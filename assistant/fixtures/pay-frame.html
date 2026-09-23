@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Gateway</title></head>
+<body>
+<label>CVV <input id="cvv" type="password" maxlength="4" inputmode="numeric"></label>
+<button onclick="parent.postMessage('pay:' + document.getElementById('cvv').value, '*')">Pay ₹79</button>
+</body>
+</html>

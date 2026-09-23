@@ -45,6 +45,11 @@ HIT_OWNER = r"""function (x, y) {
   const r = this.getBoundingClientRect();
   return window.__jevFast?.climb(this, r.x + this.clientLeft + x, r.y + this.clientTop + y) ?? null;
 }"""
+FRAME_VISIBLE = r"""function () {
+  const r = this.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth &&
+    this.checkVisibility({checkOpacity: true, checkVisibilityCSS: true});
+}"""
 SELECT = r"""(({node, value}) => {
   const c = window.__jevFast, e = c?.nodes.get(node);
   if (!e || e.tagName !== 'SELECT' || !c.locate(node)) return null;
@@ -304,11 +309,73 @@ class Browser:
         except (RuntimeError, TimeoutError):
             pass  # read-only wait after an already-logged action; a navigation may interrupt it
 
+    def _sync(self):
+        PUMP.flush()
+        infos = cdp("Target.getTargets")["targetInfos"]
+        self._sync_tabs(infos)
+        self._sync_frames(infos)
+
+    def _frame_ids(self, session):
+        ids, stack = [], [self.call("Page.getFrameTree", session)["frameTree"]]
+        while stack:
+            node = stack.pop()
+            ids.append(node["frame"]["id"])
+            stack.extend(node.get("childFrames", []))
+        return ids
+
+    def _sync_frames(self, infos):
+        """Attach the active tab's cross-origin frames. Each frame's owner session holds its <iframe> element."""
+        owners = {fid: (self.session, None) for fid in self._frame_ids(self.session)}
+        seen, progress = set(), True
+        frames = [t for t in infos if t["type"] == "iframe"]
+        while progress:  # parents are found before children, whatever order Chrome lists them in
+            progress = False
+            for info in frames:
+                fid = info["targetId"]
+                if fid in seen or info.get("parentFrameId") not in owners:
+                    continue
+                seen.add(fid)
+                progress = True
+                if fid not in self.frames:
+                    session = cdp("Target.attachToTarget", targetId=fid, flatten=True)["sessionId"]
+                    self.call("Page.enable", session)
+                    self.call("DOM.enable", session)
+                    PUMP.register(session, self._on_event)
+                    self.frames[fid] = {"session": session}
+                owner, parent = owners[info["parentFrameId"]]
+                self.frames[fid].update(owner=owner, parent=parent, tab=self.active)
+                for child in self._frame_ids(self.frames[fid]["session"]):
+                    owners[child] = (self.frames[fid]["session"], fid)
+        for fid in [f for f, info in self.frames.items() if info["tab"] == self.active and f not in seen]:
+            PUMP.unregister(self.frames.pop(fid)["session"])
+
+    def _frame_visible(self, fid):
+        try:
+            response = self.call("Runtime.callFunctionOn", self.frames[fid]["owner"], objectId=self._owner(fid),
+                                 functionDeclaration=FRAME_VISIBLE, returnByValue=True)
+            return response.get("result", {}).get("value") is True
+        except (RuntimeError, TimeoutError, KeyError):
+            return False
+
     def _read(self):
         main = self.evaluate(READ_STATE)
         if main is None:
             raise StalePage("Document is navigating")
-        return merge([(None, main)])
+        parts, shown = [(None, main)], set()
+        # ponytail: every visible third-party frame is snapshotted each observation; cap them if ads make it slow.
+        for fid, info in list(self.frames.items()):
+            if info["tab"] != self.active or (info["parent"] and info["parent"] not in shown):
+                continue
+            if not self._frame_visible(fid):
+                continue
+            try:
+                state = self.evaluate(READ_STATE, info["session"])
+            except (StalePage, RuntimeError, TimeoutError):
+                continue  # a frame mid-navigation is skipped; its controls return with the next observation
+            if state:
+                shown.add(fid)
+                parts.append((fid, state))
+        return merge(parts)
 
     def _read_settled(self):
         for attempt in range(10):
@@ -544,10 +611,6 @@ class Browser:
 
     def _do_wait(self, action, **_):
         time.sleep(0.1)
-
-    def _sync(self):
-        PUMP.flush()
-        self._sync_tabs(cdp("Target.getTargets")["targetInfos"])
 
     def _sync_tabs(self, infos):
         """Follow pop-ups opened by this task's tabs and forget tabs that closed."""

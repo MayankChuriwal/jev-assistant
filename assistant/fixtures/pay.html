@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Checkout</title></head>
+<body>
+<script>window.log = []; addEventListener('message', e => log.push(e.data));</script>
+<h1>Pay ₹79</h1>
+<iframe id="gateway" title="Payment" style="width:360px;height:160px;border:1px solid #999"></iframe>
+<iframe id="ad" title="Ad" style="position:absolute;left:-2000px;top:0;width:300px;height:100px"></iframe>
+<script>
+  // 127.0.0.1 and localhost are different sites, so these frames are cross-origin (separate CDP targets).
+  const other = `${location.protocol}//localhost:${location.port}`;
+  document.getElementById('gateway').src = other + '/pay-frame.html';
+  document.getElementById('ad').src = other + '/ad-frame.html';
+</script>
+</body>
+</html>
