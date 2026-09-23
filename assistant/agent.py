@@ -174,9 +174,19 @@ class Agent:
         The next code for that field (another login, a bank's OTP) starts with its own attempts."""
         labels = {a["label"] for a in page["actions"]}
         for where, typed in list(self.state["typed"].items()):
+            if typed["source"] in {"vault", "profile"}:  # a saved value may be wrong: it counts until it works
+                continue
             moved = typed.get("url") and urlparse(typed["url"])[1:3] != urlparse(page["url"])[1:3]
             if moved and where[1] not in labels:
+                if typed["key"]:
+                    self.state["rejected"].add((where, typed["key"]))  # a code is used once: never offer it again
                 del self.state["typed"][where]
+
+    def file_name(self, path):
+        """A file's name as logs and models may see it: profile values hidden, even inside names like Jane_Doe_CV."""
+        name = Path(path).name
+        spaced = re.sub(r"[_-]+", " ", name)
+        return self.secrets.text(spaced) if self.secrets.text(spaced) != spaced else name
 
     def command(self, name, body=None):
         token = SECRETS.set(self.secrets)  # every model request inside this step is redacted for this task
@@ -248,12 +258,20 @@ class Agent:
             raise Halt("blocked", f"Stopped at the {MAX_ACTIONS}-action budget.")
         self.stop_if_interrupted()
         if operation == "LOOK":
-            spot = self.look(page, "the control the task needs next")
+            approved = (self.state["approval"] or {}).get("look")
+            if approved and approved["fingerprint"] == page["fingerprint"]:
+                spot = {**approved, "commits": True}  # the spot the user said yes to, on the page they saw
+            else:
+                spot = self.look(page, "the control the task needs next")
             if spot is None:
+                misses = self.state.setdefault("look_misses", {})
+                misses[page["fingerprint"]] = misses.get(page["fingerprint"], 0) + 1
+                if misses[page["fingerprint"]] >= 2:
+                    raise Halt("blocked", "I looked at this page twice and couldn't find what the next step needs.")
                 self.state["memory"].append("Looked at the screen: nothing there fits the next step.")
                 self.state["status"] = "ready"
                 return self.snapshot()
-            action = {**action, "label": spot[2], "point": [spot[0], spot[1]]}  # the gate reads this name
+            action = {**action, **spot}  # the gate reads its name, its words, and whether it commits
         commit = self.gate(operation, action, decision, page)
         if commit is False:
             return self.snapshot()
@@ -272,20 +290,21 @@ class Agent:
 
     def look(self, page, purpose):
         """Find by sight what the element list can't name: one grid question, then a closer one inside the chosen
-        cell. The text model answers with cell names only; code turns the cell into a point. (x, y, label) or None."""
+        cell. The text model answers with cell names only; code turns the cell into a point. Returns
+        {"point", "label", "text", "commits"}, or None when nothing on screen fits."""
         s = self.state
-        image, cells = s["browser"].grid_screenshot(masked=self.secrets.nodes)
+        hide = [value for value, _ in self.profile.hidden_values()]  # the page may show them as plain text
+        image, cells = s["browser"].grid_screenshot(masked=self.secrets.nodes, hide=hide)
         found, meta = jobs.look(self.context(), page, purpose, image, cells)
         s["text_calls"].append({**meta, "field": "LOOK", "value": found and found["cell"]})
         if found is None:
             return None
         close, finer = s["browser"].grid_screenshot(region=cells[found["cell"]], columns=4, rows=4,
-                                                    masked=self.secrets.nodes, scale=2)
+                                                    masked=self.secrets.nodes, hide=hide, scale=2)
         cell, meta = jobs.look_closer(found["label"], close, finer)
         s["text_calls"].append({**meta, "field": "LOOK closer", "value": cell})
-        x, y = rules.centre(finer[cell])
-        return x, y, found["label"]
-
+        return {"point": list(rules.centre(finer[cell])), "label": found["label"], "text": found.get("text", ""),
+                "commits": found.get("commits", False)}
 
     def gate(self, operation, action, decision, page):
         """True for ordinary actions; the commit's label once the user approved exactly this action; False when
@@ -305,6 +324,9 @@ class Agent:
         if not label:
             return True
         if self.confirm(page, label, action):
+            if operation == "LOOK":  # the yes is for this spot, whatever a later look would call it
+                s["approval"]["look"] = {"point": action["point"], "label": action["label"],
+                                         "text": action.get("text", ""), "fingerprint": page["fingerprint"]}
             # The user may have taken a while and a total outside this control may have moved: read the page
             # again, and act only if the approval still holds there.
             raise StalePage("Approved. Reading the page again before acting.")
@@ -312,6 +334,8 @@ class Agent:
 
     def matches(self, approval, action, label):
         """Whether this is the action the user approved: the same control, or the same words when none was named."""
+        if approval.get("look") or action.get("point"):  # a spot found by sight matches only the spot approved
+            return bool(approval.get("look")) and action.get("point") == approval["look"]["point"]
         if approval.get("target"):
             return (action.get("frame"), action.get("node")) == approval["target"]
         return bool(label) and rules.overlap(label, approval["action_label"])
@@ -376,7 +400,7 @@ class Agent:
             "text": shown,
             "key": inputs.get("key"),
             "drop": inputs["drop"]["label"] if "drop" in inputs else None,
-            "files": [Path(f).name for f in inputs["files"]] if "files" in inputs else None,
+            "files": [self.file_name(f) for f in inputs["files"]] if "files" in inputs else None,
             "text_helper": helper["model"] if helper else None,
             "text_latency_ms": helper["latency_ms"] if helper else 0,
             "page_changed": None,
@@ -410,7 +434,9 @@ class Agent:
                 base64.b64decode(state["page"]["screenshot"])
             )
         recent = state["history"][-3:]
-        stuck = len(recent) == 3 and all(h["page_changed"] is False and h["operation"] != "WAIT" for h in recent)
+        # A canvas changes no text the page reports, so looking-and-clicking never counts as making no progress.
+        stuck = len(recent) == 3 and all(h["page_changed"] is False and h["operation"] not in {"WAIT", "LOOK"}
+                                         for h in recent)
         state["status"] = "blocked" if stuck else "ready"
 
     # ---- values an operation needs
@@ -436,7 +462,7 @@ class Agent:
                 if spot is None:
                     self.state["memory"].append(f"Looked for a spot to drop {action['label']}: nothing fits.")
                     raise StalePage("Nothing on screen fits the drop. Choose again.")
-                drop = {**drop, "label": spot[2], "point": [spot[0], spot[1]]}
+                drop = {**drop, "label": spot["label"], "point": spot["point"]}
             return {"drop": drop}, None, None
 
         if operation == "UPLOAD":
@@ -447,7 +473,7 @@ class Agent:
             path = reply.get("file")
             if not path or not Path(path).is_file():
                 raise Halt("blocked", "No file arrived, so nothing was attached.")
-            state["memory"].append(f"User sent the file {Path(path).name}")
+            state["memory"].append(f"User sent the file {self.file_name(path)}")
             return {"files": [path]}, None, None
         return {}, None, None
 
@@ -498,7 +524,7 @@ class Agent:
             text = form[1]
             whole = re.fullmatch(r"\s*\[profile:(\w+)\]\s*", text)
             try:
-                if "[secret:" in text:
+                if "[secret" in text:  # "[secret]" marks a filled secret field; "[secret:<key>]" names one
                     raise KeyError(text)
                 if whole:
                     return self.profile.value(whole[1]), f"[profile:{whole[1]}]", "profile", whole[1]
@@ -629,7 +655,7 @@ class Agent:
         elements, heads, _ = action_space(page["actions"])
         card, _ = jobs.confirm_card(self.context(), page, label, elements)
         target = (action.get("frame"), action["node"]) if action and action.get("node") is not None else None
-        if target is None and card["element"]:
+        if target is None and card["element"] and not (action and action.get("point")):  # LOOK binds its spot
             bound = next((a for head in heads.values() for index, a in head.items() if index == card["element"]
                           and a.get("node") is not None), None)
             target = (bound.get("frame"), bound["node"]) if bound else None
@@ -729,7 +755,7 @@ class Agent:
             "messages": [{k: v for k, v in m.items() if k != "image"} for m in s["messages"]],
             "steps": [{k: h.get(k) for k in TRACE_STEP} for h in s["history"]],
             "decisions": [{k: d.get(k) for k in TRACE_DECISION} for d in s["decisions"]],
-            "text_calls": s["text_calls"], "memory": s["memory"], "files": [Path(f).name for f in s["files"]],
+            "text_calls": s["text_calls"], "memory": s["memory"], "files": [self.file_name(f) for f in s["files"]],
         })
 
     def save_trace(self):

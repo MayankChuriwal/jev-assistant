@@ -137,3 +137,31 @@ def test_a_code_the_site_took_leaves_the_next_code_its_own_attempts(tmp_path):
     a.browser.observe.return_value = fake_page(text="Order placed", url="https://shop.test/orders", actions=WAIT_ONLY)
     a.observe()
     assert where not in a.state["typed"]  # the site moved on without the field: it took the code
+
+
+def test_a_saved_value_keeps_counting_through_a_failure_page(tmp_path):
+    a = agent_with(tmp_path)
+    page = a.state["page"]
+    cvv = next(x for x in page["actions"] if x["id"] == "e3")
+    where = ("shop.test", "CVV")
+    a.state["unused"][where] = ("123", "[secret:card.hdfc.cvv]", "vault", "card.hdfc.cvv")
+    a.after_typing(cvv, page)
+    a.browser.observe.return_value = fake_page(text="Payment failed. Try again", url="https://shop.test/failed",
+                                               actions=WAIT_ONLY)
+    a.observe()
+    assert a.state["typed"][where]["count"] == 1  # a Keychain value the site may have refused is never forgotten
+    a.browser.observe.return_value = fake_page()  # back at checkout, the CVV field again
+    a.observe()
+    assert a.previous(where)["rejected"] and "card.hdfc.cvv" not in a.allowed(where)
+
+
+def test_a_code_the_site_took_is_never_offered_again(tmp_path):
+    a = agent_with(tmp_path)
+    page = a.state["page"]
+    code = next(x for x in page["actions"] if x["id"] == "e2")
+    where = ("shop.test", "Code")
+    a.state["unused"][where] = ("482913", "[secret:answer1]", "user", "answer1")
+    a.after_typing(code, page)
+    a.browser.observe.return_value = fake_page(text="Order placed", url="https://shop.test/orders", actions=WAIT_ONLY)
+    a.observe()
+    assert where not in a.state["typed"] and (where, "answer1") in a.state["rejected"]

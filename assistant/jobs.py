@@ -154,9 +154,10 @@ def look(context, page, purpose, image, cells):
     if out.get("cell") is None:
         return None, meta
     label = words(out, "label", 80)
-    if out["cell"] not in cells or not label:
+    if out["cell"] not in cells or not label or not isinstance(out.get("commits", False), bool):
         raise invalid("look")
-    return {"cell": out["cell"], "label": label}, meta
+    return {"cell": out["cell"], "label": label, "text": words(out, "text", 120) or "",
+            "commits": out.get("commits") is True}, meta
 
 
 def look_closer(label, image, cells):

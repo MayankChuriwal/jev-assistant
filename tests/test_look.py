@@ -11,7 +11,7 @@ from helpers import find, log, until
 
 from assistant import agent as loop
 from assistant import jobs, model, questions, rules
-from assistant.browser import fingerprint
+from assistant.browser import StalePage, fingerprint
 from assistant.profile import Profile
 
 META = {"model": "fake", "latency_ms": 1}
@@ -40,7 +40,7 @@ def test_look_answers_are_cells_or_nothing(monkeypatch):
     cells, finer = rules.grid(VIEW, 8, 6), rules.grid({"x": 0, "y": 0, "w": 100, "h": 100}, 4, 4)
     page = {"url": "https://shop.test/", "title": "Shop", "text": "Pick a colour"}
     found, _ = jobs.look("context", page, "the control the task needs next", "IMAGE", cells)
-    assert found == {"cell": "C4", "label": "Blue button"}
+    assert found == {"cell": "C4", "label": "Blue button", "text": "", "commits": False}
     assert calls[0][2]["images"] == ["IMAGE"] and calls[0][1]["purpose"] == "the control the task needs next"
     assert calls[0][1]["cells"][:2] == ["A1", "A2"] and len(calls[0][1]["cells"]) == 48
     assert jobs.look("context", page, "the control the task needs next", "IMAGE", cells)[0] is None
@@ -103,7 +103,7 @@ def looking(tmp_path, monkeypatch, *answers, actions=None, replies=()):
     page["fingerprint"] = fingerprint(page)
     a = agent_with(tmp_path, page=page, replies=replies)
 
-    def shot(region=None, columns=8, rows=6, masked=(), scale=1):
+    def shot(region=None, columns=8, rows=6, masked=(), scale=1, hide=()):
         return ("CLOSE" if region else "IMAGE"), rules.grid(region or VIEW, columns, rows)
 
     a.browser.grid_screenshot = Mock(side_effect=shot)
@@ -203,3 +203,123 @@ def test_the_agent_clicks_a_canvas_button_it_can_only_see(chrome, site, tmp_path
     pictures = [b["messages"][1]["content"] for b in sent
                 if "messages" in b and isinstance(b["messages"][1]["content"], list)]
     assert len(pictures) == 2 and pictures[0][1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def outcome_success(monkeypatch):
+    monkeypatch.setattr(loop.jobs, "outcome", lambda context, page, label: ("success", "Order placed #A1B2", META))
+    monkeypatch.setattr(loop.jobs, "confirm_card", lambda context, page, label, elements=(): (dict(CARD), META))
+
+
+def test_a_control_that_commits_needs_approval_whatever_it_is_called(tmp_path, monkeypatch):
+    outcome_success(monkeypatch)
+    for answer in ({"cell": "C4", "label": "Orange button", "text": "", "commits": True},
+                   {"cell": "C4", "label": "Orange button", "text": "Place order", "commits": False}):
+        a = looking(tmp_path, monkeypatch, answer, replies=[{"option": "no"}, {"option": "items"}])
+        act(a, decision("look", "LOOK"))
+        a.browser.act.assert_not_called()
+        assert a.asked[0]["kind"] == "confirm", answer
+
+
+def test_an_approved_look_clicks_the_spot_the_user_saw(tmp_path, monkeypatch):
+    outcome_success(monkeypatch)
+    a = looking(tmp_path, monkeypatch, {"cell": "C4", "label": "Pay ₹79", "text": "Pay ₹79", "commits": True},
+                {"cell": "A1", "label": "Green button", "text": "", "commits": False}, replies=[{"option": "yes"}])
+    with pytest.raises(StalePage):
+        act(a, decision("look", "LOOK"))
+    act(a, decision("look", "LOOK"))  # the page is unchanged: the approved spot is clicked, nothing is looked up again
+    assert a.browser.act.call_count == 1 and a.browser.act.call_args.kwargs == {"point": [237.5, 337.5]}
+    assert a.browser.grid_screenshot.call_count == 2 and a.state["approval"] is None
+    assert a.state["memory"][-1] == "Done: Pay ₹79 (Order placed #A1B2)"
+
+
+def test_a_look_approval_never_covers_a_listed_control(tmp_path, monkeypatch):
+    outcome_success(monkeypatch)
+    a = looking(tmp_path, monkeypatch, {"cell": "C4", "label": "Pay ₹79", "text": "Pay ₹79", "commits": True},
+                replies=[{"option": "yes"}, {"option": "no"}, {"option": "items"}])
+    with pytest.raises(StalePage):
+        act(a, decision("look", "LOOK"))
+    act(a, decision("e6", "CLICK"))  # the page's own "Pay ₹79" button is another control: it needs its own yes
+    a.browser.act.assert_not_called()
+    assert [m["kind"] for m in a.asked] == ["confirm", "confirm", "choice"]
+
+
+def test_looking_hides_the_users_details(tmp_path, monkeypatch):
+    a = looking(tmp_path, monkeypatch, {"cell": "C4", "label": "Blue button"})
+    act(a, decision("look", "LOOK"))
+    hidden = a.browser.grid_screenshot.call_args_list[0].kwargs["hide"]
+    assert "Mayank Churiwal" in hidden and any("98765" in value for value in hidden)
+
+
+def test_looking_twice_at_nothing_stops_instead_of_looping(tmp_path, monkeypatch):
+    a = looking(tmp_path, monkeypatch, None, None)
+    act(a, decision("look", "LOOK"))
+    assert a.state["status"] == "ready"
+    act(a, decision("look", "LOOK"))
+    assert a.state["status"] == "blocked" and "couldn't find" in a.told[-1]["text"]
+
+
+def test_clicks_on_a_canvas_are_not_mistaken_for_no_progress(tmp_path, monkeypatch):
+    spot = {"cell": "C4", "label": "Seat 12A"}
+    a = looking(tmp_path, monkeypatch, spot, dict(spot), dict(spot))
+    for _ in range(3):  # a canvas changes no text the page reports
+        act(a, decision("look", "LOOK"))
+    assert a.state["status"] == "ready" and a.browser.act.call_count == 3
+
+
+@pytest.mark.browser
+def test_captures_follow_a_scrolled_page(browser_at, monkeypatch):
+    b = browser_at("/look.html")
+    b.evaluate("document.body.style.height = '3000px'; scrollTo(0, 300)")
+    page = b.observe()
+    clips, real = [], b.call
+
+    def spy(method, session=None, **params):
+        if method == "Page.captureScreenshot":
+            clips.append(params.get("clip"))
+        return real(method, session, **params)
+
+    monkeypatch.setattr(b, "call", spy)
+    _image, cells = b.grid_screenshot()
+    b.grid_screenshot(region=cells["C4"], columns=4, rows=4, scale=2)
+    b.screenshot(find(page, "Pin", "drag"))
+    assert clips[0]["y"] == 300 and clips[1]["y"] == cells["C4"]["y"] + 300
+    pin_top = b.evaluate("document.getElementById('pin').getBoundingClientRect().top + scrollY")
+    assert abs(clips[2]["y"] + 16 - pin_top) <= 2  # the crop sits on the element, not a scroll's height above it
+
+
+@pytest.mark.browser
+def test_captures_hide_the_users_details_shown_as_text(browser_at, monkeypatch):
+    b = browser_at("/look.html")
+    b.evaluate("document.getElementById('out').textContent = 'Deliver to Mayank Churiwal, 98765 43210'")
+    b.observe()
+    seen, real = [], b.call
+
+    def spy(method, session=None, **params):
+        if method == "Page.captureScreenshot":
+            seen.append(b.evaluate("document.getElementById('out').style.filter"))
+        return real(method, session, **params)
+
+    monkeypatch.setattr(b, "call", spy)
+    b.grid_screenshot(hide=["Mayank Churiwal", "+91 98765 43210", "9876543210"])
+    assert seen == ["blur(12px)"] and b.evaluate("document.getElementById('out').style.filter") == ""
+
+
+@pytest.mark.browser
+def test_a_screenshot_is_never_taken_unmasked(browser_at, monkeypatch):
+    from assistant import browser as browsers
+
+    b = browser_at("/look.html")
+    b.observe()
+    methods, evaluate, call = [], b.evaluate, b.call
+
+    def busy(expression, session=None):
+        if expression.startswith(f"({browsers.MASK})") and ", true" in expression:
+            raise TimeoutError("the page is busy")
+        return evaluate(expression, session)
+
+    monkeypatch.setattr(b, "evaluate", busy)
+    monkeypatch.setattr(b, "call", lambda method, session=None, **params: methods.append(method) or call(
+        method, session, **params))
+    with pytest.raises(RuntimeError, match="nothing was captured"):
+        b.screenshot()
+    assert "Page.captureScreenshot" not in methods

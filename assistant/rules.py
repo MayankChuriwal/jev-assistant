@@ -19,8 +19,12 @@ def host(url):
 
 def commit_label(operation, action, page, key=None, focused=""):
     """The words that make this action a commit, or None. `focused` names the control a page-level key reaches."""
-    if operation in {"CLICK", "DOUBLE_CLICK", "LOOK"}:
+    if operation in {"CLICK", "DOUBLE_CLICK"}:
         label = action.get("label", "")
+    elif operation == "LOOK":  # found by sight: its name, the words on it, and whether clicking it commits
+        label = action.get("label", "")
+        if action.get("commits") or COMMIT.search(action.get("text") or ""):
+            return label or action.get("text") or "the control found on screen"
     elif operation == "PRESS_KEY" and key in {"Enter", "Space"}:
         # Enter submits the field's form; on the page, Enter or Space presses whatever has focus.
         label = (action.get("submit", "") if key == "Enter" else "") or (focused if action.get("node") is None else "")
@@ -56,7 +60,13 @@ def verbatim(fragment, text):
 def approval_valid(approval, page, steps):
     if not approval or approval["host"] != host(page["url"]) or steps - approval["step"] >= APPROVAL_STEPS:
         return False
-    return not approval["amount"] or verbatim(approval["amount"], page["text"])
+    return not approval["amount"] or amount_shown(approval["amount"], page["text"])
+
+
+def amount_shown(amount, text):
+    """The approved amount on the page as a whole number: ₹79 is not ₹790, ₹79.50, or 179."""
+    fragment = normal(amount)
+    return bool(fragment) and re.search(r"(?<!\d)" + re.escape(fragment) + r"(?![\d.,]*\d)", normal(text)) is not None
 
 
 def attempt_limit(key):

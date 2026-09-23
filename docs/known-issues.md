@@ -26,8 +26,8 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 
 | ID | Issue | Where | Status |
 |---|---|---|---|
-| P2-01 | A field's attempt count never resets after the value is accepted, so a later code for the same field starts with used attempts. | `agent.py` | fixed (Plan 4 Task 6) |
-| P2-02 | OTP boxes without their own label share one attempt count per site. | `agent.py` | fixed (Plan 4 Task 6): counts reset once the site takes a code |
+| P2-01 | A field's attempt count never resets after the value is accepted, so a later code for the same field starts with used attempts. | `agent.py` | partly fixed (Plan 4): a user's code stops counting once the URL changes and the field is gone; saved values keep counting; a same-URL modal still keeps counting |
+| P2-02 | OTP boxes without their own label share one attempt count per site. | `agent.py` | partly fixed (Plan 4): as P2-01 |
 | P2-03 | Keychain calls have no timeout, so a Keychain unlock dialog hangs the task. | `profile.py` | fixed (Plan 4 Task 6) |
 | P2-04 | Screenshots only blur secret fields (no disc masking), and a field the page re-renders is not blurred again. | `browser.py` | fixed (Plan 4 Task 5) |
 | P2-05 | In the terminal, typing "yes" at a confirmation declines; only the option number works. | `server.py` `terminal_asker` | open |
@@ -57,3 +57,20 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | P3-15 | Each webhook is handled on its own thread, so a goal and a quick follow-up change can be routed out of order. | `server.py`, `core.py` | open |
 | P3-16 | Documents sent to chat carry no task title when several tasks run. | `core.py` | open |
 | P3-17 | Nothing confirms when a task that was asked to stop has actually stopped. | `core.py` | fixed (Plan 4 Task 7) |
+
+## Plan 4 — LOOK, traces, smoke kit
+
+| ID | Issue | Where | Status |
+|---|---|---|---|
+| P4-01 | Trace file names come from the unredacted task title (a phone or email in a `jev run` goal lands in the name); `~/.jev/traces` is created 0755 and each file is readable for an instant before `chmod`. | `agent.py` `save_trace` | open |
+| P4-02 | A task the chat stopped, or gave up on after three problems, is traced as `ready` instead of cancelled or failed. | `core.py`, `agent.py` | open |
+| P4-03 | The LOOK grid is drawn under top-layer content, so it is hidden behind a modal `<dialog>`. | `browser.py` `GRID` | open |
+| P4-04 | Event pump: a persistent error prints about 20 lines a second; one malformed event drops the rest of its batch; a stopped pump cannot restart. | `browser.py` `EventPump` | open |
+| P4-05 | Keychain waits block the task thread up to 120 s with no cancel check; the unlock prompt stays up after the timeout; a timed-out card save repeats its offer. | `profile.py`, `agent.py` | open |
+| P4-06 | With `JEV_DEBUG=1`, a debug-view capture can unmask fields in the middle of a LOOK capture. | `server.py`, `browser.py` | open |
+| P4-07 | `jev traces --limit 0` prints every trace. | `server.py` | open |
+| P4-08 | A `[secret:<key>]` the field may use is refused (a "Problem" message) instead of being used like `{"secret": key}`. | `agent.py` `resolve` | open |
+| P4-09 | URL-encoded emails (`m%40…`) and name parts that are common words escape redaction. | `profile.py` `Secrets` | open |
+| P4-10 | An answer the text model marks as not secret reaches task memory and traces as typed. | `agent.py` | open |
+| P4-11 | Profile saves are locked within one process only; `jev run` and `jev` running at once can collide. | `profile.py` | open |
+| P4-12 | How reliably GPT-4.1 mini reads the 11 px grid labels, and clip scale on a Retina display, are unverified until live runs. | `browser.py`, `questions.py` | open |

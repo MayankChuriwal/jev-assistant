@@ -122,7 +122,7 @@
 
   // Visible text first. Text asking to drag or drop a file marks its container as an upload target.
   const words = [], zones = new Set();
-  const FILE_WORDS = /\b(files?|upload\w*|documents?|attach\w*|pdfs?|images?|photos?|pictures?|receipts?|statements?)\b/i;
+  const FILE_WORDS = /\b(files?|upload\w*|documents?|attach\w*|pdfs?|images?|photos?|pictures?|receipts?|statements?|resumes?|cvs?|browse|docx?|jpe?g|png|csv|xlsx?)\b/i;
   let length = 0;
   const dropZone = (e, text, dx, dy) => {
     for (let i = 0; e && i < 4; e = e.parentElement, i++) {

@@ -121,7 +121,6 @@ def action_space(actions):
     drops = {i: a for h in DROPS for i, a in heads.get(h, {}).items() if a.get("node") is not None}
     if "LOOK" in controls:  # a free spot on a canvas or a map, found by sight
         drops["look"] = {**controls["LOOK"], "label": "A free spot on the screen, found by looking"}
-
     if "drag_source" in heads:
         if drops:
             heads["drag_target"] = drops

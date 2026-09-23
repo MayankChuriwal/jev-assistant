@@ -268,3 +268,11 @@ def test_screenshots_hide_every_filled_field(browser_at, monkeypatch):
     b.screenshot()
     assert seen == [["disc|blur(12px)", "none|", "disc|blur(12px)"]]
     assert b.evaluate(styles) == ["none|", "none|", "none|"]
+
+
+def test_resume_and_browse_drops_are_upload_zones(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', ['Drag & drop your resume/CV here', 'Drop here or "
+               "browse'].map(t => `<div style=\"width:320px;height:60px\">${t}</div>`).join(''))")
+    zones = [a["label"] for a in b.observe()["actions"] if a.get("drop")]
+    assert zones == ["Drop zone: Drag & drop your resume/CV here", "Drop zone: Drop here or browse"]

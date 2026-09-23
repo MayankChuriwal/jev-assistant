@@ -294,6 +294,15 @@ def test_placeholders_the_model_writes_become_the_values_they_name(tmp_path):
         "+91 98765 43210", "[profile:phone]", "profile", "phone")
     assert a.resolve(("text", "Call [profile:name] at gate 4"), phone, where) == (
         "Call Mayank Churiwal at gate 4", "Call [profile:name] at gate 4", "model", None)
-    for text in ("[secret:card.hdfc.cvv]", "[profile:nickname]"):
+    for text in ("[secret:card.hdfc.cvv]", "[secret]", "[profile:nickname]"):
         with pytest.raises(ValueError, match="placeholder"):
             a.resolve(("text", text), phone, where)
+
+
+def test_file_names_never_carry_the_users_name_to_a_model(tmp_path):
+    cv = tmp_path / "Mayank_Churiwal_CV.pdf"
+    cv.write_bytes(b"%PDF")
+    a = agent_with(tmp_path, replies=[{"file": str(cv)}])
+    act(a, decision("e7", "UPLOAD"))
+    assert a.state["memory"][-1] == "User sent the file [profile:name] CV.pdf"
+    assert a.state["history"][-1]["files"] == ["[profile:name] CV.pdf"]

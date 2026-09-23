@@ -98,8 +98,9 @@ SET_VALUE = r"""(({node, value}) => {
 })"""
 FOCUS = "(node => { const e = window.__jevFast?.nodes.get(node); e?.focus(); return !!e && e.matches(':focus'); })"
 # Blur fields that hold secrets for the duration of a capture that leaves the process.
-MASK = r"""((ids, on) => {
-  // For one capture: blur and dot every filled text field, and every field that received a secret (§10.4).
+MASK = r"""((ids, on, hide) => {
+  // For one capture: blur and dot every filled text field and every field that received a secret (§10.4), and blur
+  // text showing the user's own details, which reach models only as placeholders (§10.2).
   const c = window.__jevFast;
   const roots = c?.roots?.length ? c.roots : [document];
   if (!on) {
@@ -107,17 +108,29 @@ MASK = r"""((ids, on) => {
       [e.style.filter, e.style.webkitTextSecurity] = JSON.parse(e.dataset.jevMask);
       delete e.dataset.jevMask;
     }
-    return;
+    return true;
   }
   const skip = ['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file', 'hidden', 'image'];
   const filled = roots.flatMap(r => [...r.querySelectorAll('input,textarea')])
     .filter(e => e.value && !skip.includes(e.type));
-  for (const e of new Set([...ids.map(id => c?.nodes.get(id)).filter(Boolean), ...filled])) {
+  const values = (hide || []).map(v => [String(v).toLowerCase(), String(v).replace(/\D/g, '')]);
+  const shows = text => {
+    const lower = text.toLowerCase(), digits = text.replace(/\D/g, '');
+    return values.some(([word, number]) => (word.length >= 3 && lower.includes(word)) ||
+      (number.length >= 7 && digits.includes(number)));
+  };
+  const texts = [];
+  if (values.length) for (const r of roots) {
+    const walker = (r.ownerDocument || r).createTreeWalker(r.body || r, NodeFilter.SHOW_TEXT);
+    for (let n; (n = walker.nextNode());) if (n.parentElement && shows(n.textContent)) texts.push(n.parentElement);
+  }
+  for (const e of new Set([...ids.map(id => c?.nodes.get(id)).filter(Boolean), ...filled, ...texts])) {
     if (e.dataset.jevMask) continue;
     e.dataset.jevMask = JSON.stringify([e.style.filter, e.style.webkitTextSecurity]);
     e.style.filter = 'blur(12px)';
     e.style.webkitTextSecurity = 'disc';
   }
+  return true;
 })"""
 # A labelled grid drawn over the page for one capture, in a closed shadow root: the page's own reads never see it.
 GRID = r"""(cells => {
@@ -641,8 +654,9 @@ class Browser:
         except (StalePage, RuntimeError, TimeoutError):
             return ""
 
-    def screenshot(self, action=None, masked=(), pad=16, clip=None):
-        """Base64 PNG of the viewport, of an element's region, or of `clip`, with fields that hold secrets hidden."""
+    def screenshot(self, action=None, masked=(), pad=16, clip=None, hide=()):
+        """Base64 PNG of the viewport, of an element's region, or of `clip` (page coordinates), with filled fields and
+        any text containing one of `hide` masked."""
         by_frame = {}
         for frame, node in masked:
             by_frame.setdefault(frame, []).append(node)
@@ -652,37 +666,41 @@ class Browser:
         elif action is not None and action.get("rect") and action.get("node") is not None:
             x, y = self._point(action)
             w, h = action["rect"]["w"], action["rect"]["h"]
-            params["clip"] = {"x": max(0, x - w / 2 - pad), "y": max(0, y - h / 2 - pad),
+            sx, sy = self.evaluate("[scrollX, scrollY]")  # a clip is in page coordinates; the point is in the viewport
+            params["clip"] = {"x": max(0, x - w / 2 - pad) + sx, "y": max(0, y - h / 2 - pad) + sy,
                               "width": w + 2 * pad, "height": h + 2 * pad, "scale": 1}
-        self._mask(by_frame, True)
         try:
+            self._mask(by_frame, True, hide)
             return self.call("Page.captureScreenshot", **params)["data"]
         finally:
             self._mask(by_frame, False)
 
-    def grid_screenshot(self, region=None, columns=8, rows=6, masked=(), scale=1):
+    def grid_screenshot(self, region=None, columns=8, rows=6, masked=(), scale=1, hide=()):
         """(PNG of the viewport or `region` under a labelled grid, the grid's cells in viewport coordinates)."""
-        if region is None:
-            width, height = self.evaluate("[innerWidth, innerHeight]")
-            region = {"x": 0, "y": 0, "w": width, "h": height}
+        width, height, sx, sy = self.evaluate("[innerWidth, innerHeight, scrollX, scrollY]")
+        region = region or {"x": 0, "y": 0, "w": width, "h": height}
         cells = rules.grid(region, columns, rows)
         self.evaluate(f"({GRID})({json.dumps(cells)})")
         try:
-            clip = {"x": region["x"], "y": region["y"], "width": region["w"], "height": region["h"], "scale": scale}
-            return self.screenshot(masked=masked, clip=clip), cells
+            # Cells stay in viewport coordinates, where clicks land; the capture's clip is in page coordinates.
+            clip = {"x": region["x"] + sx, "y": region["y"] + sy, "width": region["w"], "height": region["h"],
+                    "scale": scale}
+            return self.screenshot(masked=masked, clip=clip, hide=hide), cells
         finally:
             self.evaluate(f"({GRID})(null)")
 
-
-    def _mask(self, by_frame, on):
-        """Mask (or unmask) the page and every frame of this tab: a re-rendered field is found again by its value."""
+    def _mask(self, by_frame, on, hide=()):
+        """Mask (or unmask) the page and every frame of this tab: a re-rendered field is found again by its value.
+        Masking that fails where the page is still there stops the capture: nothing is captured unmasked."""
         frames = {None, *by_frame, *(f for f, info in self.frames.items() if info["tab"] == self.active)}
         for frame in frames:
             try:
-                nodes = json.dumps(by_frame.get(frame, []))
-                self.evaluate(f"({MASK})({nodes}, {json.dumps(on)})", self._session_for(frame))
+                nodes, values = json.dumps(by_frame.get(frame, [])), json.dumps(list(hide), ensure_ascii=False)
+                self.evaluate(f"({MASK})({nodes}, {json.dumps(on)}, {values})", self._session_for(frame))
             except (StalePage, RuntimeError, TimeoutError):
-                pass  # the frame is gone, so nothing of it can appear in the capture
+                if on and (frame is None or frame in self.frames):
+                    raise RuntimeError("Couldn't hide the page's fields for a screenshot; nothing was captured.") \
+                        from None
 
     def _mouse(self, x, y, button="left", count=1):
         self.input("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
@@ -708,7 +726,6 @@ class Browser:
         if not point:
             raise ValueError("LOOK needs a point found on the screen; nothing clicked.")
         self._mouse(*point)
-
 
     def _do_type_text(self, action, text=None, **_):
         if not isinstance(text, str) or not text:
@@ -867,7 +884,6 @@ class Browser:
             {"id": "open_url", "kind": "open_url", "node": None, "label": "Open a web address"},
             {"id": "save_pdf", "kind": "save_pdf", "node": None, "label": "Save page as PDF"},
             {"id": "look", "kind": "look", "node": None, "label": "Look at the screen"},
-
         ]
         history = self.call("Page.getNavigationHistory")
         index, entries = history["currentIndex"], history["entries"]

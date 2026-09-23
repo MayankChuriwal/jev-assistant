@@ -90,3 +90,16 @@ def test_enter_or_space_on_the_page_uses_the_focused_control():
 def test_approved_labels_match_by_their_words():
     assert rules.overlap("Place your order", "Place order")
     assert not rules.overlap("Pay ₹79", "Submit complaint") and not rules.overlap("Pay ₹79", "Delete address")
+
+
+def test_an_approved_amount_must_appear_whole():
+    approval = {"host": "shop.test", "step": 0, "amount": "₹79"}
+
+    def page(text):
+        return {"url": "https://shop.test/pay", "text": text}
+
+    assert rules.approval_valid(approval, page("Total ₹79. Pay now"), 1)
+    assert rules.approval_valid(approval, page("Total ₹79, delivery free"), 1)
+    for text in ("Total ₹790", "Total ₹79.50"):
+        assert not rules.approval_valid(approval, page(text), 1), text
+    assert not rules.approval_valid({**approval, "amount": "79"}, page("Total 179"), 1)

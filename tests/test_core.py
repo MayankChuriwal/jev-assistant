@@ -532,3 +532,33 @@ def test_a_stopped_task_says_when_it_has_stopped(world):
     text(world, "stop")
     gate.set()
     assert until(lambda: "Stopped Order Diet Coke." in bodies(world)) and "never" not in bodies(world)
+
+
+def test_a_stop_after_a_payment_says_it_may_have_gone_through(world):
+    gate = threading.Event()
+    world.scripts["Order Diet Coke"] = [lambda agent: agent.state.update(commit={"label": "Pay ₹79", "checks": 0}),
+                                        hold(gate)]
+    text(world, "Order Diet Coke")
+    assert until(lambda: world.agents.get("Order Diet Coke") and world.agents["Order Diet Coke"].state["commit"])
+    world.intents.append(("CANCEL", "t1", {"CANCEL": 0.97}))
+    text(world, "stop")
+    gate.set()
+    assert until(lambda: "Stopped Order Diet Coke. Pay ₹79 may already have gone through; check it before trying "
+                         "again." in bodies(world))
+
+
+def test_a_task_that_finished_is_never_reported_stopped(world):
+    gate = threading.Event()
+
+    def last(agent):
+        gate.wait(5)
+        agent.state["status"] = "done"
+
+    world.scripts["Order Diet Coke"] = [last]
+    text(world, "Order Diet Coke")
+    assert until(lambda: world.core.tasks["t1"].status == "running")
+    world.intents.append(("CANCEL", "t1", {"CANCEL": 0.97}))
+    text(world, "stop")
+    gate.set()
+    assert until(lambda: world.core.tasks["t1"].status == "done")
+    assert not any(b.startswith("Stopped") for b in bodies(world))

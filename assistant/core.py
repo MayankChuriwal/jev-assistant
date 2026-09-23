@@ -339,8 +339,11 @@ class Core:
         finally:
             state = task.agent.state["status"] if task.agent else None
             task.status = state if state in STOPPED else ("cancelled" if task.cancelled else "failed")
-            if task.cancelled and task.agent and state != "cancelled":
-                self.say(f"Stopped {task.title}.", task)  # it stopped between steps, so the agent said nothing
+            if task.cancelled and task.agent and state not in STOPPED:  # it stopped between steps: say so
+                commit = task.agent.state.get("commit")
+                pending = f" {commit['label']} may already have gone through; check it before trying again." \
+                    if commit else ""
+                self.say(f"Stopped {task.title}.{pending}", task)
             if task.agent:
                 try:
                     task.agent.settle()  # downloads that finish as the task ends still reach chat
