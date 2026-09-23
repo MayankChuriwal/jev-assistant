@@ -98,7 +98,7 @@ def test_a_failed_payment_never_writes_a_replacement(tmp_path, monkeypatch):
 
 
 def test_values_the_model_wrote_are_not_attempts(tmp_path, monkeypatch):
-    help_step = {"rung": "guide", "text": "I keep retyping this field. What should I do?", "crop_element": ""}
+    help_step = {"rung": "guide", "text": "I keep retyping this field. What should I do?", "options": []}
     monkeypatch.setattr(loop.jobs, "unblock", lambda context, page, elements, must_stop=False: (help_step, META))
     monkeypatch.setattr(loop.jobs, "hint", lambda context, page, text=None, image=None: ("Carry on", META))
     a = reacting(agent_with(tmp_path, replies=[{"text": "carry on"}, {"text": "carry on"}]))

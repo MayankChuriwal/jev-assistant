@@ -79,8 +79,13 @@ def test_results_notes_help_hints_and_preferences(monkeypatch):
     assert jobs.result("c", PAGE)[1:3] == ("", False)
     reply(monkeypatch, {"facts": ["Total ₹79", "", "a", "b", "c", "d", "e"]})
     assert jobs.note("c", PAGE)[0] == ["Total ₹79", "a", "b", "c", "d"]
-    reply(monkeypatch, {"rung": "show", "text": "Type the captcha.", "crop_element": "2"})
-    assert jobs.unblock("c", PAGE, ELEMENTS)[0] == {"rung": "show", "text": "Type the captcha.", "crop_element": "2"}
+    options = [{"label": "Home", "description": "", "element": "2"}, {"label": "Office", "description": "",
+                                                                        "element": ""}]
+    reply(monkeypatch, {"rung": "choose", "text": "Which address?", "options": options})
+    assert jobs.unblock("c", PAGE, ELEMENTS)[0] == {"rung": "choose", "text": "Which address?", "options": options}
+    reply(monkeypatch, {"rung": "choose", "text": "Which address?", "options": [{"label": "Home", "element": "99"}]})
+    with pytest.raises(ValueError):
+        jobs.unblock("c", PAGE, ELEMENTS)  # an option tied to an element the page doesn't have
     assert jobs.unblock("c", PAGE, ELEMENTS, must_stop=True)[0]["rung"] == "stop"
     post = reply(monkeypatch, {"hint": "Open Accounts → Disputes."})
     assert jobs.hint("c", PAGE, image="iVBORw0KGgo=")[0] == "Open Accounts → Disputes."

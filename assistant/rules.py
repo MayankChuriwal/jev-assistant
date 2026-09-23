@@ -155,6 +155,34 @@ def address_extra(label):
     return bool(ADDRESS_EXTRA.search(label or ""))
 
 
+PRICE = re.compile(r"[₹$€£]\s?\d[\d,.]*|\bRs\.?\s?\d[\d,.]*", re.IGNORECASE)
+CHOICE_ROLES = ("option", "radio")
+ACTING = {"request", "book", "confirm", "pay", "place", "order", "buy", "purchase", "proceed", "continue", "choose",
+          "select"}
+
+
+def priced_choice(page, action):
+    """(the priced alternatives, the one this click takes) when it picks, or commits to, one of two or more options
+    or radios that each show a price (ride types, sizes, plans); ([], None) otherwise."""
+    def group(role):
+        found = [a for a in page["actions"] if a["kind"] == "click" and a.get("role") == role
+                 and PRICE.search(a.get("label", ""))]
+        return found if len(found) >= 2 else []
+
+    label = action.get("label", "")
+    if action.get("role") in CHOICE_ROLES:
+        found = group(action["role"])
+        return (found, action) if action in found else ([], None)
+    named = words(label) - ACTING  # "Request Uber Go AC" names the ride it requests
+    if not COMMIT.search(label) or not named:
+        return [], None
+    for found in map(group, CHOICE_ROLES):
+        target = next((a for a in found if named <= words(a["label"])), None)
+        if target:
+            return found, target
+    return [], None
+
+
 def means_current_location(text):
     """Whether the user answered "current location" (the agent's browser has no location of its own)."""
     return bool(CURRENT_PLACE.search(text or ""))

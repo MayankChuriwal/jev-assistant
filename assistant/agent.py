@@ -53,6 +53,8 @@ class Agent:
     interrupted = None  # set by the chat: true once the user cancelled or changed the task during a step
     trace_dir = HOME / "traces"
     steady_ms = 3000  # a page still changing this soon after a step is read again before the user is asked
+    processing_ms = 300000  # how long to watch a commit the site is still working on (a ride finding a driver)
+    outcome_pause = 5.0  # seconds between looks at that commit
 
     def __init__(self, url, goal, *, asker=None, notify=None, profile=None, vault=None, record_dir=None,
                  screenshots=False, provide_file=None, browser=None, title=None, trace_dir=None):
@@ -285,6 +287,10 @@ class Agent:
             addresses = [a for a in page["actions"] if a["kind"] == "click" and rules.saved_address(a["label"])]
             if len(addresses) >= 2 and not self.prefers(action, addresses):
                 return self.ask_address(page, addresses)  # the user decides where it goes
+        if operation == "CLICK":
+            choices, target = rules.priced_choice(page, action)
+            if choices and not self.prefers(target, choices):
+                return self.ask_choice(choices)  # the user picks which ride, size, or plan, seeing the prices
         if operation == "LOOK":
             approved = (self.state["approval"] or {}).get("look")
             if approved and approved["fingerprint"] == page["fingerprint"]:
@@ -325,11 +331,34 @@ class Agent:
                 s["login"]["done"] = True
                 s["memory"].append(f"Signed in to {host}.")
 
-    def prefers(self, action, addresses):
-        """Whether a saved preference names this address: its own words, not ones every listed address shares."""
-        others = set().union(*(rules.words(a["label"]) for a in addresses if a is not action))
-        mine = rules.words(action["label"]) - others
-        return any(mine & rules.words(p["text"]) for p in self.profile.data["preferences"])
+    def prefers(self, action, choices):
+        """Whether the user named this one of the choices, in the goal, a saved preference, or an answer: by its own
+        words, not ones the other choices share or the site's name ("uber" names no particular ride)."""
+        s = self.state
+        others = set().union(*(rules.words(a["label"]) for a in choices if a is not action))
+        mine = rules.words(action["label"]) - others - rules.words(rules.host(s["page"]["url"]).replace(".", " "))
+        said = [s["goal"], *(p["text"] for p in self.profile.data["preferences"]),
+                *(m for m in s["memory"] if m.startswith("User"))]
+        return any(mine & rules.words(text) for text in said)
+
+    def ask_choice(self, choices):
+        """Which of several priced alternatives (a ride type, a size): the user's call, with prices, in chat."""
+        s = self.state
+        options = []
+        for n, a in enumerate(choices[:10], 1):
+            name = re.split(r"\s(?=\d|[₹$€£])", a["label"])[0].strip()
+            rest = rules.PRICE.sub("", a["label"][len(name):]).strip()
+            options.append({"id": f"o{n}", "label": name[:20],
+                            "description": f"{' – '.join(rules.PRICE.findall(a['label']))} · {rest}"[:72]})
+        reply = self.ask({"kind": "choice", "text": "Which one do you want?", "options": options})
+        picked = next((a for a, o in zip(choices, options) if o["id"] == reply.get("option")), None)
+        if picked:
+            s["memory"].append(f"User chose: {picked['label']}")
+            self.click_same(picked)
+        else:
+            s["memory"].append(f"User answered “Which one do you want?”: {str(reply.get('text', '')).strip()}")
+        s["status"] = "ready"
+        return self.snapshot()
 
     def ask_address(self, page, addresses):
         """Which saved address: always the user's choice, unless they saved a preference for one of them."""
@@ -447,10 +476,26 @@ class Agent:
         commit = s["commit"]
         if not commit or s["status"] in STOPPED:
             return None
-        try:
-            outcome, evidence, _ = jobs.outcome(self.context(), s["page"], commit["label"])
-        except ValueError:
-            outcome, evidence = "unclear", ""  # the commit already ran; an unreadable answer is not a failure
+        while True:
+            try:
+                outcome, evidence, _ = jobs.outcome(self.context(), s["page"], commit["label"])
+            except ValueError:
+                outcome, evidence = "unclear", ""  # the commit already ran; an unreadable answer is not a failure
+            if outcome != "processing":
+                break
+            # The site is working on it (finding a driver): nothing to do but watch, and say so once.
+            if self.elapsed() - commit.get("since", 0) >= self.processing_ms:
+                s["commit"] = None
+                raise Halt("blocked", f"{commit['label']} went through, but after {self.processing_ms // 60000} "
+                                      f"minutes the site still shows “{evidence}”. I stopped watching; check the "
+                                      "site or its app for updates.")
+            if not commit.get("told"):
+                commit["told"] = True
+                self.say(f"{commit['label']}: {evidence or 'the site is working on it'}. I'll tell you as soon as "
+                         "it's confirmed.")
+            self.stop_if_interrupted()
+            time.sleep(self.outcome_pause)
+            self.observe()
         commit["checks"] += 1
         if outcome == "pending" and commit["checks"] < OUTCOME_CHECKS:
             return "pending"
@@ -465,8 +510,8 @@ class Agent:
             s["memory"].append(f"{commit['label']} failed: {evidence}. Trying again needs a new approval.")
             self.say(f"{commit['label']} didn't go through: {evidence}")
         else:
-            raise Halt("blocked", f"I can't tell whether {commit['label']} went through. Please check your bank "
-                                  "or account before anything is tried again.")
+            raise Halt("blocked", f"I can't tell whether {commit['label']} went through, so I stopped rather than "
+                                  "risk doing it twice. Please check the site or its app before trying again.")
         return outcome
 
     def offer_card_save(self):
@@ -519,7 +564,7 @@ class Agent:
         state["history"].append({**entry, "executed_ms": state["elapsed_ms"], "elapsed_ms": state["elapsed_ms"]})
         if commit:  # it ran: spend the approval and watch the outcome, even if the next observation fails
             state["approval"] = None
-            state["commit"] = {"label": commit, "checks": 0}
+            state["commit"] = {"label": commit, "checks": 0, "since": state["elapsed_ms"]}
         if operation == "TYPE_TEXT":
             self.after_typing(action, page)
         self.observe()
@@ -903,22 +948,25 @@ class Agent:
         if step["rung"] == "stop":
             raise Halt("failed", step["text"])
         s["help_rounds"][where] = rounds + 1
-        image = None
-        if step["crop_element"] or step["rung"] == "show":
-            target = next((a for head in heads.values() for index, a in head.items() if index == step["crop_element"]),
-                          None)
-            image = s["browser"].screenshot(target, masked=self.secrets.nodes)
-        message = {"kind": "image", "text": step["text"], "image": image} if image else {"kind": "text",
-                                                                                         "text": step["text"]}
-        secret = rules.asks_for_secret(step["text"])
-        if secret:
-            message["kind"] = "secret"  # a code or password is hidden, and never sent to the hint model
+        secret = rules.asks_for_secret(step["text"])  # a code or password is hidden, and never sent to the hint model
+        options = [] if secret else [{"id": f"o{n}", "label": o["label"], "description": o["description"]}
+                                     for n, o in enumerate(step["options"], 1)]
+        message = {"kind": "secret" if secret else "text", "text": step["text"]}
+        if len(options) >= 2:  # choices are buttons in chat; the agent clicks the one picked
+            message.update(kind="choice", options=options)
         reply = self.ask(message)
+        picked = next((o for o, shown in zip(step["options"], options) if shown["id"] == reply.get("option")), None)
         text = str(reply.get("text", "")).strip()
         path = Path(reply["file"]) if reply.get("file") else None
         if secret:
             name = self.keep_secret(text) if text else "none"
             s["memory"].append(f"User answered “{step['text']}” with [secret:{name}] (secret key {name})")
+        elif picked:
+            detail = f" ({picked['description']})" if picked["description"] else ""
+            s["memory"].append(f"User answered “{step['text']}”: {picked['label']}{detail}")
+            target = heads.get("click_target", {}).get(picked["element"]) if picked["element"] else None
+            if target and target.get("role") not in EDITABLE:
+                self.choose_option(target)
         elif step["rung"] == "device":
             s["memory"].append(f"User finished the step on their device: {text or 'done'}")
         elif path and path.suffix.lower() in IMAGE_TYPES and path.is_file():

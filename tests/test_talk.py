@@ -366,7 +366,7 @@ def test_only_lasting_preferences_are_offered_to_remember(tmp_path, monkeypatch)
 
 
 def help_with(monkeypatch, text):
-    step = {"rung": "guide", "text": text, "crop_element": ""}
+    step = {"rung": "guide", "text": text, "options": []}
     monkeypatch.setattr(loop.jobs, "unblock", lambda context, page, elements, must_stop=False: (step, META))
     monkeypatch.setattr(loop.jobs, "hint", lambda context, page, text=None, image=None: ("Scroll down", META))
 
@@ -454,3 +454,42 @@ def test_a_detail_the_profile_holds_is_typed_not_asked(tmp_path, monkeypatch):
     act(a, decision("ASK_USER", "ASK_USER"))
     assert a.asked == [] and typed(a) == "+91 98765 43210"
     assert a.state["history"][-1]["text"] == "[profile:phone]"
+
+
+RIDES = [{"id": "e1", "kind": "click", "role": "option", "node": 1,
+          "label": "Uber Go AC Person 4 3 mins away • 4:56 AM Affordable compact rides Tag ₹884.18 ₹944.18"},
+         {"id": "e2", "kind": "click", "role": "option", "node": 2,
+          "label": "Go Non AC Person 4 5 mins away • 4:58 AM Everyday affordable rides Tag ₹860.03 ₹920.03"},
+         {"id": "e3", "kind": "click", "role": "option", "node": 3,
+          "label": "Premier AC Person 4 2 mins away • 4:55 AM Comfortable sedans, top-quality drivers ₹1,211.66"},
+         {"id": "e4", "kind": "click", "role": "button", "node": 4, "label": "Request Uber Go AC"}]
+
+
+def riding(tmp_path, goal="book an uber", replies=()):
+    a = agent_with(tmp_path, page=fake_page(text="Choose a ride", url="https://m.uber.com/go/product-selection",
+                                            actions=RIDES), replies=replies)
+    a.state["goal"] = goal
+    return a
+
+
+def test_the_user_chooses_between_priced_alternatives(tmp_path):
+    a = riding(tmp_path, replies=[{"option": "o3"}])
+    act(a, decision("e1", "CLICK"))  # Jev would have taken Uber Go AC by itself
+    assert a.asked[0]["kind"] == "choice" and a.asked[0]["text"] == "Which one do you want?"
+    assert [o["label"] for o in a.asked[0]["options"]] == ["Uber Go AC Person", "Go Non AC Person", "Premier AC Person"]
+    assert "₹884.18" in a.asked[0]["options"][0]["description"]
+    assert [c.args[1]["node"] for c in a.browser.act.call_args_list] == [3]
+    assert a.state["memory"][-1].startswith("User chose: Premier AC")
+
+
+def test_a_commit_that_names_one_alternative_asks_which_one_first(tmp_path):
+    a = riding(tmp_path, replies=[{"option": "o1"}])
+    act(a, decision("e4", "CLICK"))  # "Request Uber Go AC" with the default ride still selected
+    assert a.asked[0]["text"] == "Which one do you want?"
+    assert [c.args[1]["node"] for c in a.browser.act.call_args_list] == [1]
+
+
+def test_an_alternative_the_goal_names_needs_no_question(tmp_path):
+    a = riding(tmp_path, goal="book an uber premier to the airport")
+    act(a, decision("e3", "CLICK"))
+    assert a.asked == [] and [c.args[1]["node"] for c in a.browser.act.call_args_list] == [3]

@@ -69,7 +69,7 @@ def test_the_commit_counts_even_if_the_next_observation_fails(tmp_path, monkeypa
     with pytest.raises(StalePage):
         act(a, decision("e6", "CLICK"))
     assert clicked(a) == ["e6"] and a.state["approval"] is None
-    assert a.state["commit"] == {"label": "Pay ₹79", "checks": 0}
+    assert a.state["commit"]["label"] == "Pay ₹79" and a.state["commit"]["checks"] == 0
     a.browser.observe.side_effect = None
     act(a, decision("e6", "CLICK"))  # a second Pay needs a second yes
     assert a.asked[1]["kind"] == "confirm" and clicked(a) == ["e6"]
@@ -133,6 +133,7 @@ def test_pending_outcomes_are_rechecked_and_unclear_ones_stop_everything(tmp_pat
     assert a.state["commit"]["checks"] == 1 and a.state["status"] == "ready"
     act(a, decision("e5", "CLICK"))  # e.g. a step on the bank's page
     assert a.state["status"] == "blocked" and "can't tell whether Pay ₹79 went through" in a.told[-1]["text"]
+    assert "bank" not in a.told[-1]["text"]  # not every commit is a payment
 
 
 def test_an_outcome_the_model_cannot_classify_stops_the_task(tmp_path, monkeypatch):
@@ -143,6 +144,7 @@ def test_an_outcome_the_model_cannot_classify_stops_the_task(tmp_path, monkeypat
     a = agent_with(tmp_path, replies=[{"option": "yes"}])
     approve(a, decision("e6", "CLICK"))
     assert a.state["status"] == "blocked" and "can't tell whether Pay ₹79 went through" in a.told[-1]["text"]
+    assert "bank" not in a.told[-1]["text"]  # not every commit is a payment
 
 
 def test_a_stale_page_after_approval_keeps_the_approval(tmp_path, monkeypatch):
@@ -183,3 +185,23 @@ def test_done_waits_for_a_payment_that_is_still_settling(tmp_path, monkeypatch):
     act(a, decision("DONE", "DONE"))
     assert a.state["status"] == "done" and len(results) == 1
     assert "Done: Pay ₹79 (Order placed #A1B2)" in a.state["memory"]
+
+
+def test_a_commit_the_site_is_still_working_on_is_watched_until_it_is_confirmed(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, replies=[{"option": "yes"}])
+    outcomes(monkeypatch, ("processing", "Finding drivers nearby"), ("processing", "Finding drivers nearby"),
+             ("success", "Your driver is on the way"))
+    approve(a, decision("e6", "CLICK"))
+    assert [m["text"] for m in a.told].count("Pay ₹79: Finding drivers nearby. I'll tell you as soon as it's "
+                                             "confirmed.") == 1
+    assert a.state["commit"] is None and a.state["memory"][-1] == "Done: Pay ₹79 (Your driver is on the way)"
+    assert a.state["status"] == "ready"
+
+
+def test_a_commit_still_processing_after_the_wait_stops_with_what_the_site_shows(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, replies=[{"option": "yes"}])
+    a.processing_ms = 0
+    outcomes(monkeypatch, ("processing", "Finding drivers nearby"))
+    approve(a, decision("e6", "CLICK"))
+    assert a.state["status"] == "blocked" and "Finding drivers nearby" in a.told[-1]["text"]
+    assert "bank" not in a.told[-1]["text"]

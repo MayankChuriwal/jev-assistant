@@ -27,7 +27,7 @@ def test_loading_waits_do_not_trigger_the_no_progress_stop(tmp_path):
 
 
 def test_three_actions_without_change_ask_the_user_for_help(tmp_path, monkeypatch):
-    help_step = {"rung": "guide", "text": "I'm stuck on this page. What should I do?", "crop_element": ""}
+    help_step = {"rung": "guide", "text": "I'm stuck on this page. What should I do?", "options": []}
     monkeypatch.setattr(loop.jobs, "unblock", lambda context, page, elements, must_stop=False: (help_step, {}))
     monkeypatch.setattr(loop.jobs, "hint", lambda context, page, text=None, image=None: ("Type the phone number", {}))
     a = agent_with(tmp_path, replies=[{"text": "type my number in the phone box"}])
@@ -114,7 +114,7 @@ def test_going_in_circles_asks_the_user_for_help(tmp_path, monkeypatch):
 
     from assistant.browser import fingerprint
 
-    help_step = {"rung": "guide", "text": "I keep going in circles. What should I do?", "crop_element": ""}
+    help_step = {"rung": "guide", "text": "I keep going in circles. What should I do?", "options": []}
     monkeypatch.setattr(loop.jobs, "unblock", lambda context, page, elements, must_stop=False: (help_step, {}))
     monkeypatch.setattr(loop.jobs, "hint", lambda context, page, text=None, image=None: ("Use Instamart", {}))
     a = agent_with(tmp_path, replies=[{"text": "open Instamart"}])

@@ -21,8 +21,8 @@ from .questions import (
 from .rules import verbatim
 
 KINDS = {"text", "secret", "choice"}
-RUNGS = {"show", "guide", "device", "stop"}
-OUTCOMES = {"success", "failed", "pending", "unclear"}
+RUNGS = {"choose", "guide", "device", "stop"}
+OUTCOMES = {"success", "failed", "pending", "processing", "unclear"}
 
 
 def invalid(job):
@@ -47,19 +47,26 @@ def start(goal):
     return url, title, meta
 
 
-def compose(context, page, elements):
-    out, meta = text_json(COMPOSE, {"context": context, "page": view(page), "elements": elements})
-    kind, text, options = out.get("kind"), words(out, "text", 4096), out.get("options") or []
-    indices = {e["index"] for e in elements}
-    if kind not in KINDS or not text or not isinstance(options, list):
-        raise invalid("question")
-    clean = []
+def choices(out, elements, what):
+    """A question's options, at most 10, each tied to an element index the page has, or to none."""
+    options, indices, clean = out.get("options") or [], {e["index"] for e in elements}, []
+    if not isinstance(options, list):
+        raise invalid(what)
     for option in options[:10]:
         label = words(option, "label", 20)
         element = str(option.get("element") or "") if isinstance(option, dict) else ""
         if not label or (element and element not in indices):
-            raise invalid("question")
+            raise invalid(what)
         clean.append({"label": label, "description": str(option.get("description") or "")[:72], "element": element})
+    return clean
+
+
+def compose(context, page, elements):
+    out, meta = text_json(COMPOSE, {"context": context, "page": view(page), "elements": elements})
+    kind, text = out.get("kind"), words(out, "text", 4096)
+    if kind not in KINDS or not text:
+        raise invalid("question")
+    clean = choices(out, elements, "question")
     if kind == "choice" and len(clean) < 2:
         raise invalid("question")
     return {"kind": kind, "text": text, "options": clean if kind == "choice" else [],
@@ -120,10 +127,11 @@ def note(context, page):
 def unblock(context, page, elements, must_stop=False):
     payload = {"context": context, "page": view(page), "elements": elements, "must_stop": must_stop}
     out, meta = text_json(HELP, payload)
-    rung, text, crop = out.get("rung"), words(out, "text", 4096), str(out.get("crop_element") or "")
-    if rung not in RUNGS or not text or (crop and crop not in {e["index"] for e in elements}):
+    rung, text = out.get("rung"), words(out, "text", 4096)
+    if rung not in RUNGS or not text:
         raise invalid("help message")
-    return {"rung": "stop" if must_stop else rung, "text": text, "crop_element": crop}, meta
+    options = choices(out, elements, "help message") if rung == "choose" and not must_stop else []
+    return {"rung": "stop" if must_stop else rung, "text": text, "options": options}, meta
 
 
 def hint(context, page, text="", image=None):

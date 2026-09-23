@@ -21,24 +21,25 @@ def ladder(monkeypatch, *steps):
     return calls
 
 
-def test_show_and_ask_sends_a_masked_crop_and_remembers_the_answer(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"text": "XK7P"}])
-    a.secrets.nodes.add((None, 8))
-    ladder(monkeypatch, {"rung": "show", "text": "Type the characters in this captcha.", "crop_element": "4"})
+def test_a_choice_the_page_shows_is_asked_in_chat_with_options_and_no_screenshot(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, replies=[{"option": "o2"}])
+    ladder(monkeypatch, {"rung": "choose", "text": "Which pickup point?", "options": [
+        {"label": "Home", "description": "Home, near gate 2", "element": "4"},
+        {"label": "Office", "description": "", "element": "5"}]})
     act(a, decision("BLOCKED", "BLOCKED"))
-    target = a.browser.screenshot.call_args.args[0]
-    assert target["id"] == "e4" and a.browser.screenshot.call_args.kwargs["masked"] == {(None, 8)}
-    assert a.asked[0]["kind"] == "image" and a.asked[0]["image"] == "iVBORw0KGgo="
-    assert a.state["memory"][-1] == "User answered “Type the characters in this captcha.”: XK7P"
-    assert a.state["status"] == "ready"
+    a.browser.screenshot.assert_not_called()
+    assert a.asked[0]["kind"] == "choice" and "image" not in a.asked[0]
+    assert [o["label"] for o in a.asked[0]["options"]] == ["Home", "Office"]
+    assert a.browser.act.call_args.args[1]["id"] == "e5"
+    assert a.state["memory"][-1] == "User answered “Which pickup point?”: Office"
 
 
 def test_guidance_screenshots_become_hints_with_a_one_time_notice(tmp_path, monkeypatch):
     shot = tmp_path / "how.png"
     shot.write_bytes(b"\x89PNG\r\n\x1a\nfake")
     a = agent_with(tmp_path, replies=[{"file": str(shot)}, {"text": "Accounts, then Disputes"}])
-    ladder(monkeypatch, {"rung": "guide", "text": "Where is the dispute option?", "crop_element": ""},
-           {"rung": "guide", "text": "Anything else?", "crop_element": ""})
+    ladder(monkeypatch, {"rung": "guide", "text": "Where is the dispute option?", "options": []},
+           {"rung": "guide", "text": "Anything else?", "options": []})
     seen = []
     monkeypatch.setattr(loop.jobs, "hint", lambda context, page, text="", image=None: seen.append(image) or (
         "Open Accounts → Disputes.", META))
@@ -53,7 +54,7 @@ def test_guidance_screenshots_become_hints_with_a_one_time_notice(tmp_path, monk
 
 def test_device_steps_wait_for_the_user(tmp_path, monkeypatch):
     a = agent_with(tmp_path, replies=[{"text": "done"}])
-    ladder(monkeypatch, {"rung": "device", "text": "Approve ₹79 in your UPI app, then reply done.", "crop_element": ""})
+    ladder(monkeypatch, {"rung": "device", "text": "Approve ₹79 in your UPI app, then reply done.", "options": []})
     act(a, decision("BLOCKED", "BLOCKED"))
     assert a.asked[0]["kind"] == "text" and a.state["memory"][-1].startswith("User finished the step")
 
@@ -61,7 +62,7 @@ def test_device_steps_wait_for_the_user(tmp_path, monkeypatch):
 def test_two_rounds_per_page_then_a_clean_stop(tmp_path, monkeypatch):
     a = agent_with(tmp_path, replies=[{"text": "a"}, {"text": "b"}])
     stop = {"rung": "device", "text": "Stopped at the payment page: it needs a passkey. Nothing was charged.",
-            "crop_element": ""}
+            "options": []}
     calls = ladder(monkeypatch, stop, stop, stop)
     for _ in range(3):
         act(a, decision("BLOCKED", "BLOCKED"))
@@ -75,7 +76,7 @@ def test_a_help_question_that_asks_for_a_code_is_hidden_and_never_sent_to_a_mode
                         lambda context, page, text=None, image=None: hints.append(text) or ("x", META))
     a = agent_with(tmp_path, replies=[{"text": "482913"}])
     ladder(monkeypatch, {"rung": "guide", "text": "Please enter the OTP you received or tell me what to do next.",
-                         "crop_element": ""})
+                         "options": []})
     act(a, decision("BLOCKED", "BLOCKED"))
     assert a.asked[0]["kind"] == "secret" and hints == [] and "482913" not in str(a.state["memory"])
     assert a.state["answers"] == {"answer1": "482913"}
