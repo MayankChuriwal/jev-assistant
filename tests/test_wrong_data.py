@@ -188,3 +188,23 @@ def test_a_code_the_site_took_is_never_offered_again(tmp_path):
     a.browser.observe.return_value = fake_page(text="Order placed", url="https://shop.test/orders", actions=WAIT_ONLY)
     a.observe()
     assert where not in a.state["typed"] and (where, "answer1") in a.state["rejected"]
+
+
+OTP = {"id": "e1", "kind": "fill", "label": "Enter an OTP Code", "role": "textbox", "value": "", "node": 1,
+       "constraints": {"type": "text"}}
+
+
+def test_a_code_field_types_the_users_code_never_one_the_model_wrote(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, page=fake_page(text="Enter the 4-digit code sent via SMS", actions=[OTP]))
+    a.keep_secret("4821")  # the user sent it when asked
+    field(monkeypatch, ("text", "1234"))
+    act(a, decision("e1", "TYPE_TEXT"))
+    assert typed(a) == ["4821"] and a.state["history"][-1]["text"] == "[secret:answer1]"
+
+
+def test_without_a_code_from_the_user_a_code_field_asks_for_one(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, replies=[{"text": "4821"}],
+                   page=fake_page(text="Enter the 4-digit code sent via SMS", actions=[OTP]))
+    field(monkeypatch, ("text", "1234"))
+    act(a, decision("e1", "TYPE_TEXT"))
+    assert typed(a) == ["4821"] and a.asked[0]["kind"] == "secret"

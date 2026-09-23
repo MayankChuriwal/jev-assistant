@@ -294,6 +294,16 @@ def test_code_boxes_labelled_one_of_four_are_one_field(browser_at):
     assert len(fills) == 1 and len(fills[0]["group"]) == 4 and fills[0]["label"] == "Enter an OTP Code"
 
 
+
+def test_a_new_code_replaces_the_digits_a_rejected_one_left_in_the_boxes(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div>' + [1, 2, 3, 4].map(n => "
+               "`<input aria-label=\"Enter an OTP Code ${n} of 4\" inputmode=\"numeric\" maxlength=\"1\" "
+               "value=\"9\">`).join('') + '</div>')")
+    page = b.observe()
+    b.act("TYPE_TEXT", next(a for a in page["actions"] if a.get("group")), page, text="4821")
+    assert b.evaluate("[...document.querySelectorAll('input[maxlength=\"1\"]')].map(i => i.value).join('')") == "4821"
+
 def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
     from assistant.browser import forget_sites
 

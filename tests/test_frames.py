@@ -84,3 +84,12 @@ def test_tracker_pixels_are_not_read(browser_at, site):
     assert observe_until(b, lambda p: len(p["frames"]) >= 2) is not None
     time.sleep(0.5)  # time for the 1×1 frame to attach as well
     assert len(b.observe()["frames"]) == 2  # the page and the visible frame, never the tracking pixel
+
+
+def test_a_frame_that_closes_while_being_attached_is_skipped(browser_at):
+    b = browser_at("/pay.html")
+    page = observe_until(b, HAS_FRAME)
+    main = b._frame_ids(b.session)[0]
+    gone = {"type": "iframe", "targetId": "0" * 32, "parentFrameId": main}  # listed, then navigated away
+    b._sync_frames([gone])  # Chrome answers "No target with given id found": the page moved on, observe again
+    assert "0" * 32 not in b.frames and page["actions"]

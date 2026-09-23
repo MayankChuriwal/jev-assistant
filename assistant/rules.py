@@ -129,11 +129,15 @@ def profile_detail(action):
     return None
 
 
+def secret_field(action):
+    """Whether a field takes a one-time code or a password: only the user or the Keychain knows its value."""
+    return action.get("kind") == "fill" and bool(action.get("group") or SECRET_ASK.search(action.get("label", ""))
+                                                 or (action.get("constraints") or {}).get("type") == "password")
+
+
 def code_field(page):
     """Whether the page asks for a one-time code or a password: signing in is not finished yet."""
-    return any(a.get("kind") == "fill" and (a.get("group") or (a.get("constraints") or {}).get("type") == "password"
-                                           or SECRET_ASK.search(a.get("label", "")))
-               for a in page["actions"])
+    return any(secret_field(a) for a in page["actions"])
 
 
 def captcha_challenge(page):

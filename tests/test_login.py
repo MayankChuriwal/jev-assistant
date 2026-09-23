@@ -47,3 +47,27 @@ def test_typing_the_phone_number_is_not_yet_signing_in(tmp_path):
     a.state["history"].append({"operation": "TYPE_TEXT", "text": "98765 43210"})
     a.track_login(fake_page(text="Enter OTP", actions=[CODE, WAIT]))  # the code screen has no sign-in button
     assert "Current step: sign in to shop.test first." in a.context() and "Signed in" not in str(a.state["memory"])
+
+
+def asking(monkeypatch, a, fresh):
+    """Jev chooses ASK_USER right after a step; `fresh` says whether the page is unchanged at each check."""
+    monkeypatch.setattr(loop, "choose", lambda page, goal, history: decision("ASK_USER", "ASK_USER"))
+    question = {"kind": "text", "text": "What's your phone number?", "options": [], "preference": False}
+    monkeypatch.setattr(loop.jobs, "compose", lambda context, page, elements: (question, {}))
+    a.steady_ms = 300
+    a.browser.fresh.side_effect = fresh
+    a.state["history"].append({"operation": "CLICK", "action": "Continue", "executed_ms": a.elapsed()})
+
+
+def test_a_page_still_changing_after_a_step_is_read_again_before_asking(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, replies=[{"text": "later"}], page=fake_page(actions=[WAIT]))
+    asking(monkeypatch, a, [True, True, False, True, True, True, True])  # the next screen arrives mid-wait
+    a.command("tick")
+    assert a.asked == [] and a.state["status"] == "ready"
+
+
+def test_a_page_that_stays_put_after_a_step_is_asked_about(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, replies=[{"text": "later"}], page=fake_page(actions=[WAIT]))
+    asking(monkeypatch, a, lambda page, action=None: True)
+    a.command("tick")
+    assert [m["text"] for m in a.asked] == ["What's your phone number?"]

@@ -52,6 +52,8 @@ def expects(action):
 class Agent:
     interrupted = None  # set by the chat: true once the user cancelled or changed the task during a step
     trace_dir = HOME / "traces"
+    steady_ms = 3000  # a page still changing this soon after a step is read again before the user is asked
+
     def __init__(self, url, goal, *, asker=None, notify=None, profile=None, vault=None, record_dir=None,
                  screenshots=False, provide_file=None, browser=None, title=None, trace_dir=None):
         goal = goal.strip() if isinstance(goal, str) else "\n".join(goal).strip()
@@ -258,9 +260,21 @@ class Agent:
             if not state["browser"].fresh(page):
                 state["status"] = "ready"
                 raise StalePage("Page changed since the decision. Choose again.")
+            if operation in {"ASK_USER", "BLOCKED"}:
+                self.steady(page)
             return self.talk(operation, page)
         action = next(a for a in page["actions"] if a["id"] == decision["choice"])
         return self.perform(operation, action, decision, page)
+
+    def steady(self, page):
+        """Asking costs the user's time. Right after a step the site may still be switching screens (a sign-in
+        page moving on to its code field), so wait until steady_ms after it; a change means choose again."""
+        last = self.state["history"][-1] if self.state["history"] else None
+        while last and self.elapsed() - last.get("executed_ms", 0) < self.steady_ms:
+            time.sleep(0.25)
+            if not self.state["browser"].fresh(page):
+                self.state["status"] = "ready"
+                raise StalePage("The page changed while I was about to ask. Choose again.")
 
     def perform(self, operation, action, decision, page):
         """Execute one browser operation through the commit gate, for Jev's choices and the user's picks alike."""
@@ -586,6 +600,8 @@ class Agent:
         context = field_context(self.context(), action, page, s["history"], self.profile.summary(),
                                 self.allowed(where), previous)
         form, helper = field_value(context)
+        if form[0] == "text" and rules.secret_field(action):  # a code or password is never the model's guess
+            form = self.code_form(action, where)
         if (form[0] == "text" and rules.addressed_to_user(form[1]) and not rules.free_text(action)) or \
                 (form[0] == "ask" and not form[2] and rules.direction_question(form[1])):
             reply = self.ask({"kind": "text", "text": form[1]})  # a question about the next step, not a value
@@ -595,6 +611,15 @@ class Agent:
         s["unused"][where] = (value, shown, source, key)
         s["text_calls"].append({**helper, "field": action["label"], "value": shown})
         return value, shown, helper
+
+    def code_form(self, action, where):
+        """The user's newest answer that was never typed anywhere, or else a question for the code itself."""
+        s = self.state
+        used = {t["key"] for t in s["typed"].values()} | {key for _, key in s["rejected"]}
+        unused = [key for key in reversed(s["answers"]) if key not in used]
+        if unused:
+            return "secret", unused[0]
+        return "ask", f"Please send what goes in “{action['label']}”: a code or password I won't guess.", True, None
 
     def previous(self, where):
         """How the last value for this field fared. Choosing the same field again after a user, Keychain, or

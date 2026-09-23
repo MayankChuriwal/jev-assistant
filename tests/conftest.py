@@ -39,6 +39,14 @@ def no_real_models(monkeypatch):
         raise AssertionError("A test tried to call a real model")
 
     monkeypatch.setattr(model.CLIENT, "post", refuse)
+
+
+@pytest.fixture(autouse=True)
+def no_settling_wait(monkeypatch):
+    """Fakes never change on their own, so the wait before asking the user would only slow the tests down."""
+    from assistant import agent
+
+    monkeypatch.setattr(agent.Agent, "steady_ms", 0)
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 

@@ -550,15 +550,21 @@ class Browser:
                     continue
                 seen.add(fid)
                 progress = True
-                if fid not in self.frames:
-                    session = cdp("Target.attachToTarget", targetId=fid, flatten=True)["sessionId"]
-                    self.call("Page.enable", session)
-                    self.call("DOM.enable", session)
-                    PUMP.register(session, self._on_event)
-                    self.frames[fid] = {"session": session}
+                try:
+                    if fid not in self.frames:
+                        session = cdp("Target.attachToTarget", targetId=fid, flatten=True)["sessionId"]
+                        self.frames[fid] = {"session": session}
+                        PUMP.register(session, self._on_event)
+                        self.call("Page.enable", session)
+                        self.call("DOM.enable", session)
+                    children = self._frame_ids(self.frames[fid]["session"])
+                except RuntimeError:  # the frame went away after Chrome listed it (the page navigated): drop it
+                    if fid in self.frames:
+                        PUMP.unregister(self.frames.pop(fid)["session"])
+                    continue
                 owner, parent = owners[info["parentFrameId"]]
                 self.frames[fid].update(owner=owner, parent=parent, tab=self.active)
-                for child in self._frame_ids(self.frames[fid]["session"]):
+                for child in children:
                     owners[child] = (self.frames[fid]["session"], fid)
         for fid in [f for f, info in self.frames.items() if info["tab"] == self.active and f not in seen]:
             PUMP.unregister(self.frames.pop(fid)["session"])
@@ -798,6 +804,7 @@ class Browser:
             points = [self._point({**action, "node": node}) for node in group]  # all reachable before typing any
             for point, char in zip(points, text):
                 self._mouse(*point)
+                self._select_all()  # a box a rejected code left filled takes nothing more (maxlength 1)
                 self.input("Input.insertText", text=char)
             return
         if action.get("constraints", {}).get("type") in DATE_TYPES:
@@ -807,11 +814,14 @@ class Browser:
                 raise RuntimeError("The field did not accept this value; inspect before retrying.")
             return
         self._mouse(*self._point(action))
+        self._select_all()
+        self.input("Input.insertText", text=text)
+
+    def _select_all(self):
         modifiers = 4 if sys.platform == "darwin" else 2
         self.input("Input.dispatchKeyEvent", type="keyDown", key="a", code="KeyA", modifiers=modifiers,
                    commands=["selectAll"])
         self.input("Input.dispatchKeyEvent", type="keyUp", key="a", code="KeyA", modifiers=modifiers)
-        self.input("Input.insertText", text=text)
 
     def _do_press_key(self, action, key=None, **_):
         if key not in KEYS:
