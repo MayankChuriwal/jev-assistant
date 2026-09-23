@@ -303,3 +303,12 @@ def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
     assert forget_sites([site["a"]]) == {"127.0.0.1": 1}
     b.navigate(site["a"] + "/next.html")
     assert b.evaluate("document.cookie") == "" and b.evaluate("localStorage.getItem('token')") is None
+
+
+def test_fields_that_share_a_label_are_told_apart(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<input aria-label=\"Search for a location\" "
+               "placeholder=\"Pickup location\"><input aria-label=\"Search for a location\" "
+               "placeholder=\"Dropoff location\">')")
+    fills = [a["label"] for a in b.observe()["actions"] if a["kind"] == "fill"]
+    assert fills == ["Search for a location (Pickup location)", "Search for a location (Dropoff location)"]

@@ -270,6 +270,17 @@
       e.readOnly ?? null, e.matches(':disabled'), e.getAttribute('aria-disabled'), e.getAttribute('aria-expanded'),
       e.getAttribute('aria-checked'), e.getAttribute('aria-selected'), e.getAttribute('href'), memo.get(scope) ?? ''];
   };
+  // Fields that share a label ("Search for a location" for pickup and dropoff) are told apart, so nothing meant for
+  // one is typed into the other: by placeholder where they have one, else by position.
+  const byLabel = {};
+  for (const a of actions) if (a.kind === 'fill') (byLabel[a.label] ||= []).push(a);
+  for (const same of Object.values(byLabel)) {
+    if (same.length < 2) continue;
+    same.forEach((a, i) => {
+      const hint = cache.nodes.get(a.node)?.placeholder;
+      a.label += ` (${hint && !a.label.includes(hint) ? hint : `${i + 1} of ${same.length}`})`;
+    });
+  }
   actions.push(...options);
   const omitted_actions = Math.max(0, actions.length - 250);
   actions.splice(250);

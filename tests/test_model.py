@@ -284,3 +284,25 @@ def test_text_model_payloads_are_redacted_before_they_are_encoded(monkeypatch):
     user = post.call_args.args[2]["messages"][1]["content"]
     assert "Jos" not in user and "cd" not in user
     assert "[profile:name]" in user and "[secret:x]" in user
+
+
+def test_a_dropped_connection_is_tried_again(monkeypatch):
+    import httpx
+
+    calls = []
+
+    class Response:
+        status_code, is_error = 200, False
+
+        def json(self):
+            return {"ok": True}
+
+    def flaky(url, json=None, headers=None):
+        calls.append(url)
+        if len(calls) < 3:
+            raise httpx.ConnectError("connection reset")
+        return Response()
+
+    monkeypatch.setattr(model.CLIENT, "post", flaky)
+    monkeypatch.setattr(model.time, "sleep", lambda seconds: None)
+    assert model.post_json("https://example.test", "key", {}) == {"ok": True} and len(calls) == 3

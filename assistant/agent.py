@@ -337,6 +337,21 @@ class Agent:
         s["status"] = "ready"
         return self.snapshot()
 
+    def profile_field(self, page):
+        """An empty field for a detail the profile holds (phone, email, name), or None."""
+        return next((a for a in page["actions"] if a["kind"] == "fill" and not a.get("value")
+                     and rules.profile_detail(a) and self.profile.data.get(rules.profile_detail(a))), None)
+
+    def type_profile_detail(self, page):
+        """Type the profile's value (logged as a placeholder) instead of asking the user for it."""
+        field = self.profile_field(page)
+        key = rules.profile_detail(field)
+        self.state["unused"][(rules.host(page["url"]), field["label"])] = (
+            self.profile.value(key), f"[profile:{key}]", "profile", key)
+        pick = {"operation": "TYPE_TEXT", "choice": field["id"], "probabilities": {field["id"]: 1.0},
+                "confidence": 1.0, "latency_ms": 0, "usage": {}}
+        return self.perform("TYPE_TEXT", field, pick, page)
+
     def keep_secret(self, value):
         """Hold a secret answer for this task: registered for redaction, usable by its name, never logged."""
         name = f"answer{len(self.state['answers']) + 1}"
@@ -686,6 +701,9 @@ class Agent:
             state["memory"] += [f"Noted: {fact}" for fact in facts]
         elif operation == "CONFIRM":
             self.confirm(page, "the next step")
+        elif state.get("login") and not state["login"]["done"] and self.profile_field(page):
+            # signing in, and the profile already holds the phone or email the page asks for: type it
+            return self.type_profile_detail(page)
         elif state.get("asks_since_step", 0) >= 2:  # asking again would repeat a question already answered
             state["memory"].append("I asked the user twice without taking a step in between; their answers are in "
                                    "task memory. Use them: type them into the field, or scroll or look for where "

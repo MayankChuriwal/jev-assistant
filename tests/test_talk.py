@@ -443,3 +443,14 @@ def test_current_location_uses_the_sites_own_detection(tmp_path, monkeypatch):
     assert a.state["memory"][-1] == ("User answered “Where should I pick you up?”: their current location. Use the "
                                      "site's option to detect or use the current location; the browser shares this "
                                      "device's location.")
+
+
+def test_a_detail_the_profile_holds_is_typed_not_asked(tmp_path, monkeypatch):
+    login = {"id": "e1", "kind": "fill", "label": "Enter phone number or email", "role": "textbox", "value": "",
+             "node": 1, "constraints": {"type": "text"}}
+    monkeypatch.setattr(loop.jobs, "compose", lambda *args: (_ for _ in ()).throw(AssertionError("asked the user")))
+    a = agent_with(tmp_path, page=fake_page(text="What's your phone number or email?", actions=[login]))
+    a.state["login"] = {"host": "shop.test", "since": 0, "done": False}  # signing in, as the site asked first
+    act(a, decision("ASK_USER", "ASK_USER"))
+    assert a.asked == [] and typed(a) == "+91 98765 43210"
+    assert a.state["history"][-1]["text"] == "[profile:phone]"
