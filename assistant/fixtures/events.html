@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Events fixture</title>
+<!-- Offline fixture for dialogs, downloads, pop-ups, shadow DOM, and a same-origin frame. -->
+<style>body { font: 14px system-ui, sans-serif; margin: 12px; } section { margin: 0 0 12px; } button, a { margin-right: 10px; }</style>
+</head>
+<body>
+<script>window.log = [];</script>
+<section>
+  <button onclick="log.push('confirm:' + confirm('Cancel order?'))">Cancel order</button>
+  <button onclick="alert('Saved!'); log.push('alerted')">Save</button>
+  <a href="/download/invoice.txt">Download invoice</a>
+  <button onclick="window.open('/popup.html', '_blank')">Open help</button>
+</section>
+<section>
+  <form onsubmit="event.preventDefault(); log.push('submit:' + confirm('Send complaint?'))">
+    <label>Complaint <input id="complaint"></label>
+  </form>
+</section>
+<section>
+  <fancy-button></fancy-button>
+  <iframe title="Inner" style="width:220px;height:60px" srcdoc="<button onclick=&quot;parent.log.push('frame')&quot;>Inner button</button>"></iframe>
+</section>
+<script>
+  customElements.define('fancy-button', class extends HTMLElement {
+    connectedCallback() {
+      const root = this.attachShadow({mode: 'open'});
+      root.innerHTML = '<button>Shadow button</button>';
+      root.querySelector('button').addEventListener('click', () => log.push('shadow'));
+    }
+  });
+</script>
+</body>
+</html>

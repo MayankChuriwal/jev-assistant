@@ -1,5 +1,6 @@
 """Agent Chrome through Browser Harness: observation, execution, tabs, frames, and browser events."""
 
+import base64
 import hashlib
 import json
 import os
@@ -152,8 +153,6 @@ class Browser:
         self.downloads_dir = Path(downloads) if downloads else HOME / "downloads"
         self.geolocation = geolocation
         INCOMING.mkdir(parents=True, exist_ok=True)
-        # Browser-wide: every download lands in one folder and is routed by session when it completes.
-        cdp("Browser.setDownloadBehavior", behavior="allowAndName", downloadPath=str(INCOMING), eventsEnabled=True)
         for permission, setting in (("notifications", "denied"), ("camera", "denied"), ("microphone", "denied"),
                                     ("geolocation", "granted" if geolocation else "denied")):
             try:
@@ -214,6 +213,9 @@ class Browser:
         self.call("Page.enable", session)
         self.call("DOM.enable", session)  # DOM.resolveNode needs it; no events flow until a document is requested
         self.call("Page.setInterceptFileChooserDialog", session, enabled=True)
+        # Downloads land in one folder; Chrome reports them to the session that set this, so each tab sets it.
+        self.call("Browser.setDownloadBehavior", session, behavior="allowAndName", downloadPath=str(INCOMING),
+                  eventsEnabled=True)
         self.call("Emulation.setDeviceMetricsOverride", session, deviceScaleFactor=1, mobile=False, **VIEWPORT)
         # Keep rAF/menus rendering in a background tab without activating it.
         self.call("Emulation.setFocusEmulationEnabled", session, enabled=True)
@@ -290,12 +292,6 @@ class Browser:
             except (StalePage, RuntimeError, TimeoutError, TypeError, ValueError):
                 pass
             time.sleep(0.05)
-
-    def _sync(self):
-        PUMP.flush()
-
-    def _extras(self):
-        return []
 
     def _settle(self):
         action, self.after_input = self.after_input, None
@@ -548,6 +544,107 @@ class Browser:
 
     def _do_wait(self, action, **_):
         time.sleep(0.1)
+
+    def _sync(self):
+        PUMP.flush()
+        self._sync_tabs(cdp("Target.getTargets")["targetInfos"])
+
+    def _sync_tabs(self, infos):
+        """Follow pop-ups opened by this task's tabs and forget tabs that closed."""
+        pages = {t["targetId"]: t for t in infos if t["type"] == "page"}
+        for target in [t for t in self.tabs if t not in pages]:
+            self._forget(target)
+        for target, info in pages.items():
+            if target not in self.tabs and info.get("openerId") in self.tabs:
+                self.active = self._adopt(target, opener=info["openerId"])
+        if self.active is None:
+            raise RuntimeError("Every tab of this task has closed.")
+        self.titles = {t: pages[t]["title"] or pages[t]["url"] for t in self.tabs if t in pages}
+
+    def _active_sessions(self):
+        return {self.session} | {f["session"] for f in self.frames.values() if f["tab"] == self.active}
+
+    def _extras(self):
+        """Page-level operations besides observed elements."""
+        extras = [
+            {"id": "key_page", "kind": "key", "node": None, "role": "page", "label": "The page (focused element)"},
+            {"id": "reload", "kind": "reload", "node": None, "label": "Reload"},
+            {"id": "open_url", "kind": "open_url", "node": None, "label": "Open a web address"},
+            {"id": "save_pdf", "kind": "save_pdf", "node": None, "label": "Save page as PDF"},
+        ]
+        history = self.call("Page.getNavigationHistory")
+        index, entries = history["currentIndex"], history["entries"]
+        if index > 0 and entries[index - 1]["url"] != "about:blank":
+            previous = entries[index - 1]
+            extras.append({"id": "go_back", "kind": "go_back", "node": None,
+                           "label": "Back to " + (previous["title"] or previous["url"])})
+        if index < len(entries) - 1:
+            following = entries[index + 1]
+            extras.append({"id": "go_forward", "kind": "go_forward", "node": None,
+                           "label": "Forward to " + (following["title"] or following["url"])})
+        if len(self.tabs) > 1:
+            for n, target in enumerate(self.tabs, 1):
+                extras.append({"id": f"tab{n}", "kind": "tab", "node": None, "tab": target,
+                               "current": target == self.active, "label": "Tab: " + self.titles.get(target, "")})
+        if self.chooser and self.chooser["session"] in self._active_sessions():
+            extras.append({"id": "file_chooser", "kind": "upload", "node": None, "chooser": True,
+                           "multiple": self.chooser["multiple"], "label": "Open file picker"})
+        return extras
+
+    def _history_step(self, offset):
+        history = self.call("Page.getNavigationHistory")
+        index = history["currentIndex"] + offset
+        if not 0 <= index < len(history["entries"]):
+            raise StalePage("History changed. Observe again.")
+        previous = self._time_origin()
+        self.call("Page.navigateToHistoryEntry", entryId=history["entries"][index]["id"])
+        self._wait_loaded(previous)
+
+    def _do_go_back(self, action, **_):
+        self._history_step(-1)
+
+    def _do_go_forward(self, action, **_):
+        self._history_step(1)
+
+    def _do_reload(self, action, **_):
+        previous = self._time_origin()
+        self.call("Page.reload")
+        self._wait_loaded(previous)
+
+    def _do_open_url(self, action, url=None, **_):
+        parsed = urlparse(url or "")
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("OPEN_URL accepts only http(s) addresses; nothing opened.")
+        self.navigate(url)
+
+    def _do_save_pdf(self, action, **_):
+        data = self.call("Page.printToPDF", timeout=60.0, printBackground=True)["data"]
+        self.downloads_dir.mkdir(parents=True, exist_ok=True)
+        path = unique(self.downloads_dir / (safe_name(self.evaluate("document.title") or "page") + ".pdf"))
+        path.write_bytes(base64.b64decode(data))
+        self.downloads.append(str(path))
+        return {"file": str(path)}
+
+    def _do_switch_tab(self, action, **_):
+        if action["tab"] not in self.tabs:
+            raise StalePage("That tab closed. Observe again.")
+        self.active = action["tab"]
+
+    def _do_close_tab(self, action, **_):
+        if action["tab"] not in self.tabs or len(self.tabs) < 2:
+            raise StalePage("Tabs changed. Observe again.")
+        cdp("Target.closeTarget", targetId=action["tab"])
+        self._forget(action["tab"])
+
+    def _close_dialog(self, accept):
+        self.call("Page.handleJavaScriptDialog", accept=accept)
+        self.dialogs.pop(self.session, None)
+
+    def _do_accept_dialog(self, action, **_):
+        self._close_dialog(True)
+
+    def _do_dismiss_dialog(self, action, **_):
+        self._close_dialog(False)
 
     def close(self):
         for target in list(self.tabs):
