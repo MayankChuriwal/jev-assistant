@@ -19,12 +19,19 @@ Type a goal, such as "Order a Diet Coke on Instamart". The agent works in its ow
 what it needs, one question at a time: buttons and lists for choices, a hidden field for OTPs and CVVs, and a
 summary card before anything is paid for or booked. Up to three tasks run at once (one per site). Messages sent
 mid-task count as answers, changes, new tasks, cancellations, or status questions. Files the agent saves, such as
-receipts or PDFs, arrive in chat as documents.
+receipts or PDFs, arrive in chat as documents. When a control can't be named from the page (a canvas, a map,
+an image-only button), the agent finds it on a masked screenshot.
 
 The chat uses WhatsApp Cloud API shapes: a webhook comes in, send-message payloads go out, and files travel as
 media ids. A WhatsApp channel can therefore replace `assistant/channel_web.py` without touching the conversation core
 (`assistant/core.py`). The server listens on 127.0.0.1 only and checks a per-launch token. `JEV_DEBUG=1` adds
 `/api/debug` with each task's recent steps.
+
+## Traces and the smoke set
+
+Every task writes a redacted trace to `~/.jev/traces/` when it ends; `uv run jev traces` lists the latest ones with
+their outcome, question count, and quoted evidence. The live smoke set that defines v1 as done is in
+`docs/smoke.md`. Known issues and their status are in `docs/known-issues.md`.
 
 ## One task in the terminal
 

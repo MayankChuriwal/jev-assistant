@@ -1,9 +1,9 @@
 # Known issues
 
 Minor findings deferred by the final reviews of each plan. Each keeps its ID for good; when one is scheduled, its
-status names the plan and task; when fixed, the commit. New findings from live runs are added here too.
+status names the plan and task; when fixed, the plan and task that fixed it. New findings from live runs are added here too.
 
-Status: `open` · `Plan N Task M` (scheduled) · `fixed <commit>` · `won't fix: <reason>`
+Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won't fix: <reason>`
 
 ## Plan 1 — browser foundation
 
