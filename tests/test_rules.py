@@ -112,3 +112,9 @@ def test_codes_are_secret_but_a_phone_number_for_a_code_is_not():
     for text in ("Please provide your phone number or email to receive the one-time code.", "Enter your PIN code",
                  "Which address?"):
         assert not rules.asks_for_secret(text), text
+
+
+def test_ways_of_saying_current_location():
+    for text in ("Current location", "use my current location", "my location", "here", "where I am."):
+        assert rules.means_current_location(text), text
+    assert not rules.means_current_location("Prestige Sunnyside Elm")

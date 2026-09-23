@@ -92,15 +92,6 @@ def test_a_second_jev_explains_the_port_is_taken(monkeypatch, capsys):
     assert "Another jev is already serving the chat" in capsys.readouterr().err
 
 
-def test_the_profile_command_sets_the_usual_address(tmp_path, monkeypatch, capsys):
-    from assistant.profile import Profile
-
-    monkeypatch.setattr("assistant.profile.HOME", tmp_path)
-    assert server.main(["profile", "--address", "Prestige Sunnyside Elm, Bengaluru"]) == 0
-    assert Profile().data["addresses"] == [{"label": "Home", "text": "Prestige Sunnyside Elm, Bengaluru"}]
-    assert "address: set" in capsys.readouterr().out
-
-
 def test_forget_needs_the_agent_chrome(monkeypatch, capsys):
     monkeypatch.setattr(server, "devtools_ready", lambda url=None: False)
     assert server.main(["forget", "swiggy.com"]) == 1 and "not running" in capsys.readouterr().err

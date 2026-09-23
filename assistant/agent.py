@@ -714,19 +714,15 @@ class Agent:
         if not answer:
             raise Halt("blocked", "I needed an answer to continue.")
         if not picked and question["kind"] != "secret" and rules.means_current_location(answer):
-            home = next((a["text"] for a in self.profile.data["addresses"] if a.get("text")), None)
-            if home:
-                answer = f"{home} (their current location)"
-            else:  # the agent's browser has no location: never let a site guess one
-                where = self.ask({"kind": "text", "text": "My browser can't see where you are. What's the address "
-                                                          "where you are now?"})
-                answer = str(where.get("text", "")).strip() or answer
+            answer = ("their current location. Use the site's option to detect or use the current location; the "
+                      "browser shares this device's location")  # never a stored address
         if question["kind"] == "secret":
             name = self.keep_secret(answer)
             s["memory"].append(f"User answered “{question['text']}” with [secret:{name}] (secret key {name})")
             return
         detail = f" ({picked['description']})" if picked and picked["description"] else ""
-        s["memory"].append(f"User answered “{question['text']}”: {answer}{detail}")
+        ending = "." if answer.startswith("their current location") else ""
+        s["memory"].append(f"User answered “{question['text']}”: {answer}{detail}{ending}")
         if reply.get("remember"):
             preference, _ = jobs.remember(question["text"], answer)
             self.profile.remember(preference, s["goal"])

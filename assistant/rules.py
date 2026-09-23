@@ -20,8 +20,8 @@ CHALLENGE = re.compile(r"i'?m not a robot|select all (the )?(images|squares)|cli
 SAVED_ADDRESS = re.compile(r"^(home|work|office|other|hotel)\b.*,|\b\d{6}\b|,.*\b(road|street|lane|nagar|layout|colony|"
                            r"sector|avenue|block|cross)\b", re.IGNORECASE)
 ADDRESS_EXTRA = re.compile(r"\b(current location|add (a )?new address)\b", re.IGNORECASE)
-CURRENT_PLACE = re.compile(r"^\s*((my |the )?(current|present) (location|place|address)|here|where i am|my location)"
-                           r"\s*\.?\s*$", re.IGNORECASE)
+CURRENT_PLACE = re.compile(r"^\s*(please )?(use )?((my |the )?(current|present) (location|place|address)|here|"
+                           r"where i am|my location)\s*(please)?\s*\.?\s*$", re.IGNORECASE)
 COMMERCE = re.compile(r"\b(book|order|buy|purchase|pay|reserve)\b", re.IGNORECASE)
 TO_USER = re.compile(r"^\s*(please|kindly|do you|would you|could you|can you|shall i|should i|are you)\b",
                      re.IGNORECASE)

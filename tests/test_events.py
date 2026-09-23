@@ -125,11 +125,11 @@ def test_history_reload_and_open_url(browser_at, site):
         b.act("OPEN_URL", find(page, "Open a web address", "open_url"), page, url="javascript:alert(1)")
 
 
-def test_permission_prompts_are_denied_without_asking(browser_at):
+def test_sites_can_detect_the_location_but_nothing_else_prompts(browser_at):
     b = browser_at("/events.html")
     states = b.evaluate("Promise.all(['geolocation', 'notifications'].map(n => "
                         "navigator.permissions.query({name: n}).then(p => p.state)))")
-    assert states == ["denied", "denied"]
+    assert states == ["granted", "denied"]  # "Use current location" works with the device's own location
 
 
 def test_downloads_still_arrive_after_a_popup_closes(browser_at):

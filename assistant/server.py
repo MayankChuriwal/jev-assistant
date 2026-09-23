@@ -190,16 +190,12 @@ def profile_command(args):
     profile = Profile()
     changed = {key: value for key, value in (("name", args.name), ("phone", args.phone), ("email", args.email),
                                              ("upi_id", args.upi)) if value}
-    if args.address:
-        others = [a for a in profile.data["addresses"] if a.get("label") != "Home"]
-        changed["addresses"] = [{"label": "Home", "text": args.address}, *others]
     if changed:
         profile.data.update(changed)
         profile.save()
     print(f"Profile: {profile.path}")
     for key in HIDDEN:
         print(f"  {key}: {'set' if profile.data.get(key) else 'not set'}")
-    print(f"  address: {'set' if profile.data['addresses'] else 'not set'}")
     return 0
 
 
@@ -397,7 +393,6 @@ def main(argv=None):
     profile_parser = commands.add_parser("profile", help="set your name, phone, email, or UPI ID; no model sees them")
     for flag in ("--name", "--phone", "--email", "--upi"):
         profile_parser.add_argument(flag)
-    profile_parser.add_argument("--address", help="your usual address; \"current location\" means this")
     forget_parser = commands.add_parser("forget", help="sign the agent Chrome out of sites, e.g. swiggy.com uber.com")
     forget_parser.add_argument("sites", nargs="+")
     traces_parser = commands.add_parser("traces", help="list the latest task traces")

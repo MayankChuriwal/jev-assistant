@@ -13,7 +13,8 @@ WAIT only when the needed control is absent/disabled, or submitted results are s
 Recent WAIT actions are not evidence of loading. Prefer a useful visible control over WAIT.
 Use saved preferences and task memory before asking. Never commit without the user's approval in task memory.
 Before typing an address or location, open the address or location control: signed-in sites list saved addresses
-to choose from. Use "current location" only when the user asked for it. Choose a suggested place only when it
+to choose from. When the user wants their current location, use the site's option to detect or use the current
+location (the browser shares this device's location); never otherwise. Choose a suggested place only when it
 matches what the user said; otherwise type the user's words and pick the matching suggestion. Never ask the user
 for something the goal already states, and never ask which page, menu, or tab to open: navigate yourself.
 A captcha challenge (pick images, type characters, "I'm not a robot") is solved only by the user: choose ASK_USER,

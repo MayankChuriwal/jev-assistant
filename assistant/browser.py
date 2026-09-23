@@ -345,7 +345,7 @@ class Browser:
         self.geolocation = geolocation
         INCOMING.mkdir(parents=True, exist_ok=True)
         for permission, setting in (("notifications", "denied"), ("camera", "denied"), ("microphone", "denied"),
-                                    ("geolocation", "granted" if geolocation else "denied")):
+                                    ("geolocation", "granted")):  # sites detect the device's own location
             try:
                 cdp("Browser.setPermission", permission={"name": permission}, setting=setting)
             except RuntimeError:

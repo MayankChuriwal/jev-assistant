@@ -433,15 +433,13 @@ def test_a_saved_address_preference_needs_no_question(tmp_path):
     assert a.asked == [] and [c.args[1]["node"] for c in a.browser.act.call_args_list] == [1]
 
 
-def test_current_location_means_the_saved_address_or_a_follow_up(tmp_path, monkeypatch):
+def test_current_location_uses_the_sites_own_detection(tmp_path, monkeypatch):
     question = {"kind": "text", "text": "Where should I pick you up?", "options": [], "preference": False}
     monkeypatch.setattr(loop.jobs, "compose", lambda context, page, elements: (question, META))
-    a = agent_with(tmp_path, replies=[{"text": "Current location"}, {"text": "Prestige Sunnyside Elm"}])
+    a = agent_with(tmp_path, replies=[{"text": "Current location"}],
+                   profile={"addresses": [{"label": "Home", "text": "Somewhere saved long ago"}]})
     act(a, decision("ASK_USER", "ASK_USER"))
-    assert a.asked[1]["text"].startswith("My browser can't see where you are.")
-    assert a.state["memory"][-1] == "User answered “Where should I pick you up?”: Prestige Sunnyside Elm"
-    a = agent_with(tmp_path, replies=[{"text": "my location"}],
-                   profile={"addresses": [{"label": "Home", "text": "Prestige Sunnyside Elm, Bengaluru"}]})
-    act(a, decision("ASK_USER", "ASK_USER"))
-    assert len(a.asked) == 1 and a.state["memory"][-1] == (
-        "User answered “Where should I pick you up?”: Prestige Sunnyside Elm, Bengaluru (their current location)")
+    assert len(a.asked) == 1 and "Somewhere saved" not in a.state["memory"][-1]  # never a stored address
+    assert a.state["memory"][-1] == ("User answered “Where should I pick you up?”: their current location. Use the "
+                                     "site's option to detect or use the current location; the browser shares this "
+                                     "device's location.")
