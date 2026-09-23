@@ -4,7 +4,20 @@ import re
 from urllib.parse import urlparse
 
 from .model import text_json
-from .questions import CHAT, COMPOSE, CONFIRM_CARD, HELP, HINT, NOTE_FACTS, OUTCOME, REMEMBER, RESULT, START
+from .questions import (
+    CHAT,
+    COMPOSE,
+    CONFIRM_CARD,
+    HELP,
+    HINT,
+    LOOK,
+    LOOK_CLOSER,
+    NOTE_FACTS,
+    OUTCOME,
+    REMEMBER,
+    RESULT,
+    START,
+)
 from .rules import verbatim
 
 KINDS = {"text", "secret", "choice"}
@@ -132,3 +145,22 @@ def chat(message, tasks):
     if not text:
         raise invalid("reply")
     return text, meta
+
+
+def look(context, page, purpose, image, cells):
+    """The grid cell holding what the task needs, and its name as the page shows it; None when nothing fits."""
+    payload = {"context": context, "page": view(page), "purpose": purpose, "cells": sorted(cells)}
+    out, meta = text_json(LOOK, payload, images=[image])
+    if out.get("cell") is None:
+        return None, meta
+    label = words(out, "label", 80)
+    if out["cell"] not in cells or not label:
+        raise invalid("look")
+    return {"cell": out["cell"], "label": label}, meta
+
+
+def look_closer(label, image, cells):
+    out, meta = text_json(LOOK_CLOSER, {"control": label, "cells": sorted(cells)}, images=[image])
+    if out.get("cell") not in cells:
+        raise invalid("look")
+    return out["cell"], meta

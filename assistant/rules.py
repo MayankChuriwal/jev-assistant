@@ -101,3 +101,15 @@ def format_error(value, action):
         except re.error:
             pass  # JavaScript-only pattern syntax: let the site judge
     return None
+
+
+def grid(region, columns, rows):
+    """Labelled cells over a region of the viewport: A1 is top-left; letters run across and numbers down."""
+    width, height = region["w"] / columns, region["h"] / rows
+    return {f"{chr(65 + c)}{r + 1}": {"x": region["x"] + c * width, "y": region["y"] + r * height, "w": width,
+                                      "h": height}
+            for r in range(rows) for c in range(columns)}
+
+
+def centre(cell):
+    return cell["x"] + cell["w"] / 2, cell["y"] + cell["h"] / 2
