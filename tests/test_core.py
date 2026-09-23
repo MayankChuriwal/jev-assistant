@@ -521,3 +521,14 @@ def test_files_that_arrive_as_the_task_ends_are_still_sent(world, tmp_path):
     world.late["Get my invoice"] = [str(late)]
     text(world, "Get my invoice")
     assert until(lambda: [m for m in sent(world) if m["type"] == "document"])
+
+
+def test_a_stopped_task_says_when_it_has_stopped(world):
+    gate = threading.Event()
+    world.scripts["Order Diet Coke"] = [hold(gate), tell("never")]
+    text(world, "Order Diet Coke")
+    assert until(lambda: world.core.tasks["t1"].status == "running")
+    world.intents.append(("CANCEL", "t1", {"CANCEL": 0.97}))
+    text(world, "stop")
+    gate.set()
+    assert until(lambda: "Stopped Order Diet Coke." in bodies(world)) and "never" not in bodies(world)

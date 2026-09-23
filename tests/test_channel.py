@@ -64,3 +64,12 @@ def test_media_is_stored_and_registered_privately(tmp_path):
     assert channel.media(registered) == (invoice, "application/pdf", "invoice.pdf")
     with pytest.raises(KeyError):
         channel.media("nope")
+
+
+def test_files_keep_their_names_for_the_sites_they_go_to(tmp_path):
+    channel = WebChannel(tmp_path / "media")
+    statement = channel.media(channel.store(b"%PDF", "application/pdf", "../statement ₹.pdf"))[0]
+    assert statement.name == "statement ₹.pdf" and statement.read_bytes() == b"%PDF"
+    assert oct(statement.parent.stat().st_mode & 0o777) == "0o700"
+    photo = channel.media(channel.store(b"\x89PNG", "image/png"))[0]
+    assert photo.suffix == ".png" and photo.parent != statement.parent

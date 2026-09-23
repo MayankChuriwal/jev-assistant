@@ -38,7 +38,7 @@ def chat(chrome, tmp_path):
     httpd = server.ChatServer(core, channel, port=0)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     browser = Browser(f"http://127.0.0.1:{httpd.server_port}/")
-    yield SimpleNamespace(browser=browser, channel=channel, core=core)
+    yield SimpleNamespace(browser=browser, channel=channel, core=core, httpd=httpd)
     browser.close()
     httpd.shutdown()
     httpd.server_close()
@@ -151,3 +151,11 @@ def test_a_secret_that_was_not_delivered_stays_hidden(chat):
     assert until(lambda: js(chat, "document.querySelector('.bubble.out.failed') !== null"))
     assert js(chat, "document.getElementById('text').type") == "password"
     assert "hunter2" not in js(chat, "document.body.innerText")
+
+
+def test_a_restarted_server_asks_for_a_reload(chat):
+    assert until(lambda: js(chat, "document.getElementById('status').textContent") == "online")
+    chat.httpd.token = "a-new-launch"  # what a restart does to the page's token
+    chat.channel.set_typing(True)  # wakes the page's long poll; the next poll meets the new token
+    assert until(lambda: js(chat, "document.getElementById('status').textContent") ==
+                 "jev restarted: reload this page", timeout=5)

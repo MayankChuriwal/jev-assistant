@@ -38,9 +38,14 @@ class WebChannel:
             return [m for m in self.outbox if m["x_seq"] > after], self.typing
 
     def store(self, data, mime, filename=None):
+        """Keep a file under its own name (sites show and check it), in a private folder of its own."""
         media_id = secrets.token_hex(8)
-        self.media_dir.mkdir(parents=True, exist_ok=True)
-        path = self.media_dir / (media_id + (mimetypes.guess_extension(mime) or ""))
+        folder = self.media_dir / media_id
+        folder.mkdir(parents=True, mode=0o700)
+        name = Path(filename or "").name
+        if name in {"", ".", ".."}:
+            name = media_id + (mimetypes.guess_extension(mime) or "")
+        path = folder / name
         path.write_bytes(data)
         path.chmod(0o600)
         self.files[media_id] = (path, mime, filename)

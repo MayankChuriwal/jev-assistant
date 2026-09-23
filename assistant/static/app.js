@@ -148,6 +148,10 @@ async function poll() {
   for (;;) {
     try {
       const r = await api(`/outbox?after=${after}&wait=25`);
+      if (r.status === 403) { // a new launch of jev has a new token
+        status.textContent = 'jev restarted: reload this page';
+        return;
+      }
       if (!r.ok) throw new Error(String(r.status));
       const {messages, typing, open} = await r.json();
       for (const m of messages) {

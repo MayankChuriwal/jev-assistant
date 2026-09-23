@@ -46,14 +46,14 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed <commit>` · `won't fix:
 | P3-04 | With no task running, an ambiguous message such as "hi" can start a task instead of asking. | `core.py` | open |
 | P3-05 | "Which task?" offers at most 2 tasks (3 for stop or change), and titles cut to 20 characters can look identical. | `core.py` | open |
 | P3-06 | Tapping a button of an already-answered question gives no feedback. | `core.py` | open |
-| P3-07 | Files the user sends reach websites under a random media-id name (and `.bin` without a MIME type), not the original filename. | `channel_web.py`, `core.py` | Plan 4 Task 7 |
+| P3-07 | Files the user sends reach websites under a random media-id name (and `.bin` without a MIME type), not the original filename. | `channel_web.py`, `core.py` | fixed (Plan 4 Task 7) |
 | P3-08 | `_forget` iterates the tab-owner map while other task threads add to it, which can raise and leave tabs open. | `browser.py` | open |
 | P3-09 | Cancelled or interrupted downloads stay in the download maps and keep closed browsers in memory. | `browser.py` | open |
 | P3-10 | Parallel tasks share one profile, and concurrent saves use the same temporary file. | `profile.py` | fixed (Plan 4 Task 6) |
 | P3-11 | If sending a question fails after it opens, it stays open and blocks every later question. | `core.py` | open |
-| P3-12 | After `jev` restarts, an open chat page gets 403 with its old token and shows "offline, retrying" forever instead of asking for a reload. | `static/app.js` | Plan 4 Task 7 |
+| P3-12 | After `jev` restarts, an open chat page gets 403 with its old token and shows "offline, retrying" forever instead of asking for a reload. | `static/app.js` | fixed (Plan 4 Task 7) |
 | P3-13 | The attach button stays highlighted if a file question is answered another way. | `static/app.js` | open |
 | P3-14 | The password-type composer may make Chrome offer to save OTPs, CVVs, or passwords. | `static/app.js` | open |
 | P3-15 | Each webhook is handled on its own thread, so a goal and a quick follow-up change can be routed out of order. | `server.py`, `core.py` | open |
 | P3-16 | Documents sent to chat carry no task title when several tasks run. | `core.py` | open |
-| P3-17 | Nothing confirms when a task that was asked to stop has actually stopped. | `core.py` | Plan 4 Task 7 |
+| P3-17 | Nothing confirms when a task that was asked to stop has actually stopped. | `core.py` | fixed (Plan 4 Task 7) |
