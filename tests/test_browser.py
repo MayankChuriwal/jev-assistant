@@ -124,3 +124,34 @@ def test_large_pages_stay_fast_and_capped(browser_at):
     page = b.observe()
     assert time.monotonic() - started < 1.5
     assert sum(1 for a in page["actions"] if a.get("node") is not None) <= 250
+
+
+def test_password_code_boxes_never_leave_the_page(browser_at):
+    b = browser_at("/guards.html")
+    b.evaluate("document.querySelectorAll('.pin input').forEach((box, i) => box.value = String(i + 1))")
+    page = b.observe()
+    assert find(page, "Card PIN", "fill")["value"] == "[filled]"
+    assert "1234" not in json.dumps(page)
+
+
+def test_covered_controls_are_not_offered_but_label_covered_inputs_are(browser_at):
+    b = browser_at("/covered.html")
+    page = b.observe()
+    assert not any(a["label"] == "Hidden behind banner" for a in page["actions"])
+    assert find(page, "Accept cookies")
+    large = find(page, "Large", "click")
+    assert large["role"] == "radio"
+    b.act("CLICK", large, page)
+    assert b.evaluate("document.querySelector('[value=large]').checked") is True
+
+
+def test_countdowns_do_not_make_every_decision_stale(browser_at):
+    b = browser_at("/countdown.html")
+    page = b.observe()
+    time.sleep(0.7)  # the countdown ticks several times
+    assert b.fresh(page) and b.fresh(page, find(page, "Verify"))
+    b.act("TYPE_TEXT", find(page, "Code", "fill"), page, text="482913")
+    assert b.evaluate("document.getElementById('code').value") == "482913"
+    page = b.observe()
+    b.evaluate("document.getElementById('total').textContent = 'Total ₹790'")
+    assert not b.fresh(page, find(page, "Verify"))

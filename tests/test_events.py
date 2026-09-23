@@ -130,3 +130,29 @@ def test_permission_prompts_are_denied_without_asking(browser_at):
     states = b.evaluate("Promise.all(['geolocation', 'notifications'].map(n => "
                         "navigator.permissions.query({name: n}).then(p => p.state)))")
     assert states == ["denied", "denied"]
+
+
+def test_downloads_still_arrive_after_a_popup_closes(browser_at):
+    b = browser_at("/events.html")
+    page = b.observe()
+    b.act("CLICK", find(page, "Open help"), page)
+    page = observe_until(b, lambda p: p["title"] == "Help center")
+    b.act("CLOSE_TAB", next(a for a in page["actions"] if a["kind"] == "tab" and a["current"]), page)
+    page = observe_until(b, lambda p: p["title"] == "Events fixture")
+    b.act("CLICK", find(page, "Download invoice"), page)
+    files = until(lambda: b.observe()["downloads"])
+    assert files and Path(files[0]).name.startswith("invoice")
+
+
+def test_leave_page_prompts_surface_as_dialogs_instead_of_hanging(browser_at, site):
+    b = browser_at("/draft.html")
+    page = b.observe()
+    b.act("TYPE_TEXT", find(page, "Message", "fill"), page, text="unsent")
+    page = b.observe()
+    started = time.monotonic()
+    b.act("OPEN_URL", find(page, "Open a web address", "open_url"), page, url=site["a"] + "/next.html")
+    assert time.monotonic() - started < 6
+    page = b.observe()
+    assert page["dialog"]["type"] == "beforeunload"
+    b.act("ACCEPT_DIALOG", find(page, "OK", "accept_dialog"), page)
+    assert observe_until(b, lambda p: p["title"] == "Next page")

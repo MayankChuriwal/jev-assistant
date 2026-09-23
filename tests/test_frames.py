@@ -1,5 +1,7 @@
 """Shadow DOM, same-origin frames, and cross-origin frames in a real headless Chrome. Run: uv run pytest -m browser"""
 
+import time
+
 import pytest
 from helpers import find, log, observe_until, until
 
@@ -47,9 +49,28 @@ def test_offscreen_frames_never_reach_jev(browser_at):
     assert "Win a prize" not in page["text"]
 
 
-def test_a_change_inside_the_frame_invalidates_the_full_check(browser_at):
+def test_a_change_to_a_frame_target_invalidates_it(browser_at):
     b = browser_at("/pay.html")
     page = observe_until(b, HAS_FRAME)
-    frame = find(page, "CVV", "fill")["frame"]
-    b.evaluate("document.body.insertAdjacentHTML('beforeend', '<p>Session expired</p>')", b.frames[frame]["session"])
-    assert not b.fresh(page)
+    cvv = find(page, "CVV", "fill")
+    b.evaluate("document.querySelector('label').firstChild.textContent = 'PIN '", b.frames[cvv["frame"]]["session"])
+    assert not b.fresh(page, cvv)
+
+
+def test_changing_third_party_frames_do_not_block_other_targets(browser_at):
+    b = browser_at("/pay.html")
+    page = observe_until(b, lambda p: HAS_FRAME(p) and "agents online" in p["text"])
+    time.sleep(0.6)  # the support widget changes several times
+    assert b.fresh(page)
+    b.act("TYPE_TEXT", find(page, "CVV", "fill"), page, text="123")
+    b.act("TYPE_TEXT", find(page, "Coupon", "fill"), page, text="SAVE10")
+    assert b.evaluate("document.getElementById('coupon').value") == "SAVE10"
+
+
+def test_a_cross_origin_frame_inside_a_same_origin_frame_can_be_driven(browser_at):
+    b = browser_at("/nested.html")
+    page = observe_until(b, HAS_FRAME)
+    b.act("TYPE_TEXT", find(page, "CVV", "fill"), page, text="456")
+    page = b.observe()
+    b.act("CLICK", find(page, "Pay ₹79", "click"), page)
+    assert until(lambda: log(b) == ["pay:456"])

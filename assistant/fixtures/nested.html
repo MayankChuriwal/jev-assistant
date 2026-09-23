@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Nested checkout</title></head>
+<body>
+<script>window.log = [];</script>
+<iframe id="shell" title="Checkout shell" style="width:420px;height:220px;border:1px solid #999"></iframe>
+<script>
+  // A same-origin shell frame that embeds the cross-origin gateway and forwards its messages here.
+  const other = `${location.protocol}//localhost:${location.port}`;
+  document.getElementById('shell').srcdoc =
+    `<body><script>addEventListener('message', e => parent.log.push(e.data))<\/script>` +
+    `<iframe title="Payment" src="${other}/pay-frame.html" style="width:380px;height:160px"></iframe></body>`;
+</script>
+</body>
+</html>

@@ -27,6 +27,11 @@
       e.getAttribute('title') || e.getAttribute('placeholder') || '';
   };
   const label = e => name(e).replace(/\s+/g, ' ').trim().slice(0, 160);
+  // Countdowns ("Resend code in 0:29", "expires in 4:59", "29s left") tick without changing what a page means.
+  const steady = t => String(t ?? '').replace(/\b(in|within)\s+\d{1,2}:\d{2}\b/gi, '$1 #:##')
+    .replace(/\b\d{1,2}:\d{2}\s+(left|remaining)\b/gi, '#:## $1')
+    .replace(/\b(in|within)\s+\d+\s?(s|secs?|seconds)\b/gi, '$1 # $2')
+    .replace(/\b\d+\s?(s|secs?|seconds)\s+(left|remaining)\b/gi, '# $1 $2');
   const roles = ['button', 'link', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemradio',
     'menuitemcheckbox', 'option', 'gridcell', 'combobox', 'textbox', 'searchbox', 'spinbutton', 'slider', 'treeitem'];
   const semantic = 'a[href],button,input,textarea,select,summary,[contenteditable="true"],[contenteditable=""],' +
@@ -76,7 +81,9 @@
       let root = cur.getRootNode(), target = cur;
       for (;;) {
         const hit = root.elementFromPoint(x, y);
-        if (!hit || !(hit === target || target.contains(hit))) return null;
+        const own = hit && (hit === target || target.contains(hit) ||
+          (target === e && [...(e.labels || [])].some(l => l === hit || l.contains(hit))));
+        if (!own) return null;
         if (!root.host) break;
         target = root.host;
         root = target.getRootNode();
@@ -111,7 +118,7 @@
     for (let i = 0; e && i < 4; e = e.parentElement, i++) {
       const rect = box(e, dx, dy);
       if (rect.w >= 60 && rect.h >= 40) {
-        if (!zones.has(e) && inView(rect)) {
+        if (!zones.has(e) && inView(rect) && cache.locate(identity(e))) {
           zones.add(e);
           actions.push({node: identity(e), kind: 'upload', drop: true, role: 'region',
             label: 'Drop zone: ' + text.replace(/\s+/g, ' ').slice(0, 80), rect});
@@ -197,6 +204,7 @@
       const rect = box(e, dx, dy);
       if (!inView(rect) || (clickable && rect.w * rect.h > innerWidth * innerHeight / 2)) continue;
       const node = identity(e);
+      if (!cache.locate(node)) continue;  // covered (banner, overlay) or clipped: a click could not reach it
       if (draggable) actions.push({node, kind: 'drag', role: 'draggable', label: label(e) || 'Draggable item', rect});
       if (dirs.length && rect.w >= 60 && rect.h >= 24) {  // short carousels and chip rows are ~30px tall
         const panel = e.getAttribute('aria-label') || label(e).slice(0, 60) || 'panel';
@@ -225,7 +233,8 @@
       if (group && group[0] !== e) continue;  // one action for a whole one-time-code group
       const fill = {...base, kind: 'fill', constraints: constraints(e),
         value: e.type === 'password' ? (e.value ? '[filled]' : '') : 'value' in e ? String(e.value) : e.innerText.trim()};
-      if (group) Object.assign(fill, {group: group.map(identity), value: group.map(b => b.value).join(''),
+      const typed = group ? group.map(b => b.value).join('') : '';
+      if (group) Object.assign(fill, {group: group.map(identity), value: group.every(safe) ? typed : typed ? '[filled]' : '',
         label: e.closest('[aria-label]')?.getAttribute('aria-label') || 'One-time code'});
       actions.push(fill, {...fill, kind: 'click', label: 'Open ' + fill.label, constraints: undefined, group: undefined});
     }
@@ -237,8 +246,8 @@
   cache.guard = (e, memo = new Map()) => {
     if (!e?.isConnected || !visible(e)) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
-    if (scope && !memo.has(scope)) memo.set(scope, scope.innerText?.slice(0, 6000) || '');
-    return [identity(e), role(e), name(e), safe(e) ? e.value ?? null : null, e.checked ?? null, e.selectedIndex ?? null,
+    if (scope && !memo.has(scope)) memo.set(scope, steady(scope.innerText?.slice(0, 6000)));
+    return [identity(e), role(e), steady(name(e)), safe(e) ? e.value ?? null : null, e.checked ?? null, e.selectedIndex ?? null,
       e.readOnly ?? null, e.matches(':disabled'), e.getAttribute('aria-disabled'), e.getAttribute('aria-expanded'),
       e.getAttribute('aria-checked'), e.getAttribute('aria-selected'), e.getAttribute('href'), memo.get(scope) ?? ''];
   };
@@ -250,7 +259,7 @@
   // Compare meaning and identity. Geometry is always resolved and hit-tested just before input.
   const semantics = actions.map(({rect, ...action}) => action);
   const marker = [performance.timeOrigin, location.href, scrollX, scrollY, innerWidth, innerHeight,
-    document.title, text, semantics, page_key[6]];
+    document.title, steady(text), steady(JSON.stringify(semantics)), page_key[6]];
   actions.forEach((a, i) => a.id = 'e' + (i + 1));
   const height = document.documentElement.scrollHeight, width = document.documentElement.scrollWidth;
   const page = (direction, more) => more && actions.push(

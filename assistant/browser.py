@@ -11,8 +11,14 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from browser_harness.admin import ensure_daemon
-from browser_harness.helpers import cdp, drain_events
+# Browser Harness fixes its daemon name at import. "default" drives the user's everyday Chrome: never fall back to it.
+os.environ.setdefault("BU_NAME", "jev")
+os.environ.setdefault("BU_CDP_URL", "http://127.0.0.1:9333")
+if os.environ["BU_NAME"] == "default":
+    raise RuntimeError("BU_NAME=default drives the user's everyday Chrome; the agent needs its own daemon: BU_NAME=jev")
+
+from browser_harness.admin import ensure_daemon  # noqa: E402
+from browser_harness.helpers import cdp, drain_events  # noqa: E402
 
 HOME = Path(os.environ.get("JEV_HOME") or Path.home() / ".jev")
 INCOMING = HOME / "downloads" / ".incoming"
@@ -43,12 +49,23 @@ LOCATE = "(node => window.__jevFast?.locate(node) ?? null)"
 # Runs on the <iframe> element in its owner document: map a point inside the frame to the owner's viewport.
 HIT_OWNER = r"""function (x, y) {
   const r = this.getBoundingClientRect();
-  return window.__jevFast?.climb(this, r.x + this.clientLeft + x, r.y + this.clientTop + y) ?? null;
+  let w = window, c = window.__jevFast;  // the snapshot runs in the session's top window only
+  try { while (!c && w.parent !== w) { w = w.parent; c = w.__jevFast; } } catch {}
+  return c?.climb(this, r.x + this.clientLeft + x, r.y + this.clientTop + y) ?? null;
 }"""
 FRAME_VISIBLE = r"""function () {
   const r = this.getBoundingClientRect();
-  return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth &&
-    this.checkVisibility({checkOpacity: true, checkVisibilityCSS: true});
+  let x = r.x, y = r.y, w = window;  // map through same-origin frames to the session's top viewport
+  try {
+    while (w.frameElement) {
+      const f = w.frameElement, fr = f.getBoundingClientRect();
+      x += fr.x + f.clientLeft;
+      y += fr.y + f.clientTop;
+      w = w.parent;
+    }
+  } catch {}
+  return r.width > 0 && r.height > 0 && x + r.width > 0 && y + r.height > 0 && x < w.innerWidth &&
+    y < w.innerHeight && this.checkVisibility({checkOpacity: true, checkVisibilityCSS: true});
 }"""
 SELECT = r"""(({node, value}) => {
   const c = window.__jevFast, e = c?.nodes.get(node);
@@ -102,6 +119,10 @@ SETTLE = r"""(action => new Promise(resolve => {
 
 class StalePage(ValueError):
     """A decision no longer refers to the observed page."""
+
+
+class ExecutionUncertain(RuntimeError):
+    """Input may already have reached the page. Never retried: the task stops and reports it."""
 
 
 class EventPump:
@@ -188,6 +209,7 @@ class Browser:
         """Trusted input on the active tab. A modal dialog blocks the reply: report it, never hang or retry."""
         if self.dialogs.get(self.session):
             return None
+        self.mutated = True
         try:
             return self.call(method, timeout=2.0, **params)
         except TimeoutError:
@@ -218,9 +240,7 @@ class Browser:
         self.call("Page.enable", session)
         self.call("DOM.enable", session)  # DOM.resolveNode needs it; no events flow until a document is requested
         self.call("Page.setInterceptFileChooserDialog", session, enabled=True)
-        # Downloads land in one folder; Chrome reports them to the session that set this, so each tab sets it.
-        self.call("Browser.setDownloadBehavior", session, behavior="allowAndName", downloadPath=str(INCOMING),
-                  eventsEnabled=True)
+        self._route_downloads(session)
         self.call("Emulation.setDeviceMetricsOverride", session, deviceScaleFactor=1, mobile=False, **VIEWPORT)
         # Keep rAF/menus rendering in a background tab without activating it.
         self.call("Emulation.setFocusEmulationEnabled", session, enabled=True)
@@ -228,6 +248,12 @@ class Browser:
             self.call("Emulation.setGeolocationOverride", session, accuracy=50, **self.geolocation)
         PUMP.register(session, self._on_event)
         return target
+
+    def _route_downloads(self, session):
+        # Downloads land in one folder. Chrome reports them to the session that set this, and resets it when that
+        # session detaches, so every tab sets it on adoption and the survivors set it again when a tab closes.
+        self.call("Browser.setDownloadBehavior", session, behavior="allowAndName", downloadPath=str(INCOMING),
+                  eventsEnabled=True)
 
     def _forget(self, target):
         session = self.tabs.pop(target, None)
@@ -239,6 +265,11 @@ class Browser:
         if target == self.active:
             opener = self.opener.get(target)
             self.active = opener if opener in self.tabs else next(reversed(self.tabs), None)
+        for remaining in self.tabs.values():
+            try:
+                self._route_downloads(remaining)
+            except (RuntimeError, TimeoutError):
+                pass  # that tab is closing too
 
     def _on_event(self, event):
         """Runs on the pump thread."""
@@ -275,8 +306,16 @@ class Browser:
         return str(target)
 
     def navigate(self, url):
+        self._navigation("Page.navigate", url=url)
+
+    def _navigation(self, method, **params):
+        """Start a navigation. A leave-page prompt blocks the call: surface it as a dialog instead of waiting."""
         previous = self._time_origin()
-        self.call("Page.navigate", url=url, timeout=30.0)
+        self.mutated = True
+        try:
+            self.call(method, timeout=3.0, **params)
+        except TimeoutError:
+            PUMP.flush()  # no dialog: a slow server; the load wait below still applies
         self._wait_loaded(previous)
 
     def _time_origin(self):
@@ -290,6 +329,8 @@ class Browser:
         # ponytail: a same-document (hash) navigation waits the full deadline; add a URL check if that matters.
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if self.dialogs.get(self.session):
+                return  # a dialog freezes the page; observe offers it
             try:
                 origin, state = self.evaluate("[performance.timeOrigin, document.readyState]")
                 if origin != previous and state == "complete":
@@ -426,14 +467,17 @@ class Browser:
         dialog = self.dialogs.get(self.session)
         if dialog or page.get("dialog"):
             return dialog is not None and dialog == page.get("dialog")
+        # Node actions compare their own target; anything else compares only its own document, so a ticking
+        # third-party frame (chat widget, ad) never makes the rest of the page stale.
         try:
-            if action is not None:
+            frame = (action or {}).get("frame")
+            snap = page["frames"][frame or "main"]
+            session = self._session_for(frame)
+            if action is not None and action.get("node") is not None:
                 node = int(action["node"])
-                current = self.evaluate(f"({GUARD})({node})", self._session_for(action.get("frame")))
-                snap = page["frames"][action.get("frame") or "main"]
+                current = self.evaluate(f"({GUARD})({node})", session)
                 return current == [snap["page_key"], snap["guards"].get(str(node))]
-            return all(self.evaluate(MARKER, self._session_for(None if key == "main" else key)) == snap["marker"]
-                       for key, snap in page["frames"].items())
+            return self.evaluate(MARKER, session) == snap["marker"]
         except (KeyError, RuntimeError):
             return False
 
@@ -441,10 +485,17 @@ class Browser:
         handler = getattr(self, "_do_" + operation.lower(), None) if operation.isupper() else None
         if handler is None:
             raise ValueError(f"Unsupported operation {operation!r}; nothing executed.")
-        guarded = action.get("node") is not None and action["kind"] != "fill"
-        if not self.fresh(page, action if guarded else None):
+        if not self.fresh(page, action):
             raise StalePage("Page changed since this decision. Observe again.")
-        result = handler(action, **inputs) or {}
+        self.mutated = False
+        try:
+            result = handler(action, **inputs) or {}
+        except ExecutionUncertain:
+            raise
+        except Exception as error:
+            if self.mutated:  # input may have reached the page: never let the loop retry it as stale
+                raise ExecutionUncertain(f"{error} (input may have reached the page; not retried)") from error
+            raise
         self.after_input = None if operation == "WAIT" else action
         return result
 
@@ -497,12 +548,14 @@ class Browser:
         if group:
             if len(text) != len(group):
                 raise ValueError(f"This code needs {len(group)} characters; nothing typed.")
-            for node, char in zip(group, text):
-                self._mouse(*self._point({**action, "node": node}))
+            points = [self._point({**action, "node": node}) for node in group]  # all reachable before typing any
+            for point, char in zip(points, text):
+                self._mouse(*point)
                 self.input("Input.insertText", text=char)
             return
         if action.get("constraints", {}).get("type") in DATE_TYPES:
             args = json.dumps({"node": action["node"], "value": text})
+            self.mutated = True
             if not self.evaluate(f"({SET_VALUE})({args})", self._session_for(action.get("frame"))):
                 raise RuntimeError("The field did not accept this value; inspect before retrying.")
             return
@@ -566,6 +619,7 @@ class Browser:
             chooser, self.chooser = self.chooser, None
             if not chooser:
                 raise StalePage("The file picker closed. Observe again.")
+            self.mutated = True
             self.call("DOM.setFileInputFiles", chooser["session"], files=paths if chooser["multiple"] else paths[:1],
                       backendNodeId=chooser["node"])
         elif action.get("drop"):
@@ -580,11 +634,13 @@ class Browser:
             element = response.get("result", {}).get("objectId")
             if not element:
                 raise StalePage("File input changed. Observe again.")
+            self.mutated = True
             self.call("DOM.setFileInputFiles", session, files=paths if action.get("multiple") else paths[:1],
                       objectId=element)
 
     def _do_select(self, action, **_):
         args = json.dumps({"node": action["node"], "value": action["value"]})
+        self.mutated = True
         response = self.call("Runtime.evaluate", self._session_for(action.get("frame")),
                              expression=f"({SELECT})({args})", returnByValue=True)
         if response.get("exceptionDetails"):
@@ -595,6 +651,7 @@ class Browser:
     def _scroll(self, action, x, y):
         # ponytail: scrollBy, not wheel events; add wheel dispatch if a site listens only to wheel.
         args = json.dumps({"node": action.get("node"), "x": x, "y": y})
+        self.mutated = True
         if not self.evaluate(f"({SCROLL})({args})", self._session_for(action.get("frame"))):
             raise StalePage("Scroll target changed. Observe again.")
 
@@ -660,9 +717,7 @@ class Browser:
         index = history["currentIndex"] + offset
         if not 0 <= index < len(history["entries"]):
             raise StalePage("History changed. Observe again.")
-        previous = self._time_origin()
-        self.call("Page.navigateToHistoryEntry", entryId=history["entries"][index]["id"])
-        self._wait_loaded(previous)
+        self._navigation("Page.navigateToHistoryEntry", entryId=history["entries"][index]["id"])
 
     def _do_go_back(self, action, **_):
         self._history_step(-1)
@@ -671,9 +726,7 @@ class Browser:
         self._history_step(1)
 
     def _do_reload(self, action, **_):
-        previous = self._time_origin()
-        self.call("Page.reload")
-        self._wait_loaded(previous)
+        self._navigation("Page.reload")
 
     def _do_open_url(self, action, url=None, **_):
         parsed = urlparse(url or "")
@@ -697,10 +750,12 @@ class Browser:
     def _do_close_tab(self, action, **_):
         if action["tab"] not in self.tabs or len(self.tabs) < 2:
             raise StalePage("Tabs changed. Observe again.")
+        self.mutated = True
         cdp("Target.closeTarget", targetId=action["tab"])
         self._forget(action["tab"])
 
     def _close_dialog(self, accept):
+        self.mutated = True
         self.call("Page.handleJavaScriptDialog", accept=accept)
         self.dialogs.pop(self.session, None)
 

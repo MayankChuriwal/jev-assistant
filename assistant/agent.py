@@ -4,7 +4,7 @@ import base64
 import time
 from pathlib import Path
 
-from .browser import Browser, StalePage
+from .browser import Browser, ExecutionUncertain, StalePage
 from .model import action_space, choose, field_context, field_text, url_value
 from .questions import MAX_ACTIONS, MAX_DECISIONS
 
@@ -107,12 +107,7 @@ class Agent:
             raise ValueError(f"Stopped at the {MAX_ACTIONS}-action budget")
         action = next(a for a in page["actions"] if a["id"] == decision["choice"])
         inputs, helper = self.inputs(operation, action, decision, page)
-        # Browser.act checks freshness immediately before input, including after text generation.
-        result = browser.act(operation, action, page, **inputs)
-        self.pending_text = None
-        state["elapsed_ms"] = self.elapsed()
-        # Record execution before observing. A stale post-action observation must not erase the action.
-        state["history"].append({
+        entry = {
             "step": len(state["history"]) + 1,
             "operation": operation,
             "action": action["label"],
@@ -125,15 +120,24 @@ class Agent:
             "key": inputs.get("key"),
             "drop": inputs["drop"]["label"] if "drop" in inputs else None,
             "files": inputs.get("files"),
-            "result": result,
             "text_helper": helper["model"] if helper else None,
             "text_latency_ms": helper["latency_ms"] if helper else 0,
             "page_changed": None,
             "url": page["url"],
             "usage": decision["usage"],
-            "executed_ms": state["elapsed_ms"],
-            "elapsed_ms": state["elapsed_ms"],
-        })
+        }
+        try:
+            # Browser.act checks freshness immediately before input, including after text generation.
+            entry["result"] = browser.act(operation, action, page, **inputs)
+        except ExecutionUncertain as error:
+            # Input may have reached the page. Record it and stop: repeating it could pay or submit twice.
+            state["history"].append({**entry, "unconfirmed": str(error), "elapsed_ms": self.elapsed()})
+            state["status"] = "blocked"
+            raise
+        self.pending_text = None
+        state["elapsed_ms"] = self.elapsed()
+        # Record execution before observing. A stale post-action observation must not erase the action.
+        state["history"].append({**entry, "executed_ms": state["elapsed_ms"], "elapsed_ms": state["elapsed_ms"]})
         self.observe()
         state["elapsed_ms"] = self.elapsed()
         state["history"][-1].update(
@@ -154,7 +158,7 @@ class Agent:
         """Values an operation needs besides its target, and text-model metadata when one was called."""
         state = self.state
         if operation == "TYPE_TEXT":
-            if not state["browser"].fresh(page):
+            if not state["browser"].fresh(page, action):
                 raise StalePage("Page changed before text generation. Choose again.")
             context = field_context(state["goal"], action, page, state["history"])
             if self.pending_text and self.pending_text[0] == context:

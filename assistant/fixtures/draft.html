@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Draft</title></head>
+<body>
+<label>Message <input id="draft"></label>
+<script>
+  addEventListener('beforeunload', e => {
+    if (document.getElementById('draft').value) { e.preventDefault(); e.returnValue = ''; }
+  });
+</script>
+</body>
+</html>

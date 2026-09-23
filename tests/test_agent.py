@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from assistant import agent as loop
-from assistant.browser import StalePage, fingerprint
+from assistant.browser import ExecutionUncertain, StalePage, fingerprint
 from assistant.questions import MAX_ACTIONS
 
 
@@ -168,3 +168,12 @@ def test_navigation_during_prediction_reobserves_without_action(runner):
     runner.command("tick")
     assert runner.state["status"] == "ready" and runner.state["decision"] is None
     runner.state["browser"].act.assert_not_called()
+
+
+def test_uncertain_execution_is_logged_and_stops_the_task(runner):
+    runner.state["decision"] = decision("e3", "CLICK")
+    runner.state["browser"].act.side_effect = ExecutionUncertain("Browser input did not return")
+    with pytest.raises(ExecutionUncertain):
+        act(runner)
+    assert runner.state["history"][-1]["action"] == "Go" and runner.state["history"][-1]["unconfirmed"]
+    assert runner.state["status"] == "blocked"

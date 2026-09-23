@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Covered</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 20px; }
+  #banner { position: fixed; left: 0; right: 0; bottom: 0; height: 120px; background: #fff; border-top: 1px solid #999; }
+  #under { position: fixed; bottom: 40px; left: 20px; }
+  .choice { position: relative; display: inline-block; padding: 8px 16px; border: 1px solid #999; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+             clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
+</style>
+</head>
+<body>
+<script>window.log = [];</script>
+<button id="under" onclick="log.push('under')">Hidden behind banner</button>
+<div id="banner"><p>We use cookies.</p><button onclick="log.push('accept')">Accept cookies</button></div>
+<fieldset>
+  <legend>Size</legend>
+  <label class="choice"><input type="radio" name="size" value="small" class="sr-only"> Small</label>
+  <label class="choice"><input type="radio" name="size" value="large" class="sr-only"> Large</label>
+</fieldset>
+</body>
+</html>

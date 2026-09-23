@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Verify code</title></head>
+<body>
+<form onsubmit="event.preventDefault()">
+  <p id="total">Total ₹79</p>
+  <label>Code <input id="code" inputmode="numeric"></label>
+  <p id="timer">Resend code in 0:30</p>
+  <button type="button">Verify</button>
+</form>
+<script>
+  let left = 30;
+  setInterval(() => {
+    left = left > 0 ? left - 1 : 30;
+    document.getElementById('timer').textContent = `Resend code in 0:${String(left).padStart(2, '0')}`;
+  }, 200);
+</script>
+</body>
+</html>
