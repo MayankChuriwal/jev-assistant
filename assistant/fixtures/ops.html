@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ops fixture</title>
+<!-- Offline fixture for observation and execution. Every handled interaction appends to window.log. -->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  section { border: 1px solid #ccc; padding: 8px; }
+  label { display: block; margin: 4px 0; }
+  .card { display: inline-block; padding: 8px; border: 1px solid #999; cursor: pointer; width: 130px; }
+  .card span { display: block; }
+  .pointer { cursor: pointer; text-decoration: underline; margin-right: 12px; }
+  #menu { display: none; border: 1px solid #999; padding: 4px; width: 120px; }
+  #account:hover + #menu, #menu:hover { display: block; }
+  #panel { height: 80px; width: 240px; overflow: auto; border: 1px solid #999; }
+  #panel p { margin: 0; height: 30px; }
+  #carousel { width: 240px; overflow-x: auto; white-space: nowrap; border: 1px solid #999; }
+  #carousel span { display: inline-block; width: 110px; height: 28px; }
+  #list li { width: 160px; height: 24px; border: 1px solid #999; margin: 2px; list-style: none; }
+  .otp input { width: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<script>window.log = []; const note = m => window.log.push(m);</script>
+<section>
+  <div class="card" onclick="note('card:Diet Coke')"><span>Diet Coke 300 ml</span><span>₹40</span></div>
+  <div class="card" id="zero"><span>Coke Zero</span><span>₹45</span></div>
+  <p><span class="pointer" ondblclick="note('dblclick')">Rename list</span>
+     <span class="pointer" oncontextmenu="note('contextmenu'); return false">Options</span></p>
+  <button id="account">Account</button>
+  <div id="menu"><a href="#orders" onclick="note('menu:Orders')">Orders</a></div>
+</section>
+<section>
+  <label>Password <input type="password" id="password"></label>
+  <div class="otp" aria-label="One-time code">
+    <input maxlength="1" inputmode="numeric"><input maxlength="1" inputmode="numeric"><input maxlength="1" inputmode="numeric"><input maxlength="1" inputmode="numeric"><input maxlength="1" inputmode="numeric"><input maxlength="1" inputmode="numeric">
+  </div>
+  <label>Date <input type="date" id="date"></label>
+  <label>Quantity <input type="range" id="quantity" min="1" max="10" value="1"></label>
+  <label>Search <input type="search" id="search"></label>
+  <label>Category <select id="category"><option>All</option><option>Drinks</option></select></label>
+</section>
+<section>
+  <div id="panel" aria-label="Order history">
+    <p>Order #1</p><p>Order #2</p><p>Order #3</p><p>Order #4</p><p>Order #5</p><p>Order #6</p>
+    <p>Order #7</p><p>Order #8</p><p>Order #9</p><p>Order #10</p><p>Order #11</p><p>Order #12</p>
+  </div>
+  <div id="carousel" aria-label="Offers">
+    <span>Offer 1</span><span>Offer 2</span><span>Offer 3</span><span>Offer 4</span><span>Offer 5</span><span>Offer 6</span><span>Offer 7</span><span>Offer 8</span>
+  </div>
+</section>
+<section>
+  <ul id="list" aria-label="Priority"><li draggable="true">Alpha</li><li draggable="true">Beta</li><li draggable="true">Gamma</li></ul>
+  <a href="/next.html">Next page</a>
+</section>
+<script>
+  document.getElementById('zero').addEventListener('click', () => note('card:Coke Zero'));
+  document.getElementById('quantity').addEventListener('input', e => note('quantity:' + e.target.value));
+  document.getElementById('search').addEventListener('keydown', e => { if (e.key === 'Enter') note('search:' + e.target.value); });
+  const boxes = [...document.querySelectorAll('.otp input')];
+  boxes.forEach((box, i) => box.addEventListener('input', () => {
+    if (box.value && boxes[i + 1]) boxes[i + 1].focus();
+    if (boxes.every(b => b.value)) note('otp:' + boxes.map(b => b.value).join(''));
+  }));
+  let dragged;
+  for (const li of document.querySelectorAll('#list li')) {
+    li.addEventListener('dragstart', e => { dragged = li; e.dataTransfer.setData('text/plain', li.textContent); });
+    li.addEventListener('dragover', e => e.preventDefault());
+    li.addEventListener('drop', e => {
+      e.preventDefault();
+      li.after(dragged);
+      note('order:' + [...document.querySelectorAll('#list li')].map(x => x.textContent).join(','));
+    });
+  }
+</script>
+</body>
+</html>

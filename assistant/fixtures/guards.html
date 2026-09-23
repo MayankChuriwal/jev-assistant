@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Guard checks</title>
+<style>body { margin: 30px; } button { width: 180px; height: 50px; } #outside { position: absolute; top: 3000px; }</style>
+</head>
+<body>
+<script>window.log = [];</script>
+<form>
+  <p id="context">Cart total: $10</p>
+  <button type="button" id="target" onclick="log.push('continue')">Continue</button>
+  <label>City <input id="field" value="Zurich"></label>
+  <label><input id="toggle" type="checkbox">Refundable</label>
+  <select id="category" aria-label="Category"><option>All</option><option>Design</option><option disabled>Unavailable</option></select>
+  <label>Query <input id="query" role="combobox" aria-controls="suggestions"></label>
+  <div role="listbox" id="suggestions"></div>
+  <input id="secret" type="password" aria-label="Secret" value="never expose this">
+  <button type="button" id="off" disabled>Disabled</button>
+</form>
+<aside id="unrelated">News</aside>
+<p id="outside">Unrelated offscreen text</p>
+<script>
+  document.getElementById('query').addEventListener('input', () => setTimeout(() => {
+    document.getElementById('suggestions').innerHTML = '<div role="option">Generated</div>';
+  }, 60));
+</script>
+</body>
+</html>
