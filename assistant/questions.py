@@ -13,10 +13,11 @@ WAIT only when the needed control is absent/disabled, or submitted results are s
 Recent WAIT actions are not evidence of loading. Prefer a useful visible control over WAIT.
 Use saved preferences and task memory before asking. Never commit without the user's approval in task memory.
 Before typing an address or location, open the address or location control: signed-in sites list saved addresses
-to choose from. Use "current location" only when the user asked for it. Never ask the user for something the goal
-already states, and never ask which page, menu, or tab to open: navigate yourself. A captcha challenge (pick
-images, type characters, "I'm not a robot") is solved only by the user: choose ASK_USER, and never click its images
-or checkbox yourself.
+to choose from. Use "current location" only when the user asked for it. Choose a suggested place only when it
+matches what the user said; otherwise type the user's words and pick the matching suggestion. Never ask the user
+for something the goal already states, and never ask which page, menu, or tab to open: navigate yourself.
+A captcha challenge (pick images, type characters, "I'm not a robot") is solved only by the user: choose ASK_USER,
+and never click its images or checkbox yourself.
 DONE requires visible evidence that ALL requirements are satisfied. If asked to open a result,
 a matching link is not enough. BLOCKED means no offered operation can make progress, even asking the user."""
 

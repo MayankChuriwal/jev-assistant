@@ -304,6 +304,33 @@ def on_browser_event(event):
             owner.downloads.append(owner._store_download(params["guid"], name))
 
 
+def forget_sites(sites):
+    """Sign the agent Chrome out of these sites: delete their cookies and clear their site storage, so the next task
+    signs in again. Returns {host: cookies removed}. The user's everyday Chrome is never touched."""
+    with DAEMON:
+        ensure_daemon()
+    target = cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
+    session = cdp("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
+    try:
+        cookies = cdp("Storage.getCookies")["cookies"]
+        removed = {}
+        for site in sites:
+            parsed = urlparse(site if "://" in site else "https://" + site)
+            host = parsed.hostname.removeprefix("www.")
+            mine = [c for c in cookies if c["domain"].lstrip(".") == host or c["domain"].endswith("." + host)]
+            for cookie in mine:
+                cdp("Network.deleteCookies", session_id=session, name=cookie["name"], domain=cookie["domain"],
+                    path=cookie["path"])
+            origins = ({f"{parsed.scheme}://{parsed.netloc}"} if "://" in site else
+                       {f"https://{prefix}{host}" for prefix in ("", "www.", "m.", "auth.")})
+            for origin in origins:
+                cdp("Storage.clearDataForOrigin", origin=origin, storageTypes="all")
+            removed[host] = len(mine)
+        return removed
+    finally:
+        cdp("Target.closeTarget", targetId=target)
+
+
 class Browser:
     """One task's tabs in the agent Chrome. Every executed target resolves from an observed node."""
 

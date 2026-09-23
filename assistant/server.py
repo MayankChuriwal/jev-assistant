@@ -3,6 +3,7 @@ checks sites for blocking; `jev run` does one task in the terminal."""
 
 import argparse
 import base64
+import errno
 import getpass
 import json
 import os
@@ -189,12 +190,28 @@ def profile_command(args):
     profile = Profile()
     changed = {key: value for key, value in (("name", args.name), ("phone", args.phone), ("email", args.email),
                                              ("upi_id", args.upi)) if value}
+    if args.address:
+        others = [a for a in profile.data["addresses"] if a.get("label") != "Home"]
+        changed["addresses"] = [{"label": "Home", "text": args.address}, *others]
     if changed:
         profile.data.update(changed)
         profile.save()
     print(f"Profile: {profile.path}")
     for key in HIDDEN:
         print(f"  {key}: {'set' if profile.data.get(key) else 'not set'}")
+    print(f"  address: {'set' if profile.data['addresses'] else 'not set'}")
+    return 0
+
+
+def forget(sites):
+    """Sign the agent Chrome out of these sites, so the next task signs in (and asks for an OTP) again."""
+    if not devtools_ready():
+        print("Agent Chrome is not running. Start it with: uv run jev chrome", file=sys.stderr)
+        return 1
+    from .browser import forget_sites
+
+    for host, count in forget_sites(sites).items():
+        print(f"{host}: signed out ({count} cookies removed, site data cleared)")
     return 0
 
 
@@ -349,7 +366,14 @@ def serve(port=CHAT_PORT):
     if chrome():
         return 1
     channel = WebChannel(home() / "media")
-    httpd = ChatServer(Core(channel), channel, port=port)
+    try:
+        httpd = ChatServer(Core(channel), channel, port=port)
+    except OSError as error:
+        if error.errno != errno.EADDRINUSE:
+            raise
+        print(f"Another jev is already serving the chat on port {port}. Stop it first (Ctrl+C in its terminal), "
+              "then run jev again.", file=sys.stderr)
+        return 1
     print(f"Chat: http://127.0.0.1:{httpd.server_port}/  (Ctrl+C stops)", flush=True)
     try:
         httpd.serve_forever()
@@ -373,6 +397,9 @@ def main(argv=None):
     profile_parser = commands.add_parser("profile", help="set your name, phone, email, or UPI ID; no model sees them")
     for flag in ("--name", "--phone", "--email", "--upi"):
         profile_parser.add_argument(flag)
+    profile_parser.add_argument("--address", help="your usual address; \"current location\" means this")
+    forget_parser = commands.add_parser("forget", help="sign the agent Chrome out of sites, e.g. swiggy.com uber.com")
+    forget_parser.add_argument("sites", nargs="+")
     traces_parser = commands.add_parser("traces", help="list the latest task traces")
     traces_parser.add_argument("--limit", type=int, default=10)
     args = parser.parse_args(argv)
@@ -386,4 +413,6 @@ def main(argv=None):
         return traces(args.limit)
     if args.command == "profile":
         return profile_command(args)
+    if args.command == "forget":
+        return forget(args.sites)
     return serve()

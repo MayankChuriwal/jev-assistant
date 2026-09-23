@@ -408,3 +408,40 @@ def test_asking_twice_without_a_step_turns_to_help(tmp_path, monkeypatch):
     assert [m["text"] for m in a.asked] == ["What is your phone number?"] * 2 + [
         "I can't find where your number goes. What should I do?"]
     assert a.state["memory"][-2].startswith("I asked the user twice without taking a step")
+
+
+HOME = {"id": "e1", "kind": "click", "label": "HOME 1122, Sobha Royal Pavilion, Sarjapur Road, Bengaluru",
+        "role": "button", "node": 1}
+WORK = {"id": "e2", "kind": "click", "label": "WORK 4, Residency Road, Bengaluru 560025", "role": "button", "node": 2}
+HERE = {"id": "e3", "kind": "click", "label": "Use current location", "role": "button", "node": 3}
+
+
+def test_the_user_chooses_between_saved_addresses(tmp_path):
+    a = agent_with(tmp_path, page=fake_page(text="Select delivery address", actions=[HOME, WORK, HERE]),
+                   replies=[{"option": "o2"}])
+    act(a, decision("e1", "CLICK"))  # Jev would have taken HOME by itself
+    assert a.asked[0]["kind"] == "choice" and a.asked[0]["text"] == "Which address should I deliver to?"
+    assert [o["label"] for o in a.asked[0]["options"]] == ["HOME 1122", "WORK 4", "Use current location"]
+    assert a.asked[0]["remember"] and [c.args[1]["node"] for c in a.browser.act.call_args_list] == [2]
+    assert a.state["memory"][-1] == "User chose the address: WORK 4, Residency Road, Bengaluru 560025"
+
+
+def test_a_saved_address_preference_needs_no_question(tmp_path):
+    a = agent_with(tmp_path, page=fake_page(text="Select delivery address", actions=[HOME, WORK]))
+    a.profile.data["preferences"].append({"text": "Default address: Home, Sobha Royal Pavilion", "from_task": "x"})
+    act(a, decision("e1", "CLICK"))
+    assert a.asked == [] and [c.args[1]["node"] for c in a.browser.act.call_args_list] == [1]
+
+
+def test_current_location_means_the_saved_address_or_a_follow_up(tmp_path, monkeypatch):
+    question = {"kind": "text", "text": "Where should I pick you up?", "options": [], "preference": False}
+    monkeypatch.setattr(loop.jobs, "compose", lambda context, page, elements: (question, META))
+    a = agent_with(tmp_path, replies=[{"text": "Current location"}, {"text": "Prestige Sunnyside Elm"}])
+    act(a, decision("ASK_USER", "ASK_USER"))
+    assert a.asked[1]["text"].startswith("My browser can't see where you are.")
+    assert a.state["memory"][-1] == "User answered “Where should I pick you up?”: Prestige Sunnyside Elm"
+    a = agent_with(tmp_path, replies=[{"text": "my location"}],
+                   profile={"addresses": [{"label": "Home", "text": "Prestige Sunnyside Elm, Bengaluru"}]})
+    act(a, decision("ASK_USER", "ASK_USER"))
+    assert len(a.asked) == 1 and a.state["memory"][-1] == (
+        "User answered “Where should I pick you up?”: Prestige Sunnyside Elm, Bengaluru (their current location)")

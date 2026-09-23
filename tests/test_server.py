@@ -76,3 +76,31 @@ def test_the_profile_command_keeps_private_details_private(tmp_path, monkeypatch
     out = capsys.readouterr().out
     assert Profile().data["name"] == "Mayank Churiwal" and "name: set" in out and "email: not set" in out
     assert "98765" not in out and "Mayank" not in out
+
+
+def test_a_second_jev_explains_the_port_is_taken(monkeypatch, capsys):
+    import socket
+
+    monkeypatch.setattr(server, "chrome", lambda: 0)
+    taken = socket.socket()
+    taken.bind(("127.0.0.1", 0))
+    taken.listen()
+    try:
+        assert server.serve(port=taken.getsockname()[1]) == 1
+    finally:
+        taken.close()
+    assert "Another jev is already serving the chat" in capsys.readouterr().err
+
+
+def test_the_profile_command_sets_the_usual_address(tmp_path, monkeypatch, capsys):
+    from assistant.profile import Profile
+
+    monkeypatch.setattr("assistant.profile.HOME", tmp_path)
+    assert server.main(["profile", "--address", "Prestige Sunnyside Elm, Bengaluru"]) == 0
+    assert Profile().data["addresses"] == [{"label": "Home", "text": "Prestige Sunnyside Elm, Bengaluru"}]
+    assert "address: set" in capsys.readouterr().out
+
+
+def test_forget_needs_the_agent_chrome(monkeypatch, capsys):
+    monkeypatch.setattr(server, "devtools_ready", lambda url=None: False)
+    assert server.main(["forget", "swiggy.com"]) == 1 and "not running" in capsys.readouterr().err

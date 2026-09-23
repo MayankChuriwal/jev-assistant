@@ -17,6 +17,11 @@ TO_RECEIVE = re.compile(r"\b(phone|mobile|e-?mail)\b.*\b(to|for) (receive|get)\b
 CHALLENGE = re.compile(r"i'?m not a robot|select all (the )?(images|squares)|click verify once|"
                        r"type the (text|characters|word)|verify (that )?you are (a )?human|press and hold|"
                        r"are you a robot", re.IGNORECASE)
+SAVED_ADDRESS = re.compile(r"^(home|work|office|other|hotel)\b.*,|\b\d{6}\b|,.*\b(road|street|lane|nagar|layout|colony|"
+                           r"sector|avenue|block|cross)\b", re.IGNORECASE)
+ADDRESS_EXTRA = re.compile(r"\b(current location|add (a )?new address)\b", re.IGNORECASE)
+CURRENT_PLACE = re.compile(r"^\s*((my |the )?(current|present) (location|place|address)|here|where i am|my location)"
+                           r"\s*\.?\s*$", re.IGNORECASE)
 COMMERCE = re.compile(r"\b(book|order|buy|purchase|pay|reserve)\b", re.IGNORECASE)
 TO_USER = re.compile(r"^\s*(please|kindly|do you|would you|could you|can you|shall i|should i|are you)\b",
                      re.IGNORECASE)
@@ -134,6 +139,21 @@ def code_field(page):
 def captcha_challenge(page):
     """Whether the page shows a captcha challenge to solve (not just a "protected by reCAPTCHA" badge)."""
     return bool(CHALLENGE.search(page.get("text", "")))
+
+
+def saved_address(label):
+    """Whether a control is one of the site's saved addresses ("HOME 1122, Sobha Royal Pavilion, …")."""
+    return bool(SAVED_ADDRESS.search(label or ""))
+
+
+def address_extra(label):
+    """Other ways to set the address that the user may prefer: current location, a new address."""
+    return bool(ADDRESS_EXTRA.search(label or ""))
+
+
+def means_current_location(text):
+    """Whether the user answered "current location" (the agent's browser has no location of its own)."""
+    return bool(CURRENT_PLACE.search(text or ""))
 
 
 def commerce_goal(goal):

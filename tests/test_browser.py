@@ -292,3 +292,14 @@ def test_code_boxes_labelled_one_of_four_are_one_field(browser_at):
                "`<input aria-label=\"Enter an OTP Code ${n} of 4\" inputmode=\"numeric\">`).join('') + '</div>')")
     fills = [a for a in b.observe()["actions"] if a["kind"] == "fill"]
     assert len(fills) == 1 and len(fills[0]["group"]) == 4 and fills[0]["label"] == "Enter an OTP Code"
+
+
+def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
+    from assistant.browser import forget_sites
+
+    b = browser_at("/next.html")
+    b.evaluate("document.cookie = 'session=abc; path=/'; localStorage.setItem('token', 'xyz'); true")
+    assert "session=abc" in b.evaluate("document.cookie")
+    assert forget_sites([site["a"]]) == {"127.0.0.1": 1}
+    b.navigate(site["a"] + "/next.html")
+    assert b.evaluate("document.cookie") == "" and b.evaluate("localStorage.getItem('token')") is None

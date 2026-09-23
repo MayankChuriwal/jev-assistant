@@ -267,6 +267,10 @@ class Agent:
         if len(self.state["history"]) >= MAX_ACTIONS:
             raise Halt("blocked", f"Stopped at the {MAX_ACTIONS}-action budget.")
         self.stop_if_interrupted()
+        if operation == "CLICK" and rules.saved_address(action["label"]) and not self.state.get("address_chosen"):
+            addresses = [a for a in page["actions"] if a["kind"] == "click" and rules.saved_address(a["label"])]
+            if len(addresses) >= 2 and not self.prefers(action, addresses):
+                return self.ask_address(page, addresses)  # the user decides where it goes
         if operation == "LOOK":
             approved = (self.state["approval"] or {}).get("look")
             if approved and approved["fingerprint"] == page["fingerprint"]:
@@ -306,6 +310,32 @@ class Agent:
                    for h in s["history"][s["login"]["since"]:]):
                 s["login"]["done"] = True
                 s["memory"].append(f"Signed in to {host}.")
+
+    def prefers(self, action, addresses):
+        """Whether a saved preference names this address: its own words, not ones every listed address shares."""
+        others = set().union(*(rules.words(a["label"]) for a in addresses if a is not action))
+        mine = rules.words(action["label"]) - others
+        return any(mine & rules.words(p["text"]) for p in self.profile.data["preferences"])
+
+    def ask_address(self, page, addresses):
+        """Which saved address: always the user's choice, unless they saved a preference for one of them."""
+        s = self.state
+        extras = [a for a in page["actions"] if a["kind"] == "click" and rules.address_extra(a["label"])]
+        choices = (addresses[:8] + extras[:2])[:10]
+        options = [{"id": f"o{n}", "label": a["label"].split(",")[0].strip()[:20], "description": a["label"][:72]}
+                   for n, a in enumerate(choices, 1)]
+        reply = self.ask({"kind": "choice", "text": "Which address should I deliver to?", "options": options,
+                          "remember": True})
+        s["address_chosen"] = True
+        picked = next((a for a, o in zip(choices, options) if o["id"] == reply.get("option")), None)
+        if picked:
+            s["memory"].append(f"User chose the address: {picked['label']}")
+            self.click_same(picked)
+        else:
+            s["memory"].append(f"User wants it delivered to: {str(reply.get('text', '')).strip()} (not a saved "
+                               "address: add it or search for it)")
+        s["status"] = "ready"
+        return self.snapshot()
 
     def keep_secret(self, value):
         """Hold a secret answer for this task: registered for redaction, usable by its name, never logged."""
@@ -683,6 +713,14 @@ class Agent:
         answer = picked["label"] if picked else str(reply.get("text", "")).strip()
         if not answer:
             raise Halt("blocked", "I needed an answer to continue.")
+        if not picked and question["kind"] != "secret" and rules.means_current_location(answer):
+            home = next((a["text"] for a in self.profile.data["addresses"] if a.get("text")), None)
+            if home:
+                answer = f"{home} (their current location)"
+            else:  # the agent's browser has no location: never let a site guess one
+                where = self.ask({"kind": "text", "text": "My browser can't see where you are. What's the address "
+                                                          "where you are now?"})
+                answer = str(where.get("text", "")).strip() or answer
         if question["kind"] == "secret":
             name = self.keep_secret(answer)
             s["memory"].append(f"User answered “{question['text']}” with [secret:{name}] (secret key {name})")
