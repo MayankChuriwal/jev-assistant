@@ -5,6 +5,7 @@ import hashlib
 import pytest
 
 from assistant import agent as loop
+from assistant.profile import Profile
 
 pytestmark = pytest.mark.browser
 
@@ -43,14 +44,19 @@ def test_one_goal_fills_uploads_and_submits_a_dispute(chrome, site, tmp_path, mo
     receipt = tmp_path / "receipt.png"
     receipt.write_bytes(b"\x89PNG\r\n\x1a\n receipt")
     monkeypatch.setattr(loop, "choose", scripted)
-    monkeypatch.setattr(loop, "field_text", lambda context: (
-        "I was charged twice for the same order at Zenith.", {"model": "fake", "latency_ms": 0}))
+    monkeypatch.setattr(loop, "field_value", lambda context: (
+        ("text", "I was charged twice for the same order at Zenith."), {"model": "fake", "latency_ms": 0}))
+    monkeypatch.setattr(loop.jobs, "confirm_card", lambda context, page, label: (
+        {"action_label": "Submit dispute", "amount": "", "lines": ["ZENITH ELECTRONICS · ₹2,499.00"]}, {}))
+    monkeypatch.setattr(loop.jobs, "outcome", lambda context, page, label: ("success", "", {}))
+    monkeypatch.setattr(loop.jobs, "result", lambda context, page: ("Dispute submitted.", "Dispute submitted", {}))
 
     def provide_file(action):
         return [str(statement if "statement" in action["label"].lower() else receipt)]
 
     with loop.Agent(site["a"] + "/upload.html", "Dispute the ₹2,499 Zenith charge; I was charged twice.",
-                    provide_file=provide_file) as agent:
+                    provide_file=provide_file, asker=lambda message: {"option": "yes"},
+                    profile=Profile(tmp_path / "profile.json")) as agent:
         for state in agent.run():
             assert len(state["history"]) < 30
         result = agent.browser.evaluate("window.__uploadResult")

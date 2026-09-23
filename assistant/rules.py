@@ -79,7 +79,7 @@ def format_error(value, action):
         return "That doesn't look like an email address."
     if kind == "date" and not DATE.fullmatch(value):
         return "Dates go in as YYYY-MM-DD."
-    if constraints.get("maxlength") and len(value) > constraints["maxlength"]:
+    if constraints.get("maxlength") and not group and len(value) > constraints["maxlength"]:  # a box holds one
         return f"This field takes at most {constraints['maxlength']} characters."
     if constraints.get("pattern"):
         try:

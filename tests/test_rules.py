@@ -73,3 +73,8 @@ def test_codes_lose_their_spaces_and_cvv_fields_allow_two_tries():
     assert rules.clean(" 482 913 ", {"group": [1, 2, 3, 4, 5, 6]}) == "482913"
     assert rules.clean(" Home ", {}) == "Home"
     assert rules.attempt_limit("card.hdfc.cvv") == 2 and rules.attempt_limit(None) == 3
+
+
+def test_a_code_group_is_judged_as_a_whole_not_by_each_boxs_maxlength():
+    group = {"group": [1, 2, 3, 4, 5, 6], "constraints": {"inputmode": "numeric", "maxlength": 1}}
+    assert rules.format_error(rules.clean("482 913", group), group) is None
