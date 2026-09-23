@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import subprocess
 from pathlib import Path
 
 HOME = Path(os.environ.get("JEV_HOME") or Path.home() / ".jev")
@@ -75,3 +76,39 @@ class Profile:
             if key == "name":
                 pairs += [(part, placeholder) for part in value.split() if len(part) >= 3]
         return pairs
+
+
+def quote(text):
+    """A double-quoted word for `security -i`, which splits its input like a shell."""
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+class Vault:
+    """Card and login secrets in the macOS Keychain (service "jev"). Secrets travel on stdin, never in argv."""
+
+    SERVICE = "jev"
+
+    def __init__(self, keychain=None):
+        self.keychain = str(keychain) if keychain else None
+
+    def get(self, key):
+        args = ["security", "find-generic-password", "-s", self.SERVICE, "-a", key, "-w"]
+        result = subprocess.run(args + ([self.keychain] if self.keychain else []), capture_output=True, text=True)
+        if result.returncode:
+            raise KeyError(key)
+        return result.stdout.removesuffix("\n")
+
+    def set(self, key, value):
+        if not value or "\n" in value:
+            raise ValueError("A secret must be one non-empty line.")
+        command = f"add-generic-password -U -s {self.SERVICE} -a {quote(key)} -w {quote(value)}"
+        if self.keychain:
+            command += " " + quote(self.keychain)
+        subprocess.run(["security", "-i"], input=command + "\n", capture_output=True, text=True)
+        # `security -i` exits 0 even when a command fails: read the value back.
+        try:
+            stored = self.get(key)
+        except KeyError:
+            stored = None
+        if stored != value:
+            raise RuntimeError(f"The Keychain did not store {key}.")

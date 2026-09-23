@@ -55,3 +55,54 @@ def test_saves_privately_and_round_trips(profile):
 def test_a_missing_file_is_an_empty_profile(tmp_path):
     p = Profile(tmp_path / "none.json")
     assert p.summary()["profile_keys"] == [] and p.geolocation() is None and p.hidden_values() == []
+
+
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+
+from assistant.profile import Vault  # noqa: E402
+
+mac = pytest.mark.skipif(sys.platform != "darwin", reason="macOS Keychain")
+
+
+@pytest.fixture
+def keychain(tmp_path):
+    path = tmp_path / "test.keychain-db"
+    subprocess.run(["security", "create-keychain", "-p", "test", str(path)], check=True)
+    subprocess.run(["security", "unlock-keychain", "-p", "test", str(path)], check=True)
+    yield path
+    subprocess.run(["security", "delete-keychain", str(path)], check=False)
+
+
+@mac
+def test_vault_round_trips_awkward_secrets_without_argv(keychain, monkeypatch):
+    seen = []
+    real = subprocess.run
+
+    def spy(args, **kwargs):
+        seen.append((list(args), kwargs.get("input")))
+        return real(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    vault = Vault(keychain)
+    vault.set("card.hdfc.cvv", "1 2\"3'\\")
+    assert vault.get("card.hdfc.cvv") == "1 2\"3'\\"
+    vault.set("card.hdfc.cvv", "456")
+    assert vault.get("card.hdfc.cvv") == "456"
+    assert not any("456" in " ".join(args) for args, _ in seen)  # secrets never reach process arguments
+
+
+@mac
+def test_vault_reports_missing_and_rejects_bad_values(keychain):
+    vault = Vault(keychain)
+    with pytest.raises(KeyError):
+        vault.get("card.none.cvv")
+    for bad in ("", "two\nlines"):
+        with pytest.raises(ValueError):
+            vault.set("card.hdfc.cvv", bad)
+
+
+@mac
+def test_vault_notices_a_store_that_did_not_happen(tmp_path):
+    with pytest.raises(RuntimeError, match="did not store"):
+        Vault(tmp_path / "missing.keychain-db").set("card.hdfc.cvv", "123")
