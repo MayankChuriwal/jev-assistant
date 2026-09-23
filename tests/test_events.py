@@ -156,3 +156,18 @@ def test_leave_page_prompts_surface_as_dialogs_instead_of_hanging(browser_at, si
     assert page["dialog"]["type"] == "beforeunload"
     b.act("ACCEPT_DIALOG", find(page, "OK", "accept_dialog"), page)
     assert observe_until(b, lambda p: p["title"] == "Next page")
+
+
+def test_parallel_downloads_reach_the_task_that_started_them(browser_at, tmp_path):
+    first = browser_at("/events.html", downloads=tmp_path / "first")
+    second = browser_at("/events.html", downloads=tmp_path / "second")  # set the download folder last
+    page = first.observe()
+    first.act("CLICK", find(page, "Download invoice"), page)
+    assert [Path(f).parent for f in until(lambda: first.observe()["downloads"])] == [tmp_path / "first"]
+    page = second.observe()
+    second.act("CLICK", find(page, "Download invoice"), page)
+    assert [Path(f).parent for f in until(lambda: second.observe()["downloads"])] == [tmp_path / "second"]
+    second.close()  # a closing tab resets Chrome's download behaviour for everyone
+    page = first.observe()
+    first.act("CLICK", find(page, "Download invoice"), page)
+    assert [Path(f).parent for f in until(lambda: first.observe()["downloads"])] == [tmp_path / "first"]

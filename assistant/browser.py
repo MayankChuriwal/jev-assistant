@@ -8,6 +8,7 @@ import re
 import sys
 import threading
 import time
+import weakref
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -176,6 +177,8 @@ class EventPump:
 
 
 PUMP = EventPump()
+OWNERS = weakref.WeakValueDictionary()  # tab target id -> Browser, so a download reaches the task that started it
+DOWNLOADS = {}  # download guid -> Browser that started it
 
 
 class Browser:
@@ -245,6 +248,7 @@ class Browser:
     def _adopt(self, target, opener=None):
         session = cdp("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
         self.tabs[target] = session
+        OWNERS[target] = self
         if opener:
             self.opener[target] = opener
         self.call("Page.enable", session)
@@ -275,11 +279,13 @@ class Browser:
         if target == self.active:
             opener = self.opener.get(target)
             self.active = opener if opener in self.tabs else next(reversed(self.tabs), None)
-        for remaining in self.tabs.values():
-            try:
-                self._route_downloads(remaining)
-            except (RuntimeError, TimeoutError):
-                pass  # that tab is closing too
+        OWNERS.pop(target, None)
+        for owner in list(OWNERS.values()):  # the closed tab may have reset downloads for every task
+            for remaining in list(owner.tabs.values()):
+                try:
+                    owner._route_downloads(remaining)
+                except (RuntimeError, TimeoutError):
+                    pass  # that tab is closing too
 
     def _on_event(self, event):
         """Runs on the pump thread."""
@@ -298,11 +304,14 @@ class Browser:
         elif method == "Input.dragIntercepted":
             self.intercepted = params["data"]
         elif method == "Browser.downloadWillBegin":
-            self.pending_downloads[params["guid"]] = params["suggestedFilename"]
+            owner = OWNERS.get(params.get("frameId")) or self  # a main frame's id is its tab's target id
+            DOWNLOADS[params["guid"]] = owner
+            owner.pending_downloads[params["guid"]] = params["suggestedFilename"]
         elif method == "Browser.downloadProgress" and params.get("state") == "completed":
-            name = self.pending_downloads.pop(params["guid"], None)
+            owner = DOWNLOADS.pop(params["guid"], self)
+            name = owner.pending_downloads.pop(params["guid"], None)
             if name:
-                self.downloads.append(self._store_download(params["guid"], name))
+                owner.downloads.append(owner._store_download(params["guid"], name))
 
     def _store_download(self, guid, name):
         source = INCOMING / guid
