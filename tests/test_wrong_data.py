@@ -98,12 +98,16 @@ def test_a_failed_payment_never_writes_a_replacement(tmp_path, monkeypatch):
 
 
 def test_values_the_model_wrote_are_not_attempts(tmp_path, monkeypatch):
-    a = reacting(agent_with(tmp_path))
+    help_step = {"rung": "guide", "text": "I keep retyping this field. What should I do?", "crop_element": ""}
+    monkeypatch.setattr(loop.jobs, "unblock", lambda context, page, elements, must_stop=False: (help_step, META))
+    monkeypatch.setattr(loop.jobs, "hint", lambda context, page, text=None, image=None: ("Carry on", META))
+    a = reacting(agent_with(tmp_path, replies=[{"text": "carry on"}, {"text": "carry on"}]))
     field(monkeypatch, *[("text", "coke")] * 5)
     for _ in range(5):
         act(a, decision("e1", "TYPE_TEXT"))
     assert len(typed(a)) == 5  # five values the model wrote: none of them counts as a rejected attempt
     assert not any("rejected" in m["text"] for m in a.told)
+    assert [m["text"] for m in a.asked] == ["I keep retyping this field. What should I do?"] * 2  # a loop, though
 
 
 def test_malformed_answers_cost_no_attempt(tmp_path, monkeypatch):

@@ -12,7 +12,7 @@ def test_a_site_that_offers_sign_in_is_signed_in_to_first(tmp_path):
     a = agent_with(tmp_path, page=fake_page(text="Enter your delivery location", actions=[SIGN_IN, WAIT]))
     a.track_login(a.state["page"])
     assert a.context().split("\n")[1].startswith("Current step: sign in to shop.test first.")
-    a.state["history"].append({"operation": "TYPE_TEXT"})  # the phone number and the code were typed
+    a.state["history"].append({"operation": "TYPE_TEXT", "text": "[secret:answer1]"})  # the code was typed
     a.track_login(fake_page(text="Saved addresses: Home, Office", actions=[WAIT]))
     assert "Current step" not in a.context() and a.state["memory"][-1] == "Signed in to shop.test."
 
@@ -36,3 +36,14 @@ def test_the_sign_in_step_reaches_jev(tmp_path, monkeypatch):
     a = agent_with(tmp_path, page=fake_page(actions=[SIGN_IN, WAIT]))
     a.command("predict")
     assert "Current step: sign in to shop.test first." in goals[0]
+
+
+CODE = {"id": "e2", "kind": "fill", "label": "One time password", "role": "textbox", "value": "", "node": 2}
+
+
+def test_typing_the_phone_number_is_not_yet_signing_in(tmp_path):
+    a = agent_with(tmp_path, page=fake_page(actions=[SIGN_IN, WAIT]))
+    a.track_login(a.state["page"])
+    a.state["history"].append({"operation": "TYPE_TEXT", "text": "98765 43210"})
+    a.track_login(fake_page(text="Enter OTP", actions=[CODE, WAIT]))  # the code screen has no sign-in button
+    assert "Current step: sign in to shop.test first." in a.context() and "Signed in" not in str(a.state["memory"])

@@ -106,3 +106,28 @@ def test_uncertain_execution_is_logged_and_stops_the_task(tmp_path):
     act(a, decision("e5", "CLICK"))
     assert a.state["history"][-1]["action"] == "Office" and a.state["history"][-1]["unconfirmed"]
     assert a.state["status"] == "blocked" and "can't confirm" in a.told[-1]["text"]
+
+
+def test_going_in_circles_asks_the_user_for_help(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from itertools import count
+
+    from assistant.browser import fingerprint
+
+    help_step = {"rung": "guide", "text": "I keep going in circles. What should I do?", "crop_element": ""}
+    monkeypatch.setattr(loop.jobs, "unblock", lambda context, page, elements, must_stop=False: (help_step, {}))
+    monkeypatch.setattr(loop.jobs, "hint", lambda context, page, text=None, image=None: ("Use Instamart", {}))
+    a = agent_with(tmp_path, replies=[{"text": "open Instamart"}])
+    shown, n = a.browser.observe.return_value, count(1)
+
+    def moving(screenshot=False):  # every click changes the page, so only the repetition gives the loop away
+        page = deepcopy(shown)
+        page["text"] += f"\nMenu section {next(n)}"
+        page["fingerprint"] = fingerprint(page)
+        return page
+
+    a.browser.observe.side_effect = moving
+    for _ in range(4):
+        act(a, decision("e5", "CLICK"))
+    assert a.asked[-1]["text"] == "I keep going in circles. What should I do?"
+    assert a.state["memory"][-2] == "I've done “Office” 4 times recently without getting closer."

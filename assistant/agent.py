@@ -25,6 +25,7 @@ ASK_TRIES = 5
 OUTCOME_CHECKS = 10
 HELP_ROUNDS = 2
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
+QUIET = {"WAIT", "SCROLL_UP", "SCROLL_DOWN", "SCROLL_LEFT", "SCROLL_RIGHT"}  # repeating these is not going in circles
 TRACE_STEP = ("step", "operation", "action", "choice", "probability", "confidence", "text", "drop", "files",
               "page_changed", "url", "elapsed_ms", "unconfirmed")
 TRACE_DECISION = ("operation", "choice", "confidence", "operation_probabilities", "latency_ms", "elapsed_ms")
@@ -293,11 +294,28 @@ class Agent:
         if s.get("login") is None:
             if offered:
                 s["login"] = {"host": host, "since": len(s["history"]), "done": False}
-        elif not s["login"]["done"] and not offered and host == s["login"]["host"]:
-            # ponytail: "controls gone after typing"; a site that keeps a sign-in banner up needs a user update.
-            if any(h.get("operation") == "TYPE_TEXT" for h in s["history"][s["login"]["since"]:]):
+        elif not s["login"]["done"] and not offered and host == s["login"]["host"] and not rules.code_field(page):
+            # ponytail: "controls gone after a code or password"; a sign-in banner left up needs a user update.
+            if any(h.get("operation") == "TYPE_TEXT" and str(h.get("text") or "").startswith("[secret")
+                   for h in s["history"][s["login"]["since"]:]):
                 s["login"]["done"] = True
                 s["memory"].append(f"Signed in to {host}.")
+
+    def keep_secret(self, value):
+        """Hold a secret answer for this task: registered for redaction, usable by its name, never logged."""
+        name = f"answer{len(self.state['answers']) + 1}"
+        self.state["answers"][name] = value
+        self.secrets.add(value, f"[secret:{name}]")
+        return name
+
+    def learn(self, key, value):
+        """A detail the user gave joins their profile: hidden from every model from now on, never asked again."""
+        self.profile.data[key] = value
+        self.profile.save()
+        for hidden, placeholder in self.profile.hidden_values():
+            self.secrets.add(hidden, placeholder)
+        names = {"phone": "phone number", "email": "email address", "name": "name"}
+        self.say(f"Saved your {names[key]} to your profile, so it stays hidden from the models and isn't asked again.")
 
     def stop_if_interrupted(self):
         """A cancel or a change from the user arrived while this step was decided: decide again with it."""
@@ -455,9 +473,14 @@ class Agent:
         stuck = len(recent) == 3 and all(h["page_changed"] is False and h["operation"] not in {"WAIT", "LOOK"}
                                          for h in recent)
         state["status"] = "ready"
-        if stuck:  # ask the user for help instead of stopping in silence
+        last = state["history"][-1]
+        again = [h for h in state["history"][-20:] if (h["operation"], h["action"], urlparse(h["url"]).path)
+                 == (last["operation"], last["action"], urlparse(last["url"]).path)]
+        looping = last["operation"] not in QUIET and len(again) >= 4
+        if stuck or looping:  # ask the user for help instead of stopping in silence or going in circles
             tried = ", ".join(dict.fromkeys(h["action"] for h in recent))
-            state["memory"].append(f"My last 3 steps ({tried}) changed nothing on this page.")
+            state["memory"].append(f"My last 3 steps ({tried}) changed nothing on this page." if stuck else
+                                   f"I've done “{last['action']}” {len(again)} times recently without getting closer.")
             self.unblock(state["page"])
 
     # ---- values an operation needs
@@ -511,6 +534,11 @@ class Agent:
         context = field_context(self.context(), action, page, s["history"], self.profile.summary(),
                                 self.allowed(where), previous)
         form, helper = field_value(context)
+        if (form[0] == "text" and rules.addressed_to_user(form[1]) and not rules.free_text(action)) or \
+                (form[0] == "ask" and not form[2] and rules.direction_question(form[1])):
+            reply = self.ask({"kind": "text", "text": form[1]})  # a question about the next step, not a value
+            s["memory"].append(f"User answered “{form[1]}”: {str(reply.get('text', '')).strip()}")
+            raise StalePage("The user answered a question about the next step. Choose again with it.")
         value, shown, source, key = self.resolve(form, action, where)
         s["unused"][where] = (value, shown, source, key)
         s["text_calls"].append({**helper, "field": action["label"], "value": shown})
@@ -573,7 +601,7 @@ class Agent:
         before = s["typed"].get(where)
         # Card details, passwords, and codes are secret whatever the model said.
         secret = (secret or key in SAVE_AS or (action.get("constraints") or {}).get("type") == "password"
-                  or bool(action.get("group")))
+                  or bool(action.get("group")) or rules.asks_for_secret(question))
         if before and before["source"] != "model" and before["count"] == rules.attempt_limit(before["key"]) - 1:
             question += " One try left before the site may lock this."
         value = self.ask_value(question, action, secret)
@@ -583,10 +611,8 @@ class Agent:
             s["pending_vault"][origin] = value  # the newest one; stored only after a successful commit
         shown = value
         if secret:
-            name = f"answer{len(self.state['answers']) + 1}"
-            self.state["answers"][name] = value
+            name = self.keep_secret(value)
             shown = f"[secret:{name}]"
-            self.secrets.add(value, shown)
             key = key or name  # so a rejection can exclude this exact answer
         if key in SAVE_AS:
             self.state["card_parts"][key] = value
@@ -595,7 +621,11 @@ class Agent:
     def after_typing(self, action, page):
         s = self.state
         where = (rules.host(page["url"]), action["label"])
-        _value, shown, source, key = s["unused"].pop(where, (None, None, "model", None))
+        value, shown, source, key = s["unused"].pop(where, (None, None, "model", None))
+        detail = rules.profile_detail(action)
+        told = source == "user" or any(m.startswith("User answered") and value and value in m for m in s["memory"])
+        if detail and value and told and not str(shown).startswith("[") and not self.profile.data.get(detail):
+            self.learn(detail, value)
         if shown and shown.startswith("[secret:"):
             for node in action.get("group") or [action["node"]]:
                 self.secrets.nodes.add((action.get("frame"), node))
@@ -627,18 +657,18 @@ class Agent:
         s = self.state
         elements, heads, _ = action_space(page["actions"])
         question, _ = jobs.compose(self.context(), page, elements)
+        if question["kind"] != "choice" and rules.asks_for_secret(question["text"]):
+            question["kind"] = "secret"  # a code or password is hidden whatever the model called it
         options = [{"id": f"o{n}", "label": o["label"], "description": o["description"]}
                    for n, o in enumerate(question["options"], 1)]
         reply = self.ask({"kind": question["kind"], "text": question["text"], "options": options,
-                          "remember": question["kind"] != "secret"})
+                          "remember": question["kind"] == "choice" and question.get("preference", False)})
         picked = next((o for o, shown in zip(question["options"], options) if shown["id"] == reply.get("option")), None)
         answer = picked["label"] if picked else str(reply.get("text", "")).strip()
         if not answer:
             raise Halt("blocked", "I needed an answer to continue.")
         if question["kind"] == "secret":
-            name = f"answer{len(s['answers']) + 1}"
-            s["answers"][name] = answer
-            self.secrets.add(answer, f"[secret:{name}]")
+            name = self.keep_secret(answer)
             s["memory"].append(f"User answered “{question['text']}” with [secret:{name}] (secret key {name})")
             return
         detail = f" ({picked['description']})" if picked and picked["description"] else ""
@@ -731,10 +761,16 @@ class Agent:
             image = s["browser"].screenshot(target, masked=self.secrets.nodes)
         message = {"kind": "image", "text": step["text"], "image": image} if image else {"kind": "text",
                                                                                          "text": step["text"]}
+        secret = rules.asks_for_secret(step["text"])
+        if secret:
+            message["kind"] = "secret"  # a code or password is hidden, and never sent to the hint model
         reply = self.ask(message)
         text = str(reply.get("text", "")).strip()
         path = Path(reply["file"]) if reply.get("file") else None
-        if step["rung"] == "device":
+        if secret:
+            name = self.keep_secret(text) if text else "none"
+            s["memory"].append(f"User answered “{step['text']}” with [secret:{name}] (secret key {name})")
+        elif step["rung"] == "device":
             s["memory"].append(f"User finished the step on their device: {text or 'done'}")
         elif path and path.suffix.lower() in IMAGE_TYPES and path.is_file():
             if not s.get("told_images"):

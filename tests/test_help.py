@@ -67,3 +67,15 @@ def test_two_rounds_per_page_then_a_clean_stop(tmp_path, monkeypatch):
         act(a, decision("BLOCKED", "BLOCKED"))
     assert calls == [False, False, True]
     assert a.state["status"] == "failed" and "Nothing was charged" in a.told[-1]["text"]
+
+
+def test_a_help_question_that_asks_for_a_code_is_hidden_and_never_sent_to_a_model(tmp_path, monkeypatch):
+    hints = []
+    monkeypatch.setattr(loop.jobs, "hint",
+                        lambda context, page, text=None, image=None: hints.append(text) or ("x", META))
+    a = agent_with(tmp_path, replies=[{"text": "482913"}])
+    ladder(monkeypatch, {"rung": "guide", "text": "Please enter the OTP you received or tell me what to do next.",
+                         "crop_element": ""})
+    act(a, decision("BLOCKED", "BLOCKED"))
+    assert a.asked[0]["kind"] == "secret" and hints == [] and "482913" not in str(a.state["memory"])
+    assert a.state["answers"] == {"answer1": "482913"}

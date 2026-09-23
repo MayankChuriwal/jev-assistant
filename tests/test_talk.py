@@ -31,8 +31,8 @@ def typed(a):
     return a.browser.act.call_args.kwargs["text"]
 
 
-def choice(monkeypatch, *options, kind="choice"):
-    question = {"kind": kind, "text": "Deliver to which address?",
+def choice(monkeypatch, *options, kind="choice", preference=True):
+    question = {"kind": kind, "text": "Deliver to which address?", "preference": preference,
                 "options": [{"label": label, "description": "", "element": element} for label, element in options]}
     monkeypatch.setattr(loop.jobs, "compose", lambda context, page, elements: (question, META))
 
@@ -313,3 +313,51 @@ def test_typing_can_use_values_the_goal_does_not_hold():
 
     assert "asking the user" in questions.OPERATIONS["TYPE_TEXT"]
     assert "even by asking the user" in questions.OPERATIONS["BLOCKED"]
+
+
+SEARCH = {"id": "e1", "kind": "fill", "label": "Search for restaurants and food", "role": "searchbox", "value": "",
+          "node": 1, "constraints": {"type": "text"}}
+
+
+def test_a_question_that_asks_for_a_code_is_always_hidden(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, replies=[{"text": "482913"}])
+    question = {"kind": "text", "text": "Please enter the OTP you received.", "options": [], "preference": False}
+    monkeypatch.setattr(loop.jobs, "compose", lambda context, page, elements: (question, META))
+    act(a, decision("ASK_USER", "ASK_USER"))
+    assert a.asked[0]["kind"] == "secret" and "482913" not in json.dumps(a.state["memory"])
+    assert a.state["answers"] == {"answer1": "482913"} and "482913" not in a.secrets.text("code 482913")
+
+
+def test_details_the_user_gives_join_the_profile_and_stay_hidden(tmp_path):
+    a = agent_with(tmp_path, profile={"phone": ""})
+    page = a.state["page"]
+    phone = next(x for x in page["actions"] if x["id"] == "e1")
+    a.state["unused"][("shop.test", "Phone number")] = ("9681190953", "9681190953", "user", None)
+    a.after_typing(phone, page)
+    assert a.profile.data["phone"] == "9681190953" and "9681190953" not in a.secrets.text("call 9681190953")
+    assert "phone number" in a.told[-1]["text"] and Profile(tmp_path / "profile.json").data["phone"] == "9681190953"
+
+
+def test_a_message_meant_for_the_user_is_asked_never_typed(tmp_path, monkeypatch):
+    for form in (("text", "Please select a restaurant that offers Diet Coke."),
+                 ("ask", "Do you want me to search all restaurants or one in particular?", False, None)):
+        a = agent_with(tmp_path, page=fake_page(actions=[SEARCH]), replies=[{"text": "use Instamart instead"}])
+        field(monkeypatch, form)
+        with pytest.raises(StalePage):
+            act(a, decision("e1", "TYPE_TEXT"))
+        a.browser.act.assert_not_called()  # the reply is an instruction for the next step, not text for the box
+        assert a.state["memory"][-1] == f"User answered “{form[1]}”: use Instamart instead"
+
+
+def test_a_value_question_still_types_the_answer(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, page=fake_page(actions=[SEARCH]), replies=[{"text": "Diet Coke"}])
+    field(monkeypatch, ("ask", "What should I search for?", False, None))
+    act(a, decision("e1", "TYPE_TEXT"))
+    assert typed(a) == "Diet Coke"
+
+
+def test_only_lasting_preferences_are_offered_to_remember(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, replies=[{"option": "o1"}])
+    choice(monkeypatch, ("View full menu", "4"), ("Search items", "5"), preference=False)
+    act(a, decision("ASK_USER", "ASK_USER"))
+    assert a.asked[0]["remember"] is False

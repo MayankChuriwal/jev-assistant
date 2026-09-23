@@ -62,7 +62,8 @@ def compose(context, page, elements):
         clean.append({"label": label, "description": str(option.get("description") or "")[:72], "element": element})
     if kind == "choice" and len(clean) < 2:
         raise invalid("question")
-    return {"kind": kind, "text": text, "options": clean if kind == "choice" else []}, meta
+    return {"kind": kind, "text": text, "options": clean if kind == "choice" else [],
+            "preference": out.get("preference") is True}, meta
 
 
 MONEY = re.compile(r"[₹$€£]|\bRs\.?|\bINR\b|\bUSD\b")

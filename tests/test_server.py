@@ -65,3 +65,14 @@ def test_traces_lists_the_latest_runs(tmp_path, capsys):
     assert "done" in out and "Instamart · Diet Coke" in out and " 3 questions" in out and "12 steps" in out
     assert "Order placed #A1B2" in out and "20260923-102000-uber.json  unreadable" in out
     assert server.traces(folder=tmp_path / "none") == 0 and "No traces yet" in capsys.readouterr().out
+
+
+def test_the_profile_command_keeps_private_details_private(tmp_path, monkeypatch, capsys):
+    from assistant.profile import Profile
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("assistant.profile.HOME", tmp_path)
+    assert server.main(["profile", "--name", "Mayank Churiwal", "--phone", "+91 98765 43210"]) == 0
+    out = capsys.readouterr().out
+    assert Profile().data["name"] == "Mayank Churiwal" and "name: set" in out and "email: not set" in out
+    assert "98765" not in out and "Mayank" not in out

@@ -95,3 +95,18 @@ def test_paying_commits_need_an_amount_and_a_real_element(monkeypatch):
         jobs.confirm_card("c", PAGE, "Pay ₹79", ELEMENTS)
     reply(monkeypatch, {"action_label": "Pay ₹79", "amount": "₹79", "lines": [], "element": "2"})
     assert jobs.confirm_card("c", PAGE, "Pay ₹79", ELEMENTS)[0]["element"] == "2"
+
+
+def test_the_start_job_is_told_to_use_a_grocery_section_for_groceries():
+    from assistant import questions
+
+    assert "grocery section" in questions.START and "Instamart" in questions.START
+
+
+def test_choice_questions_say_whether_they_are_lasting_preferences(monkeypatch):
+    reply(monkeypatch, {"kind": "choice", "text": "Deliver where?", "preference": True, "options": [
+        {"label": "Home", "element": "1"}, {"label": "Office", "element": "2"}]})
+    assert jobs.compose("Goal: order", PAGE, ELEMENTS)[0]["preference"] is True
+    reply(monkeypatch, {"kind": "choice", "text": "What next?", "options": [
+        {"label": "View full menu", "element": "1"}, {"label": "Search items", "element": "2"}]})
+    assert jobs.compose("Goal: order", PAGE, ELEMENTS)[0]["preference"] is False

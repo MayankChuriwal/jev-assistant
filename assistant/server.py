@@ -182,6 +182,22 @@ def run(goal, url=None):
     return 0 if agent.state["status"] == "done" else 1
 
 
+def profile_command(args):
+    """Set the details every model sees only as placeholders, and show which are set (never their values)."""
+    from .profile import HIDDEN, Profile
+
+    profile = Profile()
+    changed = {key: value for key, value in (("name", args.name), ("phone", args.phone), ("email", args.email),
+                                             ("upi_id", args.upi)) if value}
+    if changed:
+        profile.data.update(changed)
+        profile.save()
+    print(f"Profile: {profile.path}")
+    for key in HIDDEN:
+        print(f"  {key}: {'set' if profile.data.get(key) else 'not set'}")
+    return 0
+
+
 def traces(limit=10, folder=None):
     """The latest task traces, one line each, with what the smoke set judges: outcome, questions, evidence."""
     folder = Path(folder) if folder else home() / "traces"
@@ -354,6 +370,9 @@ def main(argv=None):
     run_parser = commands.add_parser("run", help="do one task in the agent Chrome, asking questions here")
     run_parser.add_argument("goal")
     run_parser.add_argument("--url", help="start page; found from the goal when omitted")
+    profile_parser = commands.add_parser("profile", help="set your name, phone, email, or UPI ID; no model sees them")
+    for flag in ("--name", "--phone", "--email", "--upi"):
+        profile_parser.add_argument(flag)
     traces_parser = commands.add_parser("traces", help="list the latest task traces")
     traces_parser.add_argument("--limit", type=int, default=10)
     args = parser.parse_args(argv)
@@ -365,4 +384,6 @@ def main(argv=None):
         return run(args.goal, args.url)
     if args.command == "traces":
         return traces(args.limit)
+    if args.command == "profile":
+        return profile_command(args)
     return serve()
