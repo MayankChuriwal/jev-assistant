@@ -8,8 +8,30 @@ Design: `docs/superpowers/specs/2026-09-23-jev-assistant-design.md`
 
     uv sync
     cp .env.example .env      # add TYPESAFE_API_KEY and OPENAI_API_KEY
+    uv run jev probe          # optional: check the smoke-set sites for 403s and captchas
+
+## Chat
+
+    uv run jev                # starts the hidden agent Chrome if needed, then serves the chat
+                              # open http://127.0.0.1:8766/
+
+Type a goal, such as "Order a Diet Coke on Instamart". The agent works in its own hidden Chrome and asks only for
+what it needs, one question at a time: buttons and lists for choices, a hidden field for OTPs and CVVs, and a
+summary card before anything is paid for or booked. Up to three tasks run at once (one per site). Messages sent
+mid-task count as answers, changes, new tasks, cancellations, or status questions. Files the agent saves, such as
+receipts or PDFs, arrive in chat as documents.
+
+The chat uses WhatsApp Cloud API shapes: a webhook comes in, send-message payloads go out, and files travel as
+media ids. A WhatsApp channel can therefore replace `assistant/channel_web.py` without touching the conversation core
+(`assistant/core.py`). The server listens on 127.0.0.1 only and checks a per-launch token. `JEV_DEBUG=1` adds
+`/api/debug` with each task's recent steps.
+
+## One task in the terminal
+
     uv run jev chrome         # hidden agent Chrome with its own profile
-    uv run jev probe          # check the smoke-set sites for 403s and captchas
+    uv run jev run "Order a Diet Coke on Instamart"
+
+Questions are asked in the terminal; type `cancel` to stop.
 
 ## Use the loop
 
@@ -19,8 +41,8 @@ Design: `docs/superpowers/specs/2026-09-23-jev-assistant-design.md`
         for state in agent.run():
             print(state["elapsed_ms"], state["status"], state["history"][-1:])
 
-Run with `uv run --env-file .env python script.py` after `uv run jev chrome`. Plan 1 has no chat: goals that need
-the user (logins, OTPs, files, approvals) stop at BLOCKED until Plan 2.
+Run with `uv run --env-file .env python script.py` after `uv run jev chrome`. Without an `asker`, goals that need
+the user (logins, OTPs, files, approvals) stop at BLOCKED.
 
 ## Checks
 
@@ -28,3 +50,4 @@ the user (logins, OTPs, files, approvals) stop at BLOCKED until Plan 2.
     uv run pytest             # offline logic
     uv run pytest -m browser  # real headless Chrome on local fixtures
     node --check assistant/snapshot.js
+    node --check assistant/static/app.js
