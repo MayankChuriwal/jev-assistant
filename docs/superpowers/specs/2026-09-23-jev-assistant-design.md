@@ -405,7 +405,7 @@ Run manually with real accounts; each completes for real:
 4. Amazon: order an item.
 5. A complaint or dispute form submitted to an organisation.
 6. Download a document (for example an invoice) and deliver it in chat.
-7. An upload task on a site chosen when that phase starts.
+7. Upload: submit the dispute form at `assistant/fixtures/upload.html` (served from localhost), attaching files the user sends in chat. The page covers a hidden input opened by a button, a drop-only zone, and a visible multi-file input. Pass: the confirmation shows a reference and SHA-256 values matching the user's original files (also exposed as `window.__uploadResult`).
 
 Pass criteria per run: the task completes; the result quotes on-page evidence; no question was unnecessary (question count recorded in the trace).
 

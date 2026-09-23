@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raise a dispute · Northwind Bank</title>
+<!-- Offline fixture. Covers three upload patterns: hidden input behind a button,
+     drop-only zone, visible native multi-file input. Result in window.__uploadResult. -->
+<style>
+  :root { --ink:#1b2430; --muted:#5b6675; --line:#d7dce3; --brand:#0b5cad; --bad:#b3261e; --bg:#f5f7fa; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui, sans-serif; color:var(--ink); background:var(--bg); }
+  header { background:var(--brand); color:#fff; padding:14px 20px; font-weight:600; }
+  main { max-width:640px; margin:24px auto; padding:0 16px; }
+  form, #done { background:#fff; border:1px solid var(--line); border-radius:10px; padding:24px; }
+  h1 { font-size:22px; margin:0 0 16px; }
+  label, fieldset, .field { display:block; margin:0 0 18px; }
+  fieldset { border:0; padding:0; }
+  legend, .title { font-weight:600; margin-bottom:6px; display:block; }
+  select, textarea, input[type=file] { width:100%; font:inherit; padding:8px; border:1px solid var(--line); border-radius:6px; }
+  textarea { min-height:90px; }
+  .choose { font:inherit; padding:8px 14px; border:1px solid var(--brand); color:var(--brand); background:#fff; border-radius:6px; cursor:pointer; }
+  .name { color:var(--muted); margin-left:8px; }
+  .drop { border:2px dashed var(--line); border-radius:10px; padding:26px; text-align:center; color:var(--muted); }
+  .drop.over { border-color:var(--brand); background:#eef5fc; }
+  .error { color:var(--bad); font-size:13px; min-height:1em; }
+  button[type=submit] { font:inherit; font-weight:600; padding:10px 20px; border:0; border-radius:6px; background:var(--brand); color:#fff; cursor:pointer; }
+  button[type=submit]:disabled { opacity:.6; cursor:default; }
+  table { width:100%; border-collapse:collapse; margin-top:12px; font-size:14px; }
+  td, th { text-align:left; padding:6px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
+  code { font-size:12px; word-break:break-all; }
+</style>
+</head>
+<body>
+<header>Northwind Bank</header>
+<main>
+  <form id="dispute" novalidate>
+    <h1>Raise a card dispute</h1>
+
+    <label>
+      <span class="title">Transaction</span>
+      <select name="txn">
+        <option value="">Choose a transaction</option>
+        <option value="T1">12 Sep · ZENITH ELECTRONICS · ₹2,499.00</option>
+        <option value="T2">14 Sep · CAFE MOCHA · ₹340.00</option>
+        <option value="T3">18 Sep · SKYLINE TRAVELS · ₹12,850.00</option>
+      </select>
+    </label>
+
+    <fieldset>
+      <legend>Reason</legend>
+      <label><input type="radio" name="reason" value="not_received"> Item or service not received</label>
+      <label><input type="radio" name="reason" value="charged_twice"> Charged twice</label>
+      <label><input type="radio" name="reason" value="wrong_amount"> Wrong amount</label>
+      <label><input type="radio" name="reason" value="not_me"> I didn't make this payment</label>
+    </fieldset>
+
+    <label>
+      <span class="title">What happened?</span>
+      <textarea name="details" placeholder="At least 20 characters"></textarea>
+    </label>
+
+    <!-- Pattern 1: hidden input opened by a styled button (file chooser). -->
+    <div class="field">
+      <span class="title" id="statement-label">Card statement (PDF, max 5 MB)</span>
+      <input type="file" id="statement" accept="application/pdf,.pdf" aria-labelledby="statement-label" hidden>
+      <button type="button" class="choose" id="statement-button">Choose statement</button>
+      <span class="name" id="statement-name">No file chosen</span>
+      <div class="error" id="statement-error"></div>
+    </div>
+
+    <!-- Pattern 2: drop-only zone, no input behind it. -->
+    <div class="field">
+      <span class="title" id="receipt-label">Receipt photo (JPG or PNG)</span>
+      <div class="drop" id="receipt" role="region" aria-labelledby="receipt-label">
+        Drag and drop a photo of the receipt here
+        <div class="name" id="receipt-name"></div>
+      </div>
+      <div class="error" id="receipt-error"></div>
+    </div>
+
+    <!-- Pattern 3: visible native input, several files, optional. -->
+    <label>
+      <span class="title">Other documents (optional)</span>
+      <input type="file" id="extra" multiple>
+    </label>
+
+    <button type="submit">Submit dispute</button>
+    <p id="progress" aria-live="polite"></p>
+    <p class="error" id="form-error" role="alert"></p>
+  </form>
+
+  <section id="done" hidden>
+    <h1>Dispute submitted</h1>
+    <p>Reference <strong id="ref"></strong>. We will email you within 3 working days.</p>
+    <table>
+      <thead><tr><th>Document</th><th>File</th><th>Size</th><th>SHA-256</th></tr></thead>
+      <tbody id="files"></tbody>
+    </table>
+  </section>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  const picked = { statement: null, receipt: null, extra: [] };
+  const size = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+  const label = f => f ? `${f.name} · ${size(f.size)}` : '';
+
+  $('statement-button').addEventListener('click', () => $('statement').click());
+  $('statement').addEventListener('change', e => {
+    const f = e.target.files[0];
+    const ok = f && (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) && f.size <= 5 * 1048576;
+    picked.statement = ok ? f : null;
+    $('statement-name').textContent = label(f) || 'No file chosen';
+    $('statement-error').textContent = f && !ok ? 'Statement must be a PDF under 5 MB.' : '';
+  });
+
+  const zone = $('receipt');
+  for (const type of ['dragenter', 'dragover']) zone.addEventListener(type, e => { e.preventDefault(); zone.classList.add('over'); });
+  for (const type of ['dragleave', 'drop']) zone.addEventListener(type, () => zone.classList.remove('over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    const f = e.dataTransfer.files[0];
+    const ok = f && ['image/jpeg', 'image/png'].includes(f.type);
+    picked.receipt = ok ? f : null;
+    $('receipt-name').textContent = label(f);
+    $('receipt-error').textContent = f && !ok ? 'Receipt must be a JPG or PNG photo.' : '';
+  });
+
+  $('extra').addEventListener('change', e => { picked.extra = [...e.target.files]; });
+
+  async function sha256(f) {
+    if (!crypto.subtle) return 'unavailable (needs http://localhost or https)';
+    const digest = await crypto.subtle.digest('SHA-256', await f.arrayBuffer());
+    return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  $('dispute').addEventListener('submit', async e => {
+    e.preventDefault();
+    const form = e.target;
+    const errors = [];
+    if (!form.txn.value) errors.push('Choose the transaction.');
+    if (!form.reason.value) errors.push('Choose a reason.');
+    if (form.details.value.trim().length < 20) errors.push('Describe what happened in at least 20 characters.');
+    if (!picked.statement) errors.push('Attach your card statement PDF.');
+    if (!picked.receipt) errors.push('Drop a photo of the receipt.');
+    $('form-error').textContent = errors.join(' ');
+    if (errors.length) return;
+
+    form.querySelector('[type=submit]').disabled = true;
+    for (let p = 0; p <= 100; p += 20) {
+      $('progress').textContent = `Uploading… ${p}%`;
+      await new Promise(r => setTimeout(r, 200));
+    }
+    const docs = [['Statement', picked.statement], ['Receipt', picked.receipt], ...picked.extra.map(f => ['Other', f])];
+    const files = await Promise.all(docs.map(async ([kind, f]) => ({ kind, name: f.name, size: f.size, sha256: await sha256(f) })));
+    const ref = `DSP-${Math.floor(100000 + Math.random() * 900000)}`;
+
+    $('ref').textContent = ref;
+    for (const f of files) {
+      const row = $('files').insertRow();
+      // textContent only: file names are user data, never HTML.
+      for (const value of [f.kind, f.name, size(f.size)]) row.insertCell().textContent = value;
+      const code = document.createElement('code');
+      code.textContent = f.sha256;
+      row.insertCell().append(code);
+    }
+    form.hidden = true;
+    $('done').hidden = false;
+    window.__uploadResult = { ref, txn: form.txn.value, reason: form.reason.value, details: form.details.value.trim(), files };
+  });
+</script>
+</body>
+</html>
