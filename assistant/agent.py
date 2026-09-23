@@ -18,7 +18,7 @@ STOPPED = {"done", "blocked", "failed", "cancelled"}
 TALK = {"ASK_USER", "CONFIRM", "NOTE", "DONE", "BLOCKED"}
 PRIVATE = {"browser", "answers", "unused", "pending_vault", "card_parts"}  # hold secret values
 EDITABLE = {"textbox", "searchbox", "spinbutton", "combobox"}
-COMMIT_OPS = {"CLICK", "DOUBLE_CLICK", "PRESS_KEY", "ACCEPT_DIALOG"}
+COMMIT_OPS = {"CLICK", "DOUBLE_CLICK", "PRESS_KEY", "ACCEPT_DIALOG", "LOOK"}
 SAVE_AS = {f"card.{part}" for part in CARD_PARTS}
 ASK_TRIES = 5
 OUTCOME_CHECKS = 10
@@ -230,6 +230,13 @@ class Agent:
         if len(self.state["history"]) >= MAX_ACTIONS:
             raise Halt("blocked", f"Stopped at the {MAX_ACTIONS}-action budget.")
         self.stop_if_interrupted()
+        if operation == "LOOK":
+            spot = self.look(page, "the control the task needs next")
+            if spot is None:
+                self.state["memory"].append("Looked at the screen: nothing there fits the next step.")
+                self.state["status"] = "ready"
+                return self.snapshot()
+            action = {**action, "label": spot[2], "point": [spot[0], spot[1]]}  # the gate reads this name
         commit = self.gate(operation, action, decision, page)
         if commit is False:
             return self.snapshot()
@@ -245,6 +252,23 @@ class Agent:
         if self.interrupted and self.interrupted():
             self.state["status"] = "ready"
             raise StalePage("The user cancelled or changed the task. Choose again.")
+
+    def look(self, page, purpose):
+        """Find by sight what the element list can't name: one grid question, then a closer one inside the chosen
+        cell. The text model answers with cell names only; code turns the cell into a point. (x, y, label) or None."""
+        s = self.state
+        image, cells = s["browser"].grid_screenshot(masked=self.secrets.nodes)
+        found, meta = jobs.look(self.context(), page, purpose, image, cells)
+        s["text_calls"].append({**meta, "field": "LOOK", "value": found and found["cell"]})
+        if found is None:
+            return None
+        close, finer = s["browser"].grid_screenshot(region=cells[found["cell"]], columns=4, rows=4,
+                                                    masked=self.secrets.nodes, scale=2)
+        cell, meta = jobs.look_closer(found["label"], close, finer)
+        s["text_calls"].append({**meta, "field": "LOOK closer", "value": cell})
+        x, y = rules.centre(finer[cell])
+        return x, y, found["label"]
+
 
     def gate(self, operation, action, decision, page):
         """True for ordinary actions; the commit's label once the user approved exactly this action; False when
@@ -384,8 +408,18 @@ class Agent:
             return {"url": url}, helper, url
         if operation == "PRESS_KEY":
             return {"key": decision["key"]}, None, None
+        if operation == "LOOK":
+            return {"point": action["point"]}, None, action["label"]
         if operation == "DRAG":
-            return {"drop": next(a for a in page["actions"] if a["id"] == decision["drop"])}, None, None
+            drop = next(a for a in page["actions"] if a["id"] == decision["drop"])
+            if drop["kind"] == "look":  # a free spot on a canvas or a map
+                spot = self.look(page, f"a free spot to drop “{action['label']}” where the task needs it")
+                if spot is None:
+                    self.state["memory"].append(f"Looked for a spot to drop {action['label']}: nothing fits.")
+                    raise StalePage("Nothing on screen fits the drop. Choose again.")
+                drop = {**drop, "label": spot[2], "point": [spot[0], spot[1]]}
+            return {"drop": drop}, None, None
+
         if operation == "UPLOAD":
             if self.provide_file:
                 return {"files": self.provide_file(action)}, None, None

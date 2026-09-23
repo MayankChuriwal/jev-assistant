@@ -19,7 +19,7 @@ def host(url):
 
 def commit_label(operation, action, page, key=None, focused=""):
     """The words that make this action a commit, or None. `focused` names the control a page-level key reaches."""
-    if operation in {"CLICK", "DOUBLE_CLICK"}:
+    if operation in {"CLICK", "DOUBLE_CLICK", "LOOK"}:
         label = action.get("label", "")
     elif operation == "PRESS_KEY" and key in {"Enter", "Space"}:
         # Enter submits the field's form; on the page, Enter or Space presses whatever has focus.
