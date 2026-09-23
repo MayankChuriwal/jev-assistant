@@ -234,3 +234,25 @@ def test_target_questions_carry_state_and_the_full_rules(monkeypatch):
 
     jev(monkeypatch, pick)
     assert model.choose(page, "Search with free cancellation", [])["choice"] == "e3"  # index 3 is node 2
+
+
+def test_every_model_request_is_redacted_for_the_current_task(monkeypatch):
+    from assistant.profile import SECRETS, Secrets
+
+    sent = []
+
+    class Response:
+        status_code, is_error = 200, False
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"text": "ok"}'}}]}
+
+    monkeypatch.setattr(model.CLIENT, "post", lambda url, json, headers: sent.append(json) or Response())
+    token = SECRETS.set(Secrets([("+91 98765 43210", "[profile:phone]"), ("9876543210", "[profile:phone]")]))
+    try:
+        model.field_text({"goal": "Call 98765 43210 about +91 98765 43210"})
+    finally:
+        SECRETS.reset(token)
+    model.field_text({"goal": "no task: 98765 43210"})
+    assert "98765" not in json.dumps(sent[0]) and "[profile:phone]" in json.dumps(sent[0])
+    assert "98765 43210" in json.dumps(sent[1])

@@ -1,5 +1,6 @@
 """The user's profile (profile.json), secrets in the macOS Keychain, and per-task redaction of both."""
 
+import contextvars
 import json
 import os
 import re
@@ -112,3 +113,44 @@ class Vault:
             stored = None
         if stored != value:
             raise RuntimeError(f"The Keychain did not store {key}.")
+
+
+SECRETS = contextvars.ContextVar("jev_secrets", default=None)
+
+
+class Secrets:
+    """One task's registry of values no model, log, or message may contain, and the fields that hold them."""
+
+    def __init__(self, pairs=()):
+        self.values = {}
+        self.nodes = set()  # (frame, node) of fields that received a secret
+        for value, placeholder in pairs:
+            self.add(value, placeholder)
+
+    def add(self, value, placeholder):
+        value = str(value or "").strip()
+        if len(value) < 3:
+            return
+        digits = re.sub(r"[\s-]", "", value)
+        if digits.isdigit() and len(digits) >= 4:  # card numbers and phones, in any spacing
+            pattern = r"(?<!\d)" + r"[\s-]?".join(digits) + r"(?!\d)"
+        else:
+            pattern = r"(?<!\w)" + re.escape(value) + r"(?!\w)"
+        self.values[value] = (re.compile(pattern, re.IGNORECASE), placeholder)
+
+    def text(self, s):
+        if s.startswith("data:image/"):
+            return s
+        for value in sorted(self.values, key=len, reverse=True):
+            regex, placeholder = self.values[value]
+            s = regex.sub(lambda _match: placeholder, s)
+        return s
+
+    def redact(self, obj):
+        if isinstance(obj, str):
+            return self.text(obj)
+        if isinstance(obj, list):
+            return [self.redact(item) for item in obj]
+        if isinstance(obj, dict):
+            return {key: self.redact(value) for key, value in obj.items()}
+        return obj

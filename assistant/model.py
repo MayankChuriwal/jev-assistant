@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .profile import SECRETS
 from .questions import HEAD_PREMISE, KEY_HELP, KEY_RULE, NEXT_ACTION, OPERATIONS, TARGET, TEXT_VALUE, URL_VALUE
 
 CLIENT = httpx.Client(http2=True, timeout=25)
@@ -34,6 +35,9 @@ DROPS = ("click_target", "scroll_up_target", "scroll_down_target", "scroll_left_
 
 
 def post_json(url, key, body):
+    secrets = SECRETS.get()
+    if secrets is not None:
+        body = secrets.redact(body)  # the one outbound path to both models
     for attempt in range(3):
         try:
             response = CLIENT.post(url, json=body, headers={"Authorization": f"Bearer {key}"})

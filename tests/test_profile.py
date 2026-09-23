@@ -106,3 +106,26 @@ def test_vault_reports_missing_and_rejects_bad_values(keychain):
 def test_vault_notices_a_store_that_did_not_happen(tmp_path):
     with pytest.raises(RuntimeError, match="did not store"):
         Vault(tmp_path / "missing.keychain-db").set("card.hdfc.cvv", "123")
+
+
+from assistant.profile import Secrets  # noqa: E402
+
+
+def test_digit_secrets_are_hidden_in_any_spacing():
+    s = Secrets([("4111 1111 1111 1111", "[secret:card.number]")])
+    for shown in ("4111111111111111", "4111-1111-1111-1111", "card 4111 1111 1111 1111 ok"):
+        assert "4111" not in s.text(shown) and "[secret:card.number]" in s.text(shown)
+    assert s.text("order 94111111111111119") == "order 94111111111111119"  # longer digit runs are other numbers
+
+
+def test_words_are_hidden_whole_and_case_insensitively():
+    s = Secrets([("Mayank", "[profile:name]"), ("m@example.com", "[profile:email]"), ("ab", "[ignored]")])
+    assert s.text("Hi mayank, mail m@example.com") == "Hi [profile:name], mail [profile:email]"
+    assert s.text("Mayankpur") == "Mayankpur" and "ab" in s.text("abc ab")
+
+
+def test_redaction_is_deep_and_leaves_images_alone():
+    s = Secrets([("482913", "[secret:otp]")])
+    body = {"a": ["code 482913", {"b": "482913"}], "n": 482913, "img": "data:image/png;base64,482913AAAA"}
+    assert s.redact(body) == {"a": ["code [secret:otp]", {"b": "[secret:otp]"}], "n": 482913,
+                              "img": "data:image/png;base64,482913AAAA"}
