@@ -67,7 +67,8 @@ FRAME_VISIBLE = r"""function () {
       w = w.parent;
     }
   } catch {}
-  return r.width > 0 && r.height > 0 && x + r.width > 0 && y + r.height > 0 && x < w.innerWidth &&
+  // Tracking pixels are 1×1: frames smaller than 8×8 are never read.
+  return r.width >= 8 && r.height >= 8 && x + r.width > 0 && y + r.height > 0 && x < w.innerWidth &&
     y < w.innerHeight && this.checkVisibility({checkOpacity: true, checkVisibilityCSS: true});
 }"""
 SELECT = r"""(({node, value}) => {
@@ -98,12 +99,24 @@ SET_VALUE = r"""(({node, value}) => {
 FOCUS = "(node => { const e = window.__jevFast?.nodes.get(node); e?.focus(); return !!e && e.matches(':focus'); })"
 # Blur fields that hold secrets for the duration of a capture that leaves the process.
 MASK = r"""((ids, on) => {
+  // For one capture: blur and dot every filled text field, and every field that received a secret (§10.4).
   const c = window.__jevFast;
-  for (const id of ids) {
-    const e = c?.nodes.get(id);
-    if (!e) continue;
-    if (on) { e.dataset.jevFilter = e.style.filter; e.style.filter = 'blur(12px)'; }
-    else { e.style.filter = e.dataset.jevFilter || ''; delete e.dataset.jevFilter; }
+  const roots = c?.roots?.length ? c.roots : [document];
+  if (!on) {
+    for (const e of roots.flatMap(r => [...r.querySelectorAll('[data-jev-mask]')])) {
+      [e.style.filter, e.style.webkitTextSecurity] = JSON.parse(e.dataset.jevMask);
+      delete e.dataset.jevMask;
+    }
+    return;
+  }
+  const skip = ['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file', 'hidden', 'image'];
+  const filled = roots.flatMap(r => [...r.querySelectorAll('input,textarea')])
+    .filter(e => e.value && !skip.includes(e.type));
+  for (const e of new Set([...ids.map(id => c?.nodes.get(id)).filter(Boolean), ...filled])) {
+    if (e.dataset.jevMask) continue;
+    e.dataset.jevMask = JSON.stringify([e.style.filter, e.style.webkitTextSecurity]);
+    e.style.filter = 'blur(12px)';
+    e.style.webkitTextSecurity = 'disc';
   }
 })"""
 # A labelled grid drawn over the page for one capture, in a closed shadow root: the page's own reads never see it.
@@ -168,6 +181,7 @@ class EventPump:
         self.handlers = {}
         self.lock = threading.RLock()
         self.thread = None
+        self.running = True
 
     def register(self, session, handler):
         with self.lock:
@@ -196,8 +210,11 @@ class EventPump:
                     print(f"jev: {event.get('method')} handler failed: {error}", file=sys.stderr)
 
     def run(self):
-        while True:
-            self.flush()
+        while self.running:
+            try:
+                self.flush()
+            except Exception as error:  # an unexpected batch must never stop routing for every task
+                print(f"jev: event pump: {error!r}", file=sys.stderr)
             time.sleep(0.05)
 
 
@@ -658,9 +675,12 @@ class Browser:
 
 
     def _mask(self, by_frame, on):
-        for frame, nodes in by_frame.items():
+        """Mask (or unmask) the page and every frame of this tab: a re-rendered field is found again by its value."""
+        frames = {None, *by_frame, *(f for f, info in self.frames.items() if info["tab"] == self.active)}
+        for frame in frames:
             try:
-                self.evaluate(f"({MASK})({json.dumps(nodes)}, {json.dumps(on)})", self._session_for(frame))
+                nodes = json.dumps(by_frame.get(frame, []))
+                self.evaluate(f"({MASK})({nodes}, {json.dumps(on)})", self._session_for(frame))
             except (StalePage, RuntimeError, TimeoutError):
                 pass  # the frame is gone, so nothing of it can appear in the capture
 

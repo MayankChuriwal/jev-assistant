@@ -9,10 +9,10 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed <commit>` · `won't fix:
 
 | ID | Issue | Where | Status |
 |---|---|---|---|
-| P1-01 | "Drop-off" and "Drag the map" are read as upload drop zones, because text asking for a drop marks its container as an upload target. | `snapshot.js` | Plan 4 Task 5 |
-| P1-02 | Every option of a native dropdown counts as a candidate, so a long country list can use up the 250-candidate cap and hide real controls. | `snapshot.js` | Plan 4 Task 5 |
+| P1-01 | "Drop-off" and "Drag the map" are read as upload drop zones, because text asking for a drop marks its container as an upload target. | `snapshot.js` | fixed (Plan 4 Task 5) |
+| P1-02 | Every option of a native dropdown counts as a candidate, so a long country list can use up the 250-candidate cap and hide real controls. | `snapshot.js` | fixed (Plan 4 Task 5) |
 | P1-03 | Recording screenshots (`record_dir`) crashes while a JavaScript dialog is open. | `agent.py` | open |
-| P1-04 | One unexpected error inside the event pump's loop stops event routing for every task until restart. | `browser.py` `EventPump` | Plan 4 Task 5 |
+| P1-04 | One unexpected error inside the event pump's loop stops event routing for every task until restart. | `browser.py` `EventPump` | fixed (Plan 4 Task 5) |
 | P1-05 | A dialog that opens while the page is being read costs 5 s per iframe. | `browser.py` | open |
 | P1-06 | Back and forward wait the full 15 s on single-page apps that change the URL without loading. | `browser.py` `_navigation` | open |
 | P1-07 | Page scripts can tamper with the in-page snapshot helper. | `snapshot.js` | open |
@@ -20,7 +20,7 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed <commit>` · `won't fix:
 | P1-09 | File-picker interception is not enabled inside cross-origin iframes. | `browser.py` | open |
 | P1-10 | `jev probe` reports `ok` when a site's DNS lookup fails. | `server.py` | open |
 | P1-11 | Some custom menu and listbox controls are not picked up as candidates. | `snapshot.js` | open |
-| P1-12 | 1×1 tracker iframes are still observed, which costs time on every read. | `browser.py` | Plan 4 Task 5 |
+| P1-12 | 1×1 tracker iframes are still observed, which costs time on every read. | `browser.py` | fixed (Plan 4 Task 5) |
 
 ## Plan 2 — talking and safety
 
@@ -29,7 +29,7 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed <commit>` · `won't fix:
 | P2-01 | A field's attempt count never resets after the value is accepted, so a later code for the same field starts with used attempts. | `agent.py` | Plan 4 Task 6 |
 | P2-02 | OTP boxes without their own label share one attempt count per site. | `agent.py` | Plan 4 Task 6 |
 | P2-03 | Keychain calls have no timeout, so a Keychain unlock dialog hangs the task. | `profile.py` | Plan 4 Task 6 |
-| P2-04 | Screenshots only blur secret fields (no disc masking), and a field the page re-renders is not blurred again. | `browser.py` | Plan 4 Task 5 |
+| P2-04 | Screenshots only blur secret fields (no disc masking), and a field the page re-renders is not blurred again. | `browser.py` | fixed (Plan 4 Task 5) |
 | P2-05 | In the terminal, typing "yes" at a confirmation declines; only the option number works. | `server.py` `terminal_asker` | open |
 | P2-06 | Temporary image files written by the terminal asker are never deleted. | `server.py` | open |
 | P2-07 | If the text model answers a field with a placeholder such as `[profile:phone]`, those literal characters are typed. | `agent.py` | Plan 4 Task 6 |

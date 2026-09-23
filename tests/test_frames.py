@@ -74,3 +74,13 @@ def test_a_cross_origin_frame_inside_a_same_origin_frame_can_be_driven(browser_a
     page = b.observe()
     b.act("CLICK", find(page, "Pay ₹79", "click"), page)
     assert until(lambda: log(b) == ["pay:456"])
+
+
+def test_tracker_pixels_are_not_read(browser_at, site):
+    b = browser_at("/next.html")
+    frame = f"{site['b']}/widget-frame.html"
+    b.evaluate(f"document.body.insertAdjacentHTML('beforeend', '<iframe src=\"{frame}\" width=\"1\" height=\"1\">"
+               f"</iframe><iframe src=\"{frame}\" width=\"320\" height=\"160\"></iframe>')")
+    assert observe_until(b, lambda p: len(p["frames"]) >= 2) is not None
+    time.sleep(0.5)  # time for the 1×1 frame to attach as well
+    assert len(b.observe()["frames"]) == 2  # the page and the visible frame, never the tracking pixel

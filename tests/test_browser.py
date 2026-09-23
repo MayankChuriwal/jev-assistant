@@ -182,7 +182,7 @@ def test_screenshots_crop_to_an_element_and_blur_secret_fields(browser_at):
     masked = base64.b64decode(b.screenshot(card, masked={(None, card["node"])}))
     width, height = struct.unpack(">II", plain[16:24])
     assert abs(width - (card["rect"]["w"] + 32)) <= 2 and abs(height - (card["rect"]["h"] + 32)) <= 2
-    assert plain != masked
+    assert plain == masked  # a filled field is hidden in every capture, registered as a secret or not (P2-04)
     assert b.evaluate("document.getElementById('card').style.filter") == ""
     whole = base64.b64decode(b.screenshot())
     assert struct.unpack(">II", whole[16:24]) == (1120, 780)
@@ -222,3 +222,49 @@ def test_tasks_starting_together_share_one_daemon(chrome, site):
     finally:
         for b in opened:
             b.close()
+
+
+def test_only_file_drops_become_upload_zones(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', ['Drop-off location', 'Drag the map to adjust your "
+               "pickup', 'Drag and drop your files here'].map(t => `<div style=\"width:320px;height:60px\">${t}</div>`)"
+               ".join(''))")
+    zones = [a["label"] for a in b.observe()["actions"] if a.get("drop")]
+    assert zones == ["Drop zone: Drag and drop your files here"]
+
+
+def test_long_dropdowns_never_crowd_out_other_controls(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("""(() => {
+      const s = document.createElement('select');
+      s.setAttribute('aria-label', 'Country');
+      for (let i = 0; i < 300; i++) s.add(new Option('Country ' + i, 'c' + i));
+      document.body.prepend(s);
+      for (let i = 0; i < 5; i++)
+        document.body.append(Object.assign(document.createElement('button'), {textContent: 'Action ' + i}));
+      return true;
+    })()""")
+    labels = [a["label"] for a in b.observe()["actions"]]
+    assert all(f"Action {i}" in labels for i in range(5)) and any(x.startswith("Country → ") for x in labels)
+
+
+def test_screenshots_hide_every_filled_field(browser_at, monkeypatch):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<input id=\"otp\" value=\"482913\"><input id=\"empty\">"
+               "<textarea id=\"note\">Gate 4</textarea>')")
+    b.observe()
+    b.evaluate("document.getElementById('otp').replaceWith(Object.assign(document.createElement('input'),"
+               " {id: 'otp', value: '482913'}))")  # the page re-rendered the field after it was typed
+    styles = ("['otp', 'empty', 'note'].map(id => { const e = document.getElementById(id);"
+              " return getComputedStyle(e).webkitTextSecurity + '|' + e.style.filter; })")
+    seen, real = [], b.call
+
+    def spy(method, session=None, **params):
+        if method == "Page.captureScreenshot":
+            seen.append(b.evaluate(styles))
+        return real(method, session, **params)
+
+    monkeypatch.setattr(b, "call", spy)
+    b.screenshot()
+    assert seen == [["disc|blur(12px)", "none|", "disc|blur(12px)"]]
+    assert b.evaluate(styles) == ["none|", "none|", "none|"]

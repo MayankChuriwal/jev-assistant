@@ -8,6 +8,7 @@ from copy import deepcopy
 from unittest.mock import Mock
 
 import pytest
+from helpers import until
 
 import assistant.browser as browser
 from assistant.browser import Browser, StalePage, fingerprint, merge, safe_name
@@ -162,3 +163,21 @@ def test_code_boxes_are_all_located_before_any_typing():
     with pytest.raises(StalePage):
         b._do_type_text({"id": "e1", "kind": "fill", "node": 1, "group": [1, 2, 3], "label": "Code"}, text="123")
     b.input.assert_not_called()
+
+
+def test_the_event_pump_survives_an_unexpected_error(monkeypatch):
+    batches = [KeyError("boom"), [{"method": "Page.frameNavigated", "session_id": "s1"}]]
+
+    def drain():
+        batch = batches.pop(0) if batches else []
+        if isinstance(batch, Exception):
+            raise batch
+        return batch
+
+    monkeypatch.setattr(browser, "drain_events", drain)
+    pump, seen = browser.EventPump(), []
+    pump.register("s1", seen.append)
+    try:
+        assert until(lambda: seen) and seen[0]["method"] == "Page.frameNavigated"
+    finally:
+        pump.running = False

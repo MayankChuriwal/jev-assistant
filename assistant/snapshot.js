@@ -118,10 +118,11 @@
     const x = r.x + r.w / 2, y = r.y + r.h / 2;
     return r.w > 0 && r.h > 0 && x >= 0 && y >= 0 && x < innerWidth && y < innerHeight;
   };
-  const actions = [];
+  const actions = [], options = [];  // dropdown options go last: the cap trims them first
 
-  // Visible text first. Text asking for a drag-and-drop marks its container as an upload target.
+  // Visible text first. Text asking to drag or drop a file marks its container as an upload target.
   const words = [], zones = new Set();
+  const FILE_WORDS = /\b(files?|upload\w*|documents?|attach\w*|pdfs?|images?|photos?|pictures?|receipts?|statements?)\b/i;
   let length = 0;
   const dropZone = (e, text, dx, dy) => {
     for (let i = 0; e && i < 4; e = e.parentElement, i++) {
@@ -148,7 +149,7 @@
       if (!(r.width > 0 && r.height > 0 && y + r.height > 0 && y < innerHeight && x + r.width > 0 && x < innerWidth)) continue;
       words.push(value);
       length += value.length;
-      if (/\b(drag|drop)\b/i.test(value)) dropZone(parent, value, dx, dy);
+      if (/\b(drag|drop)\b/i.test(value) && FILE_WORDS.test(value)) dropZone(parent, value, dx, dy);  // not "Drop-off"
     }
   }
   const text = words.join('\n').slice(0, 6000);
@@ -227,7 +228,7 @@
       if (e.tagName === 'SELECT') {
         const current = [...e.selectedOptions].map(o => o.label).join(', ');
         for (const o of e.options) if (!o.selected && !o.disabled && !o.closest('optgroup[disabled]'))
-          actions.push({...base, kind: 'select', value: o.value, current_value: current, label: base.label + ' → ' + o.label});
+          options.push({...base, kind: 'select', value: o.value, current_value: current, label: base.label + ' → ' + o.label});
         continue;
       }
       const editable = !e.readOnly && e.getAttribute('aria-readonly') !== 'true' &&
@@ -264,6 +265,7 @@
       e.readOnly ?? null, e.matches(':disabled'), e.getAttribute('aria-disabled'), e.getAttribute('aria-expanded'),
       e.getAttribute('aria-checked'), e.getAttribute('aria-selected'), e.getAttribute('href'), memo.get(scope) ?? ''];
   };
+  actions.push(...options);
   const omitted_actions = Math.max(0, actions.length - 250);
   actions.splice(250);
   const memo = new Map(), guards = {};
