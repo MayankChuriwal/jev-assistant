@@ -102,6 +102,9 @@ OPERATIONS = {
     "RELOAD": "Reload a page that is broken, stuck, or showing stale content.",
     "OPEN_URL": "Open a web address directly when no visible control leads where the goal needs.",
     "SAVE_PDF": "Save the current page as a PDF for the user, such as a receipt or confirmation.",
+    "LOOK": "Look at a screenshot to click what the element list does not include: a control drawn on a canvas, a "
+            "spot on a map, or an image-only button. Slower than CLICK; use it only when no listed element fits.",
+
     "ACCEPT_DIALOG": "Accept the open browser dialog (OK).",
     "DISMISS_DIALOG": "Dismiss the open browser dialog (Cancel).",
     "WAIT": "Wait for the page to update.",

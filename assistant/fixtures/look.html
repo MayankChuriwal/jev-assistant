@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Look fixture</title>
+<style>body { font: 16px system-ui, sans-serif; margin: 8px; } canvas { display: block; border: 1px solid #ccc; }</style>
+</head>
+<body>
+<!-- Offline fixture for LOOK: buttons drawn on a canvas, which the element list cannot name, and a free drop area. -->
+<p id="out">Pick a colour on the board.</p>
+<canvas id="board" width="600" height="300"></canvas>
+<p><span id="pin" draggable="true">Pin</span></p>
+<script>
+window.log = [];
+const board = document.getElementById('board'), g = board.getContext('2d');
+const buttons = [{name: 'Red', x: 40, y: 60, color: '#c62828'}, {name: 'Blue', x: 380, y: 160, color: '#1565c0'}];
+for (const b of buttons) {
+  g.fillStyle = b.color;
+  g.fillRect(b.x, b.y, 160, 80);
+  g.fillStyle = '#fff';
+  g.font = 'bold 28px sans-serif';
+  g.fillText(b.name, b.x + 40, b.y + 50);
+}
+const at = e => {
+  const r = board.getBoundingClientRect();
+  return [Math.round(e.clientX - r.left), Math.round(e.clientY - r.top)];
+};
+board.addEventListener('click', e => {
+  const [x, y] = at(e);
+  const hit = buttons.find(b => x >= b.x && x < b.x + 160 && y >= b.y && y < b.y + 80);
+  window.log.push(hit ? hit.name : 'miss');
+  document.getElementById('out').textContent = hit ? `Picked ${hit.name}` : 'Missed';
+});
+board.addEventListener('dragover', e => e.preventDefault());
+board.addEventListener('drop', e => { e.preventDefault(); window.log.push('drop:' + at(e).join(',')); });
+document.getElementById('pin').addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', 'pin'));
+</script>
+</body>
+</html>

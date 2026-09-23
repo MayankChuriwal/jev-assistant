@@ -21,6 +21,8 @@ if os.environ["BU_NAME"] == "default":
 from browser_harness.admin import ensure_daemon  # noqa: E402
 from browser_harness.helpers import cdp, drain_events  # noqa: E402
 
+from . import rules  # noqa: E402
+
 HOME = Path(os.environ.get("JEV_HOME") or Path.home() / ".jev")
 INCOMING = HOME / "downloads" / ".incoming"
 # Atomically read visible content and controls, preserving actual DOM node identity.
@@ -104,6 +106,29 @@ MASK = r"""((ids, on) => {
     else { e.style.filter = e.dataset.jevFilter || ''; delete e.dataset.jevFilter; }
   }
 })"""
+# A labelled grid drawn over the page for one capture, in a closed shadow root: the page's own reads never see it.
+GRID = r"""(cells => {
+  document.getElementById('__jev_grid')?.remove();
+  if (!cells) return true;
+  const host = document.createElement('div');
+  host.id = '__jev_grid';
+  host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none';
+  const root = host.attachShadow({mode: 'closed'});
+  for (const [name, c] of Object.entries(cells)) {
+    const cell = document.createElement('div');
+    cell.style.cssText = `position:fixed;left:${c.x}px;top:${c.y}px;width:${c.w}px;height:${c.h}px;` +
+      'box-sizing:border-box;border:1px solid rgba(255,0,90,.9)';
+    const tag = document.createElement('span');
+    tag.textContent = name;
+    tag.style.cssText = 'position:absolute;left:1px;top:1px;padding:0 3px;font:bold 11px/14px sans-serif;' +
+      'color:#fff;background:rgba(255,0,90,.85)';
+    cell.append(tag);
+    root.append(cell);
+  }
+  document.documentElement.append(host);
+  return true;
+})"""
+
 # After input: wait two frames (50 ms cap), or up to 200 ms for a combobox's visible suggestions.
 SETTLE = r"""(action => new Promise(resolve => {
   const field = action.node === null ? null : window.__jevFast?.nodes.get(action.node);
@@ -599,13 +624,15 @@ class Browser:
         except (StalePage, RuntimeError, TimeoutError):
             return ""
 
-    def screenshot(self, action=None, masked=(), pad=16):
-        """Base64 PNG of the viewport, or of an element's region, with fields that hold secrets blurred."""
+    def screenshot(self, action=None, masked=(), pad=16, clip=None):
+        """Base64 PNG of the viewport, of an element's region, or of `clip`, with fields that hold secrets hidden."""
         by_frame = {}
         for frame, node in masked:
             by_frame.setdefault(frame, []).append(node)
         params = {"format": "png"}
-        if action is not None and action.get("rect") and action.get("node") is not None:
+        if clip:
+            params["clip"] = clip
+        elif action is not None and action.get("rect") and action.get("node") is not None:
             x, y = self._point(action)
             w, h = action["rect"]["w"], action["rect"]["h"]
             params["clip"] = {"x": max(0, x - w / 2 - pad), "y": max(0, y - h / 2 - pad),
@@ -615,6 +642,20 @@ class Browser:
             return self.call("Page.captureScreenshot", **params)["data"]
         finally:
             self._mask(by_frame, False)
+
+    def grid_screenshot(self, region=None, columns=8, rows=6, masked=(), scale=1):
+        """(PNG of the viewport or `region` under a labelled grid, the grid's cells in viewport coordinates)."""
+        if region is None:
+            width, height = self.evaluate("[innerWidth, innerHeight]")
+            region = {"x": 0, "y": 0, "w": width, "h": height}
+        cells = rules.grid(region, columns, rows)
+        self.evaluate(f"({GRID})({json.dumps(cells)})")
+        try:
+            clip = {"x": region["x"], "y": region["y"], "width": region["w"], "height": region["h"], "scale": scale}
+            return self.screenshot(masked=masked, clip=clip), cells
+        finally:
+            self.evaluate(f"({GRID})(null)")
+
 
     def _mask(self, by_frame, on):
         for frame, nodes in by_frame.items():
@@ -642,6 +683,12 @@ class Browser:
     def _do_hover(self, action, **_):
         x, y = self._point(action)
         self.input("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
+
+    def _do_look(self, action, point=None, **_):
+        if not point:
+            raise ValueError("LOOK needs a point found on the screen; nothing clicked.")
+        self._mouse(*point)
+
 
     def _do_type_text(self, action, text=None, **_):
         if not isinstance(text, str) or not text:
@@ -687,9 +734,11 @@ class Browser:
                    nativeVirtualKeyCode=keycode, modifiers=modifiers)
 
     def _do_drag(self, action, drop=None, **_):
-        if not drop or drop.get("node") is None:
-            raise ValueError("DRAG needs an observed drop target; nothing moved.")
-        (sx, sy), (tx, ty) = self._point(action), self._point(drop)
+        if not drop or (drop.get("node") is None and not drop.get("point")):
+            raise ValueError("DRAG needs an observed drop target or a point; nothing moved.")
+        (sx, sy) = self._point(action)
+        (tx, ty) = drop["point"] if drop.get("point") else self._point(drop)
+
         self.intercepted = None
         # HTML5 drag-and-drop never completes from raw mouse events; intercept its data and replay the drop.
         self.call("Input.setInterceptDrags", enabled=True)
@@ -797,6 +846,8 @@ class Browser:
             {"id": "reload", "kind": "reload", "node": None, "label": "Reload"},
             {"id": "open_url", "kind": "open_url", "node": None, "label": "Open a web address"},
             {"id": "save_pdf", "kind": "save_pdf", "node": None, "label": "Save page as PDF"},
+            {"id": "look", "kind": "look", "node": None, "label": "Look at the screen"},
+
         ]
         history = self.call("Page.getNavigationHistory")
         index, entries = history["currentIndex"], history["entries"]

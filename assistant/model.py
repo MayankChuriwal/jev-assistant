@@ -41,7 +41,9 @@ HEADS = {
 }
 HEAD_OPERATIONS = dict(HEADS.values())
 OPERATION_HEAD = {op: head for head, ops in HEAD_OPERATIONS.items() for op in ops}
-CONTROLS = ("wait", "go_back", "go_forward", "reload", "open_url", "save_pdf", "accept_dialog", "dismiss_dialog")
+CONTROLS = ("wait", "go_back", "go_forward", "reload", "open_url", "save_pdf", "accept_dialog", "dismiss_dialog",
+            "look")
+
 # A drag can drop onto anything clickable or any scrollable panel.
 DROPS = ("click_target", "scroll_up_target", "scroll_down_target", "scroll_left_target", "scroll_right_target")
 
@@ -117,6 +119,9 @@ def action_space(actions):
         if kind == "fill" or action.get("role") == "slider":
             heads.setdefault("press_key_target", {})[index] = action
     drops = {i: a for h in DROPS for i, a in heads.get(h, {}).items() if a.get("node") is not None}
+    if "LOOK" in controls:  # a free spot on a canvas or a map, found by sight
+        drops["look"] = {**controls["LOOK"], "label": "A free spot on the screen, found by looking"}
+
     if "drag_source" in heads:
         if drops:
             heads["drag_target"] = drops
