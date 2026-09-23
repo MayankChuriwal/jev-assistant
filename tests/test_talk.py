@@ -255,3 +255,10 @@ def test_a_pick_is_never_guessed_between_identical_labels(tmp_path, monkeypatch)
     choice(monkeypatch, ("Home", "4"), ("Office", "5"))
     act(a, decision("ASK_USER", "ASK_USER"))
     a.browser.act.assert_not_called()
+
+
+def test_a_given_title_is_kept(tmp_path):
+    a = loop.Agent("https://www.swiggy.com/instamart", "Order Diet Coke", title="Swiggy · Diet Coke",
+                   profile=Profile(tmp_path / "p.json"), vault=FakeVault(),
+                   browser=Mock(observe=Mock(return_value=fake_page())))
+    assert a.state["title"] == "Swiggy · Diet Coke"

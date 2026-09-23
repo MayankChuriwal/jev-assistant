@@ -45,7 +45,7 @@ def expects(action):
 
 class Agent:
     def __init__(self, url, goal, *, asker=None, notify=None, profile=None, vault=None, record_dir=None,
-                 screenshots=False, provide_file=None, browser=None):
+                 screenshots=False, provide_file=None, browser=None, title=None):
         goal = goal.strip() if isinstance(goal, str) else "\n".join(goal).strip()
         if not goal:
             raise ValueError("Supply a task")
@@ -55,7 +55,7 @@ class Agent:
         self.secrets = Secrets(self.profile.hidden_values())
         self.record_dir = Path(record_dir) if record_dir else None
         self.screenshots = screenshots or bool(record_dir)
-        title = goal[:60]
+        title = title or goal[:60]
         token = SECRETS.set(self.secrets)
         try:
             if url is None:
