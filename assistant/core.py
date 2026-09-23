@@ -109,7 +109,8 @@ class Core:
 
     def receive_webhook(self, body):
         for event in self.channel.events(body):
-            self.receive(event)
+            if event["from"] == self.user:  # one user; on WhatsApp, strangers messaging the number are ignored
+                self.receive(event)
 
     def receive(self, event):
         if (event.get("reply_id") or "").startswith("remember:"):

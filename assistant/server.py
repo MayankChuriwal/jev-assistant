@@ -1,18 +1,33 @@
-"""Command line. `jev chrome` launches the hidden agent Chrome; `jev probe` checks sites for blocking."""
+"""Command line and chat server. `jev` serves the chat; `jev chrome` launches the hidden agent Chrome; `jev probe`
+checks sites for blocking; `jev run` does one task in the terminal."""
 
 import argparse
 import base64
 import getpass
+import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 PORT = 9333
+CHAT_PORT = 8766
+MAX_WEBHOOK = 64 * 1024
+MAX_UPLOAD = 20 * 1024 * 1024
+DRAIN_LIMIT = 64 * 1024 * 1024  # larger refused bodies are cut off instead of read
+STATIC = Path(__file__).parent / "static"
+ASSETS = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+          "/style.css": ("style.css", "text/css; charset=utf-8")}
+IMAGES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+PAGE_POLICY = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; "
+               "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 SMOKE_SITES = ("https://www.swiggy.com/instamart", "https://www.swiggy.com", "https://m.uber.com",
                "https://www.amazon.in")
 BLOCKED = re.compile(r"captcha|verify (that )?you are (a )?human|are you a robot|unusual traffic|access denied"
@@ -167,9 +182,152 @@ def run(goal, url=None):
     return 0 if agent.state["status"] == "done" else 1
 
 
+def debug_view(core):
+    """Each task's recent steps and a live screenshot with secret fields masked. Development only."""
+    with core.lock:
+        tasks = list(core.tasks.values())
+    view = []
+    for t in tasks:  # screenshots are taken outside the core's lock: they are slow
+        try:
+            shot = t.agent.browser.screenshot(masked=t.agent.secrets.nodes) if t.agent else None
+        except Exception:  # the task's tab may be closing
+            shot = None
+        view.append({"id": t.id, "title": t.title, "status": t.status, "host": t.host,
+                     "history": t.agent.state["history"][-20:] if t.agent else [], "screenshot": shot})
+    return view
+
+
+class ChatHandler(BaseHTTPRequestHandler):
+    server_version = "jev"
+
+    def log_message(self, *_args):
+        pass  # chat content never reaches the terminal
+
+    def reply(self, status, body=b"", kind="application/json", headers=()):
+        if not isinstance(body, bytes):
+            body = json.dumps(body, ensure_ascii=False, default=str).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
+        for name, value in headers:
+            self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def local(self):
+        """Host and Origin name this server, so no other site and no DNS-rebound name reaches it."""
+        names = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
+        origin = self.headers.get("Origin")
+        return self.headers.get("Host") in names and (origin is None or origin.removeprefix("http://") in names)
+
+    def authorised(self, query):
+        token = self.headers.get("X-Jev-Token") or (query.get("t") or [""])[0]
+        return self.local() and secrets.compare_digest(token.encode(), self.server.token.encode())
+
+    def body(self, limit):
+        """The request body, or None when its length is missing, malformed, or over `limit`."""
+        length = self.headers.get("Content-Length", "")
+        if length.isdigit() and int(length) <= limit:
+            return self.rfile.read(int(length))
+        self.close_connection = True
+        if length.isdigit() and int(length) <= DRAIN_LIMIT:  # read and drop it, so the client sees the 413
+            remaining = int(length)                           # instead of a reset connection
+            while remaining > 0 and (chunk := self.rfile.read(min(remaining, 65536))):
+                remaining -= len(chunk)
+        return None
+
+    def do_GET(self):
+        url = urlsplit(self.path)
+        query = parse_qs(url.query)
+        if url.path in ASSETS:
+            if not self.local():
+                return self.reply(403, {"error": "forbidden"})
+            name, kind = ASSETS[url.path]
+            data = (STATIC / name).read_bytes().replace(b"{{TOKEN}}", self.server.token.encode())
+            return self.reply(200, data, kind, [("Content-Security-Policy", PAGE_POLICY)])
+        if not self.authorised(query):
+            return self.reply(403, {"error": "forbidden"})
+        if url.path == "/outbox":
+            try:
+                after = int(query.get("after", ["0"])[0])
+                wait = max(0.0, min(float(query.get("wait", ["0"])[0]), 25.0))  # NaN becomes 0
+            except ValueError:
+                return self.reply(400, {"error": "bad query"})
+            messages, typing = self.server.channel.since(after, wait)
+            return self.reply(200, {"messages": messages, "typing": typing})
+        if url.path.startswith("/media/"):
+            try:
+                path, mime, name = self.server.channel.media(url.path.removeprefix("/media/"))
+                data = Path(path).read_bytes()
+            except (KeyError, OSError):
+                return self.reply(404, {"error": "not found"})
+            download = quote(name or Path(path).name)
+            disposition = "inline" if mime in IMAGES else f"attachment; filename*=UTF-8''{download}"
+            return self.reply(200, data, mime, [("Content-Disposition", disposition),
+                                                ("Content-Security-Policy", "sandbox")])
+        if url.path == "/api/debug" and os.environ.get("JEV_DEBUG") == "1":
+            return self.reply(200, debug_view(self.server.core))
+        return self.reply(404, {"error": "not found"})
+
+    def do_POST(self):
+        url = urlsplit(self.path)
+        if not self.authorised(parse_qs(url.query)):
+            return self.reply(403, {"error": "forbidden"})
+        if url.path == "/webhook":
+            data = self.body(MAX_WEBHOOK)
+            if data is None:
+                return self.reply(413, {"error": "body missing or too large"})
+            try:
+                self.server.core.receive_webhook(json.loads(data))
+            except ValueError:  # bad JSON, or JSON that is not a WhatsApp webhook body
+                return self.reply(400, {"error": "not a WhatsApp webhook body"})
+            return self.reply(200, {"ok": True})
+        if url.path == "/media":
+            data = self.body(MAX_UPLOAD)
+            if data is None:
+                return self.reply(413, {"error": "body missing or too large"})
+            if not data:
+                return self.reply(400, {"error": "empty file"})
+            mime = (self.headers.get("Content-Type") or "application/octet-stream").split(";")[0].strip()
+            name = Path(unquote(self.headers.get("X-Filename") or "")).name or None
+            return self.reply(200, {"id": self.server.channel.store(data, mime, name)})
+        return self.reply(404, {"error": "not found"})
+
+
+class ChatServer(ThreadingHTTPServer):
+    """The chat page and the channel's endpoints, on loopback only."""
+
+    daemon_threads = True
+
+    def __init__(self, core, channel, *, port=CHAT_PORT, token=None):
+        self.core, self.channel = core, channel
+        self.token = token or secrets.token_urlsafe(24)
+        super().__init__(("127.0.0.1", port), ChatHandler)
+
+
+def serve(port=CHAT_PORT):
+    from .channel_web import WebChannel
+    from .core import Core
+
+    if chrome():
+        return 1
+    channel = WebChannel(home() / "media")
+    httpd = ChatServer(Core(channel), channel, port=port)
+    print(f"Chat: http://127.0.0.1:{httpd.server_port}/  (Ctrl+C stops)", flush=True)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+    return 0
+
+
 def main(argv=None):
     load_environment()
-    parser = argparse.ArgumentParser(prog="jev", description="Jev Assistant")
+    parser = argparse.ArgumentParser(prog="jev", description="Jev Assistant. With no command, serves the chat.")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("chrome", help="launch the hidden agent Chrome with its own profile")
     probe_parser = commands.add_parser("probe", help="check sites for 403s and captchas in the agent Chrome")
@@ -184,5 +342,4 @@ def main(argv=None):
         return probe(args.urls)
     if args.command == "run":
         return run(args.goal, args.url)
-    parser.print_help()
-    return 0
+    return serve()

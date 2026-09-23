@@ -39,10 +39,11 @@ def test_env_file_never_overrides_the_environment(monkeypatch, tmp_path):
     assert os.environ["BU_NAME"] == "already-set" and os.environ["JEV_TEST_ONLY"] == "from-file"
 
 
-def test_no_command_prints_help(capsys, monkeypatch, tmp_path):
+def test_no_command_serves_the_chat(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    assert server.main([]) == 0
-    assert "chrome" in capsys.readouterr().out
+    calls = []
+    monkeypatch.setattr(server, "serve", lambda: calls.append("serve") or 0)
+    assert server.main([]) == 0 and calls == ["serve"]
 
 
 @pytest.mark.browser

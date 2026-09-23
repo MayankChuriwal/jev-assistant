@@ -344,3 +344,11 @@ def test_a_message_that_cannot_be_read_says_so(world):
     text(world, "Order Diet Coke")
     assert "I couldn't read that message: Model connection failed; no action executed." in bodies(world)
     assert world.core.tasks == {}
+
+
+def test_only_the_configured_user_is_heard(world):
+    stranger = {"from": "someone-else", "id": "wamid.x", "type": "text", "text": {"body": "Order Diet Coke"}}
+    body = {"object": "whatsapp_business_account",
+            "entry": [{"id": "x", "changes": [{"field": "messages", "value": {"messages": [stranger]}}]}]}
+    world.core.receive_webhook(body)
+    assert world.classified == [] and world.core.tasks == {}
