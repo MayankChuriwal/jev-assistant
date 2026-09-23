@@ -22,6 +22,23 @@ from pathlib import Path  # noqa: E402
 import pytest  # noqa: E402
 
 FIXTURES = Path(__file__).parents[1] / "assistant" / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def no_real_models(monkeypatch):
+    """No test reaches a paid model: the developer's .env never loads, the keys are gone, and the HTTP client
+    refuses unless a test replaces it with a scripted one."""
+    from assistant import model, server
+
+    load = server.load_environment
+    monkeypatch.setattr(server, "load_environment", lambda path=None: load(path) if path else None)
+    for key in ("OPENAI_API_KEY", "TYPESAFE_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("A test tried to call a real model")
+
+    monkeypatch.setattr(model.CLIENT, "post", refuse)
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 

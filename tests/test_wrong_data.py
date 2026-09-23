@@ -1,8 +1,12 @@
 """Wrong OTPs, CVVs, and other rejected values: count, warn, stop, never reuse. Fakes only."""
 
+import itertools
+from copy import deepcopy
+
 from fakes import FakeVault, act, agent_with, decision, fake_page
 
 from assistant import agent as loop
+from assistant.browser import fingerprint
 
 META = {"model": "fake", "latency_ms": 1}
 
@@ -18,6 +22,21 @@ def field(monkeypatch, *forms):
     return calls
 
 
+def reacting(a):
+    """The site answers every attempt with a new error line, as real sites do, so these tests meet the attempt
+    limits and never the no-progress rule (which asks the user for help)."""
+    count = itertools.count(1)
+
+    def observe(screenshot=False):
+        page = deepcopy(a.browser.observe.return_value)
+        page["text"] += f"\nThat didn't work ({next(count)})"
+        page["fingerprint"] = fingerprint(page)
+        return page
+
+    a.browser.observe.side_effect = observe
+    return a
+
+
 def typed(a):
     return [call.kwargs["text"] for call in a.browser.act.call_args_list]
 
@@ -26,7 +45,7 @@ ASK = ("ask", "Enter the code Swiggy sent you.", True, None)
 
 
 def test_a_rejected_code_is_asked_again_with_a_warning_then_the_task_stops(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"text": "111111"}, {"text": "222222"}, {"text": "333333"}])
+    a = reacting(agent_with(tmp_path, replies=[{"text": "111111"}, {"text": "222222"}, {"text": "333333"}]))
     calls = field(monkeypatch, ASK, ASK, ASK, ASK)
     for _ in range(4):
         act(a, decision("e2", "TYPE_TEXT"))
@@ -38,7 +57,7 @@ def test_a_rejected_code_is_asked_again_with_a_warning_then_the_task_stops(tmp_p
 
 
 def test_rerendered_code_boxes_still_count_attempts(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"text": "111111"}, {"text": "222222"}, {"text": "333333"}])
+    a = reacting(agent_with(tmp_path, replies=[{"text": "111111"}, {"text": "222222"}, {"text": "333333"}]))
     field(monkeypatch, ASK, ASK, ASK)
     for round_ in range(4):
         page = fake_page()
@@ -79,11 +98,11 @@ def test_a_failed_payment_never_writes_a_replacement(tmp_path, monkeypatch):
 
 
 def test_values_the_model_wrote_are_not_attempts(tmp_path, monkeypatch):
-    a = agent_with(tmp_path)
+    a = reacting(agent_with(tmp_path))
     field(monkeypatch, *[("text", "coke")] * 5)
     for _ in range(5):
         act(a, decision("e1", "TYPE_TEXT"))
-    assert len(typed(a)) == 5  # the unchanged fake page trips the no-progress stop, never the attempt limit
+    assert len(typed(a)) == 5  # five values the model wrote: none of them counts as a rejected attempt
     assert not any("rejected" in m["text"] for m in a.told)
 
 
@@ -108,7 +127,7 @@ def test_only_the_newest_replacement_reaches_the_keychain(tmp_path, monkeypatch)
     page = fake_page(actions=[expiry,
                               {"id": "wait", "kind": "wait", "label": "Wait", "node": None}])
     vault = FakeVault({"card.hdfc.expiry": "12/28"})
-    a = agent_with(tmp_path, page=page, vault=vault, replies=[{"text": "12/92"}, {"text": "12/29"}])
+    a = reacting(agent_with(tmp_path, page=page, vault=vault, replies=[{"text": "12/92"}, {"text": "12/29"}]))
     again = ("ask", "That expiry was rejected. Send it again?", True, "card.expiry")
     field(monkeypatch, ("secret", "card.hdfc.expiry"), again, again)
     for _ in range(3):
