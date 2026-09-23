@@ -1,10 +1,13 @@
 """Command line. `jev chrome` launches the hidden agent Chrome; `jev probe` checks sites for blocking."""
 
 import argparse
+import base64
+import getpass
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -103,6 +106,53 @@ def probe(urls):
     return 1 if failures else 0
 
 
+def terminal_asker(message, *, read=input, secret_read=getpass.getpass, write=print):
+    """Answer the agent in a terminal: a number picks an option, "cancel" stops the task."""
+    write("")
+    write(message["text"])
+    if message.get("image"):
+        path = Path(tempfile.gettempdir()) / f"jev-{time.time_ns()}.png"
+        path.write_bytes(base64.b64decode(message["image"]))
+        write(f"(image: {path})")
+    options = message.get("options") or []
+    for n, option in enumerate(options, 1):
+        detail = f" — {option['description']}" if option.get("description") else ""
+        write(f"  {n}. {option['label']}{detail}")
+    if message["kind"] == "secret":
+        answer = secret_read("(hidden) > ").strip()
+    else:
+        answer = read("file path > " if message["kind"] == "file" else "> ").strip()
+    if answer.lower() in {"cancel", "/cancel"}:
+        return {"cancel": True}
+    if options and answer.isdigit() and 1 <= int(answer) <= len(options):
+        reply = {"option": options[int(answer) - 1]["id"]}
+        if message.get("remember") and read("Remember this for next time? [y/N] > ").strip().lower() == "y":
+            reply["remember"] = True
+        return reply
+    if message["kind"] == "file":
+        return {"file": str(Path(answer).expanduser())}
+    return {"text": answer}
+
+
+def terminal_notify(message, *, write=print):
+    write(("Result: " if message["kind"] == "result" else "Note: ") + message["text"])
+
+
+def run(goal, url=None):
+    from .agent import Agent
+
+    agent = Agent(url, goal, asker=terminal_asker, notify=terminal_notify)
+    shown = 0
+    try:
+        for state in agent.run():
+            for step in state["history"][shown:]:
+                print(f"  {state['elapsed_ms'] / 1000:6.1f}s  {step['operation']:<12} {step['action'][:70]}")
+            shown = len(state["history"])
+    finally:
+        agent.close()
+    return 0 if agent.state["status"] == "done" else 1
+
+
 def main(argv=None):
     load_environment()
     parser = argparse.ArgumentParser(prog="jev", description="Jev Assistant")
@@ -110,10 +160,15 @@ def main(argv=None):
     commands.add_parser("chrome", help="launch the hidden agent Chrome with its own profile")
     probe_parser = commands.add_parser("probe", help="check sites for 403s and captchas in the agent Chrome")
     probe_parser.add_argument("urls", nargs="*")
+    run_parser = commands.add_parser("run", help="do one task in the agent Chrome, asking questions here")
+    run_parser.add_argument("goal")
+    run_parser.add_argument("--url", help="start page; found from the goal when omitted")
     args = parser.parse_args(argv)
     if args.command == "chrome":
         return chrome()
     if args.command == "probe":
         return probe(args.urls)
+    if args.command == "run":
+        return run(args.goal, args.url)
     parser.print_help()
     return 0
