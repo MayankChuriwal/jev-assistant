@@ -6,6 +6,7 @@ import json
 import re
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 from . import jobs, rules
 from .browser import Browser, ExecutionUncertain, StalePage
@@ -20,6 +21,8 @@ EDITABLE = {"textbox", "searchbox", "spinbutton", "combobox"}
 SAVE_AS = {f"card.{part}" for part in CARD_PARTS}
 ASK_TRIES = 5
 OUTCOME_CHECKS = 10
+HELP_ROUNDS = 2
+IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 class Halt(Exception):
@@ -535,7 +538,40 @@ class Agent:
         return self.snapshot()
 
     def unblock(self, page):
-        raise Halt("blocked", "I'm stuck on this page and can't continue.")
+        """BLOCKED: show and ask, ask for guidance, ask for a step on the user's device, or stop cleanly."""
+        s = self.state
+        where = rules.host(page["url"]) + urlparse(page["url"]).path
+        rounds = s["help_rounds"].get(where, 0)
+        elements, heads, _ = action_space(page["actions"])
+        step, _ = jobs.unblock(self.context(), page, elements, must_stop=rounds >= HELP_ROUNDS)
+        if step["rung"] == "stop":
+            raise Halt("failed", step["text"])
+        s["help_rounds"][where] = rounds + 1
+        image = None
+        if step["crop_element"] or step["rung"] == "show":
+            target = next((a for head in heads.values() for index, a in head.items() if index == step["crop_element"]),
+                          None)
+            image = s["browser"].screenshot(target, masked=self.secrets.nodes)
+        message = {"kind": "image", "text": step["text"], "image": image} if image else {"kind": "text",
+                                                                                         "text": step["text"]}
+        reply = self.ask(message)
+        text = str(reply.get("text", "")).strip()
+        path = Path(reply["file"]) if reply.get("file") else None
+        if step["rung"] == "device":
+            s["memory"].append(f"User finished the step on their device: {text or 'done'}")
+        elif path and path.suffix.lower() in IMAGE_TYPES and path.is_file():
+            if not s.get("told_images"):
+                self.say("Images you send are read by OpenAI to work out the next step.")
+                s["told_images"] = True
+            hint, _ = jobs.hint(self.context(), page, text=text, image=base64.b64encode(path.read_bytes()).decode())
+            s["memory"].append(f"Hint from the user: {hint}")
+        elif step["rung"] == "guide":
+            hint, _ = jobs.hint(self.context(), page, text=text)
+            s["memory"].append(f"Hint from the user: {hint}")
+        else:
+            s["memory"].append(f"User read from the screen: {text}")
+        s["status"] = "ready"
+        return self.snapshot()
 
     def run(self):
         while self.state["status"] not in STOPPED:
