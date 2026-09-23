@@ -19,35 +19,6 @@ def openai_env(monkeypatch):
     monkeypatch.delenv("TEXT_MODEL_BASE_URL", raising=False)
 
 
-def test_text_request_uses_only_parameters_openai_accepts(monkeypatch):
-    post = reply('{"text": "Zurich"}')
-    monkeypatch.setattr(model, "post_json", post)
-    value, meta = model.field_text({"goal": 'Fly from "Zurich" to London'})
-    url, key, body = post.call_args.args
-    assert value == "Zurich" and meta["model"] == "gpt-4.1-mini"
-    assert url == "https://api.openai.com/v1/chat/completions" and key == "sk-test"
-    assert set(body) == {"model", "messages", "response_format", "max_tokens"}
-    assert body["response_format"] == {"type": "json_object"}
-    assert json.loads(body["messages"][1]["content"])["goal"] == 'Fly from "Zurich" to London'
-
-
-def test_missing_key_stops_before_guessing(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY")
-    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
-        model.field_text({"goal": "Find a flight"})
-
-
-@pytest.mark.parametrize(
-    "content",
-    ["Thinking: Zurich", '["Zurich"]', '{"text":null}', '{"text":"Zurich","extra":true}', '{"text":123}',
-     '{"text":" "}'],
-)
-def test_invalid_field_values_type_nothing(monkeypatch, content):
-    monkeypatch.setattr(model, "post_json", reply(content))
-    with pytest.raises(ValueError, match="nothing typed"):
-        model.field_text({"goal": "Find a flight"})
-
-
 def test_url_value_returns_an_http_address(monkeypatch):
     post = reply('{"url": "https://www.swiggy.com/instamart"}')
     monkeypatch.setattr(model, "post_json", post)
@@ -148,7 +119,7 @@ def test_offered_operations_follow_the_page(monkeypatch):
     model.choose(shop(), "Order Diet Coke", [])
     offered = set(calls[0]["questions"]["operation"]["criteria"])
     assert offered == {"CLICK", "DOUBLE_CLICK", "RIGHT_CLICK", "HOVER", "TYPE_TEXT", "PRESS_KEY", "SELECT", "DRAG",
-                       "SCROLL_DOWN", "UPLOAD", "WAIT", "RELOAD", "DONE", "BLOCKED"}
+                       "SCROLL_DOWN", "UPLOAD", "WAIT", "RELOAD", "ASK_USER", "CONFIRM", "NOTE", "DONE", "BLOCKED"}
     assert "drag_source" in calls[0]["questions"] and "press_key_key" in calls[0]["questions"]
     lonely = {**shop(), "actions": [a for a in shop()["actions"] if a["kind"] not in {"click", "scroll_down"}]}
     calls = jev(monkeypatch, lambda q: {"operation": choice(q["operation"]["criteria"], "WAIT")})
@@ -236,6 +207,49 @@ def test_target_questions_carry_state_and_the_full_rules(monkeypatch):
     assert model.choose(page, "Search with free cancellation", [])["choice"] == "e3"  # index 3 is node 2
 
 
+FIELD = {"goal": "Log in", "profile": {"profile_keys": ["phone"]}, "allowed": ["card.hdfc.cvv", "answer1"]}
+
+
+def test_text_request_uses_only_parameters_openai_accepts(monkeypatch):
+    post = reply('{"text": "Zurich"}')
+    monkeypatch.setattr(model, "post_json", post)
+    value, meta = model.field_value({"goal": 'Fly from "Zurich" to London'})
+    url, key, body = post.call_args.args
+    assert value == ("text", "Zurich") and meta["model"] == "gpt-4.1-mini"
+    assert url == "https://api.openai.com/v1/chat/completions" and key == "sk-test"
+    assert set(body) == {"model", "messages", "response_format", "max_tokens"}
+    assert body["response_format"] == {"type": "json_object"}
+
+
+def test_missing_key_stops_before_guessing(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY")
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        model.field_value({"goal": "Find a flight"})
+
+
+@pytest.mark.parametrize("content, expected", [
+    ('{"text": "Zurich"}', ("text", "Zurich")),
+    ('{"profile": "phone"}', ("profile", "phone")),
+    ('{"secret": "card.hdfc.cvv"}', ("secret", "card.hdfc.cvv")),
+    ('{"ask": "Enter the OTP", "secret": true}', ("ask", "Enter the OTP", True, None)),
+    ('{"ask": "Card number?", "secret": true, "save_as": "card.number"}', ("ask", "Card number?", True, "card.number")),
+])
+def test_field_values_take_one_of_four_forms(monkeypatch, content, expected):
+    monkeypatch.setattr(model, "post_json", reply(content))
+    assert model.field_value(FIELD)[0] == expected
+
+
+@pytest.mark.parametrize("content", [
+    "Thinking: Zurich", '["Zurich"]', '{"text":null}', '{"text":"Zurich","extra":true}', '{"text":" "}',
+    '{"profile": "upi_id"}', '{"secret": "card.icici.cvv"}', '{"ask": "OTP?"}', '{"ask": "OTP?", "secret": "yes"}',
+    '{"ask": "OTP?", "secret": true, "save_as": "card.pin"}',
+])
+def test_invalid_field_values_type_nothing(monkeypatch, content):
+    monkeypatch.setattr(model, "post_json", reply(content))
+    with pytest.raises(ValueError, match="nothing typed"):
+        model.field_value(FIELD)
+
+
 def test_every_model_request_is_redacted_for_the_current_task(monkeypatch):
     from assistant.profile import SECRETS, Secrets
 
@@ -250,9 +264,9 @@ def test_every_model_request_is_redacted_for_the_current_task(monkeypatch):
     monkeypatch.setattr(model.CLIENT, "post", lambda url, json, headers: sent.append(json) or Response())
     token = SECRETS.set(Secrets([("+91 98765 43210", "[profile:phone]"), ("9876543210", "[profile:phone]")]))
     try:
-        model.field_text({"goal": "Call 98765 43210 about +91 98765 43210"})
+        model.field_value({"goal": "Call 98765 43210 about +91 98765 43210"})
     finally:
         SECRETS.reset(token)
-    model.field_text({"goal": "no task: 98765 43210"})
+    model.field_value({"goal": "no task: 98765 43210"})
     assert "98765" not in json.dumps(sent[0]) and "[profile:phone]" in json.dumps(sent[0])
     assert "98765 43210" in json.dumps(sent[1])

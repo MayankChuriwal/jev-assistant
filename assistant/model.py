@@ -8,8 +8,8 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .profile import SECRETS
-from .questions import HEAD_PREMISE, KEY_HELP, KEY_RULE, NEXT_ACTION, OPERATIONS, TARGET, TEXT_VALUE, URL_VALUE
+from .profile import CARD_PARTS, SECRETS
+from .questions import FIELD_VALUE, HEAD_PREMISE, KEY_HELP, KEY_RULE, NEXT_ACTION, OPERATIONS, TARGET, URL_VALUE
 
 CLIENT = httpx.Client(http2=True, timeout=25)
 
@@ -128,7 +128,7 @@ def choose(state, goal, history):
     elements, heads, controls = action_space(state["actions"])
     operations = {op: OPERATIONS[op] for head in heads for op in HEAD_OPERATIONS.get(head, ())}
     operations.update({op: OPERATIONS[op] for op in controls})
-    operations.update(DONE=OPERATIONS["DONE"], BLOCKED=OPERATIONS["BLOCKED"])
+    operations.update({op: OPERATIONS[op] for op in ("ASK_USER", "CONFIRM", "NOTE", "DONE", "BLOCKED")})
     questions = {
         "operation": {"type": "choice", "criteria": operations, "instructions": {"goal": goal, "rules": NEXT_ACTION}}
     }
@@ -195,22 +195,17 @@ def choose(state, goal, history):
     )
     return decision
 
-def field_context(goal, action, page, history):
-    return {
-        "goal": goal,
-        "field": {k: action.get(k) for k in ("label", "role", "value")},
-        "page": {"title": page["title"], "text": page["text"][:6000]},
-        "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-6:]],
-    }
-
-
-def text_json(system, payload, *, max_tokens=512):
+def text_json(system, payload, *, max_tokens=512, images=()):
     """One JSON object from the OpenAI-compatible text model, plus call metadata."""
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         raise ValueError("The text model needs OPENAI_API_KEY; nothing is guessed.")
     base = os.environ.get("TEXT_MODEL_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     name = os.environ.get("TEXT_MODEL", "gpt-4.1-mini")
+    user = json.dumps(payload)
+    if images:
+        user = [{"type": "text", "text": user}] + [
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image}"}} for image in images]
     started = time.perf_counter()
     result = post_json(
         base + "/chat/completions",
@@ -219,7 +214,7 @@ def text_json(system, payload, *, max_tokens=512):
             "model": name,
             "max_tokens": max_tokens,
             "response_format": {"type": "json_object"},
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload)}],
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         },
     )
     try:
@@ -235,12 +230,40 @@ def text_json(system, payload, *, max_tokens=512):
     }
 
 
-def field_text(context):
-    output, meta = text_json(TEXT_VALUE, context, max_tokens=1024)
-    value = output.get("text")
-    if set(output) != {"text"} or not isinstance(value, str) or not value.strip() or len(value) > 2000:
-        raise ValueError("Text helper returned no valid field value; nothing typed.")
-    return value, meta
+def field_context(context, action, page, history, profile, allowed, previous=None):
+    field = {k: action.get(k) for k in ("label", "role", "value", "constraints")}
+    if action.get("group"):
+        field["code_length"] = len(action["group"])
+    return {
+        "goal": context,
+        "field": field,
+        "page": {"title": page["title"], "text": page["text"][:6000]},
+        "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-6:]],
+        "profile": profile,
+        "allowed": allowed,
+        "previous": previous,
+    }
+
+
+SAVE_AS = {f"card.{part}" for part in CARD_PARTS}
+
+
+def field_value(context):
+    """What goes into a field: ("text", value), ("profile", key), ("secret", key),
+    or ("ask", question, secret, save_as)."""
+    out, meta = text_json(FIELD_VALUE, context, max_tokens=1024)
+    keys = set(out)
+    if keys == {"text"} and isinstance(out["text"], str) and out["text"].strip() and len(out["text"]) <= 2000:
+        return ("text", out["text"]), meta
+    if keys == {"profile"} and out["profile"] in context.get("profile", {}).get("profile_keys", []):
+        return ("profile", out["profile"]), meta
+    if keys == {"secret"} and out["secret"] in context.get("allowed", []):
+        return ("secret", out["secret"]), meta
+    if (keys in ({"ask", "secret"}, {"ask", "secret", "save_as"}) and isinstance(out["ask"], str)
+            and out["ask"].strip() and isinstance(out["secret"], bool)
+            and out.get("save_as", "card.number") in SAVE_AS):
+        return ("ask", out["ask"].strip(), out["secret"], out.get("save_as")), meta
+    raise ValueError("Text helper returned no valid field value; nothing typed.")
 
 
 def url_value(goal, page, history):
