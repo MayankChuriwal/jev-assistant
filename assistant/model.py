@@ -4,10 +4,11 @@ import json
 import math
 import os
 import time
+from urllib.parse import urlparse
 
 import httpx
 
-from .questions import NEXT_ACTION, TARGET, TEXT_VALUE
+from .questions import NEXT_ACTION, TARGET, TEXT_VALUE, URL_VALUE
 
 CLIENT = httpx.Client(http2=True, timeout=25)
 
@@ -157,42 +158,56 @@ def field_context(goal, action, page, history):
     }
 
 
-def field_text(context):
-    key = os.environ.get("TEXT_MODEL_API_KEY")
+def text_json(system, payload, *, max_tokens=512):
+    """One JSON object from the OpenAI-compatible text model, plus call metadata."""
+    key = os.environ.get("OPENAI_API_KEY")
     if not key:
-        raise ValueError("TYPE_TEXT needs TEXT_MODEL_API_KEY; no text is hardcoded or guessed by the executor.")
-    base = os.environ.get("TEXT_MODEL_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
-    model = os.environ.get("TEXT_MODEL", "deepseek-chat")
-    reasoning = {"thinking": {"type": "disabled"}} if "api.deepseek.com/" in base else {"reasoning": {"effort": "low"}}
-    if os.environ.get("TEXT_MODEL_REASONING") == "none":
-        reasoning = {"reasoning": {"enabled": False}}
+        raise ValueError("The text model needs OPENAI_API_KEY; nothing is guessed.")
+    base = os.environ.get("TEXT_MODEL_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    name = os.environ.get("TEXT_MODEL", "gpt-4.1-mini")
     started = time.perf_counter()
     result = post_json(
         base + "/chat/completions",
         key,
         {
-            "model": model,
-            "max_tokens": 1024,
+            "model": name,
+            "max_tokens": max_tokens,
             "response_format": {"type": "json_object"},
-            **reasoning,
-            "messages": [
-                {"role": "system", "content": TEXT_VALUE},
-                {
-                    "role": "user",
-                    "content": json.dumps(context),
-                },
-            ],
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload)}],
         },
     )
     try:
         output = json.loads(result["choices"][0]["message"]["content"])
-        value = output["text"]
-        if set(output) != {"text"} or not isinstance(value, str) or not value.strip() or len(value) > 2000:
-            raise ValueError()
-    except (ValueError, KeyError, TypeError):
-        raise ValueError("Text helper returned no valid field value; nothing typed.") from None
-    return value, {
-        "model": model,
+    except (ValueError, KeyError, TypeError, IndexError):
+        output = None
+    if not isinstance(output, dict):
+        raise ValueError("Text model returned no JSON object; nothing typed or executed.")
+    return output, {
+        "model": name,
         "latency_ms": round((time.perf_counter() - started) * 1000),
         "usage": result.get("usage", {}),
     }
+
+
+def field_text(context):
+    output, meta = text_json(TEXT_VALUE, context, max_tokens=1024)
+    value = output.get("text")
+    if set(output) != {"text"} or not isinstance(value, str) or not value.strip() or len(value) > 2000:
+        raise ValueError("Text helper returned no valid field value; nothing typed.")
+    return value, meta
+
+
+def url_value(goal, page, history):
+    output, meta = text_json(
+        URL_VALUE,
+        {
+            "goal": goal,
+            "page": {"url": page["url"], "title": page["title"], "text": page["text"][:3000]},
+            "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-6:]],
+        },
+    )
+    url = output.get("url")
+    parsed = urlparse(url) if isinstance(url, str) else None
+    if set(output) != {"url"} or not parsed or parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Text model returned no valid http(s) URL; nothing opened.")
+    return url, meta

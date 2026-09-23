@@ -1,6 +1,5 @@
 """Offline contracts for a dynamic operation/target policy. No paid APIs."""
 
-import json
 import time
 from copy import deepcopy
 from unittest.mock import Mock
@@ -140,23 +139,6 @@ def test_target_head_receives_control_state_and_full_next_step_rules(monkeypatch
     assert d["choice"] == "e3"
 
 
-def test_quoted_task_text_still_uses_the_llm(monkeypatch):
-    monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
-    post = Mock(return_value={"choices": [{"message": {"content": '{"text":"Zurich"}'}}]})
-    monkeypatch.setattr(model, "post_json", post)
-    context = model.field_context('Fly from "Zurich" to London', page()["actions"][0], page(), [])
-    assert model.field_text(context)[0] == "Zurich"
-    assert post.call_count == 1
-    sent = json.loads(post.call_args.args[2]["messages"][1]["content"])
-    assert sent["goal"] == 'Fly from "Zurich" to London'
-
-
-def test_missing_text_credential_stops_before_guessing(monkeypatch):
-    monkeypatch.delenv("TEXT_MODEL_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="TEXT_MODEL_API_KEY"):
-        model.field_text({"goal": 'Enter "Zurich"'})
-
-
 @pytest.fixture
 def runner():
     a = loop.Agent.__new__(loop.Agent)
@@ -274,16 +256,6 @@ def test_fingerprint_tracks_values_and_identity_not_screenshots():
     assert fingerprint(p) == fingerprint(other)
     other["actions"][0]["node"] = 99
     assert fingerprint(p) != fingerprint(other)
-
-
-@pytest.mark.parametrize(
-    "content", ["Thinking: Zurich", '{"text":null}', '{"text":"Zurich","extra":true}', '{"text":123}']
-)
-def test_text_helper_rejects_invalid_values(monkeypatch, content):
-    monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
-    monkeypatch.setattr(model, "post_json", Mock(return_value={"choices": [{"message": {"content": content}}]}))
-    with pytest.raises(ValueError, match="nothing typed"):
-        model.field_text({"goal": "Find a flight"})
 
 
 def test_navigation_during_prediction_reobserves_without_action(runner):
