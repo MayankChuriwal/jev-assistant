@@ -1,0 +1,95 @@
+"""Wrong OTPs, CVVs, and other rejected values: count, warn, stop, never reuse. Fakes only."""
+
+from fakes import FakeVault, act, agent_with, decision, fake_page
+
+from assistant import agent as loop
+
+META = {"model": "fake", "latency_ms": 1}
+
+
+def field(monkeypatch, *forms):
+    queue, calls = list(forms), []
+
+    def fake(context):
+        calls.append(context)
+        return queue.pop(0), META
+
+    monkeypatch.setattr(loop, "field_value", fake)
+    return calls
+
+
+def typed(a):
+    return [call.kwargs["text"] for call in a.browser.act.call_args_list]
+
+
+ASK = ("ask", "Enter the code Swiggy sent you.", True, None)
+
+
+def test_a_rejected_code_is_asked_again_with_a_warning_then_the_task_stops(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, replies=[{"text": "111111"}, {"text": "222222"}, {"text": "333333"}])
+    calls = field(monkeypatch, ASK, ASK, ASK, ASK)
+    for _ in range(4):
+        act(a, decision("e2", "TYPE_TEXT"))
+    assert typed(a) == ["111111", "222222", "333333"]
+    assert calls[0]["previous"] is None
+    assert calls[1]["previous"] == {"source": "user", "rejected": True, "attempts": 1, "left": 2}
+    assert "One try left" not in a.asked[1]["text"] and "One try left" in a.asked[2]["text"]
+    assert a.state["status"] == "blocked" and "rejected 3 values" in a.told[-1]["text"] and len(calls) == 3
+
+
+def test_rerendered_code_boxes_still_count_attempts(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, replies=[{"text": "111111"}, {"text": "222222"}, {"text": "333333"}])
+    field(monkeypatch, ASK, ASK, ASK)
+    for round_ in range(4):
+        page = fake_page()
+        code = next(x for x in page["actions"] if x["id"] == "e2")
+        code["node"], code["group"] = 100 * (round_ + 1), [100 * (round_ + 1) + n for n in range(6)]
+        a.state["page"] = a.browser.observe.return_value = page
+        act(a, decision("e2", "TYPE_TEXT"))
+    assert len(typed(a)) == 3 and a.state["status"] == "blocked"
+
+
+def test_a_rejected_keychain_value_is_never_reused_and_its_replacement_waits_for_success(tmp_path, monkeypatch):
+    vault = FakeVault({"card.hdfc.cvv": "123"})
+    a = agent_with(tmp_path, vault=vault, replies=[{"text": "456"}])
+    replacement = ("ask", "Your saved CVV was rejected. Send it?", True, "card.cvv")
+    calls = field(monkeypatch, ("secret", "card.hdfc.cvv"), replacement)
+    act(a, decision("e3", "TYPE_TEXT"))
+    act(a, decision("e3", "TYPE_TEXT"))
+    assert typed(a) == ["123", "456"]
+    assert "card.hdfc.cvv" in calls[0]["allowed"] and "card.hdfc.cvv" not in calls[1]["allowed"]
+    assert "One try left" in a.asked[0]["text"]  # a CVV field allows two values
+    assert a.state["pending_vault"] == {"card.hdfc.cvv": "456"} and vault.writes == []
+    act(a, decision("e3", "TYPE_TEXT"))
+    assert a.state["status"] == "blocked" and len(typed(a)) == 2
+    a.state["status"], a.state["commit"] = "ready", {"label": "Pay ₹79", "checks": 0}
+    monkeypatch.setattr(loop.jobs, "outcome", lambda context, page, label: ("success", "Pay ₹79", META))
+    a.check_commit()
+    assert vault.writes == [("card.hdfc.cvv", "456")]
+
+
+def test_a_failed_payment_never_writes_a_replacement(tmp_path, monkeypatch):
+    vault = FakeVault({"card.hdfc.cvv": "123"})
+    a = agent_with(tmp_path, vault=vault)
+    a.state["pending_vault"] = {"card.hdfc.cvv": "456"}
+    a.state["commit"] = {"label": "Pay ₹79", "checks": 0}
+    monkeypatch.setattr(loop.jobs, "outcome", lambda context, page, label: ("failed", "Pay ₹79", META))
+    a.check_commit()
+    assert vault.writes == [] and a.state["pending_vault"] == {"card.hdfc.cvv": "456"}
+
+
+def test_values_the_model_wrote_are_not_attempts(tmp_path, monkeypatch):
+    a = agent_with(tmp_path)
+    field(monkeypatch, *[("text", "coke")] * 5)
+    for _ in range(5):
+        act(a, decision("e1", "TYPE_TEXT"))
+    assert len(typed(a)) == 5  # the unchanged fake page trips the no-progress stop, never the attempt limit
+    assert not any("rejected" in m["text"] for m in a.told)
+
+
+def test_malformed_answers_cost_no_attempt(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, vault=FakeVault(), replies=[{"text": "12a"}, {"text": "1234"}, {"text": "123"}])
+    field(monkeypatch, ("ask", "CVV?", True, "card.cvv"))
+    act(a, decision("e3", "TYPE_TEXT"))
+    assert typed(a) == ["123"] and len(a.asked) == 3
+    assert a.state["typed"][("shop.test", "CVV")]["count"] == 1

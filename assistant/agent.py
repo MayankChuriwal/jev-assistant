@@ -373,7 +373,19 @@ class Agent:
         return value, shown, helper
 
     def previous(self, where):
-        return None
+        """How the last value for this field fared. Choosing the same field again after a user, Keychain, or
+        profile value means the site rejected it: count it, stop at the limit, and never offer that value again."""
+        s = self.state
+        typed = s["typed"].get(where)
+        if not typed or typed["source"] == "model":
+            return None
+        limit = rules.attempt_limit(typed["key"])
+        if typed["count"] >= limit:
+            raise Halt("blocked", f"The site rejected {typed['count']} values for “{where[1]}”, so I stopped before "
+                                  "your account gets locked.")
+        if typed["key"]:
+            s["rejected"].add((where, typed["key"]))
+        return {"source": typed["source"], "rejected": True, "attempts": typed["count"], "left": limit - typed["count"]}
 
     def allowed(self, where):
         """Secret keys the text model may name for this field: never one the site already rejected here."""
