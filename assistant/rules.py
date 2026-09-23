@@ -10,6 +10,8 @@ COMMIT = re.compile(
     re.IGNORECASE,
 )
 APPROVAL_STEPS = 20
+LOGIN = re.compile(r"\b(sign[ -]?in|log[ -]?in)\b", re.IGNORECASE)
+SSO = re.compile(r"\b(google|apple|facebook|microsoft)\b", re.IGNORECASE)
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -67,6 +69,12 @@ def amount_shown(amount, text):
     """The approved amount on the page as a whole number: ₹79 is not ₹790, ₹79.50, or 179."""
     fragment = normal(amount)
     return bool(fragment) and re.search(r"(?<!\d)" + re.escape(fragment) + r"(?![\d.,]*\d)", normal(text)) is not None
+
+
+def login_offered(page):
+    """Whether the page offers the user's own sign-in: a sign-in or log-in control, not a Google or Apple one."""
+    return any(a.get("kind") in {"click", "fill"} and LOGIN.search(a.get("label", "")) and not SSO.search(a["label"])
+               for a in page["actions"])
 
 
 def attempt_limit(key):

@@ -13,7 +13,7 @@ from . import jobs, rules
 from .browser import Browser, ExecutionUncertain, StalePage, unique
 from .model import action_space, choose, field_context, field_value, url_value
 from .profile import CARD_PARTS, HOME, SECRETS, Profile, Secrets, Vault
-from .questions import MAX_ACTIONS, MAX_DECISIONS
+from .questions import LOGIN_FIRST, MAX_ACTIONS, MAX_DECISIONS
 
 STOPPED = {"done", "blocked", "failed", "cancelled"}
 TALK = {"ASK_USER", "CONFIRM", "NOTE", "DONE", "BLOCKED"}
@@ -87,7 +87,7 @@ class Agent:
             browser=browser, goal=goal, title=title, page=page, decision=None, history=[], status="ready",
             decisions=[], text_calls=[], files=list(page.get("downloads", [])), elapsed_ms=0, started_at=None,
             record=record, memory=[], messages=[], answers={}, unused={}, typed={}, rejected=set(), approval=None,
-            commit=None, pending_vault={}, card_parts={}, help_rounds={},
+            commit=None, pending_vault={}, card_parts={}, help_rounds={}, login=None,
         )
 
     # ---- what the user and the models see
@@ -102,6 +102,8 @@ class Agent:
         """The goal as Jev and the text model read it: goal, task memory, profile summary, approval."""
         s = self.state
         lines = [f"Goal: {s['goal']}"]
+        if s.get("login") and not s["login"]["done"]:
+            lines.append(LOGIN_FIRST.format(host=s["login"]["host"]))
         if s["memory"]:
             lines.append("Task memory:\n" + "\n".join(f"- {item}" for item in s["memory"][-30:]))
         lines.append("Profile: " + json.dumps(self.profile.summary(), ensure_ascii=False))
@@ -229,6 +231,7 @@ class Agent:
             raise ValueError("This task has stopped. Start a new one.")
         if len(state["decisions"]) >= MAX_DECISIONS:
             raise Halt("blocked", f"Reached the {MAX_DECISIONS}-decision budget.")
+        self.track_login(state["page"])
         state["decision"] = choose(state["page"], self.context(), state["history"])
         state["decisions"].append(
             {**state["decision"], "fingerprint": state["page"]["fingerprint"], "elapsed_ms": self.elapsed()}
@@ -281,6 +284,20 @@ class Agent:
                      commit=commit if isinstance(commit, str) else None)
         self.check_commit()
         return self.snapshot()
+
+    def track_login(self, page):
+        """The user wants to be signed in before anything else. A site that offers sign-in makes it the next step,
+        until its sign-in controls are gone after something was typed to sign in."""
+        s = self.state
+        offered, host = rules.login_offered(page), rules.host(page["url"])
+        if s.get("login") is None:
+            if offered:
+                s["login"] = {"host": host, "since": len(s["history"]), "done": False}
+        elif not s["login"]["done"] and not offered and host == s["login"]["host"]:
+            # ponytail: "controls gone after typing"; a site that keeps a sign-in banner up needs a user update.
+            if any(h.get("operation") == "TYPE_TEXT" for h in s["history"][s["login"]["since"]:]):
+                s["login"]["done"] = True
+                s["memory"].append(f"Signed in to {host}.")
 
     def stop_if_interrupted(self):
         """A cancel or a change from the user arrived while this step was decided: decide again with it."""
@@ -437,7 +454,11 @@ class Agent:
         # A canvas changes no text the page reports, so looking-and-clicking never counts as making no progress.
         stuck = len(recent) == 3 and all(h["page_changed"] is False and h["operation"] not in {"WAIT", "LOOK"}
                                          for h in recent)
-        state["status"] = "blocked" if stuck else "ready"
+        state["status"] = "ready"
+        if stuck:  # ask the user for help instead of stopping in silence
+            tried = ", ".join(dict.fromkeys(h["action"] for h in recent))
+            state["memory"].append(f"My last 3 steps ({tried}) changed nothing on this page.")
+            self.unblock(state["page"])
 
     # ---- values an operation needs
 
@@ -725,7 +746,7 @@ class Agent:
             hint, _ = jobs.hint(self.context(), page, text=text)
             s["memory"].append(f"Hint from the user: {hint}")
         else:
-            s["memory"].append(f"User read from the screen: {text}")
+            s["memory"].append(f"User answered “{step['text']}”: {text}")  # later steps reuse it as an answer
         s["status"] = "ready"
         return self.snapshot()
 
@@ -754,7 +775,8 @@ class Agent:
             "questions": sum(m["from"] == "agent" and m.get("kind") not in {"info", "result"} for m in s["messages"]),
             "messages": [{k: v for k, v in m.items() if k != "image"} for m in s["messages"]],
             "steps": [{k: h.get(k) for k in TRACE_STEP} for h in s["history"]],
-            "decisions": [{k: d.get(k) for k in TRACE_DECISION} for d in s["decisions"]],
+            "decisions": [{**{k: d.get(k) for k in TRACE_DECISION}, "seen": (d.get("request") or {}).get("state")}
+                          for d in s["decisions"]],  # "seen": the page and elements Jev chose from, to replay it
             "text_calls": s["text_calls"], "memory": s["memory"], "files": [self.file_name(f) for f in s["files"]],
         })
 

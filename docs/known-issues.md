@@ -34,7 +34,7 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | P2-06 | Temporary image files written by the terminal asker are never deleted. | `server.py` | open |
 | P2-07 | If the text model answers a field with a placeholder such as `[profile:phone]`, those literal characters are typed. | `agent.py` | fixed (Plan 4 Task 6) |
 | P2-08 | DONE can finish while a payment's outcome is still pending. | `agent.py` | fixed (Plan 4 Task 6) |
-| P2-09 | The terminal prints nothing when a task stops for making no progress. | `server.py` | open |
+| P2-09 | The terminal prints nothing when a task stops for making no progress. | `server.py` | fixed (live run 1): a task that makes no progress asks the user for help, in chat and in the terminal |
 
 ## Plan 3 — chat and runner
 
@@ -74,3 +74,10 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | P4-10 | An answer the text model marks as not secret reaches task memory and traces as typed. | `agent.py` | open |
 | P4-11 | Profile saves are locked within one process only; `jev run` and `jev` running at once can collide. | `profile.py` | open |
 | P4-12 | How reliably GPT-4.1 mini reads the 11 px grid labels, and clip scale on a Retina display, are unverified until live runs. | `browser.py`, `questions.py` | open |
+
+## Live runs
+
+| ID | Issue | Where | Status |
+|---|---|---|---|
+| L1-01 | "Order Diet Coke from Swiggy" starts on swiggy.com's restaurant search instead of Instamart, and wanders through restaurant menus. | `jobs.start`, Jev | open |
+| L1-02 | A site that keeps a "Sign in" banner up after the user signed in keeps the sign-in step pending; the user must say "continue". | `agent.py` `track_login` | open |

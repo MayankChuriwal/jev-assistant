@@ -13,7 +13,12 @@ WAIT only when the needed control is absent/disabled, or submitted results are s
 Recent WAIT actions are not evidence of loading. Prefer a useful visible control over WAIT.
 Use saved preferences and task memory before asking. Never commit without the user's approval in task memory.
 DONE requires visible evidence that ALL requirements are satisfied. If asked to open a result,
-a matching link is not enough. BLOCKED means no offered operation can make progress."""
+a matching link is not enough. BLOCKED means no offered operation can make progress, even asking the user."""
+
+LOGIN_FIRST = """Current step: sign in to {host} first. The user wants to be signed in before anything else: the
+account holds their saved addresses, payment methods, and orders. Use the site's sign-in or log-in control and the
+user's phone number or email (a one-time code is asked in chat); never Google, Apple, or Facebook buttons. Once signed
+in, continue with the goal. Skip this only if the user said to continue without signing in."""
 
 TARGET = """Choose the best observed target if the next operation is the one named in this question.
 Use the user's entire goal, field values, nearby text, and recent actions. This question chooses only
@@ -87,7 +92,8 @@ OPERATIONS = {
     "RIGHT_CLICK": "Right-click an element to open its context menu.",
     "HOVER": "Move the pointer over an element to reveal a menu, tooltip, or hidden control.",
     "DRAG": "Drag one element onto another: reorder a list, move a card, or drop an item onto a zone.",
-    "TYPE_TEXT": "Enter or replace text in an editable field. A small LLM will supply the value from the goal.",
+    "TYPE_TEXT": "Enter or replace text in an editable field. A small LLM supplies the value from the goal, the "
+                 "user's profile, task memory, or by asking the user in chat.",
     "PRESS_KEY": "Press a key: Enter to submit a field without a button, Escape to close, arrows for sliders.",
     "SELECT": "Select an observed dropdown value.",
     "UPLOAD": "Attach a file to a file input, an open file picker, or a drop zone.",
@@ -113,7 +119,7 @@ OPERATIONS = {
                "no approval from the user for this exact action.",
     "NOTE": "Save facts from this page that later steps need, such as a price or reference before leaving it.",
     "DONE": "Every requirement is visibly satisfied.",
-    "BLOCKED": "No offered operation can make progress.",
+    "BLOCKED": "No offered operation can make progress, even by asking the user for a missing detail.",
 }
 
 HEAD_PREMISE = {

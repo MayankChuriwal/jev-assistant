@@ -250,7 +250,11 @@
       const typed = group ? group.map(b => b.value).join('') : '';
       if (group) Object.assign(fill, {group: group.map(identity), value: group.every(safe) ? typed : typed ? '[filled]' : '',
         label: e.closest('[aria-label]')?.getAttribute('aria-label') || 'One-time code'});
-      actions.push(fill, {...fill, kind: 'click', label: 'Open ' + fill.label, constraints: undefined, group: undefined});
+      actions.push(fill);
+      // A field that opens a picker or a list also gets a click; a plain text field would only offer a decoy.
+      const opens = ['date', 'time', 'datetime-local', 'month', 'week'].includes(e.type) || rname === 'combobox' ||
+        e.hasAttribute('list') || e.readOnly || !!(e.getAttribute('aria-haspopup') || '').replace('false', '');
+      if (opens) actions.push({...fill, kind: 'click', label: 'Open ' + fill.label, constraints: undefined, group: undefined});
     }
   }
 

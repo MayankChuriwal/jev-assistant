@@ -26,11 +26,16 @@ def test_loading_waits_do_not_trigger_the_no_progress_stop(tmp_path):
     assert len(a.state["history"]) == 5 and a.state["status"] == "ready"
 
 
-def test_three_actions_without_change_block_the_task(tmp_path):
-    a = agent_with(tmp_path)
+def test_three_actions_without_change_ask_the_user_for_help(tmp_path, monkeypatch):
+    help_step = {"rung": "guide", "text": "I'm stuck on this page. What should I do?", "crop_element": ""}
+    monkeypatch.setattr(loop.jobs, "unblock", lambda context, page, elements, must_stop=False: (help_step, {}))
+    monkeypatch.setattr(loop.jobs, "hint", lambda context, page, text=None, image=None: ("Type the phone number", {}))
+    a = agent_with(tmp_path, replies=[{"text": "type my number in the phone box"}])
     for _ in range(3):
         act(a, decision("e5", "CLICK"))
-    assert a.state["status"] == "blocked"
+    assert a.asked[-1]["text"] == "I'm stuck on this page. What should I do?"  # never a silent stop
+    assert a.state["memory"][-2] == "My last 3 steps (Office) changed nothing on this page."
+    assert a.state["memory"][-1] == "Hint from the user: Type the phone number" and a.state["status"] == "ready"
 
 
 def test_stale_observation_preserves_the_executed_action(tmp_path):

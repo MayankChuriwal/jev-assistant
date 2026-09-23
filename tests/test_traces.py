@@ -18,7 +18,7 @@ def test_traces_are_redacted_records_of_the_run(tmp_path):
         {"from": "agent", "kind": "result", "text": "Ordered.", "evidence": "Order placed #A1B2", "image": "iVBORw0"},
     ]
     a.state["decisions"].append({**decision("e4", "CLICK"), "operation_probabilities": {"CLICK": 0.9, "DONE": 0.1},
-                                 "request": {"state": "a whole request body"}})
+                                 "request": {"state": {"page": {"text": "Checkout"}}, "questions": "every rule"}})
     a.state["status"] = "done"
     path = a.save_trace()
     trace, text = json.loads(path.read_text()), path.read_text()
@@ -26,8 +26,9 @@ def test_traces_are_redacted_records_of_the_run(tmp_path):
     assert trace["status"] == "done" and trace["questions"] == 2
     assert trace["result"] == {"text": "Ordered.", "evidence": "Order placed #A1B2"}
     assert trace["decisions"] == [{"operation": "CLICK", "choice": "e4", "confidence": 1.0, "latency_ms": 1,
-                                   "operation_probabilities": {"CLICK": 0.9, "DONE": 0.1}, "elapsed_ms": None}]
-    for leak in ("98765", "4111", "iVBORw0", "a whole request body"):
+                                   "operation_probabilities": {"CLICK": 0.9, "DONE": 0.1}, "elapsed_ms": None,
+                                   "seen": {"page": {"text": "Checkout"}}}]  # what Jev saw, to replay a live step
+    for leak in ("98765", "4111", "iVBORw0", "every rule"):
         assert leak not in text, leak
     assert "[profile:phone]" in text and "[secret:card.hdfc.number]" in text
 

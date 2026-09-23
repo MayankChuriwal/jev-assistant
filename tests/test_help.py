@@ -29,7 +29,8 @@ def test_show_and_ask_sends_a_masked_crop_and_remembers_the_answer(tmp_path, mon
     target = a.browser.screenshot.call_args.args[0]
     assert target["id"] == "e4" and a.browser.screenshot.call_args.kwargs["masked"] == {(None, 8)}
     assert a.asked[0]["kind"] == "image" and a.asked[0]["image"] == "iVBORw0KGgo="
-    assert a.state["memory"][-1] == "User read from the screen: XK7P" and a.state["status"] == "ready"
+    assert a.state["memory"][-1] == "User answered “Type the characters in this captcha.”: XK7P"
+    assert a.state["status"] == "ready"
 
 
 def test_guidance_screenshots_become_hints_with_a_one_time_notice(tmp_path, monkeypatch):

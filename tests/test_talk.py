@@ -306,3 +306,10 @@ def test_file_names_never_carry_the_users_name_to_a_model(tmp_path):
     act(a, decision("e7", "UPLOAD"))
     assert a.state["memory"][-1] == "User sent the file [profile:name] CV.pdf"
     assert a.state["history"][-1]["files"] == ["[profile:name] CV.pdf"]
+
+
+def test_typing_can_use_values_the_goal_does_not_hold():
+    from assistant import questions
+
+    assert "asking the user" in questions.OPERATIONS["TYPE_TEXT"]
+    assert "even by asking the user" in questions.OPERATIONS["BLOCKED"]

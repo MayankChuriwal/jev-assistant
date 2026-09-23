@@ -276,3 +276,11 @@ def test_resume_and_browse_drops_are_upload_zones(browser_at):
                "browse'].map(t => `<div style=\"width:320px;height:60px\">${t}</div>`).join(''))")
     zones = [a["label"] for a in b.observe()["actions"] if a.get("drop")]
     assert zones == ["Drop zone: Drag & drop your resume/CV here", "Drop zone: Drop here or browse"]
+
+
+def test_only_fields_that_open_something_get_an_open_twin(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<input aria-label=\"Phone number\" type=\"tel\">"
+               "<input aria-label=\"Travel date\" type=\"date\"><input aria-label=\"City\" role=\"combobox\">')")
+    clicks = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click"]
+    assert "Open Phone number" not in clicks and "Open Travel date" in clicks and "Open City" in clicks
