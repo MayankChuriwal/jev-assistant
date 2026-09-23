@@ -256,7 +256,7 @@ class ChatHandler(BaseHTTPRequestHandler):
             except ValueError:
                 return self.reply(400, {"error": "bad query"})
             messages, typing = self.server.channel.since(after, wait)
-            return self.reply(200, {"messages": messages, "typing": typing})
+            return self.reply(200, {"messages": messages, "typing": typing, "open": self.server.core.showing()})
         if url.path.startswith("/media/"):
             try:
                 path, mime, name = self.server.channel.media(url.path.removeprefix("/media/"))

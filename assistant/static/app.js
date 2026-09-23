@@ -10,7 +10,8 @@ const status = document.getElementById('status');
 const MAX_UPLOAD = 20 * 1024 * 1024;
 let after = 0;
 let sent = 0;
-let secretFor = null; // the open secret question: what is typed is hidden and shown as ••••
+let secretFor = null; // the open secret question, as the server reports it: what is typed is hidden
+let answered = null; // the secret question whose answer was just delivered
 
 const api = (path, options = {}) => fetch(path, {...options, headers: {...options.headers, 'X-Jev-Token': token}});
 const media = id => `/media/${encodeURIComponent(id)}?t=${encodeURIComponent(token)}`;
@@ -81,14 +82,12 @@ function show(m) {
     link.download = m.document.filename || '';
     b.append(link);
   }
-  if (m.x_question !== undefined && m.x_question !== secretFor) secretFor = m.x_secret ? m.x_question : null;
   if (m.x_expects && m.x_expects.file) document.body.classList.add('wants-file');
-  mode();
 }
 
 function mode() {
   input.type = secretFor === null ? 'text' : 'password';
-  input.placeholder = secretFor === null ? 'Message' : 'Hidden answer, never sent to any model';
+  input.placeholder = secretFor === null ? 'Message' : 'Hidden answer, never sent to any model (or type cancel)';
 }
 
 async function send(message, shown) {
@@ -104,9 +103,11 @@ async function send(message, shown) {
     const r = await api('/webhook', {method: 'POST', headers: {'Content-Type': 'application/json'},
                                      body: JSON.stringify(hook)});
     if (!r.ok) throw new Error(String(r.status));
+    return true;
   } catch {
     own.classList.add('failed');
     own.append(el('small', 'error', 'Not delivered. Is jev still running?'));
+    return false;
   }
 }
 
@@ -114,11 +115,15 @@ form.addEventListener('submit', event => {
   event.preventDefault();
   const text = input.value.trim();
   if (!text) return;
-  const secret = secretFor !== null;
+  const question = secretFor;
   input.value = '';
-  secretFor = null;
-  mode();
-  send({type: 'text', text: {body: text}}, secret ? '••••' : text);
+  send({type: 'text', text: {body: text}}, question === null ? text : '••••').then(delivered => {
+    if (delivered && question !== null && secretFor === question) { // stay hidden until the answer is in
+      answered = question;
+      secretFor = null;
+      mode();
+    }
+  });
 });
 
 file.addEventListener('change', async () => {
@@ -144,11 +149,13 @@ async function poll() {
     try {
       const r = await api(`/outbox?after=${after}&wait=25`);
       if (!r.ok) throw new Error(String(r.status));
-      const {messages, typing} = await r.json();
+      const {messages, typing, open} = await r.json();
       for (const m of messages) {
         show(m);
         after = Math.max(after, m.x_seq);
       }
+      secretFor = open && open.secret && open.id !== answered ? open.id : null; // the server knows what is open
+      mode();
       status.textContent = typing ? 'typing…' : 'online';
       if (messages.length) chat.scrollTop = chat.scrollHeight;
     } catch {

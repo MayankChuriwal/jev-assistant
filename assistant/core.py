@@ -17,6 +17,7 @@ PAUSE_AFTER = 15 * 60
 CANCEL_AFTER = 24 * 3600
 MAX_DOWNLOAD = 100 * 1024 * 1024
 FIRST = {"secret", "confirm"}  # asked before anything older
+STOP_WORDS = {"cancel", "stop", "/cancel"}  # stop a task even at a hidden prompt, without any model
 ACTIVE = {"starting", "waiting", "running", "paused"}
 
 
@@ -122,6 +123,8 @@ class Core:
             self.log.append({"from": "user", "text": "••••" if secret and not event.get("reply_id") else text})
             if event.get("reply_id"):
                 return self.tapped(event)
+            if secret and text.lower() in STOP_WORDS:
+                return self.cancel(question.task)
             takes_file = question is not None and question.message["kind"] in {"file", "image", "text"}
             if question and (secret or (event.get("context") and event["context"] in question.sent)
                              or (event.get("media_id") and takes_file) or self.numbered(question, text)):
@@ -132,10 +135,10 @@ class Core:
                 return None
             views, chat = self.views(), self.log[-7:-1]
         try:
-            intent, target, probabilities = self.hidden(self.classify, text, views, chat)
+            intent, target, probabilities, certainty = self.hidden(self.classify, text, views, chat)
         except Exception as error:  # a model or network failure is a chat message, never a failed webhook
             return self.say(f"I couldn't read that message: {error}")
-        return self.route(event, text, intent, target, probabilities)
+        return self.route(event, text, intent, target, probabilities, certainty, question)
 
     def numbered(self, question, text):
         options = question.message.get("options") or []
@@ -145,28 +148,26 @@ class Core:
         return [t.view(self.open if self.open and self.open.task is t else None)
                 for t in self.tasks.values() if t.status in ACTIVE]
 
-    def route(self, event, text, intent, target, probabilities):
+    def route(self, event, text, intent, target, probabilities, certainty, asked):
+        """Act on Jev's reading. `asked` is the question that was open when the message arrived."""
         with self.lock:
             active = [t for t in self.tasks.values() if t.status in ACTIVE]
             task = self.tasks.get(target)
-            if task not in active:
-                task = active[0] if len(active) == 1 else None
+            task = task if task in active else None
             if active and model.ambiguous(probabilities):
-                return self.which(event, text, active)
+                return self.which(event, text, active, None, asked)
             if intent == "ANSWER" and self.open:
+                if self.open is not asked:  # another question opened while Jev read this one's answer
+                    return self.say("The question changed while I was reading your message. Please answer again.")
                 return self.answer(self.open, event)
             if intent == "NEW_TASK":
                 return self.new_task(text)
-            if intent == "CANCEL" and task:
-                return self.cancel(task)
-            if intent == "AMEND" and task:
-                task.updates.append(text)
-                done = [m.removeprefix("Done: ").rpartition(" (")[0] for m in task.agent.state["memory"]
-                        if m.startswith("Done: ")] if task.agent else []  # the agent's record of a finished commit
-                if done:
-                    return self.say(f"{done[-1]} already went through. I'll try to change it on the site; anything "
-                                    "that costs money again waits for your OK. Say “cancel” to stop instead.", task)
-                return self.say(f"Got it. I'll use that for {task.title}.")
+            if intent in {"CANCEL", "AMEND"}:
+                if not active:
+                    return self.say("Nothing is running right now.")
+                if task is None or model.ambiguous(certainty):  # never stop or change a task by guess
+                    return self.which(event, text, active, intent, asked)
+                return self.cancel(task) if intent == "CANCEL" else self.amend(task, text)
             views = self.views()
         try:
             reply, _ = self.hidden(self.chat, text, views)  # STATUS, OTHER, or nothing to act on
@@ -174,29 +175,45 @@ class Core:
             reply = f"I couldn't answer that: {error}"
         self.say(reply)
 
-    def which(self, event, text, active):
-        self.routes[event["id"]] = text
-        options = [(f"route:{t.id}:{event['id']}", t.title) for t in active[:2]]
-        self.buttons("Is this about one of your tasks, or something new?",
-                     options + [(f"route:new:{event['id']}", "New task")])
+    def amend(self, task, text):
+        task.updates.append(text)
+        done = [m.removeprefix("Done: ").rpartition(" (")[0] for m in task.agent.state["memory"]
+                if m.startswith("Done: ")] if task.agent else []  # the agent's record of a finished commit
+        if done:
+            return self.say(f"{done[-1]} already went through. I'll try to change it on the site; anything "
+                            "that costs money again waits for your OK. Say “cancel” to stop instead.", task)
+        return self.say(f"Got it. I'll use that for {task.title}.")
+
+    def which(self, event, text, active, intent, asked):
+        """Ask which task a message is about. A stop or a change names a running task; anything else may be new."""
+        self.routes[event["id"]] = (text, intent, asked)
+        options = [(f"route:{t.id}:{event['id']}", t.title) for t in active[:3 if intent else 2]]
+        if intent is None:
+            return self.buttons("Is this about one of your tasks, or something new?",
+                                options + [(f"route:new:{event['id']}", "New task")])
+        self.buttons("Which task should I stop?" if intent == "CANCEL" else "Which task is this change for?", options)
 
     def tapped(self, event):
         kind, _, rest = event["reply_id"].partition(":")
         if kind == "route":
             target, _, key = rest.partition(":")
-            text = self.routes.pop(key, None)
-            task = self.tasks.get(target)
-            if text is None:
+            routed = self.routes.pop(key, None)
+            if routed is None:
                 return None
-            if target == "new" or not task or task.status not in ACTIVE:
+            text, intent, asked = routed
+            if target == "new":
                 return self.new_task(text)
-            if self.open and self.open.task is task:
-                return self.answer(self.open, {"type": "text", "text": text})
-            task.updates.append(text)
-            return self.say(f"Got it. I'll use that for {task.title}.")
-        question = self.open
+            task = self.tasks.get(target)
+            if not task or task.status not in ACTIVE:
+                return self.say(f"{task.title if task else 'That task'} already finished.")
+            if intent == "CANCEL":
+                return self.cancel(task)
+            if intent is None and asked is not None and self.open is asked and asked.task is task:
+                return self.answer(asked, {"type": "text", "text": text})  # still the question it was sent to
+            return self.amend(task, text)
+        question = next((q for q in self.queue if q.sent and event["reply_id"].startswith(f"q{q.id}:")), None)
         if question and messages.reply_for(question.id, question.message.get("options") or [], event) is not None:
-            return self.answer(question, event)
+            return self.answer(question, event)  # any question on screen, even one a code request moved aside
         return None  # a tap on a question that is already answered
 
     def answer(self, question, event):
@@ -238,11 +255,25 @@ class Core:
             self.say(f"Saved for next time: {preference}")
 
     def show_next(self):
-        if self.open or not self.queue:
+        """Open the next question. A code or password request opens at once, moving an ordinary question aside
+        (its buttons still work), so a code typed as it arrives never goes to a model."""
+        if self.open is None and self.queue:
+            question = min(self.queue, key=lambda q: (q.message["kind"] not in FIRST, q.asked_at, q.id))
+        elif self.open is not None and self.open.message["kind"] != "secret":
+            waiting = [q for q in self.queue if q.message["kind"] == "secret"]
+            if not waiting:
+                return
+            question = min(waiting, key=lambda q: (q.asked_at, q.id))
+        else:
             return
-        question = min(self.queue, key=lambda q: (q.message["kind"] not in FIRST, q.asked_at, q.id))
         self.open = question
         self.send(question.message, question.task, question)
+
+    def showing(self):
+        """The open question as the chat page needs it: which one, and whether what is typed must be hidden."""
+        with self.lock:
+            question = self.open
+            return {"id": question.id, "secret": question.message["kind"] == "secret"} if question else None
 
     # ---- tasks
 
@@ -292,6 +323,7 @@ class Core:
                 return self.say(f"Cancelled {task.title} before it started.")
             task.agent = self.make_agent(url, task.goal, task.title, lambda m: self.ask(task, m),
                                          lambda m: self.send(m, task))
+            task.agent.interrupted = lambda: task.cancelled or bool(task.updates)
             self.update_typing()
             while task.agent.state["status"] not in STOPPED and not task.cancelled:
                 self.apply_updates(task)
@@ -308,6 +340,11 @@ class Core:
             state = task.agent.state["status"] if task.agent else None
             task.status = state if state in STOPPED else ("cancelled" if task.cancelled else "failed")
             if task.agent:
+                try:
+                    task.agent.settle()  # downloads that finish as the task ends still reach chat
+                    self.deliver_files(task)
+                except Exception:
+                    pass
                 try:
                     task.agent.close()
                 except Exception:
@@ -338,6 +375,8 @@ class Core:
         """The agent's asker: queue the question and wait for its answer, pausing and finally cancelling."""
         question = Question(next(self.question_ids), task, message, self.clock())
         with self.lock:
+            if task.cancelled:  # cancelled while this step was deciding: never show its question
+                return {"cancel": True}
             self.queue.append(question)
             self.show_next()
             self.update_typing()

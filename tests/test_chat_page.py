@@ -19,9 +19,15 @@ EVIL = '<img src=x onerror="window.pwned=1"><b>bold</b>'
 class RecordingCore:
     def __init__(self):
         self.events, self.tasks, self.lock = [], {}, threading.RLock()
+        self.open, self.refuse = None, False
 
     def receive_webhook(self, body):
+        if self.refuse:
+            raise ValueError("refused")
         self.events += WebChannel.events(body)
+
+    def showing(self):
+        return self.open
 
 
 @pytest.fixture
@@ -66,6 +72,7 @@ def test_lists_show_every_row_and_a_tap_sends_a_list_reply(chat):
 
 
 def test_secret_questions_hide_what_is_typed(chat):
+    chat.core.open = {"id": 3, "secret": True}
     chat.channel.send("local", {"type": "text", "x_question": 3, "x_secret": True, "x_expects": {"length": 6},
                                 "text": {"body": "Enter the OTP."}})
     page = observe_until(chat.browser, lambda p: "Enter the OTP." in p["text"])
@@ -74,6 +81,7 @@ def test_secret_questions_hide_what_is_typed(chat):
     page = chat.browser.observe()
     chat.browser.act("PRESS_KEY", find(page, "Message", "fill"), page, key="Enter")
     assert until(lambda: chat.core.events) and chat.core.events[0]["text"] == "482913"
+    chat.core.open = None
     page = observe_until(chat.browser, lambda p: "••••" in p["text"])
     assert "482913" not in page["text"] and js(chat, "document.getElementById('text').type") == "text"
 
@@ -120,3 +128,26 @@ def test_images_documents_uploads_and_typing(chat, tmp_path):
     event = chat.core.events[0]
     assert event["type"] == "document" and event["filename"] == "statement.pdf"
     assert chat.channel.media(event["media_id"])[0].read_bytes() == b"%PDF-1.4 statement"
+
+
+def test_secret_mode_follows_the_core_not_old_messages(chat):
+    chat.channel.send("local", {"type": "text", "x_question": 5, "x_secret": True, "text": {"body": "Enter the OTP."}})
+    assert until(lambda: "Enter the OTP." in js(chat, "document.body.innerText"))
+    assert js(chat, "document.getElementById('text').type") == "text"  # answered before this page loaded
+    chat.core.open = {"id": 6, "secret": True}
+    chat.channel.set_typing(True)  # anything new wakes the page's long poll
+    assert until(lambda: js(chat, "document.getElementById('text').type") == "password")
+
+
+def test_a_secret_that_was_not_delivered_stays_hidden(chat):
+    chat.core.open, chat.core.refuse = {"id": 8, "secret": True}, True
+    chat.channel.send("local", {"type": "text", "x_question": 8, "x_secret": True,
+                                "text": {"body": "Enter your password."}})
+    page = observe_until(chat.browser, lambda p: "Enter your password." in p["text"])
+    assert until(lambda: js(chat, "document.getElementById('text').type") == "password")
+    chat.browser.act("TYPE_TEXT", find(page, "Message", "fill"), page, text="hunter2")
+    page = chat.browser.observe()
+    chat.browser.act("PRESS_KEY", find(page, "Message", "fill"), page, key="Enter")
+    assert until(lambda: js(chat, "document.querySelector('.bubble.out.failed') !== null"))
+    assert js(chat, "document.getElementById('text').type") == "password"
+    assert "hunter2" not in js(chat, "document.body.innerText")

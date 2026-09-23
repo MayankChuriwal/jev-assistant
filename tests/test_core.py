@@ -26,8 +26,8 @@ class Clock:
 class FakeAgent:
     """Each tick runs one scripted step; with no steps left the task is done."""
 
-    def __init__(self, script, asker, notify):
-        self.script, self.asker, self.notify = list(script), asker, notify
+    def __init__(self, script, asker, notify, late=()):
+        self.script, self.asker, self.notify, self.late = list(script), asker, notify, list(late)
         self.state = {"status": "ready", "history": [], "files": [], "memory": [],
                       "approval": {"action_label": "Pay ₹79"}, "commit": None}
         self.replies, self.closed = [], False
@@ -38,6 +38,9 @@ class FakeAgent:
         else:
             self.state["status"] = "done"
         return self.state
+
+    def settle(self):
+        self.state["files"].extend(self.late)  # downloads that finished after the last step
 
     def close(self):
         self.closed = True
@@ -62,16 +65,17 @@ def hold(gate):
 
 @pytest.fixture
 def world(tmp_path):
-    w = SimpleNamespace(scripts={}, hosts={}, agents={}, classified=[], intents=[], clock=Clock(), n=0)
+    w = SimpleNamespace(scripts={}, hosts={}, agents={}, late={}, classified=[], intents=[], clock=Clock(), n=0)
     w.channel = WebChannel(tmp_path / "media")
 
     def make_agent(url, goal, title, asker, notify):
-        w.agents[goal] = FakeAgent(w.scripts.get(goal, []), asker, notify)
+        w.agents[goal] = FakeAgent(w.scripts.get(goal, []), asker, notify, w.late.get(goal, []))
         return w.agents[goal]
 
     def classify(text, tasks, chat):
         w.classified.append(text)
-        return w.intents.pop(0) if w.intents else ("NEW_TASK", "none", {"NEW_TASK": 1.0})
+        entry = w.intents.pop(0) if w.intents else ("NEW_TASK", "none", {"NEW_TASK": 1.0})
+        return (*entry, {entry[1]: 1.0})[:4]  # the task pick is certain unless a test says otherwise
 
     w.core = conversation.Core(
         w.channel, profile=Profile(tmp_path / "profile.json"), make_agent=make_agent,
@@ -136,7 +140,7 @@ def test_secret_answers_never_reach_the_classifier(world):
     assert "482913" not in world.classified and "482913" not in str(world.core.log)
 
 
-def test_waiting_questions_show_secrets_and_confirmations_first(world):
+def test_code_requests_open_at_once_and_the_rest_wait_oldest_first(world):
     world.hosts.update({"A": "a.test", "B": "b.test", "C": "c.test"})
     world.scripts.update(A=[ask({"kind": "text", "text": "Where to?"})], B=[ask(ADDRESS)], C=[ask(OTP)])
     text(world, "A")
@@ -144,11 +148,15 @@ def test_waiting_questions_show_secrets_and_confirmations_first(world):
     text(world, "B")
     assert until(lambda: len(world.core.queue) == 2)
     text(world, "C")
-    assert until(lambda: len(world.core.queue) == 3)
+    assert until(lambda: world.core.open is not None and world.core.open.task.goal == "C")
+    text(world, "482913")
+    assert until(lambda: world.agents["C"].replies == [{"text": "482913"}])
+    assert until(lambda: world.core.open is not None and world.core.open.task.goal == "A")
     world.intents.append(("ANSWER", "t1", {"ANSWER": 0.95}))
     text(world, "Airport")
-    assert until(lambda: world.core.open is not None and world.core.open.task.goal == "C")
-    assert until(lambda: world.agents["A"].replies == [{"text": "Airport"}])  # A's thread records it just after
+    assert until(lambda: world.agents["A"].replies == [{"text": "Airport"}])
+    assert until(lambda: world.core.open is not None and world.core.open.task.goal == "B")
+    assert "482913" not in world.classified
 
 
 def test_taps_on_answered_questions_are_ignored(world):
@@ -352,3 +360,164 @@ def test_only_the_configured_user_is_heard(world):
             "entry": [{"id": "x", "changes": [{"field": "messages", "value": {"messages": [stranger]}}]}]}
     world.core.receive_webhook(body)
     assert world.classified == [] and world.core.tasks == {}
+
+
+def test_a_cancel_mid_step_stops_it_before_it_asks(world):
+    gate, flags = threading.Event(), []
+
+    def step(agent):
+        gate.wait(5)
+        flags.append(agent.interrupted())
+        ask(ADDRESS)(agent)
+
+    world.scripts["Order Diet Coke"] = [step]
+    text(world, "Order Diet Coke")
+    assert until(lambda: world.core.tasks["t1"].status == "running")
+    world.intents.append(("CANCEL", "t1", {"CANCEL": 0.97}))
+    text(world, "stop")
+    gate.set()
+    agent = world.agents["Order Diet Coke"]
+    assert until(lambda: agent.replies == [{"cancel": True}]) and flags == [True]
+    assert interactive(world) == [] and world.core.open is None
+
+
+def test_an_amendment_mid_step_interrupts_it(world):
+    gate, flags = threading.Event(), []
+
+    def step(agent):
+        gate.wait(5)
+        flags.append(agent.interrupted())
+
+    world.scripts["Order Diet Coke"] = [step]
+    text(world, "Order Diet Coke")
+    assert until(lambda: world.core.tasks["t1"].status == "running")
+    world.intents.append(("AMEND", "t1", {"AMEND": 0.9}))
+    text(world, "make it 2 cans")
+    gate.set()
+    assert until(lambda: "User update: make it 2 cans" in world.agents["Order Diet Coke"].state["memory"])
+    assert flags == [True]
+
+
+def test_cancel_and_changes_never_guess_the_task(world):
+    gate = threading.Event()
+    world.scripts["Order Diet Coke"] = [hold(gate)]
+    text(world, "Order Diet Coke")
+    assert until(lambda: world.core.tasks["t1"].status == "running")
+    world.intents.append(("CANCEL", "none", {"CANCEL": 0.97}))
+    text(world, "cancel the chips order")
+    assert until(lambda: interactive(world)) and buttons(world) == ["route:t1:wamid.in2"]
+    assert interactive(world)[-1]["interactive"]["body"]["text"] == "Which task should I stop?"
+    assert not world.core.tasks["t1"].cancelled
+    tap(world, "route:t1:wamid.in2")
+    assert world.core.tasks["t1"].cancelled and "Stopping Order Diet Coke after its current step." in bodies(world)
+    gate.set()
+
+
+def test_an_unsure_task_pick_asks_which(world):
+    gates = {g: threading.Event() for g in "AB"}
+    world.hosts.update(A="a.test", B="b.test")
+    world.scripts.update(A=[hold(gates["A"])], B=[hold(gates["B"])])
+    text(world, "A")
+    text(world, "B")
+    assert until(lambda: sum(t.status == "running" for t in world.core.tasks.values()) == 2)
+    world.intents.append(("AMEND", "t1", {"AMEND": 0.9}, {"t1": 0.55, "t2": 0.45}))
+    text(world, "make it 2")
+    assert until(lambda: interactive(world)) and buttons(world) == ["route:t1:wamid.in3", "route:t2:wamid.in3"]
+    assert world.core.tasks["t1"].updates == []
+    tap(world, "route:t2:wamid.in3")
+    assert world.core.tasks["t2"].updates == ["make it 2"]
+    for gate in gates.values():
+        gate.set()
+
+
+def test_changes_with_nothing_running_say_so(world):
+    world.intents.append(("CANCEL", "none", {"CANCEL": 0.97}))
+    text(world, "cancel it")
+    assert bodies(world) == ["Nothing is running right now."] and world.core.tasks == {}
+
+
+def test_an_answer_goes_only_to_the_question_that_was_open(world):
+    world.scripts["Order Diet Coke"] = [ask(ADDRESS), ask(OTP)]
+    text(world, "Order Diet Coke")
+    assert until(lambda: interactive(world))
+
+    def slow(message, tasks, chat):  # the address is tapped and the OTP opens while Jev reads "Home"
+        tap(world, "q1:o1")
+        until(lambda: world.core.open is not None and world.core.open.id == 2)
+        return "ANSWER", "t1", {"ANSWER": 0.95}, {"t1": 1.0}
+
+    world.core.classify = slow
+    text(world, "Home")
+    assert "The question changed while I was reading your message. Please answer again." in bodies(world)
+    assert world.agents["Order Diet Coke"].replies == [{"option": "o1"}] and world.core.open.id == 2
+
+
+def test_a_late_which_tap_never_answers_a_newer_question(world):
+    world.scripts["Order Diet Coke"] = [ask(ADDRESS), ask(OTP)]
+    text(world, "Order Diet Coke")
+    assert until(lambda: interactive(world))
+    world.intents.append(("ANSWER", "t1", {"ANSWER": 0.5, "AMEND": 0.45}))
+    text(world, "use my office address")
+    assert until(lambda: buttons(world) == ["route:t1:wamid.in2", "route:new:wamid.in2"])
+    tap(world, "q1:o1")
+    assert until(lambda: world.core.open is not None and world.core.open.id == 2)
+    tap(world, "route:t1:wamid.in2")
+    assert world.core.tasks["t1"].updates == ["use my office address"]
+    assert world.agents["Order Diet Coke"].replies == [{"option": "o1"}] and world.core.open.id == 2
+
+
+def test_a_which_tap_for_a_finished_task_starts_nothing(world):
+    gate = threading.Event()
+    world.scripts["Order Diet Coke"] = [hold(gate)]
+    text(world, "Order Diet Coke")
+    assert until(lambda: world.core.tasks["t1"].status == "running")
+    world.intents.append(("AMEND", "t1", {"AMEND": 0.5, "NEW_TASK": 0.45}))
+    text(world, "2 please")
+    assert until(lambda: interactive(world))
+    gate.set()
+    assert until(lambda: world.core.tasks["t1"].status == "done")
+    tap(world, "route:t1:wamid.in2")
+    assert "Order Diet Coke already finished." in bodies(world) and list(world.core.tasks) == ["t1"]
+
+
+def test_cancel_works_even_while_a_secret_is_asked(world):
+    world.scripts["Log in to Swiggy"] = [ask(OTP)]
+    text(world, "Log in to Swiggy")
+    assert until(lambda: any(m.get("x_secret") for m in sent(world)))
+    text(world, " Cancel ")
+    assert until(lambda: world.agents["Log in to Swiggy"].replies == [{"cancel": True}])
+    assert world.classified == ["Log in to Swiggy"]
+
+
+def test_a_code_request_opens_at_once_and_earlier_buttons_still_work(world):
+    gate = threading.Event()
+    world.hosts.update({"Book a cab": "uber.test", "Log in to Swiggy": "swiggy.test"})
+    world.scripts["Book a cab"] = [ask(ADDRESS)]
+    world.scripts["Log in to Swiggy"] = [hold(gate), ask(OTP)]
+    text(world, "Book a cab")
+    assert until(lambda: interactive(world))
+    text(world, "Log in to Swiggy")
+    assert until(lambda: world.core.tasks["t2"].status == "running")
+    gate.set()
+    assert until(lambda: world.core.open is not None and world.core.open.message["kind"] == "secret")
+    tap(world, "q1:o2")
+    assert until(lambda: world.agents["Book a cab"].replies == [{"option": "o2"}])
+    assert world.core.open.message["kind"] == "secret"
+    text(world, "482913")
+    assert until(lambda: world.agents["Log in to Swiggy"].replies == [{"text": "482913"}])
+    assert "482913" not in world.classified
+
+
+def test_the_page_learns_which_question_is_open(world):
+    assert world.core.showing() is None
+    world.scripts["Log in to Swiggy"] = [ask(OTP)]
+    text(world, "Log in to Swiggy")
+    assert until(lambda: world.core.showing() == {"id": 1, "secret": True})
+
+
+def test_files_that_arrive_as_the_task_ends_are_still_sent(world, tmp_path):
+    late = tmp_path / "late.pdf"
+    late.write_bytes(b"%PDF")
+    world.late["Get my invoice"] = [str(late)]
+    text(world, "Get my invoice")
+    assert until(lambda: [m for m in sent(world) if m["type"] == "document"])

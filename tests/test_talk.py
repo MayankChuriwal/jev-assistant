@@ -1,6 +1,7 @@
 """The agent talking to its user: typing resolution, questions, choices, notes, results. Fakes only."""
 
 import json
+import threading
 from copy import deepcopy
 from unittest.mock import Mock
 
@@ -262,3 +263,24 @@ def test_a_given_title_is_kept(tmp_path):
                    profile=Profile(tmp_path / "p.json"), vault=FakeVault(),
                    browser=Mock(observe=Mock(return_value=fake_page())))
     assert a.state["title"] == "Swiggy · Diet Coke"
+
+
+def test_an_interrupted_step_is_chosen_again_instead_of_run(tmp_path):
+    a = agent_with(tmp_path)
+    a.interrupted = lambda: True  # the user cancelled or changed the task while this step was being decided
+    with pytest.raises(StalePage):
+        act(a, decision("e4", "CLICK"))
+    a.browser.act.assert_not_called()
+
+
+def test_settle_keeps_downloads_that_finish_late(tmp_path):
+    a = agent_with(tmp_path)
+    a.browser.pending_downloads, a.browser.downloads = {"g1": "invoice.pdf"}, []
+
+    def finish():
+        a.browser.downloads.append("/downloads/invoice.pdf")
+        a.browser.pending_downloads.clear()
+
+    threading.Timer(0.2, finish).start()
+    a.settle(timeout=3)
+    assert a.state["files"][-1] == "/downloads/invoice.pdf" and a.browser.downloads == []

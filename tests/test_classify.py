@@ -28,8 +28,8 @@ def test_one_request_reads_intent_and_task(monkeypatch):
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
     monkeypatch.setattr(model, "post_json", post)
     chat = [{"from": "user", "text": str(n)} for n in range(10)]
-    intent, task, probabilities = model.classify("make it 2 cans", TASKS, chat)
-    assert (intent, task) == ("AMEND", "t1") and probabilities["AMEND"] == 0.9
+    intent, task, probabilities, certainty = model.classify("make it 2 cans", TASKS, chat)
+    assert (intent, task) == ("AMEND", "t1") and probabilities["AMEND"] == 0.9 and certainty["t1"] == 1.0
     body = calls[0]
     assert set(body["questions"]["intent"]["criteria"]) == {"ANSWER", "AMEND", "NEW_TASK", "CANCEL", "STATUS", "OTHER"}
     assert set(body["questions"]["task"]["criteria"]) == {"t1", "none"}

@@ -297,7 +297,7 @@ def url_value(goal, page, history):
 
 
 def classify(message, tasks, chat):
-    """Jev's reading of one chat message: (intent, task id or "none", intent probabilities)."""
+    """Jev's reading of one chat message: (intent, task id or "none", intent probabilities, task probabilities)."""
     targets = {t["id"]: {k: t[k] for k in ("title", "goal", "step", "open_question") if t.get(k)} for t in tasks}
     targets["none"] = "No existing task: a new request, or a message about no task"
     body = {
@@ -312,7 +312,7 @@ def classify(message, tasks, chat):
     result = post_json("https://api.typesafe.ai/v1/systemone", os.environ["TYPESAFE_API_KEY"], body)
     intent = validate_choice(result["answers"].get("intent", {}), INTENTS)
     task = validate_choice(result["answers"].get("task", {}), targets)
-    return intent["choice"], task["choice"], intent["probabilities"]
+    return intent["choice"], task["choice"], intent["probabilities"], task["probabilities"]
 
 
 def ambiguous(probabilities):

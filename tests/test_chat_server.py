@@ -18,6 +18,9 @@ class FakeCore:
     def __init__(self):
         self.bodies, self.tasks, self.lock = [], {}, threading.RLock()
 
+    def showing(self):
+        return {"id": 7, "secret": True}
+
     def receive_webhook(self, body):
         WebChannel.events(body)  # refuses what the real core refuses
         self.bodies.append(body)
@@ -57,7 +60,7 @@ def test_api_routes_need_the_token_and_this_server_s_own_name(chat):
     assert chat.client.get("/outbox", headers={"X-Jev-Token": "wrong"}).status_code == 403
     assert chat.client.get("/outbox", headers={"Host": f"evil.test:{chat.port}"}).status_code == 403
     assert chat.client.post("/webhook", json=WEBHOOK, headers={"Origin": "http://evil.test"}).status_code == 403
-    assert chat.client.get("/outbox").json() == {"messages": [], "typing": False}
+    assert chat.client.get("/outbox").json() == {"messages": [], "typing": False, "open": {"id": 7, "secret": True}}
     assert httpx.get(chat.base + "/outbox?t=secret-token").status_code == 200
     assert chat.core.bodies == []
 

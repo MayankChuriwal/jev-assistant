@@ -171,3 +171,15 @@ def test_parallel_downloads_reach_the_task_that_started_them(browser_at, tmp_pat
     page = first.observe()
     first.act("CLICK", find(page, "Download invoice"), page)
     assert [Path(f).parent for f in until(lambda: first.observe()["downloads"])] == [tmp_path / "first"]
+
+
+def test_downloads_that_open_in_a_new_tab_reach_the_task(browser_at, tmp_path):
+    first = browser_at("/events.html", downloads=tmp_path / "first")
+    second = browser_at("/events.html", downloads=tmp_path / "second")
+    first.evaluate("document.body.insertAdjacentHTML('afterbegin', "
+                   "'<a href=\"/download/popup-invoice.txt\" target=\"_blank\">Invoice in a new tab</a>')")
+    page = first.observe()
+    first.act("CLICK", find(page, "Invoice in a new tab"), page)
+    files = until(lambda: first.observe()["downloads"], timeout=6)
+    assert [Path(f).name for f in files] == ["popup-invoice.txt"] and Path(files[0]).parent == tmp_path / "first"
+    assert second.observe()["downloads"] == []

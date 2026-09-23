@@ -180,6 +180,54 @@ PUMP = EventPump()
 OWNERS = weakref.WeakValueDictionary()  # tab target id -> Browser, so a download reaches the task that started it
 DOWNLOADS = {}  # download guid -> Browser that started it
 DAEMON = threading.Lock()  # tasks starting together must not each spawn or restart the daemon
+OPENERS = {}  # pop-up target id -> the target that opened it
+POPUP_DOWNLOADS = set()  # guids of downloads that started in a pop-up
+WATCH = {"session": None}  # the browser-level session that sees those downloads
+
+
+def watch_popups():
+    """A download that starts in a pop-up (a link with target=_blank) is reported only to a browser-level session.
+    Keep one, and credit such downloads to the task whose tab opened the pop-up. Call with DAEMON held."""
+    for _ in range(2):
+        if WATCH["session"] is None:
+            WATCH["session"] = cdp("Target.attachToBrowserTarget")["sessionId"]
+            PUMP.register(WATCH["session"], on_browser_event)
+            PUMP.register(None, on_browser_event)  # the daemon relays target discovery without a session id
+            cdp("Target.setDiscoverTargets", session_id=WATCH["session"], discover=True)
+        try:
+            cdp("Browser.setDownloadBehavior", session_id=WATCH["session"], behavior="allowAndName",
+                downloadPath=str(INCOMING), eventsEnabled=True)
+            return
+        except RuntimeError:  # the daemon restarted, and its sessions with it
+            PUMP.unregister(WATCH["session"])
+            WATCH["session"] = None
+
+
+def on_browser_event(event):
+    """Runs on the pump thread. Tabs report their own downloads; this handles the ones pop-ups start."""
+    method, params = event["method"], event.get("params", {})
+    if method in {"Target.targetCreated", "Target.targetInfoChanged"} and params["targetInfo"].get("openerId"):
+        OPENERS[params["targetInfo"]["targetId"]] = params["targetInfo"]["openerId"]
+    elif method == "Target.targetDestroyed":
+        OPENERS.pop(params.get("targetId"), None)
+    elif method == "Browser.downloadWillBegin" and params.get("frameId") in OPENERS:
+        target = params["frameId"]
+        for _ in range(3):  # a pop-up opened by a pop-up still belongs to the tab that started the chain
+            target = OPENERS.get(target, target)
+            owner = OWNERS.get(target)
+            if owner:
+                POPUP_DOWNLOADS.add(params["guid"])
+                DOWNLOADS[params["guid"]] = owner
+                owner.pending_downloads[params["guid"]] = params["suggestedFilename"]
+                return
+    elif method == "Browser.downloadProgress" and params.get("state") == "completed":
+        if params["guid"] not in POPUP_DOWNLOADS:
+            return
+        POPUP_DOWNLOADS.discard(params["guid"])
+        owner = DOWNLOADS.pop(params["guid"])
+        name = owner.pending_downloads.pop(params["guid"], None)
+        if name:
+            owner.downloads.append(owner._store_download(params["guid"], name))
 
 
 class Browser:
@@ -188,6 +236,7 @@ class Browser:
     def __init__(self, url, *, downloads=None, geolocation=None):
         with DAEMON:
             ensure_daemon()
+            watch_popups()
         self.tabs, self.opener, self.frames, self.dialogs, self.titles = {}, {}, {}, {}, {}
         self.alerts, self.downloads, self.pending_downloads = [], [], {}
         self.chooser = self.intercepted = self.after_input = self.active = None
@@ -256,7 +305,8 @@ class Browser:
         self.call("Page.enable", session)
         self.call("DOM.enable", session)  # DOM.resolveNode needs it; no events flow until a document is requested
         self.call("Page.setInterceptFileChooserDialog", session, enabled=True)
-        self._route_downloads(session)
+        if not opener:  # a pop-up that routed downloads to itself would take them along when it closes
+            self._route_downloads(session)
         self.call("Emulation.setDeviceMetricsOverride", session, deviceScaleFactor=1, mobile=False, **VIEWPORT)
         # Keep rAF/menus rendering in a background tab without activating it.
         self.call("Emulation.setFocusEmulationEnabled", session, enabled=True)
@@ -729,7 +779,10 @@ class Browser:
             self._forget(target)
         for target, info in pages.items():
             if target not in self.tabs and info.get("openerId") in self.tabs:
-                self.active = self._adopt(target, opener=info["openerId"])
+                try:
+                    self.active = self._adopt(target, opener=info["openerId"])
+                except RuntimeError:  # it closed while being adopted, like a tab that only started a download
+                    self._forget(target)
         if self.active is None:
             raise RuntimeError("Every tab of this task has closed.")
         self.titles = {t: pages[t]["title"] or pages[t]["url"] for t in self.tabs if t in pages}

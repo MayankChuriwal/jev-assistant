@@ -44,6 +44,7 @@ def expects(action):
 
 
 class Agent:
+    interrupted = None  # set by the chat: true once the user cancelled or changed the task during a step
     def __init__(self, url, goal, *, asker=None, notify=None, profile=None, vault=None, record_dir=None,
                  screenshots=False, provide_file=None, browser=None, title=None):
         goal = goal.strip() if isinstance(goal, str) else "\n".join(goal).strip()
@@ -228,14 +229,22 @@ class Agent:
         """Execute one browser operation through the commit gate, for Jev's choices and the user's picks alike."""
         if len(self.state["history"]) >= MAX_ACTIONS:
             raise Halt("blocked", f"Stopped at the {MAX_ACTIONS}-action budget.")
+        self.stop_if_interrupted()
         commit = self.gate(operation, action, decision, page)
         if commit is False:
             return self.snapshot()
         inputs, helper, shown = self.inputs(operation, action, decision, page)
+        self.stop_if_interrupted()  # the last moment before anything reaches the page
         self.execute(operation, action, decision, page, inputs, helper, shown,
                      commit=commit if isinstance(commit, str) else None)
         self.check_commit()
         return self.snapshot()
+
+    def stop_if_interrupted(self):
+        """A cancel or a change from the user arrived while this step was decided: decide again with it."""
+        if self.interrupted and self.interrupted():
+            self.state["status"] = "ready"
+            raise StalePage("The user cancelled or changed the task. Choose again.")
 
     def gate(self, operation, action, decision, page):
         """True for ordinary actions; the commit's label once the user approved exactly this action; False when
@@ -626,6 +635,16 @@ class Agent:
     def run(self):
         while self.state["status"] not in STOPPED:
             yield self.command("tick")
+
+    def settle(self, timeout=10.0):
+        """Before the tabs close: wait (bounded) for downloads still in flight and keep every one that arrived."""
+        browser = self.state["browser"]
+        deadline = time.monotonic() + timeout
+        while browser.pending_downloads and time.monotonic() < deadline:
+            time.sleep(0.1)
+        arrived = browser.downloads[:]
+        del browser.downloads[:len(arrived)]
+        self.state["files"].extend(arrived)
 
     def close(self):
         self.browser.close()
