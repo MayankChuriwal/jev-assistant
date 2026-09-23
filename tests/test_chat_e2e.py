@@ -61,7 +61,7 @@ def test_two_goals_in_chat_run_in_parallel_without_leaks(chrome, site, tmp_path,
                 return {"start_url": site["b"] + "/next.html", "title": "Second page PDF"}
             return {"start_url": site["a"] + "/shop.html", "title": "Diet Coke"}
         if system == questions.RESULT and "Second page." in payload["page"]["text"]:
-            return {"text": "Saved the second page as a PDF.", "evidence": "Second page."}
+            return {"text": "Saved the second page as a PDF.", "evidence": "Second page.", "achieved": True}
         return text_model(system, payload)
 
     def post(url, json=None, headers=None):  # the keyword httpx uses; the module is jsonlib here

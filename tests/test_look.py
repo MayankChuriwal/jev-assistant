@@ -182,7 +182,7 @@ def test_the_agent_clicks_a_canvas_button_it_can_only_see(chrome, site, tmp_path
             region = rules.grid(where["view"], 8, 6)[where["cell"]]
             answer = {"cell": containing(rules.grid(region, 4, 4), where["blue"])}
         elif system == questions.RESULT:
-            answer = {"text": "Picked the blue colour.", "evidence": "Picked Blue"}
+            answer = {"text": "Picked the blue colour.", "evidence": "Picked Blue", "achieved": True}
         else:
             raise AssertionError(f"unexpected job: {system[:40]}")
         return Response({"choices": [{"message": {"content": jsonlib.dumps(answer)}}]})
@@ -323,3 +323,20 @@ def test_a_screenshot_is_never_taken_unmasked(browser_at, monkeypatch):
     with pytest.raises(RuntimeError, match="nothing was captured"):
         b.screenshot()
     assert "Page.captureScreenshot" not in methods
+
+
+@pytest.mark.browser
+def test_numbers_are_drawn_for_one_capture_only(browser_at, monkeypatch):
+    b = browser_at("/look.html")
+    page = b.observe()
+    seen, real = [], b.call
+
+    def spy(method, session=None, **params):
+        if method == "Page.captureScreenshot":
+            seen.append(b.evaluate("document.getElementById('__jev_marks') !== null"))
+        return real(method, session, **params)
+
+    monkeypatch.setattr(b, "call", spy)
+    image = b.marked_screenshot([find(page, "Pin", "drag")])
+    assert base64.b64decode(image)[:8] == b"\x89PNG\r\n\x1a\n" and seen == [True]
+    assert b.fresh(page) and b.evaluate("document.getElementById('__jev_marks') === null")

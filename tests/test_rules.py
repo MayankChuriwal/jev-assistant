@@ -103,3 +103,12 @@ def test_an_approved_amount_must_appear_whole():
     for text in ("Total ₹790", "Total ₹79.50"):
         assert not rules.approval_valid(approval, page(text), 1), text
     assert not rules.approval_valid({**approval, "amount": "79"}, page("Total 179"), 1)
+
+
+def test_codes_are_secret_but_a_phone_number_for_a_code_is_not():
+    for text in ("Please enter the OTP you received.", "Enter the 4-digit verification code sent via SMS",
+                 "Enter the code we sent to your email", "Enter your UPI PIN", "Your Uber account password"):
+        assert rules.asks_for_secret(text), text
+    for text in ("Please provide your phone number or email to receive the one-time code.", "Enter your PIN code",
+                 "Which address?"):
+        assert not rules.asks_for_secret(text), text

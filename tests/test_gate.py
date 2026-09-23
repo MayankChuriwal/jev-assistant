@@ -175,7 +175,8 @@ def test_done_waits_for_a_payment_that_is_still_settling(tmp_path, monkeypatch):
     outcomes(monkeypatch, ("pending", ""), ("success", "Order placed #A1B2"))
     results = []
     monkeypatch.setattr(loop.jobs, "result",
-                        lambda context, page: results.append(page["url"]) or ("Ordered.", "Order placed #A1B2", META))
+                        lambda context, page: results.append(page["url"]) or ("Ordered.", "Order placed #A1B2", True,
+                                                                              META))
     act(a, decision("DONE", "DONE"))
     assert a.state["status"] == "ready" and results == [] and a.state["commit"]["checks"] == 1
     assert a.state["memory"][-1] == "Waiting for the result of Pay ₹79 before finishing."

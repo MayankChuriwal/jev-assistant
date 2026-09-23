@@ -58,7 +58,7 @@ def test_traces_lists_the_latest_runs(tmp_path, capsys):
     folder.mkdir()
     (folder / "20260923-101500-diet-coke.json").write_text(json.dumps({
         "status": "done", "title": "Instamart · Diet Coke", "questions": 3, "steps": [{}] * 12,
-        "elapsed_ms": 61200, "result": {"text": "Ordered.", "evidence": "Order placed #A1B2"}}))
+        "elapsed_ms": 61200, "result": {"text": "Ordered.", "evidence": "Order placed\n#A1B2"}}))
     (folder / "20260923-102000-uber.json").write_text("{broken")
     assert server.traces(folder=folder) == 0
     out = capsys.readouterr().out

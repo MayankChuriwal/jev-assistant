@@ -11,7 +11,13 @@ COMMIT = re.compile(
 )
 APPROVAL_STEPS = 20
 SECRET_ASK = re.compile(r"\b(otp|one[- ]?time (pass(word|code)?|code)|verification code|security code|passcode|"
-                        r"password|cvv|cvc|pin(?! ?code))\b", re.IGNORECASE)
+                        r"password|cvv|cvc|pin(?! ?code)|\d[- ]?digit code|"
+                        r"code (we |that was |you )?(sent|received))\b", re.IGNORECASE)
+TO_RECEIVE = re.compile(r"\b(phone|mobile|e-?mail)\b.*\b(to|for) (receive|get)\b", re.IGNORECASE)
+CHALLENGE = re.compile(r"i'?m not a robot|select all (the )?(images|squares)|click verify once|"
+                       r"type the (text|characters|word)|verify (that )?you are (a )?human|press and hold|"
+                       r"are you a robot", re.IGNORECASE)
+COMMERCE = re.compile(r"\b(book|order|buy|purchase|pay|reserve)\b", re.IGNORECASE)
 TO_USER = re.compile(r"^\s*(please|kindly|do you|would you|could you|can you|shall i|should i|are you)\b",
                      re.IGNORECASE)
 DIRECTION = re.compile(r"^\s*(do you want|would you like|should i|shall i|do you have|can you confirm|"
@@ -87,7 +93,7 @@ def login_offered(page):
 
 def asks_for_secret(text):
     """Whether a question asks for a code, password, CVV, or PIN: its answer must be hidden, whatever a model said."""
-    return bool(SECRET_ASK.search(text or ""))
+    return bool(SECRET_ASK.search(text or "")) and not TO_RECEIVE.search(text or "")  # "your phone, to get a code"
 
 
 def addressed_to_user(text):
@@ -123,6 +129,16 @@ def code_field(page):
     return any(a.get("kind") == "fill" and (a.get("group") or (a.get("constraints") or {}).get("type") == "password"
                                            or SECRET_ASK.search(a.get("label", "")))
                for a in page["actions"])
+
+
+def captcha_challenge(page):
+    """Whether the page shows a captcha challenge to solve (not just a "protected by reCAPTCHA" badge)."""
+    return bool(CHALLENGE.search(page.get("text", "")))
+
+
+def commerce_goal(goal):
+    """Whether the goal is finished only by a booking, an order, or a payment going through."""
+    return bool(COMMERCE.search(goal or ""))
 
 
 def attempt_limit(key):

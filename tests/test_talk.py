@@ -134,12 +134,14 @@ def test_notes_go_to_task_memory(tmp_path, monkeypatch):
 
 def test_done_reports_with_evidence_or_a_caution(tmp_path, monkeypatch):
     a = agent_with(tmp_path)
-    monkeypatch.setattr(loop.jobs, "result", lambda context, page: ("Ordered for ₹79.", "Pay ₹79", META))
+    a.state["memory"].append("Done: Pay ₹79 (Order placed #A1B2)")
+    monkeypatch.setattr(loop.jobs, "result", lambda context, page: ("Ordered for ₹79.", "Pay ₹79", True, META))
     act(a, decision("DONE", "DONE"))
     assert a.state["status"] == "done"
     assert a.told[-1] == {"from": "agent", "kind": "result", "text": "Ordered for ₹79.", "evidence": "Pay ₹79"}
     a = agent_with(tmp_path)
-    monkeypatch.setattr(loop.jobs, "result", lambda context, page: ("Ordered.", "", META))
+    a.state["memory"].append("Done: Pay ₹79 (Order placed #A1B2)")
+    monkeypatch.setattr(loop.jobs, "result", lambda context, page: ("Ordered.", "", True, META))
     act(a, decision("DONE", "DONE"))
     assert "couldn't find proof" in a.told[-1]["text"]
 
@@ -361,3 +363,48 @@ def test_only_lasting_preferences_are_offered_to_remember(tmp_path, monkeypatch)
     choice(monkeypatch, ("View full menu", "4"), ("Search items", "5"), preference=False)
     act(a, decision("ASK_USER", "ASK_USER"))
     assert a.asked[0]["remember"] is False
+
+
+def help_with(monkeypatch, text):
+    step = {"rung": "guide", "text": text, "crop_element": ""}
+    monkeypatch.setattr(loop.jobs, "unblock", lambda context, page, elements, must_stop=False: (step, META))
+    monkeypatch.setattr(loop.jobs, "hint", lambda context, page, text=None, image=None: ("Scroll down", META))
+
+
+def test_a_booking_goal_is_not_done_until_something_was_booked(tmp_path, monkeypatch):
+    results = []
+    monkeypatch.setattr(loop.jobs, "result",
+                        lambda context, page: results.append(1) or ("Signed in.", "Sign out", True, META))
+    a = agent_with(tmp_path)  # the goal orders something
+    act(a, decision("DONE", "DONE"))
+    assert a.state["status"] == "ready" and results == []
+    assert a.state["memory"][-1] == "Not done: nothing was booked, ordered, or paid for in this task yet. Keep going."
+
+
+def test_done_needs_the_page_to_show_the_goal_done(tmp_path, monkeypatch):
+    monkeypatch.setattr(loop.jobs, "result", lambda context, page: ("You are signed in.", "Sign out", False, META))
+    a = agent_with(tmp_path)
+    a.state["goal"] = "Download my latest invoice"
+    act(a, decision("DONE", "DONE"))
+    assert a.state["status"] == "ready" and a.told == []
+    assert a.state["memory"][-1] == "Not done: the page doesn't show the goal done yet. Keep going."
+
+
+def test_three_refused_finishes_ask_the_user_for_help(tmp_path, monkeypatch):
+    help_with(monkeypatch, "I keep thinking this is done, but it isn't. What should I do?")
+    a = agent_with(tmp_path, replies=[{"text": "choose a ride and request it"}])
+    for _ in range(3):
+        act(a, decision("DONE", "DONE"))
+    assert a.asked[-1]["text"] == "I keep thinking this is done, but it isn't. What should I do?"
+
+
+def test_asking_twice_without_a_step_turns_to_help(tmp_path, monkeypatch):
+    question = {"kind": "text", "text": "What is your phone number?", "options": [], "preference": False}
+    monkeypatch.setattr(loop.jobs, "compose", lambda context, page, elements: (question, META))
+    help_with(monkeypatch, "I can't find where your number goes. What should I do?")
+    a = agent_with(tmp_path, replies=[{"text": "98301 23456"}, {"text": "98301 23456"}, {"text": "scroll down"}])
+    for _ in range(3):
+        act(a, decision("ASK_USER", "ASK_USER"))
+    assert [m["text"] for m in a.asked] == ["What is your phone number?"] * 2 + [
+        "I can't find where your number goes. What should I do?"]
+    assert a.state["memory"][-2].startswith("I asked the user twice without taking a step")

@@ -99,11 +99,14 @@ def outcome(context, page, commit):
 
 
 def result(context, page):
+    """(text for the user, a short verbatim quote proving it or "", whether the page shows the goal done, meta)."""
     out, meta = text_json(RESULT, {"context": context, "page": view(page)})
     text, evidence = words(out, "text", 1000), out.get("evidence", "")
-    if not text or not isinstance(evidence, str):
+    if not text or not isinstance(evidence, str) or not isinstance(out.get("achieved", False), bool):
         raise invalid("result")
-    return text, evidence.strip() if verbatim(evidence, page["text"]) else "", meta
+    evidence = evidence.strip()
+    quoted = evidence if len(evidence) <= 200 and verbatim(evidence, page["text"]) else ""  # a quote, not the page
+    return text, quoted, out.get("achieved") is True, meta
 
 
 def note(context, page):

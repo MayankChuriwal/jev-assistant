@@ -284,3 +284,11 @@ def test_only_fields_that_open_something_get_an_open_twin(browser_at):
                "<input aria-label=\"Travel date\" type=\"date\"><input aria-label=\"City\" role=\"combobox\">')")
     clicks = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click"]
     assert "Open Phone number" not in clicks and "Open Travel date" in clicks and "Open City" in clicks
+
+
+def test_code_boxes_labelled_one_of_four_are_one_field(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div>' + [1, 2, 3, 4].map(n => "
+               "`<input aria-label=\"Enter an OTP Code ${n} of 4\" inputmode=\"numeric\">`).join('') + '</div>')")
+    fills = [a for a in b.observe()["actions"] if a["kind"] == "fill"]
+    assert len(fills) == 1 and len(fills[0]["group"]) == 4 and fills[0]["label"] == "Enter an OTP Code"

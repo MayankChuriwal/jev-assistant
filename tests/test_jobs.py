@@ -73,6 +73,10 @@ def test_results_notes_help_hints_and_preferences(monkeypatch):
     assert jobs.result("c", PAGE)[:2] == ("Ordered.", "Pay ₹79")
     reply(monkeypatch, {"text": "Ordered.", "evidence": "Order #9"})
     assert jobs.result("c", PAGE)[1] == ""
+    reply(monkeypatch, {"text": "Ordered.", "evidence": "Pay ₹79", "achieved": True})
+    assert jobs.result("c", PAGE)[2] is True
+    reply(monkeypatch, {"text": "Signed in.", "evidence": PAGE["text"] * 30})  # a page dump is not a quote
+    assert jobs.result("c", PAGE)[1:3] == ("", False)
     reply(monkeypatch, {"facts": ["Total ₹79", "", "a", "b", "c", "d", "e"]})
     assert jobs.note("c", PAGE)[0] == ["Total ₹79", "a", "b", "c", "d"]
     reply(monkeypatch, {"rung": "show", "text": "Type the captcha.", "crop_element": "2"})

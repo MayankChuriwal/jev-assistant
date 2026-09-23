@@ -339,6 +339,8 @@ class Core:
         finally:
             state = task.agent.state["status"] if task.agent else None
             task.status = state if state in STOPPED else ("cancelled" if task.cancelled else "failed")
+            if task.agent and state not in STOPPED:
+                task.agent.state["status"] = task.status  # so its trace says how it ended (P4-02)
             if task.cancelled and task.agent and state not in STOPPED:  # it stopped between steps: say so
                 commit = task.agent.state.get("commit")
                 pending = f" {commit['label']} may already have gone through; check it before trying again." \

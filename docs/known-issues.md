@@ -63,7 +63,7 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | ID | Issue | Where | Status |
 |---|---|---|---|
 | P4-01 | Trace file names come from the unredacted task title (a phone or email in a `jev run` goal lands in the name); `~/.jev/traces` is created 0755 and each file is readable for an instant before `chmod`. | `agent.py` `save_trace` | open |
-| P4-02 | A task the chat stopped, or gave up on after three problems, is traced as `ready` instead of cancelled or failed. | `core.py`, `agent.py` | open |
+| P4-02 | A task the chat stopped, or gave up on after three problems, is traced as `ready` instead of cancelled or failed. | `core.py`, `agent.py` | fixed (live run 3) |
 | P4-03 | The LOOK grid is drawn under top-layer content, so it is hidden behind a modal `<dialog>`. | `browser.py` `GRID` | open |
 | P4-04 | Event pump: a persistent error prints about 20 lines a second; one malformed event drops the rest of its batch; a stopped pump cannot restart. | `browser.py` `EventPump` | open |
 | P4-05 | Keychain waits block the task thread up to 120 s with no cancel check; the unlock prompt stays up after the timeout; a timed-out card save repeats its offer. | `profile.py`, `agent.py` | open |
@@ -83,3 +83,5 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | L1-02 | A site that keeps a "Sign in" banner up after the user signed in keeps the sign-in step pending; the user must say "continue". | `agent.py` `track_login` | open (sign-in via a magic link or a device approval also stays pending) |
 | L2-01 | Icon-only tiles carry labels like "IM" and "DO", so Jev cannot tell that "IM" is Instamart. | `snapshot.js` labels | open |
 | L2-02 | The user's name shown by a site after sign-in reaches the models unless it is in the profile; set it once with `jev profile --name …`. | `profile.py` | open (mitigated: `jev profile`; phone and email are learned when typed) |
+| L3-01 | On Uber, the summary card for "Request Uber Go AC" failed three times, so the ride was never requested; the error was not recorded then. Traces now keep errors, so the next run shows the cause. | `jobs.confirm_card` | open |
+| L3-02 | Ola's login form was not seen after "LOG IN" (only a scroll panel and a reCAPTCHA badge), so the phone number had nowhere to go. Repeated questions now turn into help, where the user can say "scroll down". | `snapshot.js`, Jev | open |

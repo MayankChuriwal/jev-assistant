@@ -50,7 +50,8 @@ def test_one_goal_fills_uploads_and_submits_a_dispute(chrome, site, tmp_path, mo
         {"action_label": "Submit dispute", "amount": "", "lines": ["ZENITH ELECTRONICS · ₹2,499.00"],
          "element": ""}, {}))
     monkeypatch.setattr(loop.jobs, "outcome", lambda context, page, label: ("success", "", {}))
-    monkeypatch.setattr(loop.jobs, "result", lambda context, page: ("Dispute submitted.", "Dispute submitted", {}))
+    monkeypatch.setattr(loop.jobs, "result",
+                        lambda context, page: ("Dispute submitted.", "Dispute submitted", True, {}))
 
     def provide_file(action):
         return [str(statement if "statement" in action["label"].lower() else receipt)]

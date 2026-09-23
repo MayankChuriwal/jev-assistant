@@ -70,7 +70,8 @@ def text_model(system, payload):
         return {"outcome": "success", "evidence": "Order placed #A1B2"} if placed else {"outcome": "pending",
                                                                                      "evidence": ""}
     if system == questions.RESULT:
-        return {"text": "Ordered Diet Coke for ₹79; it arrives in 12 minutes.", "evidence": "Order placed #A1B2"}
+        return {"text": "Ordered Diet Coke for ₹79; it arrives in 12 minutes.", "evidence": "Order placed #A1B2",
+                "achieved": True}
     raise AssertionError(f"unexpected job: {system[:40]}")
 
 

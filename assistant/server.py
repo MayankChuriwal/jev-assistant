@@ -208,7 +208,7 @@ def traces(limit=10, folder=None):
     for path in paths:
         try:
             t = json.loads(path.read_text())
-            evidence = (t.get("result") or {}).get("evidence") or "no evidence"
+            evidence = " ".join(((t.get("result") or {}).get("evidence") or "no evidence").split())
             print(f"{path.name[:15]}  {t['status']:<9} {t['title'][:28]:<28} {t['questions']:>2} questions "
                   f"{len(t['steps']):>4} steps {t['elapsed_ms'] / 1000:7.1f}s  {evidence[:48]}")
         except (ValueError, KeyError, TypeError):

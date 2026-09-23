@@ -532,6 +532,7 @@ def test_a_stopped_task_says_when_it_has_stopped(world):
     text(world, "stop")
     gate.set()
     assert until(lambda: "Stopped Order Diet Coke." in bodies(world)) and "never" not in bodies(world)
+    assert world.agents["Order Diet Coke"].state["status"] == "cancelled"  # what its trace records
 
 
 def test_a_stop_after_a_payment_says_it_may_have_gone_through(world):

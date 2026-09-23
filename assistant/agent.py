@@ -24,6 +24,7 @@ SAVE_AS = {f"card.{part}" for part in CARD_PARTS}
 ASK_TRIES = 5
 OUTCOME_CHECKS = 10
 HELP_ROUNDS = 2
+CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
 QUIET = {"WAIT", "SCROLL_UP", "SCROLL_DOWN", "SCROLL_LEFT", "SCROLL_RIGHT"}  # repeating these is not going in circles
 TRACE_STEP = ("step", "operation", "action", "choice", "probability", "confidence", "text", "drop", "files",
@@ -88,7 +89,7 @@ class Agent:
             browser=browser, goal=goal, title=title, page=page, decision=None, history=[], status="ready",
             decisions=[], text_calls=[], files=list(page.get("downloads", [])), elapsed_ms=0, started_at=None,
             record=record, memory=[], messages=[], answers={}, unused={}, typed={}, rejected=set(), approval=None,
-            commit=None, pending_vault={}, card_parts={}, help_rounds={}, login=None,
+            commit=None, pending_vault={}, card_parts={}, help_rounds={}, login=None, errors=[],
         )
 
     # ---- what the user and the models see
@@ -206,6 +207,11 @@ class Agent:
             self.state["decision"] = None
             self.say(str(halt))
             return self.snapshot()
+        except StalePage:
+            raise
+        except (ValueError, RuntimeError) as error:  # a model or network problem: the trace keeps what it was
+            self.state["errors"].append({"step": len(self.state["history"]), "error": str(error)})
+            raise
         finally:
             SECRETS.reset(token)
 
@@ -328,7 +334,7 @@ class Agent:
         cell. The text model answers with cell names only; code turns the cell into a point. Returns
         {"point", "label", "text", "commits"}, or None when nothing on screen fits."""
         s = self.state
-        hide = [value for value, _ in self.profile.hidden_values()]  # the page may show them as plain text
+        hide = self.hidden_details()
         image, cells = s["browser"].grid_screenshot(masked=self.secrets.nodes, hide=hide)
         found, meta = jobs.look(self.context(), page, purpose, image, cells)
         s["text_calls"].append({**meta, "field": "LOOK", "value": found and found["cell"]})
@@ -473,11 +479,12 @@ class Agent:
         stuck = len(recent) == 3 and all(h["page_changed"] is False and h["operation"] not in {"WAIT", "LOOK"}
                                          for h in recent)
         state["status"] = "ready"
+        state["asks_since_step"] = 0
         last = state["history"][-1]
         again = [h for h in state["history"][-20:] if (h["operation"], h["action"], urlparse(h["url"]).path)
                  == (last["operation"], last["action"], urlparse(last["url"]).path)]
         looping = last["operation"] not in QUIET and len(again) >= 4
-        if stuck or looping:  # ask the user for help instead of stopping in silence or going in circles
+        if (stuck or looping) and not state.get("relaying"):  # ask for help, never stop silently or circle
             tried = ", ".join(dict.fromkeys(h["action"] for h in recent))
             state["memory"].append(f"My last 3 steps ({tried}) changed nothing on this page." if stuck else
                                    f"I've done “{last['action']}” {len(again)} times recently without getting closer.")
@@ -638,6 +645,8 @@ class Agent:
 
     def talk(self, operation, page):
         state = self.state
+        if operation in {"ASK_USER", "BLOCKED"} and rules.captcha_challenge(page):
+            return self.relay_captcha(page)
         if operation == "DONE":
             return self.finish(page)
         if operation == "BLOCKED":
@@ -647,7 +656,14 @@ class Agent:
             state["memory"] += [f"Noted: {fact}" for fact in facts]
         elif operation == "CONFIRM":
             self.confirm(page, "the next step")
+        elif state.get("asks_since_step", 0) >= 2:  # asking again would repeat a question already answered
+            state["memory"].append("I asked the user twice without taking a step in between; their answers are in "
+                                   "task memory. Use them: type them into the field, or scroll or look for where "
+                                   "they go.")
+            state["asks_since_step"] = 0
+            return self.unblock(page)
         else:
+            state["asks_since_step"] = state.get("asks_since_step", 0) + 1
             self.ask_user(page)
         if state["status"] not in STOPPED:
             state["status"] = "ready"
@@ -683,6 +699,10 @@ class Agent:
 
     def choose_option(self, target):
         """Click the element the user's pick is tied to, through the same gate as any other click."""
+        self.click_same(target)
+
+    def click_same(self, target):
+        """Click the element the user named on a fresh read of the page, through the same gate as any other click."""
         page = self.observe()  # the user may have taken a while
         clicks = [a for a in page["actions"] if a["kind"] == "click"]
         same = (target.get("frame"), target.get("node"))
@@ -736,7 +756,11 @@ class Agent:
                     s["memory"].append(f"Waiting for the result of {label} before finishing.")
                 s["status"] = "ready"
                 return self.snapshot()
-        text, evidence, _ = jobs.result(self.context(), page)
+        if rules.commerce_goal(s["goal"]) and not any(m.startswith("Done: ") for m in s["memory"]):
+            return self.not_done(page, "nothing was booked, ordered, or paid for in this task yet")
+        text, evidence, achieved, _ = jobs.result(self.context(), page)
+        if not achieved:
+            return self.not_done(page, "the page doesn't show the goal done yet")
         if not evidence:
             text += " I couldn't find proof of this on the page, so please check it yourself."
         self.say(text, kind="result", evidence=evidence)
@@ -744,9 +768,57 @@ class Agent:
         self.state["elapsed_ms"] = self.elapsed()
         return self.snapshot()
 
+    def not_done(self, page, why):
+        """DONE was premature: say why in task memory and carry on; after three, ask the user for help."""
+        s = self.state
+        s["memory"].append(f"Not done: {why}. Keep going.")
+        s["done_refusals"] = s.get("done_refusals", 0) + 1
+        s["status"] = "ready"
+        if s["done_refusals"] >= 3:
+            s["done_refusals"] = 0
+            return self.unblock(page)
+        return self.snapshot()
+
+    def relay_captcha(self, page):
+        """A captcha only the user may solve: they see it with its squares numbered, and the agent clicks exactly
+        the squares they name, or keeps the text they read for typing. Nothing is solved automatically."""
+        s = self.state
+        s["captcha_rounds"] = s.get("captcha_rounds", 0) + 1
+        if s["captcha_rounds"] > CAPTCHA_ROUNDS:
+            raise Halt("blocked", f"The site kept showing new checks after {CAPTCHA_ROUNDS} rounds, so I stopped. "
+                                  "Please try this step on your own device.")
+        clicks = [a for a in page["actions"] if a["kind"] == "click" and a.get("node") is not None]
+        marks = ([a for a in clicks if a.get("frame")] or clicks)[:40]  # a captcha lives in its own frame
+        image = s["browser"].marked_screenshot(marks, masked=self.secrets.nodes, hide=self.hidden_details())
+        reply = self.ask({"kind": "image", "image": image, "text": "The site wants a check (captcha) solved. Reply "
+                          "with the numbers of the squares to pick, like 2 5 8; or type the text it shows; or say "
+                          "none if there is nothing to pick."})
+        text = str(reply.get("text", "")).strip()
+        picked = [int(n) for n in re.findall(r"\d+", text)] if re.fullmatch(r"[\d\s,]+", text) else None
+        if picked is None:
+            s["memory"].append("User says the captcha has nothing to pick: press its verify or skip button."
+                               if text.lower() in {"none", ""} else f"User read the captcha: {text}")
+        else:
+            s["relaying"] = True  # these clicks are the user's: no loop or no-progress help in between
+            try:
+                for n in picked:
+                    if 1 <= n <= len(marks):
+                        self.click_same(marks[n - 1])
+            finally:
+                s["relaying"] = False
+            s["memory"].append(f"Clicked the captcha squares the user picked ({', '.join(map(str, picked))}). "
+                               "Press its verify or next button now.")
+        s["status"] = "ready"
+        return self.snapshot()
+
+    def hidden_details(self):
+        return [value for value, _ in self.profile.hidden_values()]  # screenshots blur them where the page shows them
+
     def unblock(self, page):
         """BLOCKED: show and ask, ask for guidance, ask for a step on the user's device, or stop cleanly."""
         s = self.state
+        if rules.captcha_challenge(page):
+            return self.relay_captcha(page)
         where = rules.host(page["url"]) + urlparse(page["url"]).path
         rounds = s["help_rounds"].get(where, 0)
         elements, heads, _ = action_space(page["actions"])
@@ -814,6 +886,7 @@ class Agent:
             "decisions": [{**{k: d.get(k) for k in TRACE_DECISION}, "seen": (d.get("request") or {}).get("state")}
                           for d in s["decisions"]],  # "seen": the page and elements Jev chose from, to replay it
             "text_calls": s["text_calls"], "memory": s["memory"], "files": [self.file_name(f) for f in s["files"]],
+            "errors": s.get("errors", []),
         })
 
     def save_trace(self):

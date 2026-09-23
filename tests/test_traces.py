@@ -2,7 +2,7 @@
 
 import json
 
-from fakes import agent_with, decision
+from fakes import act, agent_with, decision
 
 
 def test_traces_are_redacted_records_of_the_run(tmp_path):
@@ -42,3 +42,21 @@ def test_closing_a_task_saves_its_trace_and_then_its_tabs(tmp_path):
     a.trace_dir.write_text("a file where the folder should be")
     a.close()  # a trace that can't be written never keeps the tabs open
     assert a.browser.close.call_count == 2
+
+
+def test_errors_are_kept_in_the_trace(tmp_path, monkeypatch):
+    import pytest
+
+    from assistant import agent as loop
+
+    def broken(*_args, **_kwargs):
+        raise ValueError("The text model returned an invalid confirmation; nothing executed.")
+
+    monkeypatch.setattr(loop.jobs, "confirm_card", broken)
+    a = agent_with(tmp_path)
+    a.trace_dir = tmp_path / "traces"
+    with pytest.raises(ValueError):
+        act(a, decision("e6", "CLICK"))  # "Pay ₹79": the summary card cannot be written
+    trace = json.loads(a.save_trace().read_text())
+    error = "The text model returned an invalid confirmation; nothing executed."
+    assert trace["errors"] == [{"step": 0, "error": error}]

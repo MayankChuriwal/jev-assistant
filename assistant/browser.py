@@ -132,6 +132,25 @@ MASK = r"""((ids, on, hide) => {
   }
   return true;
 })"""
+# Numbers drawn over the page for one capture, so the user can name what to click (a captcha's squares).
+MARKS = r"""(marks => {
+  document.getElementById('__jev_marks')?.remove();
+  if (!marks) return true;
+  const host = document.createElement('div');
+  host.id = '__jev_marks';
+  host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none';
+  const root = host.attachShadow({mode: 'closed'});
+  for (const m of marks) {
+    const tag = document.createElement('span');
+    tag.textContent = m.n;
+    tag.style.cssText = `position:fixed;left:${m.x - 11}px;top:${m.y - 11}px;min-width:22px;height:22px;` +
+      'box-sizing:border-box;padding:0 5px;border-radius:11px;border:2px solid #fff;font:bold 12px/18px sans-serif;' +
+      'text-align:center;color:#fff;background:rgba(255,0,90,.92)';
+    root.append(tag);
+  }
+  document.documentElement.append(host);
+  return true;
+})"""
 # A labelled grid drawn over the page for one capture, in a closed shadow root: the page's own reads never see it.
 GRID = r"""(cells => {
   document.getElementById('__jev_grid')?.remove();
@@ -688,6 +707,21 @@ class Browser:
             return self.screenshot(masked=masked, clip=clip, hide=hide), cells
         finally:
             self.evaluate(f"({GRID})(null)")
+
+    def marked_screenshot(self, actions, masked=(), hide=()):
+        """A viewport PNG with a number (1, 2, …) on each action, for the user to name what to click."""
+        marks = []
+        for n, action in enumerate(actions, 1):
+            try:
+                x, y = self._point(action)
+            except (StalePage, RuntimeError):
+                continue  # covered or gone: it gets no number
+            marks.append({"n": n, "x": x, "y": y})
+        self.evaluate(f"({MARKS})({json.dumps(marks)})")
+        try:
+            return self.screenshot(masked=masked, hide=hide)
+        finally:
+            self.evaluate(f"({MARKS})(null)")
 
     def _mask(self, by_frame, on, hide=()):
         """Mask (or unmask) the page and every frame of this tab: a re-rendered field is found again by its value.

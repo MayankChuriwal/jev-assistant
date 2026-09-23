@@ -170,9 +170,10 @@
     }
     return dirs;
   };
+  const ofCount = e => /\b\d+\s*of\s*\d+\s*$/i.test(label(e));  // "Code 1 of 4": one box of a code
   const otpGroup = e => {
     for (let p = e.parentElement, i = 0; p && i < 3; p = p.parentElement, i++) {
-      const boxes = [...p.querySelectorAll('input')].filter(b => b.maxLength === 1 && visible(b));
+      const boxes = [...p.querySelectorAll('input')].filter(b => (b.maxLength === 1 || ofCount(b)) && visible(b));
       if (boxes.length >= 4 && boxes.length <= 8) return boxes;
     }
     return null;
@@ -239,7 +240,7 @@
           e.isContentEditable || rname === 'combobox' ? e.innerText.trim() : ''});
         continue;
       }
-      const group = e.tagName === 'INPUT' && e.maxLength === 1 ? otpGroup(e) : null;
+      const group = e.tagName === 'INPUT' && (e.maxLength === 1 || ofCount(e)) ? otpGroup(e) : null;
       if (group && group[0] !== e) continue;  // one action for a whole one-time-code group
       const fill = {...base, kind: 'fill', constraints: constraints(e),
         value: e.type === 'password' ? (e.value ? '[filled]' : '') : 'value' in e ? String(e.value) : e.innerText.trim()};
@@ -249,7 +250,7 @@
       if (submitter) fill.submit = label(submitter);  // what Enter in this field would press
       const typed = group ? group.map(b => b.value).join('') : '';
       if (group) Object.assign(fill, {group: group.map(identity), value: group.every(safe) ? typed : typed ? '[filled]' : '',
-        label: e.closest('[aria-label]')?.getAttribute('aria-label') || 'One-time code'});
+        label: (e.closest('[aria-label]')?.getAttribute('aria-label') || 'One-time code').replace(/\s*\d+\s*of\s*\d+\s*$/i, '')});
       actions.push(fill);
       // A field that opens a picker or a list also gets a click; a plain text field would only offer a decoy.
       const opens = ['date', 'time', 'datetime-local', 'month', 'week'].includes(e.type) || rname === 'combobox' ||
