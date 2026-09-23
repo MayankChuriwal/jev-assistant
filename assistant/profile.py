@@ -73,7 +73,7 @@ class Profile:
             pairs.append((value, placeholder))
             if key == "phone":
                 digits = re.sub(r"\D", "", value)
-                pairs += [(digits, placeholder), (digits[-10:], placeholder)]
+                pairs += [(digits, placeholder), (digits[-10:], placeholder), ("0" + digits[-10:], placeholder)]
             if key == "name":
                 pairs += [(part, placeholder) for part in value.split() if len(part) >= 3]
         return pairs
@@ -133,7 +133,7 @@ class Secrets:
             return
         digits = re.sub(r"[\s-]", "", value)
         if digits.isdigit() and len(digits) >= 4:  # card numbers and phones, in any spacing
-            pattern = r"(?<!\d)" + r"[\s-]?".join(digits) + r"(?!\d)"
+            pattern = r"(?<!\d)" + r"[\s().-]*".join(digits) + r"(?!\d)"  # any spacing, brackets, dots, dashes
         else:
             pattern = r"(?<!\w)" + re.escape(value) + r"(?!\w)"
         self.values[value] = (re.compile(pattern, re.IGNORECASE), placeholder)

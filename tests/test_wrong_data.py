@@ -93,3 +93,28 @@ def test_malformed_answers_cost_no_attempt(tmp_path, monkeypatch):
     act(a, decision("e3", "TYPE_TEXT"))
     assert typed(a) == ["123"] and len(a.asked) == 3
     assert a.state["typed"][("shop.test", "CVV")]["count"] == 1
+
+
+def test_a_rejected_code_is_never_offered_again_by_its_answer_name(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, replies=[{"text": "111111"}, {"text": "482913"}])
+    calls = field(monkeypatch, ASK, ASK)
+    act(a, decision("e2", "TYPE_TEXT"))
+    act(a, decision("e2", "TYPE_TEXT"))
+    assert "answer1" not in calls[1]["allowed"] and typed(a) == ["111111", "482913"]
+
+
+def test_only_the_newest_replacement_reaches_the_keychain(tmp_path, monkeypatch):
+    expiry = {"id": "e1", "kind": "fill", "label": "Expiry", "role": "textbox", "value": "", "node": 1}
+    page = fake_page(actions=[expiry,
+                              {"id": "wait", "kind": "wait", "label": "Wait", "node": None}])
+    vault = FakeVault({"card.hdfc.expiry": "12/28"})
+    a = agent_with(tmp_path, page=page, vault=vault, replies=[{"text": "12/92"}, {"text": "12/29"}])
+    again = ("ask", "That expiry was rejected. Send it again?", True, "card.expiry")
+    field(monkeypatch, ("secret", "card.hdfc.expiry"), again, again)
+    for _ in range(3):
+        act(a, decision("e1", "TYPE_TEXT"))
+    assert typed(a) == ["12/28", "12/92", "12/29"] and a.state["pending_vault"] == {"card.hdfc.expiry": "12/29"}
+    a.state["status"], a.state["commit"] = "ready", {"label": "Pay ₹79", "checks": 0}
+    monkeypatch.setattr(loop.jobs, "outcome", lambda context, page, label: ("success", "Pay ₹79", META))
+    a.check_commit()
+    assert vault.writes == [("card.hdfc.expiry", "12/29")]

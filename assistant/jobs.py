@@ -1,5 +1,6 @@
 """Text-model jobs besides field values. Every answer is validated before the agent acts on it."""
 
+import re
 from urllib.parse import urlparse
 
 from .model import text_json
@@ -51,16 +52,26 @@ def compose(context, page, elements):
     return {"kind": kind, "text": text, "options": clean if kind == "choice" else []}, meta
 
 
-def confirm_card(context, page, commit):
-    out, meta = text_json(CONFIRM_CARD, {"context": context, "page": view(page), "commit": commit})
+MONEY = re.compile(r"[₹$€£]|\bRs\.?|\bINR\b|\bUSD\b")
+
+
+def confirm_card(context, page, commit, elements=()):
+    payload = {"context": context, "page": view(page), "commit": commit, "elements": list(elements)}
+    out, meta = text_json(CONFIRM_CARD, payload)
     action, amount, lines = words(out, "action_label", 40), out.get("amount", ""), out.get("lines")
+    element = str(out.get("element") or "")
+    if element and element not in {e["index"] for e in elements}:
+        raise invalid("confirmation card")
     if not action or not isinstance(amount, str) or not isinstance(lines, list) or not all(
             isinstance(line, str) for line in lines):
         raise invalid("confirmation card")
     amount = amount.strip()
     if amount and not verbatim(amount, page["text"]):
         raise invalid("confirmation card")  # the model may not invent a total
-    return {"action_label": action, "amount": amount, "lines": [x.strip() for x in lines if x.strip()][:8]}, meta
+    if not amount and MONEY.search(commit):
+        raise invalid("confirmation card")  # a paying commit always shows its amount
+    lines = [x.strip() for x in lines if x.strip()][:8]
+    return {"action_label": action, "amount": amount, "lines": lines, "element": element}, meta
 
 
 def outcome(context, page, commit):

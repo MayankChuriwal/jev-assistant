@@ -18,6 +18,7 @@ STOPPED = {"done", "blocked", "failed", "cancelled"}
 TALK = {"ASK_USER", "CONFIRM", "NOTE", "DONE", "BLOCKED"}
 PRIVATE = {"browser", "answers", "unused", "pending_vault", "card_parts"}  # hold secret values
 EDITABLE = {"textbox", "searchbox", "spinbutton", "combobox"}
+COMMIT_OPS = {"CLICK", "DOUBLE_CLICK", "PRESS_KEY", "ACCEPT_DIALOG"}
 SAVE_AS = {f"card.{part}" for part in CARD_PARTS}
 ASK_TRIES = 5
 OUTCOME_CHECKS = 10
@@ -61,7 +62,7 @@ class Agent:
                 url, title, _ = jobs.start(goal)
             self.browser = browser or Browser(url, geolocation=self.profile.geolocation())
             try:
-                page = self.browser.observe(screenshot=self.screenshots)
+                page = self.clean(self.browser.observe(screenshot=False))
             except Exception:
                 self.browser.close()
                 raise
@@ -70,7 +71,7 @@ class Agent:
         self.state = self.new_state(self.browser, goal, title, page, bool(self.record_dir))
         if self.record_dir:
             self.record_dir.mkdir(parents=True, exist_ok=True)
-            (self.record_dir / "000000.jpg").write_bytes(base64.b64decode(page["screenshot"]))
+            (self.record_dir / "000000.png").write_bytes(base64.b64decode(page["screenshot"]))
 
     @staticmethod
     def new_state(browser, goal, title, page, record):
@@ -140,11 +141,21 @@ class Agent:
     def elapsed(self):
         return round((time.perf_counter() - self.state["started_at"]) * 1000)
 
-    def observe(self):
-        page = self.state["browser"].observe(screenshot=self.screenshots)
+    def clean(self, page):
+        """The page as the agent keeps it: hidden values replaced before anything reads or truncates the text,
+        fields that hold secrets masked, and screenshots taken with those fields blurred."""
+        page["text"] = self.secrets.text(page["text"])
+        page["title"] = self.secrets.text(page["title"])
+        page["actions"] = self.secrets.redact(page["actions"])
         for action in page["actions"]:
             if action.get("value") and (action.get("frame"), action.get("node")) in self.secrets.nodes:
                 action["value"] = "[secret]"  # an emptied field (a rejected code) still reads as empty
+        if self.screenshots:
+            page["screenshot"] = self.browser.screenshot(masked=self.secrets.nodes)
+        return page
+
+    def observe(self):
+        page = self.clean(self.state["browser"].observe(screenshot=False))
         self.state["page"] = page
         self.state["files"].extend(page.get("downloads", []))
         return page
@@ -221,24 +232,39 @@ class Agent:
         if commit is False:
             return self.snapshot()
         inputs, helper, shown = self.inputs(operation, action, decision, page)
-        self.execute(operation, action, decision, page, inputs, helper, shown)
-        if isinstance(commit, str):  # it executed: the approval is spent and the outcome is watched
-            self.state["approval"] = None
-            self.state["commit"] = {"label": commit, "checks": 0}
+        self.execute(operation, action, decision, page, inputs, helper, shown,
+                     commit=commit if isinstance(commit, str) else None)
         self.check_commit()
         return self.snapshot()
 
     def gate(self, operation, action, decision, page):
-        """True for ordinary actions; the commit's label once the user approved it; False when they did not."""
+        """True for ordinary actions; the commit's label once the user approved exactly this action; False when
+        they declined. A fresh yes re-reads the page before anything runs."""
         s = self.state
-        label = rules.commit_label(operation, action, page, decision.get("key"))
+        key = decision.get("key")
+        if operation not in COMMIT_OPS or (operation == "PRESS_KEY" and key not in {"Enter", "Space"}):
+            return True
+        focused = s["browser"].focused_label() if operation == "PRESS_KEY" and action.get("node") is None else ""
+        label = rules.commit_label(operation, action, page, key, focused)
+        approval = s["approval"]
+        steps = len(s["history"])
+        if approval and rules.approval_valid(approval, page, steps) and self.matches(approval, action, label):
+            if not s["browser"].fresh(page, action):
+                raise StalePage("Page changed since the approval. Choose again.")
+            return label or approval["action_label"]
         if not label:
             return True
-        if not rules.approval_valid(s["approval"], page, len(s["history"])) and not self.confirm(page, label):
-            return False
-        if not s["browser"].fresh(page, action):  # the user may have taken a while
-            raise StalePage("Page changed while waiting for approval. Choose again.")
-        return label
+        if self.confirm(page, label, action):
+            # The user may have taken a while and a total outside this control may have moved: read the page
+            # again, and act only if the approval still holds there.
+            raise StalePage("Approved. Reading the page again before acting.")
+        return False
+
+    def matches(self, approval, action, label):
+        """Whether this is the action the user approved: the same control, or the same words when none was named."""
+        if approval.get("target"):
+            return (action.get("frame"), action.get("node")) == approval["target"]
+        return bool(label) and rules.overlap(label, approval["action_label"])
 
     def check_commit(self):
         """After a commit: success carries on, an explicit failure is reported, anything unclear stops the task."""
@@ -246,7 +272,10 @@ class Agent:
         commit = s["commit"]
         if not commit or s["status"] in STOPPED:
             return
-        outcome, evidence, _ = jobs.outcome(self.context(), s["page"], commit["label"])
+        try:
+            outcome, evidence, _ = jobs.outcome(self.context(), s["page"], commit["label"])
+        except ValueError:
+            outcome, evidence = "unclear", ""  # the commit already ran; an unreadable answer is not a failure
         commit["checks"] += 1
         if outcome == "pending" and commit["checks"] < OUTCOME_CHECKS:
             return
@@ -281,7 +310,7 @@ class Agent:
                 self.say(f"Saved the card ending {last4}.")
         parts.clear()
 
-    def execute(self, operation, action, decision, page, inputs, helper, shown):
+    def execute(self, operation, action, decision, page, inputs, helper, shown, commit=None):
         state = self.state
         entry = {
             "step": len(state["history"]) + 1,
@@ -312,6 +341,9 @@ class Agent:
         state["elapsed_ms"] = self.elapsed()
         # Record execution before observing. A stale post-action observation must not erase the action.
         state["history"].append({**entry, "executed_ms": state["elapsed_ms"], "elapsed_ms": state["elapsed_ms"]})
+        if commit:  # it ran: spend the approval and watch the outcome, even if the next observation fails
+            state["approval"] = None
+            state["commit"] = {"label": commit, "checks": 0}
         if operation == "TYPE_TEXT":
             self.after_typing(action, page)
         self.observe()
@@ -322,7 +354,7 @@ class Agent:
             elapsed_ms=state["elapsed_ms"],
         )
         if state["record"]:
-            (self.record_dir / f"{state['elapsed_ms']:06d}.jpg").write_bytes(
+            (self.record_dir / f"{state['elapsed_ms']:06d}.png").write_bytes(
                 base64.b64decode(state["page"]["screenshot"])
             )
         recent = state["history"][-3:]
@@ -388,6 +420,8 @@ class Agent:
                                   "your account gets locked.")
         if typed["key"]:
             s["rejected"].add((where, typed["key"]))
+        if typed["source"] == "user" and typed.get("origin"):
+            s["pending_vault"].pop(typed["origin"], None)  # a rejected replacement never reaches the Keychain
         return {"source": typed["source"], "rejected": True, "attempts": typed["count"], "left": limit - typed["count"]}
 
     def allowed(self, where):
@@ -419,18 +453,23 @@ class Agent:
     def ask_field(self, question, action, secret, key, where):
         s = self.state
         before = s["typed"].get(where)
+        # Card details, passwords, and codes are secret whatever the model said.
+        secret = (secret or key in SAVE_AS or (action.get("constraints") or {}).get("type") == "password"
+                  or bool(action.get("group")))
         if before and before["source"] != "model" and before["count"] == rules.attempt_limit(before["key"]) - 1:
             question += " One try left before the site may lock this."
         value = self.ask_value(question, action, secret)
-        if before and before["source"] == "vault":
-            key = before["key"]  # the user's replacement for a rejected Keychain value
-            s["pending_vault"][key] = value  # stored only after a successful commit
+        origin = before and (before["key"] if before["source"] == "vault" else before.get("origin"))
+        if origin:
+            key = origin  # the user's replacement for a rejected Keychain value
+            s["pending_vault"][origin] = value  # the newest one; stored only after a successful commit
         shown = value
         if secret:
             name = f"answer{len(self.state['answers']) + 1}"
             self.state["answers"][name] = value
             shown = f"[secret:{name}]"
             self.secrets.add(value, shown)
+            key = key or name  # so a rejection can exclude this exact answer
         if key in SAVE_AS:
             self.state["card_parts"][key] = value
         return value, shown, "user", key
@@ -442,8 +481,10 @@ class Agent:
         if shown and shown.startswith("[secret:"):
             for node in action.get("group") or [action["node"]]:
                 self.secrets.nodes.add((action.get("frame"), node))
-        count = s["typed"].get(where, {}).get("count", 0)
-        s["typed"][where] = {"source": source, "key": key, "count": count + (source != "model")}
+        before = s["typed"].get(where, {})
+        origin = key if source == "vault" else before.get("origin")
+        s["typed"][where] = {"source": source, "key": key, "count": before.get("count", 0) + (source != "model"),
+                             "origin": origin}
 
     # ---- talking operations
 
@@ -497,8 +538,10 @@ class Agent:
         page = self.observe()  # the user may have taken a while
         clicks = [a for a in page["actions"] if a["kind"] == "click"]
         same = (target.get("frame"), target.get("node"))
-        match = next((a for a in clicks if (a.get("frame"), a.get("node")) == same), None) or next(
-            (a for a in clicks if a["label"] == target["label"]), None)
+        match = next((a for a in clicks if (a.get("frame"), a.get("node")) == same), None)
+        if match is None:
+            named = [a for a in clicks if a["label"] == target["label"]]
+            match = named[0] if len(named) == 1 else None  # two "Deliver here" buttons: never guess
         if match is None:
             return  # the page moved on; Jev decides with the answer in memory
         pick = {"operation": "CLICK", "choice": match["id"], "probabilities": {match["id"]: 1.0},
@@ -508,16 +551,23 @@ class Agent:
         except StalePage:
             self.observe()
 
-    def confirm(self, page, label):
-        """Show the summary card and wait for an explicit yes. True when approved."""
+    def confirm(self, page, label, action=None):
+        """Show the summary card and wait for an explicit yes. True when approved; the approval is tied to the
+        control that commits (the action itself, or the one the card names)."""
         s = self.state
-        card, _ = jobs.confirm_card(self.context(), page, label)
+        elements, heads, _ = action_space(page["actions"])
+        card, _ = jobs.confirm_card(self.context(), page, label, elements)
+        target = (action.get("frame"), action["node"]) if action and action.get("node") is not None else None
+        if target is None and card["element"]:
+            bound = next((a for head in heads.values() for index, a in head.items() if index == card["element"]
+                          and a.get("node") is not None), None)
+            target = (bound.get("frame"), bound["node"]) if bound else None
         lines = [card["action_label"], *card["lines"]] + ([f"Total: {card['amount']}"] if card["amount"] else [])
         reply = self.ask({"kind": "confirm", "text": "\n".join(lines), "options": [
             {"id": "yes", "label": ("Yes, " + card["action_label"])[:20]}, {"id": "no", "label": "No"}]})
         if reply.get("option") == "yes":
             s["approval"] = {"action_label": card["action_label"], "amount": card["amount"],
-                             "host": rules.host(page["url"]), "step": len(s["history"])}
+                             "host": rules.host(page["url"]), "step": len(s["history"]), "target": target}
             return True
         change = self.ask({"kind": "choice", "text": "What should I change?", "options": [
             {"id": "payment", "label": "Payment"}, {"id": "items", "label": "Items"},

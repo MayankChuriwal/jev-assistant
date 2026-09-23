@@ -129,3 +129,9 @@ def test_redaction_is_deep_and_leaves_images_alone():
     body = {"a": ["code 482913", {"b": "482913"}], "n": 482913, "img": "data:image/png;base64,482913AAAA"}
     assert s.redact(body) == {"a": ["code [secret:otp]", {"b": "[secret:otp]"}], "n": 482913,
                               "img": "data:image/png;base64,482913AAAA"}
+
+
+def test_phone_numbers_are_hidden_in_local_formats(profile):
+    s = Secrets(profile.hidden_values())
+    for shown in ("(98765) 43210", "098765 43210", "+91-98765-43210", "98765.43210"):
+        assert "98765" not in s.text(f"call {shown} now"), shown

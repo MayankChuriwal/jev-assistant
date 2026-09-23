@@ -1,6 +1,7 @@
 """The agent talking to its user: typing resolution, questions, choices, notes, results. Fakes only."""
 
 import json
+from copy import deepcopy
 from unittest.mock import Mock
 
 import pytest
@@ -160,11 +161,12 @@ def test_cancel_stops_before_anything_else(tmp_path, monkeypatch):
 
 
 def test_confirm_records_an_approval_or_asks_what_to_change(tmp_path, monkeypatch):
-    card = {"action_label": "Pay ₹79", "amount": "₹79", "lines": ["Diet Coke 300 ml", "Home"]}
-    monkeypatch.setattr(loop.jobs, "confirm_card", lambda context, page, label: (card, META))
+    card = {"action_label": "Pay ₹79", "amount": "₹79", "lines": ["Diet Coke 300 ml", "Home"], "element": ""}
+    monkeypatch.setattr(loop.jobs, "confirm_card", lambda context, page, label, elements=(): (card, META))
     a = agent_with(tmp_path, replies=[{"option": "yes"}])
     assert a.confirm(a.state["page"], "Pay ₹79")
-    assert a.state["approval"] == {"action_label": "Pay ₹79", "amount": "₹79", "host": "shop.test", "step": 0}
+    assert a.state["approval"] == {"action_label": "Pay ₹79", "amount": "₹79", "host": "shop.test", "step": 0,
+                                   "target": None}
     assert a.asked[0]["kind"] == "confirm" and "Total: ₹79" in a.asked[0]["text"]
     a = agent_with(tmp_path, replies=[{"option": "no"}, {"option": "payment"}])
     assert not a.confirm(a.state["page"], "Pay ₹79")
@@ -195,3 +197,61 @@ def test_model_requests_during_a_step_are_redacted(tmp_path, monkeypatch):
     a = agent_with(tmp_path, page=fake_page(text="Call Mayank on 98765 43210"))
     act(a, decision("NOTE", "NOTE"))
     assert sent and "98765" not in json.dumps(sent) and "Mayank" not in json.dumps(sent)
+
+
+def test_pages_are_redacted_before_anyone_sees_them(tmp_path):
+    a = agent_with(tmp_path)
+    a.browser.observe.return_value = fake_page(text="Thanks Mayank Churiwal, call 98765 43210")
+    page = a.observe()
+    assert page["text"] == "Thanks [profile:name], call [profile:phone]"
+    assert "98765" not in json.dumps(a.snapshot(), ensure_ascii=False, default=str)
+
+
+def test_screenshots_blur_fields_that_hold_secrets(tmp_path):
+    a = agent_with(tmp_path)
+    a.screenshots = True
+    a.secrets.nodes.add((None, 8))
+    page = a.observe()
+    assert page["screenshot"] == "iVBORw0KGgo=" and a.browser.screenshot.call_args.kwargs == {"masked": {(None, 8)}}
+    a.browser.observe.assert_called_with(screenshot=False)
+
+
+def test_evidence_is_checked_against_what_the_model_saw(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    said = {"outcome": "success", "evidence": "Thanks [profile:name], order #A1 placed"}
+    answer = {"choices": [{"message": {"content": json.dumps(said)}}]}
+    monkeypatch.setattr(model, "post_json", Mock(return_value=answer))
+    a = agent_with(tmp_path)
+    a.browser.observe.return_value = fake_page(text="Thanks Mayank Churiwal, order #A1 placed")
+    a.observe()
+    a.state["commit"] = {"label": "Pay ₹79", "checks": 0}
+    a.check_commit()
+    assert a.state["memory"][-1] == "Done: Pay ₹79 (Thanks [profile:name], order #A1 placed)"
+
+
+@pytest.mark.parametrize("target, form, answer", [
+    ("e1", ("ask", "Card number?", False, "card.number"), "4111 1111 1111 1111"),
+    ("e3", ("ask", "CVV?", False, None), "123"),
+    ("e2", ("ask", "Code?", False, None), "482913"),
+])
+def test_card_details_passwords_and_codes_are_always_secret(tmp_path, monkeypatch, target, form, answer):
+    a = agent_with(tmp_path, replies=[{"text": answer}])
+    field(monkeypatch, form)
+    act(a, decision(target, "TYPE_TEXT"))
+    assert a.asked[0]["kind"] == "secret" and a.state["history"][-1]["text"].startswith("[secret:")
+
+
+def test_a_pick_is_never_guessed_between_identical_labels(tmp_path, monkeypatch):
+    page = fake_page()
+    for x in page["actions"]:
+        if x["id"] in ("e4", "e5"):
+            x["label"] = "Deliver here"
+    moved = deepcopy(page)
+    for x in moved["actions"]:
+        if x["id"] in ("e4", "e5"):
+            x["node"] += 100
+    a = agent_with(tmp_path, page=page, replies=[{"option": "o1"}])
+    a.browser.observe.return_value = moved
+    choice(monkeypatch, ("Home", "4"), ("Office", "5"))
+    act(a, decision("ASK_USER", "ASK_USER"))
+    a.browser.act.assert_not_called()

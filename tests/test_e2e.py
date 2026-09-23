@@ -46,8 +46,9 @@ def test_one_goal_fills_uploads_and_submits_a_dispute(chrome, site, tmp_path, mo
     monkeypatch.setattr(loop, "choose", scripted)
     monkeypatch.setattr(loop, "field_value", lambda context: (
         ("text", "I was charged twice for the same order at Zenith."), {"model": "fake", "latency_ms": 0}))
-    monkeypatch.setattr(loop.jobs, "confirm_card", lambda context, page, label: (
-        {"action_label": "Submit dispute", "amount": "", "lines": ["ZENITH ELECTRONICS · ₹2,499.00"]}, {}))
+    monkeypatch.setattr(loop.jobs, "confirm_card", lambda context, page, label, elements=(): (
+        {"action_label": "Submit dispute", "amount": "", "lines": ["ZENITH ELECTRONICS · ₹2,499.00"],
+         "element": ""}, {}))
     monkeypatch.setattr(loop.jobs, "outcome", lambda context, page, label: ("success", "", {}))
     monkeypatch.setattr(loop.jobs, "result", lambda context, page: ("Dispute submitted.", "Dispute submitted", {}))
 

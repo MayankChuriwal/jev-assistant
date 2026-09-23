@@ -270,3 +270,17 @@ def test_every_model_request_is_redacted_for_the_current_task(monkeypatch):
     model.field_value({"goal": "no task: 98765 43210"})
     assert "98765" not in json.dumps(sent[0]) and "[profile:phone]" in json.dumps(sent[0])
     assert "98765 43210" in json.dumps(sent[1])
+
+def test_text_model_payloads_are_redacted_before_they_are_encoded(monkeypatch):
+    from assistant.profile import SECRETS, Secrets
+
+    post = reply('{"text": "ok"}')
+    monkeypatch.setattr(model, "post_json", post)  # below the text model, above post_json's own redaction
+    token = SECRETS.set(Secrets([("José Müller", "[profile:name]"), ('ab"cd\\ef', "[secret:x]")]))
+    try:
+        model.field_value({"goal": 'José Müller typed ab"cd\\ef'})
+    finally:
+        SECRETS.reset(token)
+    user = post.call_args.args[2]["messages"][1]["content"]
+    assert "Jos" not in user and "cd" not in user
+    assert "[profile:name]" in user and "[secret:x]" in user

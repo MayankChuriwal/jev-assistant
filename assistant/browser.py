@@ -531,6 +531,13 @@ class Browser:
             raise StalePage("Target changed or is covered. Observe again.")
         return point["x"], point["y"]
 
+    def focused_label(self):
+        """Label of the control a key press on the page would reach, or ""."""
+        try:
+            return self.evaluate("window.__jevFast?.focused?.() ?? ''") or ""
+        except (StalePage, RuntimeError, TimeoutError):
+            return ""
+
     def screenshot(self, action=None, masked=(), pad=16):
         """Base64 PNG of the viewport, or of an element's region, with fields that hold secrets blurred."""
         by_frame = {}

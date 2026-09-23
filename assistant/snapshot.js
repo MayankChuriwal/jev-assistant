@@ -97,6 +97,15 @@
     }
     return x >= 0 && y >= 0 && x < innerWidth && y < innerHeight ? {x, y} : null;
   };
+  cache.focused = () => {  // the control a page-level key press reaches, through shadow roots and same-origin frames
+    let e = document.activeElement;
+    for (;;) {
+      if (e?.shadowRoot?.activeElement) e = e.shadowRoot.activeElement;
+      else if (e?.tagName === 'IFRAME' && e.contentDocument?.activeElement) e = e.contentDocument.activeElement;
+      else break;
+    }
+    return e && e.tagName !== 'BODY' && e.tagName !== 'HTML' ? label(e) : '';
+  };
   cache.locate = id => {
     const e = cache.nodes.get(id);
     if (!e?.isConnected || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) return null;

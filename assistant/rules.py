@@ -17,17 +17,30 @@ def host(url):
     return urlparse(url).netloc
 
 
-def commit_label(operation, action, page, key=None):
-    """The words that make this action a commit, or None."""
+def commit_label(operation, action, page, key=None, focused=""):
+    """The words that make this action a commit, or None. `focused` names the control a page-level key reaches."""
     if operation in {"CLICK", "DOUBLE_CLICK"}:
         label = action.get("label", "")
-    elif operation == "PRESS_KEY" and key == "Enter":
-        label = action.get("submit", "")  # Enter submits the field's form
+    elif operation == "PRESS_KEY" and key in {"Enter", "Space"}:
+        # Enter submits the field's form; on the page, Enter or Space presses whatever has focus.
+        label = (action.get("submit", "") if key == "Enter" else "") or (focused if action.get("node") is None else "")
     elif operation == "ACCEPT_DIALOG":
         label = page.get("text", "")
     else:
         return None
     return label if COMMIT.search(label or "") else None
+
+
+STOP_WORDS = {"the", "your", "and", "for", "now", "with", "this", "all", "you"}
+
+
+def words(text):
+    return {w for w in re.findall(r"[a-z]{3,}", str(text).lower())} - STOP_WORDS
+
+
+def overlap(label, approved):
+    """Whether an action's label names the same commit as the approved one."""
+    return bool(words(label) & words(approved))
 
 
 def normal(text):

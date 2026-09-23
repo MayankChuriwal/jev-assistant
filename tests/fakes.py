@@ -58,7 +58,7 @@ def agent_with(tmp_path, *, replies=(), page=None, vault=None, profile=None):
     a.secrets = Secrets(a.profile.hidden_values())
     page = page or fake_page()
     a.browser = Mock(fresh=Mock(return_value=True), observe=Mock(return_value=page), act=Mock(return_value={}),
-                     screenshot=Mock(return_value="iVBORw0KGgo="))
+                     screenshot=Mock(return_value="iVBORw0KGgo="), focused_label=Mock(return_value=""))
     a.asked, a.told, queue = [], [], list(replies)
     a.asker = lambda message: a.asked.append(message) or (queue.pop(0) if queue else {"cancel": True})
     a.notify = a.told.append

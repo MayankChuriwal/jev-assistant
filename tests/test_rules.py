@@ -78,3 +78,15 @@ def test_codes_lose_their_spaces_and_cvv_fields_allow_two_tries():
 def test_a_code_group_is_judged_as_a_whole_not_by_each_boxs_maxlength():
     group = {"group": [1, 2, 3, 4, 5, 6], "constraints": {"inputmode": "numeric", "maxlength": 1}}
     assert rules.format_error(rules.clean("482 913", group), group) is None
+
+
+def test_enter_or_space_on_the_page_uses_the_focused_control():
+    page_key = {"kind": "key", "node": None, "label": "The page"}
+    assert rules.commit_label("PRESS_KEY", page_key, {}, key="Space", focused="Pay ₹79") == "Pay ₹79"
+    assert rules.commit_label("PRESS_KEY", page_key, {}, key="Enter", focused="Search") is None
+    assert rules.commit_label("PRESS_KEY", page_key, {}, key="Tab", focused="Pay ₹79") is None
+
+
+def test_approved_labels_match_by_their_words():
+    assert rules.overlap("Place your order", "Place order")
+    assert not rules.overlap("Pay ₹79", "Submit complaint") and not rules.overlap("Pay ₹79", "Delete address")

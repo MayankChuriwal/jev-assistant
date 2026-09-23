@@ -191,7 +191,7 @@ def choose(state, goal, history):
         model=result["model"],
         usage=result.get("usage", {}),
         latency_ms=round((time.perf_counter() - started) * 1000),
-        request=body,
+        request=SECRETS.get().redact(body) if SECRETS.get() else body,
     )
     return decision
 
@@ -202,7 +202,9 @@ def text_json(system, payload, *, max_tokens=512, images=()):
         raise ValueError("The text model needs OPENAI_API_KEY; nothing is guessed.")
     base = os.environ.get("TEXT_MODEL_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     name = os.environ.get("TEXT_MODEL", "gpt-4.1-mini")
-    user = json.dumps(payload)
+    secrets = SECRETS.get()
+    # Redact the values themselves: JSON escaping (non-ASCII, quotes) would hide them from a string-level pass.
+    user = json.dumps(secrets.redact(payload) if secrets else payload, ensure_ascii=False)
     if images:
         user = [{"type": "text", "text": user}] + [
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image}"}} for image in images]

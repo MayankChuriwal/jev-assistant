@@ -139,12 +139,26 @@ def terminal_notify(message, *, write=print):
 
 
 def run(goal, url=None):
-    from .agent import Agent
+    from .agent import STOPPED, Agent
 
     agent = Agent(url, goal, asker=terminal_asker, notify=terminal_notify)
-    shown = 0
+    shown = problems = 0
     try:
-        for state in agent.run():
+        while agent.state["status"] not in STOPPED:
+            try:
+                state = agent.command("tick")
+            except (ValueError, RuntimeError) as error:  # a model or network hiccup: report it, decide again
+                problems += 1
+                print(f"Problem: {error}")
+                commit = agent.state.get("commit")
+                if commit:
+                    print(f"{commit['label']} may already have gone through. Check it before running this again.")
+                    break
+                if problems >= 3:
+                    print("Stopping after 3 problems in a row.")
+                    break
+                continue
+            problems = 0
             for step in state["history"][shown:]:
                 print(f"  {state['elapsed_ms'] / 1000:6.1f}s  {step['operation']:<12} {step['action'][:70]}")
             shown = len(state["history"])

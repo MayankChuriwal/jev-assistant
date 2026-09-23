@@ -84,3 +84,14 @@ def test_results_notes_help_hints_and_preferences(monkeypatch):
     assert parts[1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
     reply(monkeypatch, {"preference": "Default Instamart address: Home"})
     assert jobs.remember("Deliver where?", "Home")[0] == "Default Instamart address: Home"
+
+
+def test_paying_commits_need_an_amount_and_a_real_element(monkeypatch):
+    reply(monkeypatch, {"action_label": "Pay", "amount": "", "lines": [], "element": ""})
+    with pytest.raises(ValueError, match="invalid confirmation card"):
+        jobs.confirm_card("c", PAGE, "Pay ₹79", ELEMENTS)
+    reply(monkeypatch, {"action_label": "Pay ₹79", "amount": "₹79", "lines": [], "element": "9"})
+    with pytest.raises(ValueError, match="invalid confirmation card"):
+        jobs.confirm_card("c", PAGE, "Pay ₹79", ELEMENTS)
+    reply(monkeypatch, {"action_label": "Pay ₹79", "amount": "₹79", "lines": [], "element": "2"})
+    assert jobs.confirm_card("c", PAGE, "Pay ₹79", ELEMENTS)[0]["element"] == "2"

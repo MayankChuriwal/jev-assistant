@@ -185,3 +185,12 @@ def test_screenshots_crop_to_an_element_and_blur_secret_fields(browser_at):
     assert b.evaluate("document.getElementById('card').style.filter") == ""
     whole = base64.b64decode(b.screenshot())
     assert struct.unpack(">II", whole[16:24]) == (1120, 780)
+
+
+def test_the_focused_control_can_be_named(browser_at):
+    b = browser_at("/pay-button.html")
+    b.observe()
+    b.evaluate("document.querySelector('button').focus()")
+    assert b.focused_label() == "Pay ₹79"
+    b.evaluate("document.activeElement.blur()")
+    assert b.focused_label() == ""
