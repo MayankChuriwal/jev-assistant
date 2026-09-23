@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="jev-token" content="{{TOKEN}}">
+<title>Jev</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header>
+  <div class="avatar" aria-hidden="true">J</div>
+  <div><h1>Jev</h1><p id="status">online</p></div>
+</header>
+<main id="chat" aria-live="polite"></main>
+<form id="composer" autocomplete="off">
+  <label class="attach" title="Attach a file">📎<input type="file" id="file" aria-label="Attach a file" hidden></label>
+  <input id="text" aria-label="Message" placeholder="Message" autocomplete="off">
+  <button id="send" type="submit" aria-label="Send">➤</button>
+</form>
+</body>
+</html>
