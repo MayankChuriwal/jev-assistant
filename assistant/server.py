@@ -182,6 +182,25 @@ def run(goal, url=None):
     return 0 if agent.state["status"] == "done" else 1
 
 
+def traces(limit=10, folder=None):
+    """The latest task traces, one line each, with what the smoke set judges: outcome, questions, evidence."""
+    folder = Path(folder) if folder else home() / "traces"
+    paths = sorted(folder.glob("*.json"))[-limit:] if folder.is_dir() else []
+    if not paths:
+        print(f"No traces yet in {folder}.")
+        return 0
+    for path in paths:
+        try:
+            t = json.loads(path.read_text())
+            evidence = (t.get("result") or {}).get("evidence") or "no evidence"
+            print(f"{path.name[:15]}  {t['status']:<9} {t['title'][:28]:<28} {t['questions']:>2} questions "
+                  f"{len(t['steps']):>4} steps {t['elapsed_ms'] / 1000:7.1f}s  {evidence[:48]}")
+        except (ValueError, KeyError, TypeError):
+            print(f"{path.name}  unreadable")
+    print(f"\nFull traces: {folder}")
+    return 0
+
+
 def debug_view(core):
     """Each task's recent steps and a live screenshot with secret fields masked. Development only."""
     with core.lock:
@@ -335,6 +354,8 @@ def main(argv=None):
     run_parser = commands.add_parser("run", help="do one task in the agent Chrome, asking questions here")
     run_parser.add_argument("goal")
     run_parser.add_argument("--url", help="start page; found from the goal when omitted")
+    traces_parser = commands.add_parser("traces", help="list the latest task traces")
+    traces_parser.add_argument("--limit", type=int, default=10)
     args = parser.parse_args(argv)
     if args.command == "chrome":
         return chrome()
@@ -342,4 +363,6 @@ def main(argv=None):
         return probe(args.urls)
     if args.command == "run":
         return run(args.goal, args.url)
+    if args.command == "traces":
+        return traces(args.limit)
     return serve()

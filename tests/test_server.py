@@ -1,5 +1,6 @@
 """CLI contracts. The browser check runs only with -m browser."""
 
+import json
 import os
 
 import pytest
@@ -50,3 +51,17 @@ def test_no_command_serves_the_chat(monkeypatch, tmp_path):
 def test_probe_reports_real_status_codes(browser_at, site):
     assert server.verdict(site["a"] + "/forbidden") == "http-403"
     assert server.verdict(site["a"] + "/ops.html") == "ok"
+
+
+def test_traces_lists_the_latest_runs(tmp_path, capsys):
+    folder = tmp_path / "traces"
+    folder.mkdir()
+    (folder / "20260923-101500-diet-coke.json").write_text(json.dumps({
+        "status": "done", "title": "Instamart · Diet Coke", "questions": 3, "steps": [{}] * 12,
+        "elapsed_ms": 61200, "result": {"text": "Ordered.", "evidence": "Order placed #A1B2"}}))
+    (folder / "20260923-102000-uber.json").write_text("{broken")
+    assert server.traces(folder=folder) == 0
+    out = capsys.readouterr().out
+    assert "done" in out and "Instamart · Diet Coke" in out and " 3 questions" in out and "12 steps" in out
+    assert "Order placed #A1B2" in out and "20260923-102000-uber.json  unreadable" in out
+    assert server.traces(folder=tmp_path / "none") == 0 and "No traces yet" in capsys.readouterr().out

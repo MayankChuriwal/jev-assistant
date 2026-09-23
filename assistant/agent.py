@@ -4,14 +4,15 @@ only for what they alone can give, and no model ever sees a secret."""
 import base64
 import json
 import re
+import sys
 import time
 from pathlib import Path
 from urllib.parse import urlparse
 
 from . import jobs, rules
-from .browser import Browser, ExecutionUncertain, StalePage
+from .browser import Browser, ExecutionUncertain, StalePage, unique
 from .model import action_space, choose, field_context, field_value, url_value
-from .profile import CARD_PARTS, SECRETS, Profile, Secrets, Vault
+from .profile import CARD_PARTS, HOME, SECRETS, Profile, Secrets, Vault
 from .questions import MAX_ACTIONS, MAX_DECISIONS
 
 STOPPED = {"done", "blocked", "failed", "cancelled"}
@@ -24,6 +25,9 @@ ASK_TRIES = 5
 OUTCOME_CHECKS = 10
 HELP_ROUNDS = 2
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
+TRACE_STEP = ("step", "operation", "action", "choice", "probability", "confidence", "text", "drop", "files",
+              "page_changed", "url", "elapsed_ms", "unconfirmed")
+TRACE_DECISION = ("operation", "choice", "confidence", "operation_probabilities", "latency_ms", "elapsed_ms")
 
 
 class Halt(Exception):
@@ -45,8 +49,9 @@ def expects(action):
 
 class Agent:
     interrupted = None  # set by the chat: true once the user cancelled or changed the task during a step
+    trace_dir = HOME / "traces"
     def __init__(self, url, goal, *, asker=None, notify=None, profile=None, vault=None, record_dir=None,
-                 screenshots=False, provide_file=None, browser=None, title=None):
+                 screenshots=False, provide_file=None, browser=None, title=None, trace_dir=None):
         goal = goal.strip() if isinstance(goal, str) else "\n".join(goal).strip()
         if not goal:
             raise ValueError("Supply a task")
@@ -55,6 +60,8 @@ class Agent:
         self.vault = vault or Vault()
         self.secrets = Secrets(self.profile.hidden_values())
         self.record_dir = Path(record_dir) if record_dir else None
+        if trace_dir:
+            self.trace_dir = Path(trace_dir)
         self.screenshots = screenshots or bool(record_dir)
         title = title or goal[:60]
         token = SECRETS.set(self.secrets)
@@ -680,8 +687,37 @@ class Agent:
         del browser.downloads[:len(arrived)]
         self.state["files"].extend(arrived)
 
+    def trace(self):
+        """The task as the smoke set judges it, redacted like everything that leaves the task: its outcome, the
+        questions it asked, and every step and decision with probabilities. No screenshots, no request bodies."""
+        s = self.state
+        result = next((m for m in reversed(s["messages"]) if m.get("kind") == "result"), None)
+        return self.secrets.redact({
+            "goal": s["goal"], "title": s["title"], "status": s["status"], "elapsed_ms": s["elapsed_ms"],
+            "result": {"text": result["text"], "evidence": result.get("evidence", "")} if result else None,
+            "questions": sum(m["from"] == "agent" and m.get("kind") not in {"info", "result"} for m in s["messages"]),
+            "messages": [{k: v for k, v in m.items() if k != "image"} for m in s["messages"]],
+            "steps": [{k: h.get(k) for k in TRACE_STEP} for h in s["history"]],
+            "decisions": [{k: d.get(k) for k in TRACE_DECISION} for d in s["decisions"]],
+            "text_calls": s["text_calls"], "memory": s["memory"], "files": [Path(f).name for f in s["files"]],
+        })
+
+    def save_trace(self):
+        """Write the trace to ~/.jev/traces/<time>-<title>.json, readable only by the user."""
+        self.trace_dir.mkdir(parents=True, exist_ok=True)
+        slug = re.sub(r"[^a-z0-9]+", "-", self.state["title"].lower()).strip("-")[:40] or "task"
+        path = unique(self.trace_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{slug}.json")
+        path.write_text(json.dumps(self.trace(), indent=2, ensure_ascii=False, default=str))
+        path.chmod(0o600)
+        return path
+
     def close(self):
-        self.browser.close()
+        try:
+            self.save_trace()
+        except OSError as error:  # a trace is a record: never a reason to leave the tabs open
+            print(f"jev: trace not saved: {error}", file=sys.stderr)
+        finally:
+            self.browser.close()
 
     def __enter__(self):
         return self

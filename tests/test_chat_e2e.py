@@ -15,7 +15,7 @@ from assistant import agent as loop
 from assistant import core as conversation
 from assistant import model, questions
 from assistant.channel_web import WebChannel
-from assistant.profile import Profile
+from assistant.profile import HOME, Profile
 
 pytestmark = pytest.mark.browser
 
@@ -129,3 +129,9 @@ def test_two_goals_in_chat_run_in_parallel_without_leaks(chrome, site, tmp_path,
         assert secret not in everything, secret
     assert not re.search(r"(?<!\d)123(?!\d)", everything)
     assert "482913" not in str(chat.log) and "111111" not in str(chat.log)
+    written = until(lambda: sorted((HOME / "traces").glob("*[0-9]-diet-coke.json")), timeout=15)  # at close
+    trace = written[-1].read_text()
+    shop = jsonlib.loads(trace)
+    assert shop["status"] == "done" and shop["questions"] == 4 and shop["result"]["evidence"] == "Order placed #A1B2"
+    for secret in ("98765", "Mayank", "482913", "111111"):
+        assert secret not in trace, secret
