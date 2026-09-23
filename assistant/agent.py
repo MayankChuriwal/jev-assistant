@@ -166,7 +166,17 @@ class Agent:
         page = self.clean(self.state["browser"].observe(screenshot=False))
         self.state["page"] = page
         self.state["files"].extend(page.get("downloads", []))
+        self.forget_accepted(page)
         return page
+
+    def forget_accepted(self, page):
+        """A value the site took no longer counts against its field: the page moved on and the field is gone.
+        The next code for that field (another login, a bank's OTP) starts with its own attempts."""
+        labels = {a["label"] for a in page["actions"]}
+        for where, typed in list(self.state["typed"].items()):
+            moved = typed.get("url") and urlparse(typed["url"])[1:3] != urlparse(page["url"])[1:3]
+            if moved and where[1] not in labels:
+                del self.state["typed"][where]
 
     def command(self, name, body=None):
         token = SECRETS.set(self.secrets)  # every model request inside this step is redacted for this task
@@ -307,18 +317,19 @@ class Agent:
         return bool(label) and rules.overlap(label, approval["action_label"])
 
     def check_commit(self):
-        """After a commit: success carries on, an explicit failure is reported, anything unclear stops the task."""
+        """After a commit: success carries on, an explicit failure is reported, anything unclear stops the task.
+        Returns the outcome, or None when no commit is waiting."""
         s = self.state
         commit = s["commit"]
         if not commit or s["status"] in STOPPED:
-            return
+            return None
         try:
             outcome, evidence, _ = jobs.outcome(self.context(), s["page"], commit["label"])
         except ValueError:
             outcome, evidence = "unclear", ""  # the commit already ran; an unreadable answer is not a failure
         commit["checks"] += 1
         if outcome == "pending" and commit["checks"] < OUTCOME_CHECKS:
-            return
+            return "pending"
         s["commit"] = None
         if outcome == "success":
             s["memory"].append(f"Done: {commit['label']} ({evidence})")
@@ -332,6 +343,7 @@ class Agent:
         else:
             raise Halt("blocked", f"I can't tell whether {commit['label']} went through. Please check your bank "
                                   "or account before anything is tried again.")
+        return outcome
 
     def offer_card_save(self):
         """After a successful payment with a card typed in this task, offer to keep it in the Keychain."""
@@ -483,7 +495,16 @@ class Agent:
         """(value, shown, source, key) for a field-value answer."""
         kind = form[0]
         if kind == "text":
-            return form[1], form[1], "model", None
+            text = form[1]
+            whole = re.fullmatch(r"\s*\[profile:(\w+)\]\s*", text)
+            try:
+                if "[secret:" in text:
+                    raise KeyError(text)
+                if whole:
+                    return self.profile.value(whole[1]), f"[profile:{whole[1]}]", "profile", whole[1]
+                return re.sub(r"\[profile:(\w+)\]", lambda m: self.profile.value(m[1]), text), text, "model", None
+            except KeyError:  # a placeholder copied from the model's redacted view: never type it
+                raise ValueError("The text model wrote a placeholder instead of a value; nothing typed.") from None
         if kind == "profile":
             return self.profile.value(form[1]), f"[profile:{form[1]}]", "profile", form[1]
         if kind == "secret":
@@ -534,7 +555,7 @@ class Agent:
         before = s["typed"].get(where, {})
         origin = key if source == "vault" else before.get("origin")
         s["typed"][where] = {"source": source, "key": key, "count": before.get("count", 0) + (source != "model"),
-                             "origin": origin}
+                             "origin": origin, "url": page["url"]}
 
     # ---- talking operations
 
@@ -629,6 +650,15 @@ class Agent:
         return False
 
     def finish(self, page):
+        s = self.state
+        if s["commit"]:  # a payment still settling decides whether the task is done
+            label = s["commit"]["label"]
+            outcome = self.check_commit()
+            if outcome != "success":
+                if outcome == "pending":
+                    s["memory"].append(f"Waiting for the result of {label} before finishing.")
+                s["status"] = "ready"
+                return self.snapshot()
         text, evidence, _ = jobs.result(self.context(), page)
         if not evidence:
             text += " I couldn't find proof of this on the page, so please check it yourself."

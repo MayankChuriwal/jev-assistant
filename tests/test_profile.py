@@ -2,10 +2,13 @@
 
 import json
 import stat
+import subprocess
+import threading
 
 import pytest
 
-from assistant.profile import Profile
+from assistant import profile as profiles
+from assistant.profile import Profile, Vault
 
 
 @pytest.fixture
@@ -57,10 +60,7 @@ def test_a_missing_file_is_an_empty_profile(tmp_path):
     assert p.summary()["profile_keys"] == [] and p.geolocation() is None and p.hidden_values() == []
 
 
-import subprocess  # noqa: E402
 import sys  # noqa: E402
-
-from assistant.profile import Vault  # noqa: E402
 
 mac = pytest.mark.skipif(sys.platform != "darwin", reason="macOS Keychain")
 
@@ -135,3 +135,36 @@ def test_phone_numbers_are_hidden_in_local_formats(profile):
     s = Secrets(profile.hidden_values())
     for shown in ("(98765) 43210", "098765 43210", "+91-98765-43210", "98765.43210"):
         assert "98765" not in s.text(f"call {shown} now"), shown
+
+
+def test_a_locked_keychain_never_hangs_the_task(monkeypatch):
+    seen = []
+
+    def hangs(args, **options):
+        seen.append(options.get("timeout"))
+        raise subprocess.TimeoutExpired(args, options.get("timeout"))
+
+    monkeypatch.setattr(profiles.subprocess, "run", hangs)
+    with pytest.raises(KeyError):
+        Vault().get("card.hdfc.cvv")  # the agent then asks for the value in chat instead
+    with pytest.raises(RuntimeError, match="Keychain"):
+        Vault().set("card.hdfc.cvv", "123")
+    assert seen == [profiles.KEYCHAIN_TIMEOUT] * 2
+
+
+def test_parallel_saves_never_collide(tmp_path):
+    p, errors = Profile(tmp_path / "profile.json"), []
+
+    def save_many():
+        try:
+            for _ in range(40):
+                p.save()
+        except Exception as error:
+            errors.append(error)
+
+    threads = [threading.Thread(target=save_many) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == [] and json.loads((tmp_path / "profile.json").read_text())["cards"] == []

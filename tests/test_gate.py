@@ -167,3 +167,18 @@ def test_card_details_typed_during_the_task_can_be_saved_after_success(tmp_path,
                                       ("card.card1111.number", "4111111111111111")]
     assert a.profile.data["cards"][-1] == {"id": "card1111", "label": "Card ••1111", "last4": "1111"}
     assert a.state["card_parts"] == {}
+
+
+def test_done_waits_for_a_payment_that_is_still_settling(tmp_path, monkeypatch):
+    a = agent_with(tmp_path)
+    a.state["commit"] = {"label": "Pay ₹79", "checks": 0}
+    outcomes(monkeypatch, ("pending", ""), ("success", "Order placed #A1B2"))
+    results = []
+    monkeypatch.setattr(loop.jobs, "result",
+                        lambda context, page: results.append(page["url"]) or ("Ordered.", "Order placed #A1B2", META))
+    act(a, decision("DONE", "DONE"))
+    assert a.state["status"] == "ready" and results == [] and a.state["commit"]["checks"] == 1
+    assert a.state["memory"][-1] == "Waiting for the result of Pay ₹79 before finishing."
+    act(a, decision("DONE", "DONE"))
+    assert a.state["status"] == "done" and len(results) == 1
+    assert "Done: Pay ₹79 (Order placed #A1B2)" in a.state["memory"]

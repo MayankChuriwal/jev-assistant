@@ -284,3 +284,16 @@ def test_settle_keeps_downloads_that_finish_late(tmp_path):
     threading.Timer(0.2, finish).start()
     a.settle(timeout=3)
     assert a.state["files"][-1] == "/downloads/invoice.pdf" and a.browser.downloads == []
+
+
+def test_placeholders_the_model_writes_become_the_values_they_name(tmp_path):
+    a = agent_with(tmp_path)
+    phone = next(x for x in a.state["page"]["actions"] if x["id"] == "e1")
+    where = ("shop.test", "Phone number")
+    assert a.resolve(("text", "[profile:phone]"), phone, where) == (
+        "+91 98765 43210", "[profile:phone]", "profile", "phone")
+    assert a.resolve(("text", "Call [profile:name] at gate 4"), phone, where) == (
+        "Call Mayank Churiwal at gate 4", "Call [profile:name] at gate 4", "model", None)
+    for text in ("[secret:card.hdfc.cvv]", "[profile:nickname]"):
+        with pytest.raises(ValueError, match="placeholder"):
+            a.resolve(("text", text), phone, where)

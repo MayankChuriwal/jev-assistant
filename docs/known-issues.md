@@ -26,14 +26,14 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed <commit>` · `won't fix:
 
 | ID | Issue | Where | Status |
 |---|---|---|---|
-| P2-01 | A field's attempt count never resets after the value is accepted, so a later code for the same field starts with used attempts. | `agent.py` | Plan 4 Task 6 |
-| P2-02 | OTP boxes without their own label share one attempt count per site. | `agent.py` | Plan 4 Task 6 |
-| P2-03 | Keychain calls have no timeout, so a Keychain unlock dialog hangs the task. | `profile.py` | Plan 4 Task 6 |
+| P2-01 | A field's attempt count never resets after the value is accepted, so a later code for the same field starts with used attempts. | `agent.py` | fixed (Plan 4 Task 6) |
+| P2-02 | OTP boxes without their own label share one attempt count per site. | `agent.py` | fixed (Plan 4 Task 6): counts reset once the site takes a code |
+| P2-03 | Keychain calls have no timeout, so a Keychain unlock dialog hangs the task. | `profile.py` | fixed (Plan 4 Task 6) |
 | P2-04 | Screenshots only blur secret fields (no disc masking), and a field the page re-renders is not blurred again. | `browser.py` | fixed (Plan 4 Task 5) |
 | P2-05 | In the terminal, typing "yes" at a confirmation declines; only the option number works. | `server.py` `terminal_asker` | open |
 | P2-06 | Temporary image files written by the terminal asker are never deleted. | `server.py` | open |
-| P2-07 | If the text model answers a field with a placeholder such as `[profile:phone]`, those literal characters are typed. | `agent.py` | Plan 4 Task 6 |
-| P2-08 | DONE can finish while a payment's outcome is still pending. | `agent.py` | Plan 4 Task 6 |
+| P2-07 | If the text model answers a field with a placeholder such as `[profile:phone]`, those literal characters are typed. | `agent.py` | fixed (Plan 4 Task 6) |
+| P2-08 | DONE can finish while a payment's outcome is still pending. | `agent.py` | fixed (Plan 4 Task 6) |
 | P2-09 | The terminal prints nothing when a task stops for making no progress. | `server.py` | open |
 
 ## Plan 3 — chat and runner
@@ -49,7 +49,7 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed <commit>` · `won't fix:
 | P3-07 | Files the user sends reach websites under a random media-id name (and `.bin` without a MIME type), not the original filename. | `channel_web.py`, `core.py` | Plan 4 Task 7 |
 | P3-08 | `_forget` iterates the tab-owner map while other task threads add to it, which can raise and leave tabs open. | `browser.py` | open |
 | P3-09 | Cancelled or interrupted downloads stay in the download maps and keep closed browsers in memory. | `browser.py` | open |
-| P3-10 | Parallel tasks share one profile, and concurrent saves use the same temporary file. | `profile.py` | Plan 4 Task 6 |
+| P3-10 | Parallel tasks share one profile, and concurrent saves use the same temporary file. | `profile.py` | fixed (Plan 4 Task 6) |
 | P3-11 | If sending a question fails after it opens, it stays open and blocks every later question. | `core.py` | open |
 | P3-12 | After `jev` restarts, an open chat page gets 403 with its old token and shows "offline, retrying" forever instead of asking for a reload. | `static/app.js` | Plan 4 Task 7 |
 | P3-13 | The attach button stays highlighted if a file question is answered another way. | `static/app.js` | open |

@@ -5,11 +5,14 @@ import json
 import os
 import re
 import subprocess
+import threading
 from pathlib import Path
 
 HOME = Path(os.environ.get("JEV_HOME") or Path.home() / ".jev")
 HIDDEN = ("name", "phone", "email", "upi_id")  # reach models only as [profile:<key>]
 CARD_PARTS = ("number", "expiry", "name", "cvv")
+KEYCHAIN_TIMEOUT = 60  # seconds for the user to answer a Keychain unlock prompt
+SAVING = threading.Lock()  # parallel tasks share one profile
 
 
 class Profile:
@@ -22,11 +25,12 @@ class Profile:
                      "cards": [], "logins": [], **stored}
 
     def save(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data, indent=2, ensure_ascii=False))
-        tmp.chmod(0o600)
-        tmp.replace(self.path)
+        with SAVING:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.data, indent=2, ensure_ascii=False))
+            tmp.chmod(0o600)
+            tmp.replace(self.path)
 
     def value(self, key):
         if key not in HIDDEN or not self.data.get(key):
@@ -94,7 +98,11 @@ class Vault:
 
     def get(self, key):
         args = ["security", "find-generic-password", "-s", self.SERVICE, "-a", key, "-w"]
-        result = subprocess.run(args + ([self.keychain] if self.keychain else []), capture_output=True, text=True)
+        try:
+            result = subprocess.run(args + ([self.keychain] if self.keychain else []), capture_output=True,
+                                    text=True, timeout=KEYCHAIN_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise KeyError(key) from None  # a locked Keychain: the agent asks for the value in chat instead
         if result.returncode:
             raise KeyError(key)
         return result.stdout.removesuffix("\n")
@@ -105,7 +113,11 @@ class Vault:
         command = f"add-generic-password -U -s {self.SERVICE} -a {quote(key)} -w {quote(value)}"
         if self.keychain:
             command += " " + quote(self.keychain)
-        subprocess.run(["security", "-i"], input=command + "\n", capture_output=True, text=True)
+        try:
+            subprocess.run(["security", "-i"], input=command + "\n", capture_output=True, text=True,
+                           timeout=KEYCHAIN_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"The Keychain did not answer (is it locked?); {key} was not stored.") from None
         # `security -i` exits 0 even when a command fails: read the value back.
         try:
             stored = self.get(key)

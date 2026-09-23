@@ -118,3 +118,22 @@ def test_only_the_newest_replacement_reaches_the_keychain(tmp_path, monkeypatch)
     monkeypatch.setattr(loop.jobs, "outcome", lambda context, page, label: ("success", "Pay ₹79", META))
     a.check_commit()
     assert vault.writes == [("card.hdfc.expiry", "12/29")]
+
+
+WAIT_ONLY = [{"id": "wait", "kind": "wait", "label": "Wait", "node": None}]
+
+
+def test_a_code_the_site_took_leaves_the_next_code_its_own_attempts(tmp_path):
+    a = agent_with(tmp_path)
+    page = a.state["page"]
+    code = next(x for x in page["actions"] if x["id"] == "e2")
+    where = ("shop.test", "Code")
+    a.state["unused"][where] = ("482913", "••••", "user", None)
+    a.after_typing(code, page)
+    assert a.state["typed"][where]["count"] == 1 and a.state["typed"][where]["url"] == page["url"]
+    a.browser.observe.return_value = fake_page()  # the same page, the field still there: a rejection still counts
+    a.observe()
+    assert where in a.state["typed"]
+    a.browser.observe.return_value = fake_page(text="Order placed", url="https://shop.test/orders", actions=WAIT_ONLY)
+    a.observe()
+    assert where not in a.state["typed"]  # the site moved on without the field: it took the code
