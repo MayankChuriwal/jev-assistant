@@ -3,6 +3,7 @@
 import base64
 import json
 import struct
+import threading
 import time
 
 import pytest
@@ -194,3 +195,30 @@ def test_the_focused_control_can_be_named(browser_at):
     assert b.focused_label() == "Pay ₹79"
     b.evaluate("document.activeElement.blur()")
     assert b.focused_label() == ""
+
+
+def test_tasks_starting_together_share_one_daemon(chrome, site):
+    from browser_harness.admin import restart_daemon
+
+    from assistant.browser import Browser
+
+    restart_daemon("jev-test")  # no daemon yet: two tasks starting at once must not each spawn or restart one
+    opened, errors = [], []
+
+    def start():
+        try:
+            opened.append(Browser(site["a"] + "/next.html"))
+        except Exception as error:
+            errors.append(error)
+
+    threads = [threading.Thread(target=start) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(60)
+    try:
+        assert errors == [] and len(opened) == 2
+        assert all("Second page." in b.observe()["text"] for b in opened)
+    finally:
+        for b in opened:
+            b.close()

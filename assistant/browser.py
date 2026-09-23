@@ -179,13 +179,15 @@ class EventPump:
 PUMP = EventPump()
 OWNERS = weakref.WeakValueDictionary()  # tab target id -> Browser, so a download reaches the task that started it
 DOWNLOADS = {}  # download guid -> Browser that started it
+DAEMON = threading.Lock()  # tasks starting together must not each spawn or restart the daemon
 
 
 class Browser:
     """One task's tabs in the agent Chrome. Every executed target resolves from an observed node."""
 
     def __init__(self, url, *, downloads=None, geolocation=None):
-        ensure_daemon()
+        with DAEMON:
+            ensure_daemon()
         self.tabs, self.opener, self.frames, self.dialogs, self.titles = {}, {}, {}, {}, {}
         self.alerts, self.downloads, self.pending_downloads = [], [], {}
         self.chooser = self.intercepted = self.after_input = self.active = None
