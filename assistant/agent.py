@@ -3,6 +3,7 @@ only for what they alone can give, and no model ever sees a secret."""
 
 import base64
 import json
+import re
 import time
 from pathlib import Path
 
@@ -18,6 +19,7 @@ PRIVATE = {"browser", "answers", "unused", "pending_vault", "card_parts"}  # hol
 EDITABLE = {"textbox", "searchbox", "spinbutton", "combobox"}
 SAVE_AS = {f"card.{part}" for part in CARD_PARTS}
 ASK_TRIES = 5
+OUTCOME_CHECKS = 10
 
 
 class Halt(Exception):
@@ -212,18 +214,69 @@ class Agent:
         """Execute one browser operation through the commit gate, for Jev's choices and the user's picks alike."""
         if len(self.state["history"]) >= MAX_ACTIONS:
             raise Halt("blocked", f"Stopped at the {MAX_ACTIONS}-action budget.")
-        if not self.gate(operation, action, decision, page):
+        commit = self.gate(operation, action, decision, page)
+        if commit is False:
             return self.snapshot()
         inputs, helper, shown = self.inputs(operation, action, decision, page)
         self.execute(operation, action, decision, page, inputs, helper, shown)
+        if isinstance(commit, str):  # it executed: the approval is spent and the outcome is watched
+            self.state["approval"] = None
+            self.state["commit"] = {"label": commit, "checks": 0}
         self.check_commit()
         return self.snapshot()
 
     def gate(self, operation, action, decision, page):
-        return True
+        """True for ordinary actions; the commit's label once the user approved it; False when they did not."""
+        s = self.state
+        label = rules.commit_label(operation, action, page, decision.get("key"))
+        if not label:
+            return True
+        if not rules.approval_valid(s["approval"], page, len(s["history"])) and not self.confirm(page, label):
+            return False
+        if not s["browser"].fresh(page, action):  # the user may have taken a while
+            raise StalePage("Page changed while waiting for approval. Choose again.")
+        return label
 
     def check_commit(self):
-        pass
+        """After a commit: success carries on, an explicit failure is reported, anything unclear stops the task."""
+        s = self.state
+        commit = s["commit"]
+        if not commit or s["status"] in STOPPED:
+            return
+        outcome, evidence, _ = jobs.outcome(self.context(), s["page"], commit["label"])
+        commit["checks"] += 1
+        if outcome == "pending" and commit["checks"] < OUTCOME_CHECKS:
+            return
+        s["commit"] = None
+        if outcome == "success":
+            s["memory"].append(f"Done: {commit['label']} ({evidence})")
+            for key, value in s["pending_vault"].items():
+                self.vault.set(key, value)
+            s["pending_vault"].clear()
+            self.offer_card_save()
+        elif outcome == "failed":
+            s["memory"].append(f"{commit['label']} failed: {evidence}. Trying again needs a new approval.")
+            self.say(f"{commit['label']} didn't go through: {evidence}")
+        else:
+            raise Halt("blocked", f"I can't tell whether {commit['label']} went through. Please check your bank "
+                                  "or account before anything is tried again.")
+
+    def offer_card_save(self):
+        """After a successful payment with a card typed in this task, offer to keep it in the Keychain."""
+        parts = self.state["card_parts"]
+        number = re.sub(r"\D", "", parts.get("card.number", ""))
+        if len(number) >= 12:
+            last4 = number[-4:]
+            reply = self.ask({"kind": "choice", "text": f"Save the card ending {last4} for next time? It stays in "
+                              "this Mac's Keychain.", "options": [{"id": "save", "label": "Save card"},
+                                                                  {"id": "skip", "label": "Not now"}]})
+            if reply.get("option") == "save":
+                card = f"card{last4}"
+                for key, value in parts.items():
+                    self.vault.set(f"card.{card}.{key.split('.')[1]}", value)
+                self.profile.add_card(card, f"Card ••{last4}", last4)
+                self.say(f"Saved the card ending {last4}.")
+        parts.clear()
 
     def execute(self, operation, action, decision, page, inputs, helper, shown):
         state = self.state
