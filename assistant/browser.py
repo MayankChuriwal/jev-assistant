@@ -313,7 +313,8 @@ class Browser:
         PUMP.flush()
         infos = cdp("Target.getTargets")["targetInfos"]
         self._sync_tabs(infos)
-        self._sync_frames(infos)
+        if not self.dialogs.get(self.session):  # an open dialog freezes the page, Page.getFrameTree included
+            self._sync_frames(infos)
 
     def _frame_ids(self, session):
         ids, stack = [], [self.call("Page.getFrameTree", session)["frameTree"]]
