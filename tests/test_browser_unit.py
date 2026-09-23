@@ -103,3 +103,9 @@ def test_blocked_input_reports_an_open_dialog_instead_of_hanging(monkeypatch):
 def test_download_names_stay_one_safe_component(name):
     cleaned = safe_name(name)
     assert "/" not in cleaned and "\\" not in cleaned and cleaned not in {"", ".", ".."}
+
+
+def test_every_key_jev_can_choose_can_be_pressed():
+    from assistant.questions import KEY_HELP
+
+    assert set(browser.KEYS) == set(KEY_HELP)

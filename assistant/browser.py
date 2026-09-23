@@ -19,6 +19,23 @@ INCOMING = HOME / "downloads" / ".incoming"
 READ_STATE = Path(__file__).with_name("snapshot.js").read_text()
 MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})()"
 VIEWPORT = {"width": 1120, "height": 780}
+DATE_TYPES = {"date", "time", "datetime-local", "month", "week"}
+KEYS = {  # name: (key, code, keyCode, text, modifiers)
+    "Enter": ("Enter", "Enter", 13, "\r", 0),
+    "Escape": ("Escape", "Escape", 27, None, 0),
+    "Tab": ("Tab", "Tab", 9, None, 0),
+    "Shift+Tab": ("Tab", "Tab", 9, None, 8),
+    "ArrowUp": ("ArrowUp", "ArrowUp", 38, None, 0),
+    "ArrowDown": ("ArrowDown", "ArrowDown", 40, None, 0),
+    "ArrowLeft": ("ArrowLeft", "ArrowLeft", 37, None, 0),
+    "ArrowRight": ("ArrowRight", "ArrowRight", 39, None, 0),
+    "PageUp": ("PageUp", "PageUp", 33, None, 0),
+    "PageDown": ("PageDown", "PageDown", 34, None, 0),
+    "Home": ("Home", "Home", 36, None, 0),
+    "End": ("End", "End", 35, None, 0),
+    "Space": (" ", "Space", 32, " ", 0),
+    "Backspace": ("Backspace", "Backspace", 8, None, 0),
+}
 
 GUARD = "(node => { const c = window.__jevFast; return c ? [c.pageKey(), c.guard(c.nodes.get(node))] : null; })"
 LOCATE = "(node => window.__jevFast?.locate(node) ?? null)"
@@ -43,6 +60,16 @@ SCROLL = r"""(({node, x, y}) => {
   (e || window).scrollBy(x * w * 0.8, y * h * 0.8);
   return true;
 })"""
+# Native date/time inputs ignore inserted text; set the value through the element's own setter.
+SET_VALUE = r"""(({node, value}) => {
+  const e = window.__jevFast?.nodes.get(node);
+  if (!e?.isConnected) return false;
+  Object.getOwnPropertyDescriptor(Object.getPrototypeOf(e), 'value').set.call(e, value);
+  e.dispatchEvent(new Event('input', {bubbles: true}));
+  e.dispatchEvent(new Event('change', {bubbles: true}));
+  return e.value === value;
+})"""
+FOCUS = "(node => { const e = window.__jevFast?.nodes.get(node); e?.focus(); return !!e && e.matches(':focus'); })"
 # After input: wait two frames (50 ms cap), or up to 200 ms for a combobox's visible suggestions.
 SETTLE = r"""(action => new Promise(resolve => {
   const field = action.node === null ? null : window.__jevFast?.nodes.get(action.node);
@@ -387,15 +414,110 @@ class Browser:
     def _do_click(self, action, **_):
         self._mouse(*self._point(action))
 
+    def _do_double_click(self, action, **_):
+        x, y = self._point(action)
+        self._mouse(x, y)
+        self._mouse(x, y, count=2)
+
+    def _do_right_click(self, action, **_):
+        self._mouse(*self._point(action), button="right")
+
+    def _do_hover(self, action, **_):
+        x, y = self._point(action)
+        self.input("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
+
     def _do_type_text(self, action, text=None, **_):
         if not isinstance(text, str) or not text:
             raise ValueError("TYPE_TEXT needs a value; nothing typed.")
+        group = action.get("group")
+        if group:
+            if len(text) != len(group):
+                raise ValueError(f"This code needs {len(group)} characters; nothing typed.")
+            for node, char in zip(group, text):
+                self._mouse(*self._point({**action, "node": node}))
+                self.input("Input.insertText", text=char)
+            return
+        if action.get("constraints", {}).get("type") in DATE_TYPES:
+            args = json.dumps({"node": action["node"], "value": text})
+            if not self.evaluate(f"({SET_VALUE})({args})", self._session_for(action.get("frame"))):
+                raise RuntimeError("The field did not accept this value; inspect before retrying.")
+            return
         self._mouse(*self._point(action))
         modifiers = 4 if sys.platform == "darwin" else 2
         self.input("Input.dispatchKeyEvent", type="keyDown", key="a", code="KeyA", modifiers=modifiers,
                    commands=["selectAll"])
         self.input("Input.dispatchKeyEvent", type="keyUp", key="a", code="KeyA", modifiers=modifiers)
         self.input("Input.insertText", text=text)
+
+    def _do_press_key(self, action, key=None, **_):
+        if key not in KEYS:
+            raise ValueError("PRESS_KEY needs a known key; nothing pressed.")
+        if action.get("node") is not None:
+            if action.get("role") == "slider":  # a click would move the thumb; focus it instead
+                if not self.evaluate(f"({FOCUS})({int(action['node'])})", self._session_for(action.get("frame"))):
+                    raise StalePage("Slider changed. Observe again.")
+            else:
+                self._mouse(*self._point(action))
+        name, code, keycode, text, modifiers = KEYS[key]
+        down = {"type": "keyDown" if text else "rawKeyDown", "key": name, "code": code,
+                "windowsVirtualKeyCode": keycode, "nativeVirtualKeyCode": keycode, "modifiers": modifiers}
+        if text:
+            down["text"] = text
+        self.input("Input.dispatchKeyEvent", **down)
+        self.input("Input.dispatchKeyEvent", type="keyUp", key=name, code=code, windowsVirtualKeyCode=keycode,
+                   nativeVirtualKeyCode=keycode, modifiers=modifiers)
+
+    def _do_drag(self, action, drop=None, **_):
+        if not drop or drop.get("node") is None:
+            raise ValueError("DRAG needs an observed drop target; nothing moved.")
+        (sx, sy), (tx, ty) = self._point(action), self._point(drop)
+        self.intercepted = None
+        # HTML5 drag-and-drop never completes from raw mouse events; intercept its data and replay the drop.
+        self.call("Input.setInterceptDrags", enabled=True)
+        try:
+            self.input("Input.dispatchMouseEvent", type="mouseMoved", x=sx, y=sy)
+            self.input("Input.dispatchMouseEvent", type="mousePressed", x=sx, y=sy, button="left", clickCount=1)
+            for step in range(1, 11):
+                self.input("Input.dispatchMouseEvent", type="mouseMoved", button="left",
+                           x=sx + (tx - sx) * step / 10, y=sy + (ty - sy) * step / 10)
+            deadline = time.monotonic() + 0.3
+            while self.intercepted is None and time.monotonic() < deadline:
+                PUMP.flush()
+                time.sleep(0.02)
+            if self.intercepted is not None:
+                for kind in ("dragEnter", "dragOver", "drop"):
+                    self.input("Input.dispatchDragEvent", type=kind, x=tx, y=ty, data=self.intercepted)
+            self.input("Input.dispatchMouseEvent", type="mouseReleased", x=tx, y=ty, button="left", clickCount=1)
+        finally:
+            self.call("Input.setInterceptDrags", enabled=False)
+
+    def _do_upload(self, action, files=None, **_):
+        paths = [str(Path(f).resolve()) for f in files or []]
+        if not paths:
+            raise ValueError("UPLOAD needs at least one file; nothing attached.")
+        missing = [p for p in paths if not Path(p).is_file()]
+        if missing:
+            raise ValueError(f"{missing[0]} does not exist; nothing attached.")
+        if action.get("chooser"):
+            chooser, self.chooser = self.chooser, None
+            if not chooser:
+                raise StalePage("The file picker closed. Observe again.")
+            self.call("DOM.setFileInputFiles", chooser["session"], files=paths if chooser["multiple"] else paths[:1],
+                      backendNodeId=chooser["node"])
+        elif action.get("drop"):
+            x, y = self._point(action)
+            data = {"items": [], "files": paths, "dragOperationsMask": 1}
+            for kind in ("dragEnter", "dragOver", "drop"):
+                self.input("Input.dispatchDragEvent", type=kind, x=x, y=y, data=data)
+        else:
+            session = self._session_for(action.get("frame"))
+            response = self.call("Runtime.evaluate", session,
+                                 expression=f"window.__jevFast?.nodes.get({int(action['node'])}) ?? null")
+            element = response.get("result", {}).get("objectId")
+            if not element:
+                raise StalePage("File input changed. Observe again.")
+            self.call("DOM.setFileInputFiles", session, files=paths if action.get("multiple") else paths[:1],
+                      objectId=element)
 
     def _do_select(self, action, **_):
         args = json.dumps({"node": action["node"], "value": action["value"]})
