@@ -68,3 +68,169 @@ def test_url_value_rejects_everything_else(monkeypatch, content):
     monkeypatch.setattr(model, "post_json", reply(content))
     with pytest.raises(ValueError, match="nothing opened"):
         model.url_value("Order Diet Coke", {"url": "https://a.test/", "title": "A", "text": ""}, [])
+
+
+def choice(ids, selected):
+    return {"choice": selected, "confidence": 1.0, "probabilities": {i: float(i == selected) for i in ids}}
+
+
+def jev(monkeypatch, pick):
+    """Fake TypeSafe. `pick(questions)` returns the answers; every request body is recorded."""
+    calls = []
+
+    def post(_url, _key, body):
+        calls.append(body)
+        return {"model": "test", "answers": pick(body["questions"])}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    return calls
+
+
+def shop():
+    return {
+        "url": "https://shop.test/", "title": "Shop", "text": "Shop", "scroll": {},
+        "actions": [
+            {"id": "e1", "kind": "fill", "label": "Search", "role": "searchbox", "value": "", "node": 1},
+            {"id": "e2", "kind": "click", "label": "Open Search", "role": "searchbox", "value": "", "node": 1},
+            {"id": "e3", "kind": "click", "label": "Diet Coke ₹40", "role": "clickable", "value": "", "node": 2},
+            {"id": "e4", "kind": "select", "label": "Size → 300 ml", "role": "combobox", "value": "300",
+             "current_value": "600 ml", "node": 3},
+            {"id": "e5", "kind": "select", "label": "Size → 1 L", "role": "combobox", "value": "1000",
+             "current_value": "600 ml", "node": 3},
+            {"id": "e6", "kind": "drag", "label": "Alpha", "role": "draggable", "node": 4},
+            {"id": "e7", "kind": "scroll_down", "label": "Panel: Orders", "role": "region", "node": 5},
+            {"id": "e8", "kind": "upload", "label": "File input: Statement", "role": "file", "node": 6},
+            {"id": "e9", "kind": "click", "label": "Quantity", "role": "slider", "value": "1", "node": 7},
+            {"id": "page_scroll_down", "kind": "scroll_down", "label": "Page", "role": "page", "node": None},
+            {"id": "wait", "kind": "wait", "label": "Wait for the page to update", "node": None},
+            {"id": "key_page", "kind": "key", "label": "The page (focused element)", "role": "page", "node": None},
+            {"id": "reload", "kind": "reload", "label": "Reload", "node": None},
+        ],
+    }
+
+
+@pytest.mark.parametrize("mutation", ["unknown", "nan", "missing", "negative", "non_max", "confidence"])
+def test_invalid_choice_is_rejected(mutation):
+    a = choice(["a", "b"], "a")
+    if mutation == "unknown":
+        a["choice"] = "invented"
+    elif mutation == "nan":
+        a["probabilities"]["a"] = float("nan")
+    elif mutation == "missing":
+        del a["probabilities"]["b"]
+    elif mutation == "negative":
+        a["probabilities"]["b"] = -1
+    elif mutation == "non_max":
+        a["choice"] = "b"
+    else:
+        a["confidence"] = 5
+    with pytest.raises(ValueError, match="Invalid TypeSafe"):
+        model.validate_choice(a, {"a", "b"})
+
+
+def test_one_index_per_node_and_compatible_targets_per_question():
+    elements, heads, controls = model.action_space(shop()["actions"])
+    assert [e["index"] for e in elements] == ["1", "2", "3", "4", "5", "6", "7"]
+    assert elements[0]["operations"] == ["TYPE_TEXT", "PRESS_KEY", "CLICK", "DOUBLE_CLICK", "RIGHT_CLICK", "HOVER"]
+    assert heads["type_text_target"] == {"1": shop()["actions"][0]}
+    assert set(heads["click_target"]) == {"1", "2", "7"}
+    assert set(heads["press_key_target"]) == {"1", "7", "key_page"}
+    assert set(heads["select_target"]) == {"3:1", "3:2"}
+    assert elements[2]["options"][1] == {"index": "3:2", "label": "Size → 1 L", "value": "1000"}
+    assert set(heads["scroll_down_target"]) == {"5", "page_scroll_down"}
+    assert set(heads["drag_target"]) == {"1", "2", "5", "7"}
+    assert set(controls) == {"WAIT", "RELOAD"}
+
+
+def test_offered_operations_follow_the_page(monkeypatch):
+    calls = jev(monkeypatch, lambda q: {"operation": choice(q["operation"]["criteria"], "WAIT")})
+    model.choose(shop(), "Order Diet Coke", [])
+    offered = set(calls[0]["questions"]["operation"]["criteria"])
+    assert offered == {"CLICK", "DOUBLE_CLICK", "RIGHT_CLICK", "HOVER", "TYPE_TEXT", "PRESS_KEY", "SELECT", "DRAG",
+                       "SCROLL_DOWN", "UPLOAD", "WAIT", "RELOAD", "DONE", "BLOCKED"}
+    assert "drag_source" in calls[0]["questions"] and "press_key_key" in calls[0]["questions"]
+    lonely = {**shop(), "actions": [a for a in shop()["actions"] if a["kind"] not in {"click", "scroll_down"}]}
+    calls = jev(monkeypatch, lambda q: {"operation": choice(q["operation"]["criteria"], "WAIT")})
+    model.choose(lonely, "Order Diet Coke", [])
+    assert "DRAG" not in calls[0]["questions"]["operation"]["criteria"]
+    assert "drag_source" not in calls[0]["questions"]
+
+
+def test_all_questions_are_one_request_and_only_the_chosen_head_executes(monkeypatch):
+    def pick(q):
+        return {
+            "operation": choice(q["operation"]["criteria"], "TYPE_TEXT"),
+            "type_text_target": choice(["1"], "1"),
+            "click_target": {"choice": "invented"},
+        }
+
+    calls = jev(monkeypatch, pick)
+    d = model.choose(shop(), "Find Diet Coke", [])
+    assert len(calls) == 1
+    assert d["operation"] == "TYPE_TEXT" and d["target"] == "1" and d["choice"] == "e1"
+
+
+def test_click_cannot_consume_a_text_target(monkeypatch):
+    jev(monkeypatch, lambda q: {
+        "operation": choice(q["operation"]["criteria"], "CLICK"),
+        "click_target": choice(["1", "2", "7", "999"], "999"),
+    })
+    with pytest.raises(ValueError, match="Invalid TypeSafe"):
+        model.choose(shop(), "Find Diet Coke", [])
+
+
+def test_drag_reads_its_drop_question_and_rejects_dropping_on_itself(monkeypatch):
+    jev(monkeypatch, lambda q: {
+        "operation": choice(q["operation"]["criteria"], "DRAG"),
+        "drag_source": choice(["4"], "4"),
+        "drag_target": choice(["1", "2", "5", "7"], "5"),
+    })
+    d = model.choose(shop(), "Move Alpha into the orders panel", [])
+    assert d["choice"] == "e6" and d["drop"] == "e7"
+    page = shop()
+    page["actions"][6] = {**page["actions"][6], "kind": "click", "node": 4}
+    jev(monkeypatch, lambda q: {
+        "operation": choice(q["operation"]["criteria"], "DRAG"),
+        "drag_source": choice(["4"], "4"),
+        "drag_target": choice(q["drag_target"]["criteria"], "4"),
+    })
+    with pytest.raises(ValueError, match="Invalid TypeSafe"):
+        model.choose(page, "Move Alpha", [])
+
+
+def test_press_key_reads_its_key_question(monkeypatch):
+    jev(monkeypatch, lambda q: {
+        "operation": choice(q["operation"]["criteria"], "PRESS_KEY"),
+        "press_key_target": choice(["1", "7", "key_page"], "1"),
+        "press_key_key": choice(q["press_key_key"]["criteria"], "Enter"),
+    })
+    d = model.choose(shop(), "Search for Diet Coke", [])
+    assert d["choice"] == "e1" and d["key"] == "Enter"
+
+
+def test_select_and_control_choices_map_to_observed_actions(monkeypatch):
+    jev(monkeypatch, lambda q: {
+        "operation": choice(q["operation"]["criteria"], "SELECT"),
+        "select_target": choice(["3:1", "3:2"], "3:2"),
+    })
+    assert model.choose(shop(), "Pick 1 L", [])["choice"] == "e5"
+    jev(monkeypatch, lambda q: {"operation": choice(q["operation"]["criteria"], "RELOAD")})
+    d = model.choose(shop(), "Pick 1 L", [])
+    assert d["choice"] == "reload" and d["probabilities"] == {"reload": 1.0}
+
+
+def test_target_questions_carry_state_and_the_full_rules(monkeypatch):
+    page = shop()
+    page["actions"].insert(0, {"id": "t", "kind": "click", "label": "Free cancellation", "node": 30,
+                               "role": "checkbox", "checked": "true"})
+
+    def pick(q):
+        target = q["click_target"]
+        assert target["criteria"]["1"]["checked"] == "true"
+        assert q["operation"]["instructions"]["rules"] in target["instructions"]["rules"]
+        return {"operation": choice(q["operation"]["criteria"], "CLICK"),
+                "click_target": choice(target["criteria"], "3")}
+
+    jev(monkeypatch, pick)
+    assert model.choose(page, "Search with free cancellation", [])["choice"] == "e3"  # index 3 is node 2
