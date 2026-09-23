@@ -233,6 +233,10 @@
       if (group && group[0] !== e) continue;  // one action for a whole one-time-code group
       const fill = {...base, kind: 'fill', constraints: constraints(e),
         value: e.type === 'password' ? (e.value ? '[filled]' : '') : 'value' in e ? String(e.value) : e.innerText.trim()};
+      const form = e.form || e.closest('form');
+      const submitter = form?.querySelector(
+        'button:not([type=button]):not([type=reset]),input[type=submit],input[type=image]');
+      if (submitter) fill.submit = label(submitter);  // what Enter in this field would press
       const typed = group ? group.map(b => b.value).join('') : '';
       if (group) Object.assign(fill, {group: group.map(identity), value: group.every(safe) ? typed : typed ? '[filled]' : '',
         label: e.closest('[aria-label]')?.getAttribute('aria-label') || 'One-time code'});

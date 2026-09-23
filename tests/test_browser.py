@@ -1,11 +1,14 @@
 """Observation and core execution against local fixtures in a real headless Chrome. Run: uv run pytest -m browser"""
 
+import base64
 import json
+import struct
 import time
 
 import pytest
 from helpers import find, log
 
+from assistant import rules
 from assistant.browser import StalePage
 
 pytestmark = pytest.mark.browser
@@ -155,3 +158,30 @@ def test_countdowns_do_not_make_every_decision_stale(browser_at):
     page = b.observe()
     b.evaluate("document.getElementById('total').textContent = 'Total ₹790'")
     assert not b.fresh(page, find(page, "Verify"))
+
+
+def test_fields_know_the_button_that_enter_submits(browser_at):
+    page = browser_at("/pay-button.html").observe()
+    assert find(page, "CVV", "fill")["submit"] == "Pay ₹79"
+    assert "submit" not in find(browser_at("/guards.html").observe(), "City", "fill")
+
+
+def test_amount_inside_the_pay_button_is_verbatim(browser_at):
+    page = browser_at("/pay-button.html").observe()
+    assert rules.verbatim("₹79", page["text"])
+
+
+def test_screenshots_crop_to_an_element_and_blur_secret_fields(browser_at):
+    b = browser_at("/pay-button.html")
+    page = b.observe()
+    b.act("TYPE_TEXT", find(page, "Card number", "fill"), page, text="4111111111111111")
+    page = b.observe()
+    card = find(page, "Card number", "fill")
+    plain = base64.b64decode(b.screenshot(card))
+    masked = base64.b64decode(b.screenshot(card, masked={(None, card["node"])}))
+    width, height = struct.unpack(">II", plain[16:24])
+    assert abs(width - (card["rect"]["w"] + 32)) <= 2 and abs(height - (card["rect"]["h"] + 32)) <= 2
+    assert plain != masked
+    assert b.evaluate("document.getElementById('card').style.filter") == ""
+    whole = base64.b64decode(b.screenshot())
+    assert struct.unpack(">II", whole[16:24]) == (1120, 780)

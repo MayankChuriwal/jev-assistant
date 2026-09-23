@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Pay</title></head>
+<body>
+<script>window.log = [];</script>
+<form onsubmit="event.preventDefault(); log.push('paid')">
+  <label>Card number <input id="card" inputmode="numeric"></label>
+  <label>CVV <input id="cvv" type="password" inputmode="numeric" maxlength="3"></label>
+  <button>Pay ₹79</button>
+</form>
+</body>
+</html>

@@ -93,6 +93,16 @@ SET_VALUE = r"""(({node, value}) => {
   return e.value === value;
 })"""
 FOCUS = "(node => { const e = window.__jevFast?.nodes.get(node); e?.focus(); return !!e && e.matches(':focus'); })"
+# Blur fields that hold secrets for the duration of a capture that leaves the process.
+MASK = r"""((ids, on) => {
+  const c = window.__jevFast;
+  for (const id of ids) {
+    const e = c?.nodes.get(id);
+    if (!e) continue;
+    if (on) { e.dataset.jevFilter = e.style.filter; e.style.filter = 'blur(12px)'; }
+    else { e.style.filter = e.dataset.jevFilter || ''; delete e.dataset.jevFilter; }
+  }
+})"""
 # After input: wait two frames (50 ms cap), or up to 200 ms for a combobox's visible suggestions.
 SETTLE = r"""(action => new Promise(resolve => {
   const field = action.node === null ? null : window.__jevFast?.nodes.get(action.node);
@@ -520,6 +530,30 @@ class Browser:
         if point is None:
             raise StalePage("Target changed or is covered. Observe again.")
         return point["x"], point["y"]
+
+    def screenshot(self, action=None, masked=(), pad=16):
+        """Base64 PNG of the viewport, or of an element's region, with fields that hold secrets blurred."""
+        by_frame = {}
+        for frame, node in masked:
+            by_frame.setdefault(frame, []).append(node)
+        params = {"format": "png"}
+        if action is not None and action.get("rect") and action.get("node") is not None:
+            x, y = self._point(action)
+            w, h = action["rect"]["w"], action["rect"]["h"]
+            params["clip"] = {"x": max(0, x - w / 2 - pad), "y": max(0, y - h / 2 - pad),
+                              "width": w + 2 * pad, "height": h + 2 * pad, "scale": 1}
+        self._mask(by_frame, True)
+        try:
+            return self.call("Page.captureScreenshot", **params)["data"]
+        finally:
+            self._mask(by_frame, False)
+
+    def _mask(self, by_frame, on):
+        for frame, nodes in by_frame.items():
+            try:
+                self.evaluate(f"({MASK})({json.dumps(nodes)}, {json.dumps(on)})", self._session_for(frame))
+            except (StalePage, RuntimeError, TimeoutError):
+                pass  # the frame is gone, so nothing of it can appear in the capture
 
     def _mouse(self, x, y, button="left", count=1):
         self.input("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
