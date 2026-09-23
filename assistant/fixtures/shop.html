@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shop</title>
+<style>
+  body { font: 15px system-ui, sans-serif; margin: 20px; }
+  section { display: none; } section.on { display: block; }
+  label { display: block; margin: 6px 0; } .otp input { width: 28px; text-align: center; }
+</style>
+</head>
+<body>
+<script>window.log = [];</script>
+<section id="login" class="on">
+  <h1>Log in</h1>
+  <form onsubmit="event.preventDefault(); sent.textContent = 'Code sent to •••• ' + phone.value.replace(/\D/g, '').slice(-4); show('otp')">
+    <label>Phone number <input id="phone" type="tel"></label>
+    <button>Continue</button>
+  </form>
+</section>
+<section id="otp">
+  <h1>Verify</h1>
+  <p id="sent"></p>
+  <div class="otp" aria-label="One-time code">
+    <input maxlength="1" inputmode="numeric"><input maxlength="1" inputmode="numeric"><input maxlength="1" inputmode="numeric"><input maxlength="1" inputmode="numeric"><input maxlength="1" inputmode="numeric"><input maxlength="1" inputmode="numeric">
+  </div>
+  <p id="otp-error" role="alert"></p>
+  <button type="button" onclick="verify()">Verify</button>
+</section>
+<section id="checkout">
+  <h1>Checkout</h1>
+  <p>Diet Coke 300 ml × 1 — ₹40</p>
+  <p>Delivery ₹39</p>
+  <p>Total ₹79</p>
+  <fieldset>
+    <legend>Deliver to</legend>
+    <label><input type="radio" name="address" value="home"> Home — 12 MG Road</label>
+    <label><input type="radio" name="address" value="office"> Office — 4 Residency Road</label>
+  </fieldset>
+  <p>Pay with HDFC Visa ••1234</p>
+  <label>CVV <input id="cvv" type="password" inputmode="numeric" maxlength="3"></label>
+  <p id="pay-error" role="alert"></p>
+  <button type="button" onclick="pay()">Pay ₹79</button>
+</section>
+<section id="done">
+  <h1>Order placed #A1B2</h1>
+  <p>Arriving in 12 minutes.</p>
+</section>
+<script>
+  const show = id => document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === id));
+  const boxes = () => [...document.querySelectorAll('.otp input')];
+  boxes().forEach((box, i) => box.addEventListener('input', () => { if (box.value && boxes()[i + 1]) boxes()[i + 1].focus(); }));
+  function verify() {
+    const code = boxes().map(b => b.value).join('');
+    log.push('otp:' + code);
+    if (code === '482913') return show('checkout');
+    document.getElementById('otp-error').textContent = 'Invalid OTP. Try again.';
+    boxes().forEach(b => b.value = '');
+  }
+  function pay() {
+    const address = document.querySelector('[name=address]:checked')?.value;
+    const cvv = document.getElementById('cvv').value;
+    log.push(`pay:${address}:${cvv.length}`);  // never the CVV itself
+    if (address && cvv === '123') return show('done');
+    document.getElementById('pay-error').textContent = address ? 'Incorrect CVV.' : 'Choose an address.';
+  }
+</script>
+</body>
+</html>
