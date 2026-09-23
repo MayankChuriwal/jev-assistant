@@ -4,7 +4,7 @@ import re
 from urllib.parse import urlparse
 
 from .model import text_json
-from .questions import COMPOSE, CONFIRM_CARD, HELP, HINT, NOTE_FACTS, OUTCOME, REMEMBER, RESULT, START
+from .questions import CHAT, COMPOSE, CONFIRM_CARD, HELP, HINT, NOTE_FACTS, OUTCOME, REMEMBER, RESULT, START
 from .rules import verbatim
 
 KINDS = {"text", "secret", "choice"}
@@ -124,3 +124,11 @@ def remember(question, answer):
     if not value:
         raise invalid("preference")
     return value, meta
+
+
+def chat(message, tasks):
+    out, meta = text_json(CHAT, {"message": message, "tasks": tasks})
+    text = words(out, "text", 1000)
+    if not text:
+        raise invalid("reply")
+    return text, meta

@@ -148,3 +148,22 @@ KEY_HELP = {
 
 MAX_ACTIONS = 150
 MAX_DECISIONS = 300
+
+
+INTENTS = {
+    "ANSWER": "Answers the question the assistant just asked.",
+    "AMEND": "Changes something about an existing task: quantity, item, address, payment, time, or destination.",
+    "NEW_TASK": "Asks for a new, separate task.",
+    "CANCEL": "Stops or cancels an existing task.",
+    "STATUS": "Asks how a task is going or what is happening.",
+    "OTHER": "Anything else: thanks, greetings, small talk.",
+}
+
+INTENT_RULE = """Read the user's chat message in the context of their tasks and the open question, and choose what
+the message does. A short reply to the open question ("Home", "yes", "2") is ANSWER."""
+
+TASK_RULE = """Choose the task the message is about, or "none" for a new request or a message about no task."""
+
+CHAT = """Reply to the user's chat message in one or two short sentences. When they ask about progress, say for each
+task in tasks what it is doing now and whether it is waiting for them. Never invent progress.
+Return JSON {"text": "..."}."""

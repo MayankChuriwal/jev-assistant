@@ -9,7 +9,19 @@ from urllib.parse import urlparse
 import httpx
 
 from .profile import CARD_PARTS, SECRETS
-from .questions import FIELD_VALUE, HEAD_PREMISE, KEY_HELP, KEY_RULE, NEXT_ACTION, OPERATIONS, TARGET, URL_VALUE
+from .questions import (
+    FIELD_VALUE,
+    HEAD_PREMISE,
+    INTENT_RULE,
+    INTENTS,
+    KEY_HELP,
+    KEY_RULE,
+    NEXT_ACTION,
+    OPERATIONS,
+    TARGET,
+    TASK_RULE,
+    URL_VALUE,
+)
 
 CLIENT = httpx.Client(http2=True, timeout=25)
 
@@ -282,3 +294,28 @@ def url_value(goal, page, history):
     if set(output) != {"url"} or not parsed or parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("Text model returned no valid http(s) URL; nothing opened.")
     return url, meta
+
+
+def classify(message, tasks, chat):
+    """Jev's reading of one chat message: (intent, task id or "none", intent probabilities)."""
+    targets = {t["id"]: {k: t[k] for k in ("title", "goal", "step", "open_question") if t.get(k)} for t in tasks}
+    targets["none"] = "No existing task: a new request, or a message about no task"
+    body = {
+        "model": os.environ.get("TYPESAFE_MODEL", "jev-latest"),
+        "state": {"message": message, "tasks": tasks, "recent_chat": chat[-6:]},
+        "questions": {
+            "intent": {"type": "choice", "criteria": INTENTS,
+                       "instructions": {"message": message, "rules": INTENT_RULE}},
+            "task": {"type": "choice", "criteria": targets, "instructions": {"message": message, "rules": TASK_RULE}},
+        },
+    }
+    result = post_json("https://api.typesafe.ai/v1/systemone", os.environ["TYPESAFE_API_KEY"], body)
+    intent = validate_choice(result["answers"].get("intent", {}), INTENTS)
+    task = validate_choice(result["answers"].get("task", {}), targets)
+    return intent["choice"], task["choice"], intent["probabilities"]
+
+
+def ambiguous(probabilities):
+    """Too close to call: the top intent is under 0.6, or within 0.2 of the second."""
+    top, second = (sorted(probabilities.values(), reverse=True) + [0.0, 0.0])[:2]
+    return top < 0.6 or top - second < 0.2
