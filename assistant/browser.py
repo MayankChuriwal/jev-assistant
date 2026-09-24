@@ -106,7 +106,7 @@ MASK = r"""((ids, on, hide) => {
   const roots = c?.roots?.length ? c.roots : [document];
   if (!on) {
     for (const e of roots.flatMap(r => [...r.querySelectorAll('[data-jev-mask]')])) {
-      [e.style.filter, e.style.webkitTextSecurity] = JSON.parse(e.dataset.jevMask);
+      [e.style.filter, e.style.webkitTextSecurity, e.style.opacity] = JSON.parse(e.dataset.jevMask);
       delete e.dataset.jevMask;
     }
     return true;
@@ -125,11 +125,14 @@ MASK = r"""((ids, on, hide) => {
     const walker = (r.ownerDocument || r).createTreeWalker(r.body || r, NodeFilter.SHOW_TEXT);
     for (let n; (n = walker.nextNode());) if (n.parentElement && shows(n.textContent)) texts.push(n.parentElement);
   }
-  for (const e of new Set([...ids.map(id => c?.nodes.get(id)).filter(Boolean), ...filled, ...texts])) {
+  const explicit = new Set(ids.map(id => c?.nodes.get(id)).filter(Boolean));
+  for (const e of new Set([...explicit, ...filled, ...texts])) {
     if (e.dataset.jevMask) continue;
-    e.dataset.jevMask = JSON.stringify([e.style.filter, e.style.webkitTextSecurity]);
+    e.dataset.jevMask = JSON.stringify([e.style.filter, e.style.webkitTextSecurity, e.style.opacity]);
     e.style.filter = 'blur(12px)';
     e.style.webkitTextSecurity = 'disc';
+    // Explicitly masked fields must not vary with their value or caret in a capture.
+    if (explicit.has(e)) e.style.opacity = '0';
   }
   return true;
 })"""

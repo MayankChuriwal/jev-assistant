@@ -202,7 +202,7 @@
     const section = e.closest('section,article,[role="region"],fieldset');
     const heading = section?.querySelector('h1,h2,h3,h4,h5,h6,legend,[role="heading"]') ||
       e.closest('h1,h2,h3,h4,h5,h6');
-    return {form: (form?.getAttribute('aria-label') || form?.getAttribute('name') ||
+    return {form_node: form ? identity(form) : null, form: (form?.getAttribute('aria-label') || form?.getAttribute('name') ||
       form?.querySelector('legend')?.textContent || '').trim().slice(0, 120),
     section: (heading?.textContent || section?.getAttribute('aria-label') || '').trim().slice(0, 120),
     placeholder: (e.getAttribute('placeholder') || '').slice(0, 120),

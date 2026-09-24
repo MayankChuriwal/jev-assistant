@@ -580,9 +580,9 @@ class Agent:
             if not commit.can_commit(self.task, proposal):
                 self.confirm(page, action['label'], action, effect_id=effect_id)
                 return self.snapshot()
-        captcha = self.validate_captcha_action(operation, action, page)
+        captcha = self.validate_captcha_action(operation, action, page, key=decision.get('key'))
         inputs, helper, shown = self.inputs(operation, action, decision, page)
-        if captcha and captcha['kind'] == 'text':
+        if captcha and captcha['kind'] == 'text' and operation == 'TYPE_TEXT':
             inputs = {'text': captcha['value']}
             shown = captcha['value']
         self.stop_if_interrupted()
@@ -594,7 +594,7 @@ class Agent:
         bound = commit.bind_decision(self.task, decision, page, assessment=kind, effect_id=effect_id)
         def execute():
             # Recheck image-bound human input at the final executor boundary.
-            self.validate_captcha_action(operation, action, page)
+            self.validate_captcha_action(operation, action, page, key=decision.get('key'))
             def consume_input():
                 if self._field_pending:
                     payload, cid, ref = self._field_pending
@@ -629,6 +629,7 @@ class Agent:
                 self.secrets.nodes.add((action.get('frame'), node))
         if receipt['status'] == 'not_dispatched':
             raise StalePage('The selected action was not dispatched')
+        self.record_captcha_execution(operation, action, receipt)
         self.observe()  # journal receipt exists before any post-dispatch read
         self.state['history'][-1]['page_changed'] = self.state['page']['fingerprint'] != page['fingerprint']
         if self.interrupted and self.interrupted():
@@ -688,8 +689,8 @@ class Agent:
 
     def inputs(self, operation, action, decision, page):
         if operation == 'TYPE_TEXT':
-            captcha = self.validate_captcha_action(operation, action, page)
-            if captcha and captcha['kind'] == 'text':
+            captcha = self.validate_captcha_action(operation, action, page, key=decision.get('key'))
+            if captcha and captcha['kind'] == 'text' and operation == 'TYPE_TEXT':
                 return {'text': captcha['value']}, None, captcha['value']
             value, shown, helper = self.field_input(action, page)
             return {'text': value}, helper, shown
@@ -885,13 +886,49 @@ class Agent:
                     constraints=action.get('constraints') or {}, frame=frame,
                     frame_origin=f'{parsed.scheme}://{parsed.netloc}')
 
+    @staticmethod
+    def captcha_page_key(page, field_id):
+        content = deepcopy({k: page[k] for k in ('url', 'text', 'actions', 'scroll')})
+        for action in content['actions']:
+            if action['id'] == field_id:
+                action.pop('value', None)
+        return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
+
+    def captcha_image_digest(self, challenge):
+        masked = self.secrets.nodes | set(challenge.get('masked_fields', []))
+        image = self.browser.marked_screenshot(challenge['marks'], masked=masked, hide=self.hidden_details())
+        return hashlib.sha256(image.encode()).hexdigest()
+
+    def record_captcha_execution(self, operation, action, receipt):
+        for c in self.task.challenges.values():
+            if c.get('purpose') != 'captcha' or c.get('kind') != 'text' or c.get('status') == 'expired':
+                continue
+            if c.get('status') == 'answer_applied':
+                c['status'] = 'submitted'  # includes unknown; never replay submission
+            elif operation == 'TYPE_TEXT' and receipt['status'] == 'executed':
+                c.update(status='checking_application', applied_execution_id=receipt['execution_id'])
+
+    def refresh_applied_captcha(self, c, page, oid):
+        fact = self.task.facts.get('captcha:' + c['id'], {})
+        field = next((a for a in page['actions'] if a['id'] == c.get('text_field')), None)
+        receipt = self.task.executions.get(c.get('applied_execution_id'), {})
+        if (c.get('status') in {'checking_application', 'answer_applied'} and fact.get('valid')
+                and receipt.get('status') == 'executed' and receipt.get('operation') == 'TYPE_TEXT'
+                and field and field.get('value') == fact['value']['value']
+                and c['structure_key'] == self.captcha_page_key(page, c['text_field'])
+                and c['image_digest'] == self.captcha_image_digest(c)):
+            c.update(status='answer_applied', observation_id=oid, page_fingerprint=page['fingerprint'])
+            fact['observation_id'] = oid
+            return True
+        return False
+
     def refresh_challenges(self, page):
         oid = next(reversed(self.task.observations))
         for cid, challenge in self.task.challenges.items():
             if challenge.get('purpose') == 'captcha':
-                # Every new observation requires a fresh displayed round, even when
-                # DOM text is unchanged: image challenges can replace pixels alone.
-                if challenge.get('observation_id') != oid:
+                # New rounds expire unless a text answer is proven applied to the
+                # same unchanged challenge; pixels can change without DOM changes.
+                if challenge.get('observation_id') != oid and not self.refresh_applied_captcha(challenge, page, oid):
                     challenge['status'] = 'expired'
                     if 'captcha:' + cid in self.task.facts:
                         self.task.facts['captcha:' + cid]['valid'] = False
@@ -928,30 +965,30 @@ class Agent:
         for cid, c in self.task.challenges.items():
             if c.get('purpose') != 'captcha' or c.get('status') == 'expired':
                 continue
-            image = self.browser.marked_screenshot(c['marks'], masked=self.secrets.nodes, hide=self.hidden_details())
             if (c['page_fingerprint'] != page['fingerprint']
-                    or c['image_digest'] != hashlib.sha256(image.encode()).hexdigest()):
+                    or c['image_digest'] != self.captcha_image_digest(c)):
                 c['status'] = 'expired'
                 fact = self.task.facts.get('captcha:' + cid)
                 if fact:
                     fact['valid'] = False
 
-    def validate_captcha_action(self, operation, action, page):
+    def validate_captcha_action(self, operation, action, page, *, key=None):
         if operation in {'WAIT', 'SCROLL', 'LOOK', 'COPY'}:
             return None
         challenges = [c for c in self.task.challenges.values() if c.get('purpose') == 'captcha'
                       and c.get('status') != 'expired']
         if not challenges:
-            if rules.captcha_challenge(page):
+            known = any(c.get('purpose') == 'captcha' and c.get('structure_key') ==
+                        self.captcha_page_key(page, c.get('text_field')) for c in self.task.challenges.values())
+            if rules.captcha_challenge(page) or known:
                 raise Halt('blocked', 'This challenge needs a fresh human answer in chat.')
             return None
         c = challenges[-1]
         fact = self.task.facts.get('captcha:' + c['id'], {})
         current = next(reversed(self.task.observations))
-        image = self.browser.marked_screenshot(c['marks'], masked=self.secrets.nodes, hide=self.hidden_details())
         if (not fact.get('valid') or c['observation_id'] != current
                 or c['page_fingerprint'] != page['fingerprint']
-                or c['image_digest'] != hashlib.sha256(image.encode()).hexdigest()
+                or c['image_digest'] != self.captcha_image_digest(c)
                 or not self.browser.fresh(page)):
             fact['valid'] = False
             c['status'] = 'expired'
@@ -962,7 +999,11 @@ class Agent:
             allowed = operation == 'CLICK' and action['id'] in targets
         else:
             fields = [a for a in page['actions'] if a['kind'] == 'fill']
-            allowed = operation == 'TYPE_TEXT' and len(fields) == 1 and action == fields[0]
+            if c.get('status') == 'answer_applied':
+                allowed = ((operation == 'CLICK' and action['id'] in c['submit_targets'])
+                           or (operation == 'PRESS_KEY' and key == 'Enter' and action['id'] == c['text_field']))
+            else:
+                allowed = operation == 'TYPE_TEXT' and len(fields) == 1 and action == fields[0]
         if not allowed:
             raise Halt('blocked', 'The selected operation does not match the current human challenge answer.')
         return answer
@@ -1045,6 +1086,19 @@ class Agent:
             tiles=labels, targets={label: a['id'] for label, a in zip(labels, marks)},
             page_fingerprint=page['fingerprint'], marks=deepcopy(marks),
             image_digest=hashlib.sha256(image.encode()).hexdigest())
+        fields = [a for a in page['actions'] if a['kind'] == 'fill']
+        field = fields[0] if kind == 'text' and len(fields) == 1 else None
+        challenge['text_field'] = field['id'] if field else None
+        challenge['structure_key'] = self.captcha_page_key(page, challenge['text_field'])
+        challenge['masked_fields'] = [(field.get('frame'), field.get('node'))] if field else []
+        challenge['submit_targets'] = [a['id'] for a in marks if field
+            and a.get('frame') == field.get('frame')
+            and ((field.get('context') or {}).get('form_node') == (a.get('context') or {}).get('form_node')
+                 if (field.get('context') or {}).get('form_node') else
+                 any((field.get('context') or {}).get(k) and (field.get('context') or {})[k] ==
+                     (a.get('context') or {}).get(k) for k in ('form', 'section')))
+            and a['label'].strip().lower() in {'verify', 'verify captcha', 'submit', 'submit captcha'}]
+        challenge['image_digest'] = self.captcha_image_digest(challenge)
         self.task.challenges[cid] = challenge
         reply = self.ask({'kind': 'image', 'image': image, 'challenge_id': cid,
             'text': 'Type the text exactly as shown.' if kind == 'text' else 'Reply with the tile labels to select.'})
