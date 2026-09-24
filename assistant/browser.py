@@ -206,6 +206,10 @@ class StalePage(ValueError):
     """A decision no longer refers to the observed page."""
 
 
+class ReservationBlocked(RuntimeError):
+    """A task-owned request was stopped before accessing another reserved account."""
+
+
 class ExecutionUncertain(RuntimeError):
     """Input may already have reached the page. Never retried: the task stops and reports it."""
 
@@ -284,6 +288,29 @@ def watch_popups():
 def on_browser_event(event):
     """Runs on the pump thread. Tabs report their own downloads; this handles the ones pop-ups start."""
     method, params = event["method"], event.get("params", {})
+    if method == 'Target.attachedToTarget':
+        info, session = params['targetInfo'], params['sessionId']
+        parent = info.get('openerId') or info.get('parentFrameId')
+        owner = OWNERS.get(parent) or next((o for o in list(OWNERS.values())
+                if parent in o.guard_targets or parent in o.frames), None)
+        if owner and owner.reserve_origin is not None:
+            owner.guard_targets[info['targetId']] = session
+            PUMP.register(session, owner._on_event)
+            try:
+                owner._guard_requests(session)
+            except Exception:
+                owner.reservation_blocked = True
+                return  # Never resume an owned child before its request gate is installed.
+        def resume_child():
+            try:
+                cdp('Runtime.runIfWaitingForDebugger', session_id=session)
+            except (RuntimeError, TimeoutError):
+                if owner and owner.reserve_origin is not None:
+                    owner.reservation_blocked = True
+        # Renderer resume can await its paused Document request. Keep the event
+        # pump free to resolve that Fetch event rather than waiting on itself.
+        threading.Thread(target=resume_child, daemon=True).start()
+        return
     if method in {"Target.targetCreated", "Target.targetInfoChanged"} and params["targetInfo"].get("openerId"):
         OPENERS[params["targetInfo"]["targetId"]] = params["targetInfo"]["openerId"]
     elif method == "Target.targetDestroyed":
@@ -338,10 +365,17 @@ def forget_sites(sites):
 class Browser:
     """One task's tabs in the agent Chrome. Every executed target resolves from an observed node."""
 
-    def __init__(self, url, *, downloads=None, geolocation=None):
+    def __init__(self, url, *, downloads=None, geolocation=None, reserve_origin=None):
         with DAEMON:
             ensure_daemon()
             watch_popups()
+            if reserve_origin is not None:
+                # Harness routes Target.* at browser scope. Its shared watcher owns
+                # paused-child dispatch; do not install a per-page auto-attach handler.
+                cdp('Target.setAutoAttach', autoAttach=True, waitForDebuggerOnStart=True, flatten=True)
+        self.reserve_origin = reserve_origin
+        self.reservation_blocked = False
+        self.guard_targets, self.guard_sessions = {}, set()
         self.tabs, self.opener, self.frames, self.dialogs, self.titles = {}, {}, {}, {}, {}
         self.alerts, self.downloads, self.pending_downloads = [], [], {}
         self.chooser = self.intercepted = self.after_input = self.active = None
@@ -402,7 +436,9 @@ class Browser:
         return self.frames[frame]["session"]
 
     def _adopt(self, target, opener=None):
-        session = cdp("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
+        session = self.guard_targets.get(target)
+        if session is None:
+            session = cdp("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
         self.tabs[target] = session
         OWNERS[target] = self
         if opener:
@@ -418,6 +454,7 @@ class Browser:
         if self.geolocation:
             self.call("Emulation.setGeolocationOverride", session, accuracy=50, **self.geolocation)
         PUMP.register(session, self._on_event)
+        self._guard_requests(session)
         return target
 
     def _route_downloads(self, session):
@@ -447,7 +484,20 @@ class Browser:
     def _on_event(self, event):
         """Runs on the pump thread."""
         method, params, session = event["method"], event.get("params", {}), event.get("session_id")
-        if method == "Page.javascriptDialogOpening":
+        if method == 'Fetch.requestPaused':
+            url = params.get('request', {}).get('url', '')
+            try:
+                allowed = (not self.reservation_blocked and self.reserve_origin is not None
+                           and self.reserve_origin(url))
+            except Exception:
+                allowed = False
+            if allowed:
+                cdp('Fetch.continueRequest', session_id=session, requestId=params['requestId'])
+            else:
+                self.reservation_blocked = True
+                cdp('Fetch.failRequest', session_id=session, requestId=params['requestId'],
+                    errorReason='BlockedByClient')
+        elif method == "Page.javascriptDialogOpening":
             if params["type"] == "alert":
                 self.alerts.append(params["message"])
                 cdp("Page.handleJavaScriptDialog", session_id=session, accept=True)
@@ -469,6 +519,18 @@ class Browser:
             name = owner.pending_downloads.pop(params["guid"], None)
             if name:
                 owner.downloads.append(owner._store_download(params["guid"], name))
+
+    def _guard_requests(self, session):
+        if self.reserve_origin is None or session in self.guard_sessions:
+            return
+        # Subresources can also access account endpoints. Gate every request,
+        # including redirects, before Chrome sends it rather than trusting its type.
+        self.call('Fetch.enable', session, patterns=[{'urlPattern': '*', 'requestStage': 'Request'}])
+        self.guard_sessions.add(session)
+
+    def check_reservation(self):
+        if getattr(self, 'reservation_blocked', False):
+            raise ReservationBlocked('The destination account is reserved; browser access was blocked.')
 
     def _store_download(self, guid, name):
         source = INCOMING / guid
@@ -493,6 +555,7 @@ class Browser:
         except TimeoutError:
             PUMP.flush()  # no dialog: a slow server; the load wait below still applies
         self._wait_loaded(previous)
+        self.check_reservation()
 
     def _time_origin(self):
         try:
@@ -505,6 +568,7 @@ class Browser:
         # ponytail: a same-document (hash) navigation waits the full deadline; add a URL check if that matters.
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            self.check_reservation()
             if self.dialogs.get(self.session):
                 return  # a dialog freezes the page; observe offers it
             try:
@@ -630,7 +694,9 @@ class Browser:
         }
 
     def observe(self, screenshot=False):
+        self.check_reservation()
         self._sync()
+        self.check_reservation()
         page = None
         if not self.dialogs.get(self.session):
             self._settle()
@@ -652,6 +718,7 @@ class Browser:
         page["downloads"] = self.downloads[:]
         del self.downloads[:len(page["downloads"])]
         page["fingerprint"] = fingerprint(page)
+        self.check_reservation()
         return page
 
     def fresh(self, page, action=None):
@@ -1150,12 +1217,16 @@ class Browser:
         self._close_dialog(False)
 
     def close(self):
-        for target in list(self.tabs):
+        for target in list(set(self.tabs) | set(self.guard_targets)):
             try:
                 cdp("Target.closeTarget", targetId=target)
             except (RuntimeError, TimeoutError):
                 pass
             self._forget(target)
+        for session in self.guard_sessions:
+            PUMP.unregister(session)
+        self.guard_sessions.clear()
+        self.guard_targets.clear()
 
 
 def merge(parts):

@@ -171,3 +171,51 @@ def test_secret_submission_captures_question_and_clears_composer(chat):
     assert event['question_id'] == 'identity-A' and event['secret_reply'] is True
     assert js(chat, "document.getElementById('text').value") == ''
     assert '482913' not in js(chat, 'document.body.innerText')
+
+
+def test_secret_draft_is_cleared_when_polling_advances_question(chat):
+    chat.core.open = {'id': 'secret-draft', 'secret': True}
+    chat.channel.send('local', {'type': 'text', 'text': {'body': 'Enter code'}})
+    assert until(lambda: js(chat, "document.getElementById('text').type") == 'password')
+    js(chat, "document.getElementById('text').value = '482913'")
+    chat.core.open = {'id': 'ordinary-next', 'secret': False}
+    chat.channel.send('local', {'type': 'text', 'text': {'body': 'Which address?'}})
+    assert until(lambda: js(chat, "document.getElementById('text').type") == 'text')
+    assert js(chat, "document.getElementById('text').value") == ''
+    js(chat, "document.getElementById('composer').requestSubmit()")
+    assert chat.core.events == []
+    assert '482913' not in js(chat, 'document.body.innerText')
+
+
+def test_button_without_question_identity_preserves_json_null(chat):
+    chat.channel.send('local', {'type': 'interactive', 'x_question': None, 'interactive': {
+        'type': 'button', 'body': {'text': 'Remember choice'}, 'action': {'buttons': [
+            {'type': 'reply', 'reply': {'id': 'remember:1', 'title': 'Remember'}}]}}})
+    assert until(lambda: js(chat, "document.querySelector('.choice') !== null"))
+    js(chat, "document.querySelector('.choice').click()")
+    assert until(lambda: chat.core.events)
+    assert chat.core.events[0]['question_id'] is None
+
+
+def test_real_core_remember_consent_button_saves_once(chat, tmp_path):
+    from assistant.core import Core, Question, Task
+    from assistant.profile import Profile
+    core = Core(chat.channel, profile=Profile(tmp_path / 'profile.json'),
+                remember=lambda question, answer: ('Chosen default: ' + answer, {}))
+    chat.httpd.core = core
+    task = Task('t', 'Choose a destination')
+    core.tasks[task.id] = task
+    question = Question(next(core.question_ids), task,
+        {'kind': 'choice', 'text': 'Destination?', 'remember': True,
+         'options': [{'id': 'home', 'label': 'Home'}]}, core.clock())
+    core.queue.append(question)
+    core.show_next()
+    assert until(lambda: js(chat, "document.querySelector('.choice')?.textContent") == 'Home')
+    js(chat, "document.querySelector('.choice').click()")
+    assert until(lambda: core.open is not None and core.open.message['kind'] == 'confirm')
+    assert until(lambda: js(chat,
+        "[...document.querySelectorAll('.choice')].some(b => b.textContent === 'Remember this')"))
+    js(chat, "[...document.querySelectorAll('.choice')].find(b => b.textContent === 'Remember this').click()")
+    assert until(lambda: core.profile.data['preferences'])
+    assert core.profile.data['preferences'] == [{'text': 'Chosen default: Home', 'from_task': task.goal}]
+    assert core.showing() is None

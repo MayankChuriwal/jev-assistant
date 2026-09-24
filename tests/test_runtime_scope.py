@@ -314,3 +314,15 @@ def test_reconciliation_constraint_cannot_dispatch_input(tmp_path):
     act(a, decision('e4', 'CLICK'))
     assert a.state['status'] == 'blocked'
     a.browser.act.assert_not_called()
+
+
+def test_network_reservation_block_prevents_talk_and_coordinator(tmp_path, monkeypatch):
+    from assistant.browser import ReservationBlocked
+    a = agent_with(tmp_path)
+    a.reserve_origin = lambda _: True
+    a.browser.check_reservation.side_effect = ReservationBlocked('account reserved')
+    a.coordinate = lambda *_: pytest.fail('blocked account must not reach coordinator')
+    monkeypatch.setattr(loop, 'choose', lambda *_: decision('DONE', 'DONE'))
+    a.command('tick')
+    assert a.state['status'] == 'blocked'
+    a.browser.act.assert_not_called()

@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from . import commit, coordinator, interaction, jobs, messages, model, rules
 from .agent import STOPPED, Agent
+from .browser import ReservationBlocked
 from .profile import SECRETS, Profile, Secrets, Vault
 from .state import TaskState, observe_state, put_fact
 
@@ -23,7 +24,13 @@ ACTIVE = {"starting", "waiting", "running", "paused", "blocked", "waiting_user",
 
 
 def site(url):
-    host = urlparse(url).netloc.lower()
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower().encode("idna").decode("ascii")
+    if ":" in host:
+        host = f"[{host}]"
+    port = parsed.port
+    if port is not None and (parsed.scheme, port) not in {("http", 80), ("https", 443)}:
+        host += f":{port}"
     for prefix in ("www.", "m."):
         host = host.removeprefix(prefix)
     return host
@@ -74,6 +81,7 @@ class Core:
         self.remember_job = remember or jobs.remember
         self.clock, self.poll = clock, poll
         self.lock = threading.RLock()
+        self.reservation_lock = threading.RLock()
         self.inbound = threading.Lock()
         self.seen_events = set()
         self.slots = threading.Condition(self.lock)
@@ -83,8 +91,8 @@ class Core:
         self.secrets = Secrets(self.profile.hidden_values())  # classification never sees the profile's values
 
     def agent_for(self, url, goal, title, asker, notify, *, task):
-        agent = Agent(url, goal, title=title, asker=asker, notify=notify, profile=self.profile, task=task.flow)
-        agent.reserve_origin = lambda origin: self.reserve(task, origin, self.account(task))
+        agent = Agent(url, goal, title=title, asker=asker, notify=notify, profile=self.profile, task=task.flow,
+                      reserve_origin=lambda origin: self.reserve_access(task, origin))
         agent.resolve_upload = lambda media_id: str(self.channel.media(media_id)[0])
         return agent
 
@@ -164,14 +172,18 @@ class Core:
                     return self.cancel(current.task)
                 if qid != str(current.id) or not secret_reply:
                     return self.say("Please submit the hidden answer with the current question.")
+                # Bind, redact and route without releasing the scheduling lock. A timeout
+                # cannot turn this protected event into an ordinary message between checks.
+                self.log.append({"from": "user", "text": "••••"})
+                return self.answer(current, event)
         if not event.get("reply_id") and not secret_reply:
             text = (event.get("text") or "").strip()
             if text == "/cleanup-legacy-cards" or text.startswith("/default "):
                 return self.local_choice(text)
-        if (event.get("reply_id") or "").startswith("remember:"):
-            return self.remember(event["reply_id"].partition(":")[2])  # a model call: outside the lock
         with self.lock:
-            question = self.open
+            if self.open is not current:
+                return self.say("That question has expired; please answer the current question.")
+            question = current
             secret = question is not None and question.message["kind"] == "secret"
             text = (event.get("text") or "").strip()
             self.log.append({"from": "user", "text": "" if event.get("reply_id") else ("••••" if secret else text)})
@@ -320,14 +332,23 @@ class Core:
                 self.open = None
             if question.message.get("remember") and reply.get("option"):
                 self.offer_remember(question, reply["option"])
+            if getattr(question, 'remember_consent', False):
+                if reply.get('option') == 'yes':
+                    threading.Thread(target=self.remember, args=(str(question.id),), daemon=True).start()
+                else:
+                    self.remembering.pop(str(question.id), None)
             self.show_next()
         question.answered.set()
 
     def offer_remember(self, question, option):
         label = next((o["label"] for o in question.message["options"] if o["id"] == option), None)
         if label:
-            self.remembering[str(question.id)] = (question.message["text"], label, question.task.goal)
-            self.buttons(f"Remember “{label}” for next time?", [(f"remember:{question.id}", "Remember this")])
+            consent = Question(next(self.question_ids), question.task,
+                {"kind": "confirm", "text": f"Remember “{label}” for next time?",
+                 "options": [{"id": "yes", "label": "Remember this"}, {"id": "no", "label": "No"}]}, self.clock())
+            consent.remember_consent = True
+            self.remembering[str(consent.id)] = (question.message["text"], label, question.task.goal)
+            self.queue.append(consent)
 
     def remember(self, key):
         item = self.remembering.pop(key, None)
@@ -454,6 +475,10 @@ class Core:
                     task.flow.set_status('blocked')
                     self.say('The file could not be delivered. Resume to retry delivery.', task)
                     break
+        except ReservationBlocked as error:
+            task.status = 'blocked'
+            task.flow.set_status('blocked')
+            self.say(str(error), task)
         except Exception as error:  # the start job, launching the browser, anything: say it once
             self.say(f"I couldn't carry on with {task.title}: {error}", task)
         finally:
@@ -462,7 +487,8 @@ class Core:
                 if hasattr(task.agent, 'stop'):
                     task.agent.stop()
             state = task.agent.state["status"] if task.agent else None
-            task.status = state if state in STOPPED else ("cancelled" if task.cancelled else "failed")
+            task.status = (state if state in STOPPED else 'blocked' if task.status == 'blocked'
+                           else "cancelled" if task.cancelled else "failed")
             if task.recovery_rows and not task.cancelled:
                 task.status = 'blocked'
                 task.flow.status = 'blocked'
@@ -634,7 +660,7 @@ class Core:
         host = site(origin) if "://" in origin else origin
         if not host:
             return False
-        with self.lock:
+        with self.reservation_lock:
             # Drop an unused old provider even if the destination is busy; no hold-and-wait.
             if not self.pending(task):
                 for key in list(task.reservations):
@@ -656,8 +682,22 @@ class Core:
             task.flow.progress["account_reservation_key"] = host + ":" + (account or "unknown")
             return True
 
+    def reserve_access(self, task, origin):
+        """Network callbacks use a separate lock and never wait for scheduling/browser work."""
+        host = site(origin)
+        if not host:
+            return False
+        with self.reservation_lock:
+            if any(other_host == host and owner != task.id
+                   for (other_host, _account), owner in self.reservations.items()):
+                return False
+            key = (host, None)  # A redirect/data request has no independently verified account identity yet.
+            self.reservations[key] = task.id
+            task.reservations.add(key)
+            return True
+
     def release(self, task):
-        with self.lock:
+        with self.reservation_lock:
             if self.pending(task):
                 return
             for key in task.reservations:

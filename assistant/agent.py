@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from . import commit, coordinator, interaction, jobs, model, rules
-from .browser import Browser, StalePage, unique
+from .browser import Browser, ReservationBlocked, StalePage, unique
 from .model import action_space, choose, field_context, field_value, url_value
 from .profile import HOME, SECRETS, Profile, Secrets, Vault
 from .state import (
@@ -135,6 +135,11 @@ class Agent:
             if halt.status in {'cancelled', 'failed'}:
                 self.release_secrets()
             return self.snapshot()
+        except ReservationBlocked as error:
+            self.task.set_status('blocked')
+            self.state.update(status='blocked', decision=None)
+            self.say(str(error))
+            return self.snapshot()
         except StalePage:
             raise
         except (ValueError, RuntimeError) as error:
@@ -172,6 +177,9 @@ class Agent:
 
     def stop_if_interrupted(self):
         """A cancel or a change from the user arrived while this step was decided: decide again with it."""
+        if (getattr(self, 'reserve_origin', None) is not None
+                and getattr(self, 'browser', None) is not None):
+            self.browser.check_reservation()
         if self.interrupted and self.interrupted():
             self.state["status"] = "ready"
             raise StalePage("The user cancelled or changed the task. Choose again.")
@@ -238,11 +246,13 @@ class Agent:
         self.close()
 
     def __init__(self, url, goal, *, asker=None, notify=None, profile=None, vault=None, record_dir=None,
-                 screenshots=False, provide_file=None, browser=None, title=None, trace_dir=None, task=None):
+                 screenshots=False, provide_file=None, browser=None, title=None, trace_dir=None, task=None,
+                 reserve_origin=None):
         goal = goal.strip() if isinstance(goal, str) else '\n'.join(goal).strip()
         if not goal:
             raise ValueError('Supply a task')
         self.asker, self.notify, self.provide_file = asker, notify, provide_file
+        self.reserve_origin = reserve_origin
         self.profile, self.vault = profile or Profile(), vault or Vault()
         self.secrets = Secrets(self.profile.hidden_values())
         self.record_dir = Path(record_dir) if record_dir else None
@@ -277,7 +287,10 @@ class Agent:
                 initial_messages = self.state['messages']
                 url, selected_title, _ = jobs.start(self.context())
                 title = title or selected_title
-            self.browser = browser or Browser(url, geolocation=None)
+            browser_options = {'geolocation': None}
+            if reserve_origin is not None:
+                browser_options['reserve_origin'] = reserve_origin
+            self.browser = browser or Browser(url, **browser_options)
             page = self.clean(self.browser.observe(screenshot=False))
             self.state = self.new_state(self.browser, self.task.goal, title or goal[:60], page, bool(record_dir))
             self.state['messages'] = initial_messages
@@ -404,6 +417,8 @@ class Agent:
     def resume(self):
         self.task.set_status('running')
         self.state.update(status='ready', decision=None)
+        if getattr(self.browser, 'reserve_origin', None) is not None:
+            self.browser.reservation_blocked = False
         self.observe()
         pending = any(e.get('commitment') and e.get('outcome') not in {'success', 'failed'}
                       and e.get('status') != 'not_dispatched' for e in self.task.executions.values())
@@ -559,7 +574,7 @@ class Agent:
         if (self.task.constraints.get('read_only_reconciliation')
                 and operation not in {'LOOK', 'WAIT', 'COPY', 'SCROLL', 'OPEN_URL'}):
             raise Halt('blocked', 'Read-only reconciliation cannot submit input or repeat the interrupted action.')
-        if hasattr(self, 'reserve_origin') and not self.reserve_origin(page['url']):
+        if getattr(self, 'reserve_origin', None) is not None and not self.reserve_origin(page['url']):
             raise Halt('blocked', 'This account is reserved by another task with an unresolved outcome.')
         if operation == 'LOOK':
             return self.look(page, 'Observe missing controls')
@@ -706,7 +721,7 @@ class Agent:
             if urlparse(url).scheme not in {'http', 'https'} or not urlparse(url).hostname:
                 raise ValueError('Invalid navigation URL')
             self.validate_navigation(url, page)
-            if hasattr(self, 'reserve_origin') and not self.reserve_origin(url):
+            if getattr(self, 'reserve_origin', None) is not None and not self.reserve_origin(url):
                 raise Halt('blocked', 'The destination account is reserved by another task.')
             return {'url': url}, helper, url
         if operation == 'PRESS_KEY':

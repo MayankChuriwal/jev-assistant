@@ -56,7 +56,7 @@ function choices(b, m) {
     button.addEventListener('click', () => {
       group.querySelectorAll('button').forEach(x => { x.disabled = true; });
       button.classList.add('picked');
-      send({type: 'interactive', context: {id: m.x_id}, x_question_id: String(m.x_question), x_secret_reply: false,
+      send({type: 'interactive', context: {id: m.x_id}, x_question_id: m.x_question == null ? null : String(m.x_question), x_secret_reply: false,
             interactive: {type: kind, [kind]: {id: option.id, title: option.title}}}, option.title);
     });
     group.append(button);
@@ -162,6 +162,9 @@ async function poll() {
       for (const m of messages) {
         show(m);
         after = Math.max(after, m.x_seq);
+      }
+      if (openQuestion?.secret && (!open || String(open.id) !== String(openQuestion.id) || !open.secret)) {
+        input.value = ''; // Never reveal or rebind a draft when its protected question expires/changes.
       }
       openQuestion = open;
       secretFor = open && open.secret && open.id !== answered ? open.id : null; // the server knows what is open

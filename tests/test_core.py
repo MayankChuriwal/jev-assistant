@@ -10,7 +10,7 @@ from assistant import core as conversation
 from assistant.channel_web import WebChannel
 from assistant.profile import Profile
 
-ADDRESS = {"kind": "choice", "text": "Deliver to which address?", "remember": True,
+ADDRESS = {"kind": "choice", "text": "Deliver to which address?", "remember": False,
            "options": [{"id": "o1", "label": "Home"}, {"id": "o2", "label": "Office"}]}
 OTP = {"kind": "secret", "text": "Enter the OTP.", "expects": {"length": 6}}
 
@@ -248,12 +248,12 @@ def test_unclear_messages_ask_which_task_they_are_for(world):
 
 
 def test_a_remember_button_follows_an_answered_choice(world):
-    world.scripts["Order Diet Coke"] = [ask(ADDRESS)]
+    world.scripts["Order Diet Coke"] = [ask({**ADDRESS, "remember": True})]
     text(world, "Order Diet Coke")
     assert until(lambda: interactive(world))
     tap(world, "q1:o1")
-    assert until(lambda: buttons(world) == ["remember:1"])
-    tap(world, "remember:1")
+    assert until(lambda: buttons(world) == ["q2:yes", "q2:no"])
+    tap(world, "q2:yes")
     assert until(lambda: "Saved for next time: Default choice: Home" in bodies(world))
     assert world.core.profile.data["preferences"][-1] == {"text": "Default choice: Home",
                                                           "from_task": "Order Diet Coke"}
@@ -968,3 +968,55 @@ def test_provider_reply_can_explicitly_choose_comparison(world):
     facts = world.core.prepare(conversation.Task('t', 'Find delivery'))
     assert facts['compare'] is True and facts['provider'] is None
     assert any('OTP' in b or 'login' in b for b in bodies(world))
+
+
+def test_secret_advance_at_validation_lock_exit_never_reclassifies(world):
+    task = conversation.Task('t', 'A')
+    secret = conversation.Question(1, task, OTP, 0)
+    ordinary = conversation.Question(2, task, {'kind': 'text', 'text': 'Where?'}, 0)
+    world.core.open, world.core.queue = secret, [secret, ordinary]
+    base = world.core.lock
+    class AdvanceOnUnlock:
+        depth = 0
+        advanced = False
+        def __enter__(self):
+            base.acquire()
+            self.depth += 1
+            return self
+        def __exit__(self, *_):
+            self.depth -= 1
+            if not self.depth and not self.advanced:
+                self.advanced = True
+                world.core.open = ordinary
+                world.core.queue = [ordinary]
+            base.release()
+    world.core.lock = AdvanceOnUnlock()
+    world.core.classify = lambda *_: pytest.fail('bound secret must never reach a classifier')
+    world.core.receive({'id': 'race', 'text': '482913', 'question_id': '1', 'secret_reply': True})
+    assert not ordinary.answered.is_set()
+    assert '482913' not in str(world.core.log)
+
+
+def test_remember_consent_is_a_tracked_question_and_old_tap_is_inert(world):
+    task = conversation.Task('t', 'A')
+    original = conversation.Question(1, task, ADDRESS, 0)
+    world.core.offer_remember(original, 'o1')
+    world.core.show_next()
+    consent = world.core.open
+    assert consent is not None and consent.message['kind'] == 'confirm'
+    assert world.core.showing()['id'] == str(consent.id)
+    tap(world, f'q{consent.id}:yes')
+    assert until(lambda: world.core.profile.data['preferences'])
+    newer = conversation.Question(999, task, OTP, 0)
+    world.core.open, world.core.queue = newer, [newer]
+    tap(world, f'q{consent.id}:yes')
+    assert len(world.core.profile.data['preferences']) == 1 and not newer.answered.is_set()
+
+
+def test_network_reservations_use_canonical_host_not_url_credentials(world):
+    holder, visitor = conversation.Task('h', 'Hold'), conversation.Task('v', 'Visit')
+    assert world.core.reserve(holder, 'https://shop.test', None)
+    assert not world.core.reserve_access(visitor, 'https://user:password@shop.test/private')
+    assert not world.core.reserve_access(visitor, 'https://shop.test:443/private')
+    assert world.core.reserve(holder, 'https://bücher.test', None)
+    assert not world.core.reserve_access(visitor, 'https://xn--bcher-kva.test/private')
