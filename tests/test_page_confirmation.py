@@ -17,9 +17,18 @@ pytestmark = pytest.mark.browser
                                               ('old-total', 'blocked'), ('wrong-item', 'blocked'),
                                               ('unrelated', 'blocked'), ('pending-line', 'blocked'),
                                               ('unsuccessful', 'blocked'), ('history', 'blocked'),
+                                              ('your-history', 'blocked'), ('my-history', 'blocked'),
+                                              ('link-history', 'blocked'),
+                                              ('order-cancelled', 'blocked'),
+                                              ('subscription-cancel', 'done'), ('booking-cancel', 'done'),
                                               ('final-total', 'blocked'), ('amount-charged', 'blocked')])
 def test_page_confirmation_is_bound_to_current_order(chrome, site, tmp_path, monkeypatch, variant, expected):
     sent = []
+    cancelling = variant in {'subscription-cancel', 'booking-cancel'}
+    item = ('Stream Plan cancellation' if variant == 'subscription-cancel' else
+            'Booking cancellation' if variant == 'booking-cancel' else 'Green tea × 1')
+    action = ('Cancel subscription' if variant == 'subscription-cancel' else
+              'Cancel booking' if variant == 'booking-cancel' else 'Place order')
 
     def text(system, payload):
         if system.startswith('Classify the external effect'):
@@ -29,18 +38,22 @@ def test_page_confirmation_is_bound_to_current_order(chrome, site, tmp_path, mon
             ids = current_evidence(task)
             result = assessment()
             if payload['event'] == 'start':
-                result['completion'] = [dict(id='order', description='Order Green tea × 1',
+                result['completion'] = [dict(id='order', description=action+' '+item,
                     kind='action', material_keys=['ordered_item'], evidence_ids=[],
                     execution_id=None, artifact_id=None)]
             if 'Final review' in payload['untrusted_page']['text']:
-                result['facts'] = [dict(key='ordered_item', value='Green tea × 1', source='page',
+                result['facts'] = [dict(key='ordered_item', value=item, source='page',
                     scope='task', revision=task['revision'], depends_on=[], evidence=ids, valid=True)]
             if payload['event'] == 'confirmation':
                 result['proposal'] = dict(task_id=task['task_id'], revision=task['revision'],
-                    action='Place order', service='Market A', account='', destination='Home — 12 MG Road',
-                    items=['Green tea × 1'], option='', timing='Tomorrow', payment='Cash',
-                    currency='INR', total_minor=13400, total_kind='exact', later_terms=[],
-                    lines=[dict(id='item', label='Green tea × 1', amount_minor=9500, currency='INR',
+                    action=action, service='Market A' if not cancelling else item, account='',
+                    destination='' if cancelling else 'Home — 12 MG Road',
+                    items=[item], option='', timing='' if cancelling else 'Tomorrow',
+                    payment='' if cancelling else 'Cash',
+                    currency=None if cancelling else 'INR', total_minor=None if cancelling else 13400,
+                    total_kind='not_applicable' if cancelling else 'exact', later_terms=[],
+                    lines=[] if cancelling else [dict(id='item', label='Green tea × 1',
+                                amount_minor=9500, currency='INR',
                                 role='item', included_in=None, evidence_ids=ids),
                            dict(id='fee', label='Delivery fee', amount_minor=3900, currency='INR',
                                 role='fee', included_in=None, evidence_ids=ids)], evidence_ids=ids)
@@ -51,6 +64,8 @@ def test_page_confirmation_is_bound_to_current_order(chrome, site, tmp_path, mon
                 result['outcome'] = dict(status=status, evidence_ids=ids, artifact_id=None)
             return result
         if system == questions.REVIEW_AMOUNTS:
+            if cancelling:
+                return {}
             return dict(exponent=2, total_text='₹134', total_quote='Total ₹134',
                         amounts={'item': '₹95', 'fee': '₹39'},
                         line_quotes={'item': 'Green tea × 1 ₹95', 'fee': 'Delivery fee ₹39'})
@@ -80,7 +95,7 @@ def test_page_confirmation_is_bound_to_current_order(chrome, site, tmp_path, mon
             answers = {'operation': choice(q['operation']['criteria'], op)}
             if op == 'CLICK':
                 criteria = q['click_target']['criteria']
-                target = next(i for i, row in criteria.items() if 'Place order' in row['element'])
+                target = next(i for i, row in criteria.items() if action in row['element'])
                 answers['click_target'] = choice(criteria, target)
             return Response({'model': 'scripted', 'answers': answers})
         output = text(json['messages'][0]['content'], __import__('json').loads(json['messages'][1]['content']))
@@ -93,7 +108,7 @@ def test_page_confirmation_is_bound_to_current_order(chrome, site, tmp_path, mon
     def answer(question):
         approvals.append(question)
         return {'option': 'yes'}
-    with loop.Agent(site['a']+f'/page-confirmation.html?variant={variant}', 'Order Green tea × 1',
+    with loop.Agent(site['a']+f'/page-confirmation.html?variant={variant}', action+' '+item,
                     asker=answer, profile=Profile(tmp_path/'p.json')) as agent:
         agent.outcome_pause = 0.1
         list(agent.run())

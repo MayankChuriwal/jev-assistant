@@ -964,6 +964,8 @@ def record_terminal_receipt(state, execution_id: str, *, status: str, evidence_i
 
 
 _TERMINAL_BY_ACTION = (
+    (re.compile(r'\bcancel\b', re.I), re.compile(
+        r'\b(subscription cancelled|booking cancelled|cancellation confirmed)\b', re.I)),
     (re.compile(r'\b(order|purchase|buy|pay)\b', re.I), re.compile(
         r'\b(order placed|order confirmed|purchase confirmed|payment successful)\b', re.I)),
     (re.compile(r'\b(ride|book)\b', re.I), re.compile(
@@ -971,8 +973,6 @@ _TERMINAL_BY_ACTION = (
     (re.compile(r'\b(send|message)\b', re.I), re.compile(r'\bmessage sent\b', re.I)),
     (re.compile(r'\b(submit|dispute|claim)\b', re.I), re.compile(
         r'\b(dispute submitted|claim submitted|request submitted|form submitted)\b', re.I)),
-    (re.compile(r'\bcancel\b', re.I), re.compile(
-        r'\b(subscription cancelled|booking cancelled|cancellation confirmed)\b', re.I)),
 )
 _TERMINAL_REFERENCE = re.compile(r'(?:#|\b(?:reference|ref|order id|booking id)\s*[:# ]\s*)([A-Z0-9-]{4,})\b',
                                  re.I)
@@ -981,8 +981,9 @@ _CONTRADICTORY_STATUS = re.compile(
     r'rejected|cancelled|canceled|provisional|not\s+(?:yet\s+)?(?:completed|confirmed|successful)|'
     r'in\s+progress|unable\s+to)\b', re.I)
 _HISTORY_CONTEXT = re.compile(
-    r'^(?:(?:previous|past|recent)\s+(?:orders|bookings|transactions)|'
-    r'(?:order|booking|transaction)\s+history)\b', re.I)
+    r'\b(?:(?:previous|past|recent|older)\s+(?:orders|bookings|transactions)|'
+    r'(?:order|booking|transaction)\s+history|'
+    r'(?:your|my)\s+(?:orders|bookings|transactions))\b', re.I)
 _PAYABLE_LABEL = re.compile(
     r'^(?:(?:final|grand)\s+total|total(?:\s+paid)?|'
     r'amount\s+(?:charged|paid|due|payable)|fare(?:\s+paid)?|charged|paid)\b', re.I)
@@ -1035,8 +1036,14 @@ def record_page_confirmation(state, execution_id: str, *, evidence_ids: list[str
     if len(terminal_lines) != 1 or terminal_lines[0] in before['text']:
         return False
     page_lines = second['text'].splitlines()
-    if any(_CONTRADICTORY_STATUS.search(line) or _HISTORY_CONTEXT.match(line.strip())
-           for line in page_lines):
+    cancel_action = bool(re.search(r'\bcancel\b', action, re.I))
+    if any(_HISTORY_CONTEXT.search(line) for line in page_lines):
+        return False
+    if any(statuses and not (cancel_action and terminal.match(line.strip())
+                             and all(status.group().casefold() in {'cancelled', 'canceled'}
+                                     for status in statuses))
+           for line in page_lines
+           if (statuses := list(_CONTRADICTORY_STATUS.finditer(line)))):
         return False
     terminal_positions = [index for index, line in enumerate(page_lines) if terminal.match(line.strip())]
     if len(terminal_positions) != 1 or terminal_lines[0] not in page_lines[terminal_positions[0]]:

@@ -7,6 +7,16 @@
 const variant=new URLSearchParams(location.search).get('variant')||'success';
 window.log=[];
 const review=document.getElementById('review'),result=document.getElementById('result');
+const cancelling=variant==='subscription-cancel'||variant==='booking-cancel';
+const item=variant==='subscription-cancel'?'Stream Plan cancellation':'Booking cancellation';
+if(cancelling){
+  review.replaceChildren();
+  for(const value of ['Final review',item]){
+    const p=document.createElement(value==='Final review'?'h1':'p');p.textContent=value;review.append(p);
+  }
+  const button=document.createElement('button');button.id='place';button.type='button';
+  button.textContent=variant==='subscription-cancel'?'Cancel subscription':'Cancel booking';review.append(button);
+}
 if(variant==='old'){
   const old=document.createElement('p');old.textContent='Order placed #ORD-4821';review.prepend(old);
 }
@@ -14,12 +24,13 @@ document.getElementById('place').onclick=()=>{
   log.push('place');review.hidden=true;result.hidden=false;
   const render=processing=>{
     result.replaceChildren();
-    const heading=processing||variant==='processing'?'Order processing #ORD-4821':
+    const heading=cancelling?(variant==='subscription-cancel'?'Subscription cancelled #CAN-4821':'Booking cancelled #CAN-4821'):
+      processing||variant==='processing'?'Order processing #ORD-4821':
       variant==='unrelated'?'Message sent #MSG-4821':
       variant==='unsuccessful'?'Order placed #ORD-4821 unsuccessful':'Order placed #ORD-4821';
-    const item=variant==='wrong-item'?'Black tea × 1':'Green tea × 1';
+    const resultItem=cancelling?item:variant==='wrong-item'?'Black tea × 1':'Green tea × 1';
     const total=variant==='wrong-amount'?'Total ₹150':'Total ₹134';
-    for(const value of [heading,item,total]){
+    for(const value of cancelling?[heading,resultItem]:[heading,resultItem,total]){
       const p=document.createElement('p');p.textContent=value;result.append(p);
     }
     if(variant==='old-total'){
@@ -32,8 +43,14 @@ document.getElementById('place').onclick=()=>{
     if(variant==='pending-line'){
       const pending=document.createElement('p');pending.textContent='Payment pending';result.append(pending);
     }
-    if(variant==='history'){
-      const old=document.createElement('h2');old.textContent='Previous orders';result.prepend(old);
+    if(['history','your-history','my-history','link-history'].includes(variant)){
+      const old=document.createElement('h2');
+      old.textContent=variant==='your-history'?'Your previous orders':
+        variant==='my-history'?'My order history':
+        variant==='link-history'?'See your previous orders':'Previous orders';result.prepend(old);
+    }
+    if(variant==='order-cancelled'){
+      const adverse=document.createElement('p');adverse.textContent='Order cancelled';result.append(adverse);
     }
   };
   render(variant==='delayed');
