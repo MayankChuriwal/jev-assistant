@@ -10,9 +10,22 @@
 <section><h2>Login</h2><form aria-label="Login"><label>Code <input placeholder="Login code"></label></form></section>
 <section><h2>Payment</h2><form aria-label="Payment"><label>Code <input placeholder="Payment code"></label></form></section>
 <div id="countdown">Resend code in 0:29</div>
+<section id="captcha" hidden aria-label="Human CAPTCHA">
+  <p>Type the characters shown: <span role="img" aria-label="CAPTCHA image">002468</span></p>
+  <label>CAPTCHA text <input inputmode="numeric" maxlength="6"></label>
+  <p>Select the requested tiles</p>
+  <button type="button" data-tile="A1">Tile A1</button>
+  <button type="button" data-tile="B2">Tile B2</button>
+</section>
 <div id="controls"></div><div id="long"></div><iframe id="remote" title="Remote status"></iframe>
 <script>
   window.log = [];
+  if (location.search.includes('captcha')) {
+    document.getElementById('captcha').hidden = false;
+    document.querySelectorAll('[data-tile]').forEach(button => {
+      button.addEventListener('click', () => window.log.push(button.dataset.tile));
+    });
+  }
   const controls = document.getElementById('controls');
   if (location.search.includes('large')) {
     controls.innerHTML = Array.from({length: 260}, (_, i) => `<button type="button">${i}</button>`).join('');

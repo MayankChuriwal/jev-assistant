@@ -1,8 +1,19 @@
 """Information is reusable, while page choices retain their exact meaning."""
 
 import pytest
+from reliability_fakes import evidence_for
+from reliability_fakes import observed as auth_observed
 
-from assistant.interaction import answer_requirements, chat_update, provider_mode, reopen, require
+from assistant.interaction import (
+    answer_requirements,
+    captcha_answer,
+    chat_update,
+    observe_auth,
+    provider_mode,
+    record_captcha_answer,
+    reopen,
+    require,
+)
 from assistant.state import TaskState, amend, cite, observe_state, put_fact
 
 
@@ -432,3 +443,225 @@ def test_secret_store_payment_expiry_and_serialization():
     now[0] = 900
     with pytest.raises(ValueError):
         store.resolve(ref, **scope)
+
+# Task 6: observed authentication and human challenge answers.
+
+
+def auth_event(s, oid, status='challenge', **changes):
+    return dict(flow_id='f1', challenge_id='c1', status=status, origin='https://shop.test',
+                purpose='login', field_role='otp', evidence_ids=evidence_for(s, oid, s.observations[oid]['text']),
+                execution_id=None, expires_at=None, allowed_origins=['https://shop.test'], **changes)
+
+
+def auth_state():
+    s, page, oid = auth_observed('Enter the login code')
+    s.challenges['c1'] = dict(id='c1', flow_id='f1', revision=s.revision, origin='https://shop.test',
+                              purpose='login', field_role='otp', observation_id=oid, status='challenge')
+    return s, page, oid
+
+
+def submit_auth(s, oid):
+    s.executions['x1'] = dict(id='x1', flow_id='f1', challenge_id='c1', revision=s.revision,
+        observation_id=oid, origin='https://shop.test', purpose='login', field_role='otp',
+        submission=True, status='dispatched')
+    event = auth_event(s, oid, 'submitted')
+    event['execution_id'] = 'x1'
+    return observe_auth(s, event)
+
+
+def test_persistent_sign_in_link_does_not_override_authenticated_evidence():
+    s, page, oid = auth_observed('Sign in | Your account | Saved addresses: Home')
+    event = auth_event(s, oid, 'authenticated')
+    event['challenge_id'] = None
+    assert observe_auth(s, event)['status'] == 'authenticated'
+    assert not s.executions
+
+
+def test_auth_submission_waits_for_post_submission_rejection_and_counts_once():
+    s, page, oid = auth_state()
+    observe_auth(s, auth_event(s, oid))
+    assert submit_auth(s, oid)['rejections'] == 0
+    event = auth_event(s, oid, 'rejected')
+    event['execution_id'] = 'x1'
+    with pytest.raises(ValueError, match='subsequent'):
+        observe_auth(s, event)
+    new = observe_state(s, dict(page, text='Incorrect code'))
+    event = auth_event(s, new, 'rejected')
+    event['execution_id'] = 'x1'
+    assert observe_auth(s, event)['rejections'] == 1
+    assert observe_auth(s, event)['rejections'] == 1
+    s.challenges['c2'] = dict(s.challenges['c1'], id='c2', status='challenge', observation_id=new)
+    event = auth_event(s, new)
+    event['challenge_id'] = 'c2'
+    assert observe_auth(s, event)['rejections'] == 1
+    assert s.challenges['c1']['status'] == 'expired'
+
+
+@pytest.mark.parametrize('field,value', [('flow_id', 'other'), ('revision', 99), ('purpose', 'payment'),
+                                       ('field_role', 'cvv'), ('submission', False)])
+def test_auth_rejects_incompatible_execution(field, value):
+    s, page, oid = auth_state()
+    submit_auth(s, oid)
+    s.executions['x1'][field] = value
+    new = observe_state(s, dict(page, text='Incorrect code'))
+    event = auth_event(s, new, 'rejected')
+    event['execution_id'] = 'x1'
+    with pytest.raises(ValueError):
+        observe_auth(s, event)
+
+
+@pytest.mark.parametrize('field,value', [('flow_id', 'other'), ('revision', 99), ('purpose', 'payment'),
+                                       ('field_role', 'cvv'), ('origin', 'https://other.test')])
+def test_auth_rejects_incompatible_challenge(field, value):
+    s, page, oid = auth_state()
+    s.challenges['c1'][field] = value
+    with pytest.raises(ValueError):
+        observe_auth(s, auth_event(s, oid))
+
+
+def test_auth_origin_list_needs_flow_navigation_not_just_visited_origin():
+    s, page, oid = auth_state()
+    observe_auth(s, auth_event(s, oid))
+    new = observe_state(s, dict(page, url='https://identity.test/', text='Login provider'))
+    event = auth_event(s, new, 'required')
+    event.update(challenge_id=None, origin='https://identity.test',
+                 allowed_origins=['https://shop.test', 'https://identity.test'])
+    with pytest.raises(ValueError, match='navigation'):
+        observe_auth(s, event)
+    s.executions['nav'] = dict(flow_id='f1', revision=s.revision, observation_id=oid,
+        origin='https://shop.test', destination_origin='https://identity.test', status='succeeded',
+        kind='navigation', evidence_ids=event['evidence_ids'])
+    assert observe_auth(s, event)['allowed_origins'] == event['allowed_origins']
+
+
+def captcha(kind='text', **changes):
+    return dict(id='captcha1', kind=kind, revision=1, tiles=[], rounds=0, observation_id='o1', **changes)
+
+
+@pytest.mark.parametrize('reply', ['2468', '002468'])
+def test_numeric_text_captcha_is_never_a_tile_list(reply):
+    assert captcha_answer(captcha(), reply, revision=1) == {'kind': 'text', 'value': reply}
+
+
+def test_tiles_are_current_labels_and_never_executable_targets():
+    challenge = captcha('tiles')
+    challenge['tiles'] = ['A1', 'B2', 'C3']
+    assert captcha_answer(challenge, 'A1, C3', revision=1) == {'kind': 'tiles', 'labels': ['A1', 'C3']}
+    for reply in ('2468', 'A1, Z9', 'A1, A1', 'click A1'):
+        with pytest.raises(ValueError):
+            captcha_answer(challenge, reply, revision=1)
+    with pytest.raises(ValueError, match='stale'):
+        captcha_answer(challenge, 'A1', revision=2)
+
+
+def test_captcha_budget_and_unsupported_gestures_block_in_chat():
+    challenge = captcha()
+    challenge['rounds'] = 8
+    with pytest.raises(ValueError, match='eight'):
+        captcha_answer(challenge, '123', revision=1)
+    with pytest.raises(ValueError, match='chat'):
+        captcha_answer(captcha('unsupported'), 'drag', revision=1)
+
+
+def test_captcha_reply_becomes_scoped_fact_only_and_refresh_invalidates_it():
+    s, page, oid = auth_observed('Select tiles')
+    s.challenges['captcha1'] = dict(captcha('tiles'), revision=0, observation_id=oid, tiles=['A1', 'B2'])
+    fact = record_captcha_answer(s, 'captcha1', 'A1', revision=0)
+    assert fact['source'] == 'user' and fact['scope'] == 'captcha1'
+    assert fact['value'] == {'kind': 'tiles', 'labels': ['A1']}
+    assert s.executions == {}
+    s.challenges['captcha1']['revision'] = 1
+    with pytest.raises(ValueError, match='stale'):
+        record_captcha_answer(s, 'captcha1', 'B2', revision=0)
+    assert not s.facts['captcha:captcha1']['valid']
+
+
+def test_submission_cannot_return_to_challenge_while_slow_auto_submit_is_pending():
+    s, _, oid = auth_state()
+    submit_auth(s, oid)
+    with pytest.raises(ValueError, match='pending'):
+        observe_auth(s, auth_event(s, oid))
+    assert s.progress['auth_flows']['f1']['rejections'] == 0
+
+
+def test_auth_evidence_must_be_from_the_event_origin_and_current_revision():
+    s, page, oid = auth_state()
+    other = observe_state(s, dict(page, url='https://other.test', text='Incorrect code'))
+    with pytest.raises(ValueError, match='origin'):
+        observe_auth(s, auth_event(s, other))
+    with pytest.raises(ValueError, match='stale'):
+        observe_auth(s, auth_event(s, oid))
+
+
+def test_captcha_round_counter_is_owned_by_recording_not_validation():
+    s, _, oid = auth_observed('Type the challenge')
+    s.challenges['captcha1'] = dict(captcha(), revision=0, observation_id=oid)
+    record_captcha_answer(s, 'captcha1', '0012', revision=0)
+    assert s.challenges['captcha1']['rounds'] == 1
+    # Duplicate delivery of an already accepted reply never spends another round.
+    record_captcha_answer(s, 'captcha1', '0012', revision=0)
+    assert s.challenges['captcha1']['rounds'] == 1
+
+
+@pytest.mark.parametrize('role,limit', [('otp', 3), ('cvv', 2)])
+def test_rejection_budget_survives_every_resend(role, limit):
+    s, page, oid = auth_state()
+    for attempt in range(limit):
+        cid, xid = f'c{attempt + 1}', f'x{attempt + 1}'
+        s.challenges[cid] = dict(s.challenges['c1'], id=cid, field_role=role,
+                                 status='challenge', observation_id=oid)
+        event = auth_event(s, oid)
+        event.update(challenge_id=cid, field_role=role)
+        observe_auth(s, event)
+        s.executions[xid] = dict(id=xid, flow_id='f1', challenge_id=cid, revision=0,
+            observation_id=oid, origin='https://shop.test', purpose='login', field_role=role,
+            submission=True, status='dispatched')
+        observe_auth(s, dict(event, status='submitted', execution_id=xid))
+        oid = observe_state(s, dict(page, text=f'Code rejected {attempt}'))
+        event.update(status='rejected', execution_id=xid,
+                     evidence_ids=evidence_for(s, oid, s.observations[oid]['text']))
+        result = observe_auth(s, event)
+        assert result['rejections'] == attempt + 1
+    assert result['blocked']
+    s.challenges['next'] = dict(s.challenges[cid], id='next', status='challenge', observation_id=oid)
+    with pytest.raises(ValueError, match='limit'):
+        observe_auth(s, dict(event, challenge_id='next', status='challenge', execution_id=None))
+
+
+def test_expired_challenge_cannot_be_resubmitted_and_does_not_count_as_rejection():
+    s, _, oid = auth_state()
+    assert observe_auth(s, auth_event(s, oid, 'expired'))['rejections'] == 0
+    with pytest.raises(ValueError, match='usable'):
+        observe_auth(s, auth_event(s, oid))
+
+
+def test_pending_submission_cannot_be_reset_by_required_event():
+    s, _, oid = auth_state()
+    submit_auth(s, oid)
+    with pytest.raises(ValueError, match='pending'):
+        observe_auth(s, auth_event(s, oid, 'required'))
+
+
+def test_pending_auth_cannot_accept_a_second_submission_receipt():
+    s, _, oid = auth_state()
+    submit_auth(s, oid)
+    s.executions['x2'] = dict(s.executions['x1'], id='x2')
+    with pytest.raises(ValueError, match='pending'):
+        observe_auth(s, dict(auth_event(s, oid, 'submitted'), execution_id='x2'))
+
+
+def test_resend_invalidates_facts_bound_to_the_old_challenge():
+    s, _, oid = auth_state()
+    observe_auth(s, auth_event(s, oid))
+    put_fact(s, 'login_answer', '[secret:opaque]', source='user', scope='c1')
+    s.challenges['c2'] = dict(s.challenges['c1'], id='c2')
+    observe_auth(s, dict(auth_event(s, oid), challenge_id='c2'))
+    assert not s.facts['login_answer']['valid']
+
+
+def test_missing_expiry_on_followup_does_not_extend_a_challenge():
+    s, _, oid = auth_state()
+    observe_auth(s, dict(auth_event(s, oid), expires_at=60))
+    submit_auth(s, oid)
+    assert s.challenges['c1']['expires_at'] == 60
+    assert s.progress['auth_flows']['f1']['expires_at'] == 60

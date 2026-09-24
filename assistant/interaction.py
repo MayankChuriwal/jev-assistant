@@ -368,3 +368,201 @@ def field_cache_key(state: TaskState, helper_input: dict, challenge_id: str | No
     encoded = json.dumps([state.task_id, state.revision, challenge_id, payload],
                          sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+AUTH_STATUSES = frozenset({'unknown', 'required', 'challenge', 'submitted', 'authenticated',
+                           'rejected', 'expired', 'unsupported'})
+AUTH_FIELDS = frozenset({'flow_id', 'challenge_id', 'status', 'origin', 'purpose', 'field_role',
+                         'evidence_ids', 'execution_id', 'expires_at', 'allowed_origins'})
+
+
+def observe_auth(state: TaskState, event: dict) -> dict:
+    """Apply a semantic observation, never infer failure from field reselection.
+
+    Challenges and execution receipts are registered by code, not the coordinator.
+    A submission receipt must declare ``submission=True`` even for auto-submit
+    typing. Redirect receipts declare kind=navigation and cite the destination
+    observation. Merely visiting an origin never permits credentials there.
+    """
+    from urllib.parse import urlsplit
+
+    if not isinstance(event, dict) or set(event) != AUTH_FIELDS:
+        raise ValueError('invalid auth event fields')
+    for key in ('flow_id', 'status', 'origin', 'purpose', 'field_role'):
+        if not isinstance(event[key], str) or not event[key].strip():
+            raise ValueError('invalid auth identity')
+    if event['status'] not in AUTH_STATUSES:
+        raise ValueError('invalid auth status')
+    for key in ('challenge_id', 'execution_id'):
+        if event[key] is not None and (not isinstance(event[key], str) or not event[key]):
+            raise ValueError('invalid auth reference')
+    expiry = event['expires_at']
+    if expiry is not None and (type(expiry) not in (float, int) or not math.isfinite(expiry) or expiry < 0):
+        raise ValueError('invalid auth expiry')
+    _evidence(state, event['evidence_ids'], required=True)
+    proof = [state.evidence[eid] for eid in event['evidence_ids']]
+    if any(e['origin'] != event['origin'] or e['kind'] not in {'page', 'browser-event'} for e in proof):
+        raise ValueError('auth evidence has incompatible source/origin')
+    origins = event['allowed_origins']
+    if not isinstance(origins, list) or any(not isinstance(o, str) for o in origins):
+        raise ValueError('invalid auth origins')
+    if len(origins) != len(set(origins)) or event['origin'] not in origins:
+        raise ValueError('auth origin missing or duplicated')
+    for origin in origins:
+        parsed = urlsplit(origin)
+        if (parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username
+                or parsed.password or parsed.path or parsed.query or parsed.fragment):
+            raise ValueError('invalid auth origin')
+    flows = state.progress.get('auth_flows', {})
+    previous = flows.get(event['flow_id'])
+    if previous and (previous['revision'] != state.revision or previous['purpose'] != event['purpose']):
+        raise ValueError('incompatible auth flow revision/purpose/role')
+    allowed = set(previous['allowed_origins']) if previous else {event['origin']}
+    order = list(state.observations)
+    latest = order[-1]
+    # Transitive expansion is allowed only through actual successful navigation
+    # receipts, preserving the original flow rather than trusting a supplied list.
+    pending = set(origins) - allowed
+    while pending:
+        verified = set()
+        for origin in pending:
+            for execution in state.executions.values():
+                ids = execution.get('evidence_ids', ())
+                if (execution.get('flow_id') == event['flow_id']
+                        and execution.get('revision') == state.revision
+                        and execution.get('kind') == 'navigation'
+                        and execution.get('status') == 'succeeded'
+                        and execution.get('origin') in allowed
+                        and execution.get('destination_origin') == origin
+                        and execution.get('observation_id') in order
+                        and order.index(execution['observation_id']) < order.index(latest)
+                        and ids and all(e in state.evidence and state.evidence[e]['revision'] == state.revision
+                                        and state.evidence[e]['origin'] == origin
+                                        and order.index(state.evidence[e]['observation_id'])
+                                        > order.index(execution['observation_id']) for e in ids)):
+                    verified.add(origin)
+        if not verified:
+            raise ValueError('auth origin requires verified flow navigation')
+        allowed.update(verified)
+        pending -= verified
+    if previous and not set(previous['allowed_origins']).issubset(origins):
+        raise ValueError('auth flow cannot discard its origin binding')
+    challenge = state.challenges.get(event['challenge_id'])
+    if event['challenge_id'] is not None:
+        if not challenge or challenge.get('id') != event['challenge_id'] or any(
+                challenge.get(k) != event[k] for k in ('flow_id', 'origin', 'purpose', 'field_role')):
+            raise ValueError('incompatible auth challenge scope')
+        if (challenge.get('revision') != state.revision
+                or challenge.get('observation_id') not in state.observations
+                or state.observations[challenge['observation_id']]['revision'] != state.revision
+                or state.observations[challenge['observation_id']]['origin'] != challenge['origin']):
+            raise ValueError('incompatible auth challenge revision/source')
+    if challenge and challenge.get('expires_at') is not None:
+        expiry = min(expiry, challenge['expires_at']) if expiry is not None else challenge['expires_at']
+    status = event['status']
+    if status in {'challenge', 'submitted', 'rejected', 'expired'} and challenge is None:
+        raise ValueError('auth transition requires a challenge')
+    execution = state.executions.get(event['execution_id'])
+    if event['execution_id'] is not None or status in {'submitted', 'rejected'}:
+        if (not execution or execution.get('submission') is not True
+                or execution.get('revision') != state.revision
+                or execution.get('status') not in {'dispatched', 'succeeded', 'uncertain'}
+                or execution.get('observation_id') not in state.observations
+                or any(execution.get(k) != event[k] for k in
+                       ('flow_id', 'challenge_id', 'origin', 'purpose', 'field_role'))):
+            raise ValueError('auth transition has no matching submission')
+        submitted = state.observations[execution['observation_id']]
+        if submitted['revision'] != state.revision or submitted['origin'] != event['origin']:
+            raise ValueError('incompatible submission observation')
+        if status in {'rejected', 'authenticated'} and order.index(execution['observation_id']) >= order.index(latest):
+            raise ValueError('auth outcome requires subsequent evidence')
+    if status == 'authenticated' and challenge and execution is None:
+        raise ValueError('challenge authentication requires matching submission')
+    if status in {'challenge', 'submitted'} and challenge.get('status') in {'expired', 'rejected', 'authenticated'}:
+        raise ValueError('challenge is no longer usable')
+    if (previous and previous['status'] == 'submitted' and status in {'challenge', 'required', 'unknown'}
+            and previous.get('challenge_id') == event['challenge_id']):
+        raise ValueError('auth submission is pending; wait for observed outcome')
+    if (previous and previous['status'] == 'submitted' and status == 'submitted'
+            and previous.get('execution_id') != event['execution_id']):
+        raise ValueError('auth submission is pending; cannot submit again')
+    rejected = list(previous.get('rejected_executions', [])) if previous else []
+    if status == 'rejected' and event['execution_id'] not in rejected:
+        rejected.append(event['execution_id'])
+    limit = 2 if event['field_role'] == 'cvv' or event['purpose'] == 'cvv' else 3
+    if len(rejected) >= limit and status in {'challenge', 'submitted'}:
+        raise ValueError('auth rejection limit reached')
+    flow = {**deepcopy(event), 'expires_at': expiry, 'revision': state.revision, 'rejections': len(rejected),
+            'rejected_executions': rejected, 'blocked': len(rejected) >= limit}
+    if previous and challenge and previous.get('challenge_id') != event['challenge_id']:
+        old = state.challenges.get(previous.get('challenge_id'))
+        if old:
+            old['status'] = 'expired'
+            for fact in state.facts.values():
+                if fact['scope'] == old['id'] or fact.get('challenge_id') == old['id']:
+                    fact['valid'] = False
+    if challenge:
+        challenge.update(status=status, expires_at=expiry, evidence_ids=list(event['evidence_ids']))
+        if status in {'expired', 'rejected', 'authenticated'}:
+            for fact in state.facts.values():
+                if fact['scope'] == challenge['id'] or fact.get('challenge_id') == challenge['id']:
+                    fact['valid'] = False
+    state.progress.setdefault('auth_flows', {})[event['flow_id']] = flow
+    return deepcopy(flow)
+
+
+def captcha_answer(challenge: dict, reply: str, *, revision: int) -> dict:
+    """Validate a human reply using the code-owned displayed challenge schema."""
+    import re
+
+    if (not isinstance(challenge, dict) or type(revision) is not int
+            or type(challenge.get('revision')) is not int or challenge['revision'] != revision):
+        raise ValueError('stale CAPTCHA; show the fresh challenge image in chat')
+    if any(not isinstance(challenge.get(k), str) or not challenge[k] for k in ('id', 'observation_id')):
+        raise ValueError('invalid CAPTCHA identity')
+    rounds = challenge.get('rounds')
+    if type(rounds) is not int or rounds < 0:
+        raise ValueError('invalid CAPTCHA round count')
+    if rounds >= 8:
+        raise ValueError('CAPTCHA stopped after eight rounds')
+    if challenge.get('kind') not in {'text', 'tiles'}:
+        raise ValueError('This CAPTCHA cannot be completed through chat')
+    if not isinstance(reply, str) or not reply.strip() or len(reply) > 4096:
+        raise ValueError('invalid CAPTCHA answer')
+    if challenge['kind'] == 'text':
+        return {'kind': 'text', 'value': reply}
+    tiles = challenge.get('tiles')
+    if (not isinstance(tiles, list) or not tiles or any(not isinstance(t, str) or not t for t in tiles)
+            or len(set(tiles)) != len(tiles)):
+        raise ValueError('invalid CAPTCHA tile labels')
+    labels = re.split(r'[\s,]+', reply.strip())
+    if len(set(labels)) != len(labels) or any(label not in tiles for label in labels):
+        raise ValueError('answer must use current CAPTCHA tile labels')
+    return {'kind': 'tiles', 'labels': labels}
+
+
+def record_captcha_answer(state: TaskState, challenge_id: str, reply: str, *, revision: int) -> dict:
+    """Store a scoped fact for Jev; no browser call or target resolution occurs."""
+    challenge = state.challenges.get(challenge_id)
+    key = f'captcha:{challenge_id}'
+    if not challenge:
+        raise ValueError('unknown CAPTCHA')
+    if challenge.get('revision') != revision:
+        if key in state.facts:
+            state.facts[key]['valid'] = False
+        raise ValueError('stale CAPTCHA; show the fresh challenge image in chat')
+    oid = challenge.get('observation_id')
+    if (oid != next(reversed(state.observations), None)
+            or state.observations[oid]['revision'] != state.revision):
+        if key in state.facts:
+            state.facts[key]['valid'] = False
+        raise ValueError('stale CAPTCHA observation; show the fresh image in chat')
+    accepted = state.facts.get(key)
+    if (accepted and accepted['valid'] and accepted.get('challenge_revision') == revision
+            and accepted.get('observation_id') == oid):
+        return deepcopy(accepted)
+    answer = captcha_answer(challenge, reply, revision=revision)
+    challenge['rounds'] += 1
+    put_fact(state, key, answer, source='user', scope=challenge_id)
+    state.facts[key].update(purpose='captcha', challenge_revision=revision, observation_id=oid)
+    return deepcopy(state.facts[key])

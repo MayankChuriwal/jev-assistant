@@ -6,7 +6,6 @@ import math
 import re
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
-from urllib.parse import urlsplit
 
 from . import model
 from .profile import SECRETS
@@ -323,23 +322,11 @@ def _validate(state, output, *, event=None):
 
 
 def _validate_auth(state, value):
-    for name in ("flow_id", "origin", "purpose", "field_role"):
-        _string(value[name], "auth." + name)
-    _enum(value["status"], {"unknown", "required", "challenge", "submitted", "authenticated", "rejected",
-                            "expired", "unsupported"}, "auth.status")
-    _reference(value["challenge_id"], state.challenges, "auth.challenge_id", nullable=True)
-    _reference(value["execution_id"], state.executions, "auth.execution_id", nullable=True)
-    expiry = value["expires_at"]
-    if expiry is not None and (type(expiry) not in (int, float) or not math.isfinite(expiry) or expiry < 0):
-        raise ValueError("auth.expires_at: expected timestamp")
-    origins = {o["origin"] for o in state.observations.values() if o["revision"] == state.revision}
-    _reference(value["origin"], origins, "auth.origin")
-    _strings(value["allowed_origins"], "auth.allowed_origins")
-    for origin in value["allowed_origins"]:
-        _reference(origin, origins, "auth.allowed_origins")
-        parsed = urlsplit(origin)
-        if parsed.path or parsed.query or parsed.fragment:
-            raise ValueError("auth.allowed_origins: expected origin")
+    # Validate with the owning transition gate without mutating during assessment.
+    # The runtime applies the issued event only after its other gates succeed.
+    from .interaction import observe_auth
+
+    observe_auth(deepcopy(state), value)
 
 
 def _validate_proposal(state, value):

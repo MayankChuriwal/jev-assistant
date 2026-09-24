@@ -117,3 +117,19 @@ def test_a_captcha_badge_alone_is_not_a_challenge(tmp_path, monkeypatch):
 
     assert not rules.captcha_challenge(fake_page(text="LOG IN protected by reCAPTCHA Privacy - Terms"))
     assert rules.captcha_challenge(fake_page(text="I'm not a robot reCAPTCHA"))
+
+
+def test_chat_only_help_rejects_device_handoff_and_considers_alternatives(monkeypatch):
+    import pytest
+
+    from assistant import jobs
+    responses = [dict(rung='device', text='Approve in your banking app', options=[]),
+                 dict(rung='guide', text='Click the button on the website', options=[]),
+                 dict(rung='stop', text='Passkey required', options=[]),
+                 dict(rung='stop', text='No chat-compatible sign-in method is available', options=[])]
+    monkeypatch.setattr(jobs, 'text_json', lambda *a, **kw: (responses.pop(0), META))
+    for checked in (False, False, False):
+        with pytest.raises(ValueError):
+            jobs.unblock({}, fake_page(), {}, chat_only=True, alternatives_checked=checked)
+    result, _ = jobs.unblock({}, fake_page(), {}, chat_only=True, alternatives_checked=True)
+    assert result['rung'] == 'stop'

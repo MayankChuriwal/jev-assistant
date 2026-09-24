@@ -205,3 +205,18 @@ def test_without_a_code_from_the_user_a_code_field_asks_for_one(tmp_path, monkey
     field(monkeypatch, ("text", "1234"))
     act(a, decision("e1", "TYPE_TEXT"))
     assert typed(a) == ["4821"] and a.asked[0]["kind"] == "secret"
+
+
+def test_login_numeric_format_error_does_not_become_a_flow_rejection():
+    from reliability_fakes import evidence_for, observed
+
+    from assistant.interaction import observe_auth
+    from assistant.rules import format_error
+    s, _, oid = observed('Enter six digit login code')
+    event = dict(flow_id='login', challenge_id=None, status='required', origin='https://shop.test',
+                 purpose='login', field_role='otp', evidence_ids=evidence_for(s, oid, 'Enter six digit login code'),
+                 execution_id=None, expires_at=None, allowed_origins=['https://shop.test'])
+    observe_auth(s, event)
+    assert format_error('12x', {'kind': 'fill', 'constraints': {'inputmode': 'numeric', 'maxlength': 6}})
+    assert s.progress['auth_flows']['login']['rejections'] == 0
+    assert not s.executions

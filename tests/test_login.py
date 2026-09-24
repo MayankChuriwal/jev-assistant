@@ -1,5 +1,6 @@
 """Signing in comes first on any site that offers it: the account holds saved addresses and payment. Fakes only."""
 
+import pytest
 from fakes import agent_with, decision, fake_page
 
 from assistant import agent as loop
@@ -71,3 +72,32 @@ def test_a_page_that_stays_put_after_a_step_is_asked_about(tmp_path, monkeypatch
     asking(monkeypatch, a, lambda page, action=None: True)
     a.command("tick")
     assert [m["text"] for m in a.asked] == ["What's your phone number?"]
+
+
+def test_public_search_with_sign_in_link_does_not_create_an_auth_flow():
+    from reliability_fakes import observed
+
+    from assistant.coordinator import apply_assessment, assess
+    s, page, _ = observed('Search public products | Sign in', goal='Find a desk lamp')
+    result = dict(objective='Find a desk lamp', facts=[], requirements=[], completion=[], auth=None,
+                  progress=None, proposal=None, outcome=None, notice=None, recovery=None)
+    assessment = assess(s, page, 'start', client=lambda *a, **kw: (result, {}))
+    apply_assessment(s, assessment)
+    assert not s.questions and not s.challenges and not s.progress.get('auth_flows')
+
+
+@pytest.mark.browser
+def test_human_captcha_fixture_exposes_text_and_tiles_without_answer_clicks(browser_at):
+    from assistant.interaction import record_captcha_answer
+    from assistant.state import TaskState, observe_state
+    browser = browser_at('/reliability.html?captcha')
+    page = browser.observe()
+    s = TaskState('human', 'Complete human challenge')
+    oid = observe_state(s, page)
+    s.challenges['c'] = dict(id='c', kind='tiles', revision=0, tiles=['A1', 'B2'], rounds=0,
+                             observation_id=oid)
+    assert any('CAPTCHA text' in a['label'] for a in page['actions'])
+    assert any('Tile A1' in a['label'] for a in page['actions'])
+    fact = record_captcha_answer(s, 'c', 'A1', revision=0)
+    assert fact['value'] == {'kind': 'tiles', 'labels': ['A1']}
+    assert not s.executions

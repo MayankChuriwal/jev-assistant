@@ -9,6 +9,7 @@ from .questions import (
     COMPOSE,
     CONFIRM_CARD,
     HELP,
+    HELP_CHAT,
     HINT,
     LOOK,
     LOOK_CLOSER,
@@ -124,12 +125,18 @@ def note(context, page):
     return [fact.strip()[:200] for fact in facts if fact.strip()][:5], meta
 
 
-def unblock(context, page, elements, must_stop=False):
+def unblock(context, page, elements, must_stop=False, *, chat_only=False, alternatives_checked=False):
     payload = {"context": context, "page": view(page), "elements": elements, "must_stop": must_stop}
-    out, meta = text_json(HELP, payload)
+    out, meta = text_json(HELP_CHAT if chat_only else HELP, payload)
     rung, text = out.get("rung"), words(out, "text", 4096)
     if rung not in RUNGS or not text:
         raise invalid("help message")
+    if chat_only:
+        if rung == 'device' or re.search(
+                r"\b(click|tap|scroll|swipe|drag|press|visit|open|navigate|approve|authenticate)\b", text, re.I):
+            raise invalid("chat-only help message")
+        if (rung == 'stop' or must_stop) and not alternatives_checked:
+            raise invalid("help message without checked chat alternatives")
     options = choices(out, elements, "help message") if rung == "choose" and not must_stop else []
     return {"rung": "stop" if must_stop else rung, "text": text, "options": options}, meta
 
