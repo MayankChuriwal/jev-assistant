@@ -57,12 +57,13 @@ def test_operation_inputs_reach_the_browser(tmp_path, operation, choice, extra):
         assert kwargs == ({"key": "Tab"} if operation == "PRESS_KEY" else {})
 
 
-def test_open_url_asks_the_text_model_for_the_address(tmp_path, monkeypatch):
-    monkeypatch.setattr(loop, "url_value", Mock(return_value=("https://x.test/", {"model": "t", "latency_ms": 1})))
+def test_open_url_asks_the_text_model_for_a_same_provider_address(tmp_path, monkeypatch):
+    monkeypatch.setattr(loop, "url_value",
+                        Mock(return_value=("https://shop.test/search", {"model": "t", "latency_ms": 1})))
     a = agent_with(tmp_path)
     act(a, decision("open_url", "OPEN_URL"))
-    assert a.browser.act.call_args.kwargs == {"url": "https://x.test/"}
-    assert a.state["history"][-1]["text"] == "https://x.test/"
+    assert a.browser.act.call_args.kwargs == {"url": "https://shop.test/search"}
+    assert a.state["history"][-1]["text"] == "https://shop.test/search"
 
 
 def test_a_file_provider_answers_uploads_without_asking(tmp_path):

@@ -300,6 +300,7 @@ class Agent:
 
     def context(self):
         task = public_context(self.task)
+        task['facts'] = {k: f for k, f in task['facts'].items() if f.get('valid')}
         return self.secrets.text('Goal: ' + self.task.goal + '\nStructured task: ' +
                                  json.dumps(task, ensure_ascii=False, default=str) + '\nProfile: ' +
                                  json.dumps(self.profile.summary(), ensure_ascii=False))
@@ -507,6 +508,7 @@ class Agent:
             self._wait_until = None
         for event in coordinator.events_for(self.task, s['page']):
             self.coordinate(event)
+        self.refresh_captcha_images(s['page'])
         revision, oid = self.task.revision, next(reversed(self.task.observations))
         repair = ''
         for attempt in range(2):
@@ -551,6 +553,7 @@ class Agent:
         return self.perform(operation, action, decision, page)
 
     def perform(self, operation, action, decision, page):
+        self._field_pending = None
         if operation == 'LOOK':
             return self.look(page, 'Observe missing controls')
         if any(not r.get('satisfied') for r in self.task.requirements.values() if r.get('kind') in interaction.KINDS):
@@ -577,7 +580,11 @@ class Agent:
             if not commit.can_commit(self.task, proposal):
                 self.confirm(page, action['label'], action, effect_id=effect_id)
                 return self.snapshot()
+        captcha = self.validate_captcha_action(operation, action, page)
         inputs, helper, shown = self.inputs(operation, action, decision, page)
+        if captcha and captcha['kind'] == 'text':
+            inputs = {'text': captcha['value']}
+            shown = captcha['value']
         self.stop_if_interrupted()
         if not self.browser.fresh(page, action):
             raise StalePage('Page changed during input preparation')
@@ -585,15 +592,30 @@ class Agent:
         if challenge is None and kind == 'authentication' and operation in {'CLICK', 'DOUBLE_CLICK', 'PRESS_KEY'}:
             challenge = self.auth_submit_challenge(action)
         bound = commit.bind_decision(self.task, decision, page, assessment=kind, effect_id=effect_id)
-        if self._field_pending:
-            payload, cid, ref = self._field_pending
-            self.field_cache.consume(self.task, payload, cid)
-            if ref:
-                self.secret_store.consume(ref)
-            self._field_pending = None
+        def execute():
+            # Recheck image-bound human input at the final executor boundary.
+            self.validate_captcha_action(operation, action, page)
+            def consume_input():
+                if self._field_pending:
+                    payload, cid, ref = self._field_pending
+                    self.field_cache.consume(self.task, payload, cid)
+                    if ref:
+                        self.secret_store.consume(ref)
+                    self._field_pending = None
+            try:
+                result = self.browser.act(operation, action, page, **inputs)
+            except StalePage:
+                # Browser's final preflight guarantees no mutation occurred.
+                raise
+            except Exception:
+                consume_input()  # uncertain dispatch must never replay a secret
+                raise
+            consume_input()
+            return result
+
         spend(self.task, 'actions')
         receipt = commit.dispatch_once(self.task, self.journal, bound, page,
-            act=lambda: self.browser.act(operation, action, page, **inputs),
+            act=execute,
             is_fresh=lambda: self.browser.fresh(page, action),
             interrupted=lambda: bool(self.interrupted and self.interrupted()),
             proposal=self.task.proposal if requires_commit else None,
@@ -666,12 +688,16 @@ class Agent:
 
     def inputs(self, operation, action, decision, page):
         if operation == 'TYPE_TEXT':
+            captcha = self.validate_captcha_action(operation, action, page)
+            if captcha and captcha['kind'] == 'text':
+                return {'text': captcha['value']}, None, captcha['value']
             value, shown, helper = self.field_input(action, page)
             return {'text': value}, helper, shown
         if operation == 'OPEN_URL':
             url, helper = url_value(self.context(), page, self.state['history'])
             if urlparse(url).scheme not in {'http', 'https'} or not urlparse(url).hostname:
                 raise ValueError('Invalid navigation URL')
+            self.validate_navigation(url, page)
             return {'url': url}, helper, url
         if operation == 'PRESS_KEY':
             return {'key': decision['key']}, None, None
@@ -850,18 +876,96 @@ class Agent:
         return self.snapshot()
 
 
+    @staticmethod
+    def field_identity(action, page):
+        frame = action.get('frame') or 'main'
+        frame_url = page.get('frames', {}).get(frame, {}).get('url', page['url'])
+        parsed = urlparse(frame_url)
+        return dict(label=action['label'], context=action.get('context') or {},
+                    constraints=action.get('constraints') or {}, frame=frame,
+                    frame_origin=f'{parsed.scheme}://{parsed.netloc}')
+
     def refresh_challenges(self, page):
         oid = next(reversed(self.task.observations))
-        for challenge in self.task.challenges.values():
-            same_field = any(a['kind'] == 'fill' and a['label'] == challenge.get('field_label')
-                and (a.get('context') or {}) == challenge.get('field_context')
-                and (a.get('constraints') or {}) == challenge.get('field_constraints')
-                for a in page['actions'])
-            if ((challenge.get('page_fingerprint') == page['fingerprint'] or same_field)
-                    and challenge.get('origin') == self.task.observations[oid]['origin']
-                    and challenge.get('revision') == self.task.revision
-                    and challenge.get('status') in {'challenge', 'answer_ready', 'awaiting_answer'}):
+        for cid, challenge in self.task.challenges.items():
+            if challenge.get('purpose') == 'captcha':
+                # Every new observation requires a fresh displayed round, even when
+                # DOM text is unchanged: image challenges can replace pixels alone.
+                if challenge.get('observation_id') != oid:
+                    challenge['status'] = 'expired'
+                    if 'captcha:' + cid in self.task.facts:
+                        self.task.facts['captcha:' + cid]['valid'] = False
+                continue
+            if challenge.get('status') not in {'challenge', 'answer_ready', 'awaiting_answer'}:
+                continue
+            matches = [a for a in page['actions'] if a['kind'] == 'fill'
+                       and self.field_identity(a, page) == challenge.get('field_identity')]
+            if (challenge.get('origin') == self.task.observations[oid]['origin']
+                    and challenge.get('revision') == self.task.revision and len(matches) == 1):
                 challenge['observation_id'] = oid
+                challenge['field_ids'] = [matches[0]['id']]
+            else:
+                challenge['status'] = 'expired'
+        self.discard_invalid_secrets()
+
+    def validate_navigation(self, url, page):
+        destination, current = urlparse(url), urlparse(page['url'])
+        same_origin = (destination.scheme, destination.netloc) == (current.scheme, current.netloc)
+        explicit = any(f.get('valid') and f.get('source') == 'user'
+                       and f.get('value') == url for k, f in self.task.facts.items()
+                       if k in {'navigation_url', 'provider_url', 'alternative_url'})
+        # Model helpers cannot authorize an external provider, including a page's
+        # advertised competitor link. The user's destination fact authorizes it.
+        if same_origin or explicit:
+            return
+        interaction.require(self.task, dict(id='navigation-service', kind='text', purpose='task',
+            keys=['navigation_url'], scope='task', depends_on=[], options=[],
+            reason='Confirm the destination for the selected provider or an explicit alternative'))
+        self.ask_user(page)
+        raise StalePage('Destination clarified; Jev must select a fresh navigation action')
+
+    def refresh_captcha_images(self, page):
+        for cid, c in self.task.challenges.items():
+            if c.get('purpose') != 'captcha' or c.get('status') == 'expired':
+                continue
+            image = self.browser.marked_screenshot(c['marks'], masked=self.secrets.nodes, hide=self.hidden_details())
+            if (c['page_fingerprint'] != page['fingerprint']
+                    or c['image_digest'] != hashlib.sha256(image.encode()).hexdigest()):
+                c['status'] = 'expired'
+                fact = self.task.facts.get('captcha:' + cid)
+                if fact:
+                    fact['valid'] = False
+
+    def validate_captcha_action(self, operation, action, page):
+        if operation in {'WAIT', 'SCROLL', 'LOOK', 'COPY'}:
+            return None
+        challenges = [c for c in self.task.challenges.values() if c.get('purpose') == 'captcha'
+                      and c.get('status') != 'expired']
+        if not challenges:
+            if rules.captcha_challenge(page):
+                raise Halt('blocked', 'This challenge needs a fresh human answer in chat.')
+            return None
+        c = challenges[-1]
+        fact = self.task.facts.get('captcha:' + c['id'], {})
+        current = next(reversed(self.task.observations))
+        image = self.browser.marked_screenshot(c['marks'], masked=self.secrets.nodes, hide=self.hidden_details())
+        if (not fact.get('valid') or c['observation_id'] != current
+                or c['page_fingerprint'] != page['fingerprint']
+                or c['image_digest'] != hashlib.sha256(image.encode()).hexdigest()
+                or not self.browser.fresh(page)):
+            fact['valid'] = False
+            c['status'] = 'expired'
+            raise StalePage('The human challenge changed; a fresh image and answer are required')
+        answer = fact['value']
+        if answer['kind'] == 'tiles':
+            targets = [c['targets'][label] for label in answer['labels']]
+            allowed = operation == 'CLICK' and action['id'] in targets
+        else:
+            fields = [a for a in page['actions'] if a['kind'] == 'fill']
+            allowed = operation == 'TYPE_TEXT' and len(fields) == 1 and action == fields[0]
+        if not allowed:
+            raise Halt('blocked', 'The selected operation does not match the current human challenge answer.')
+        return answer
 
     def register_challenge(self, action):
         oid = next(reversed(self.task.observations))
@@ -878,7 +982,8 @@ class Agent:
             purpose=flow['purpose'], field_role=flow['field_role'], observation_id=oid,
             field_ids=[action['id']], status='challenge', expires_at=time.time() + ttl,
             page_fingerprint=self.state['page']['fingerprint'], field_context=action.get('context') or {},
-            field_label=action['label'], field_constraints=action.get('constraints') or {})
+            field_label=action['label'], field_constraints=action.get('constraints') or {},
+            field_identity=self.field_identity(action, self.state['page']))
         if flow['purpose'] == 'payment':
             parents = [e for e in self.task.executions.values() if e.get('commitment')
                        and e.get('status') == 'executed' and e.get('approval_id')
@@ -927,11 +1032,19 @@ class Agent:
             raise Halt('blocked', 'This human challenge cannot be completed through chat.')
         if not self.browser.fresh(page):
             raise StalePage('The human challenge changed')
+        for previous in self.task.challenges.values():
+            if previous.get('purpose') == 'captcha':
+                previous['status'] = 'expired'
+                old = self.task.facts.get('captcha:' + previous['id'])
+                if old:
+                    old['valid'] = False
         cid = uuid4().hex
         labels = [str(i) for i in range(1, len(marks) + 1)]
         challenge = dict(id=cid, kind=kind, purpose='captcha', revision=rounds,
             observation_id=next(reversed(self.task.observations)), rounds=rounds,
-            tiles=labels, targets={label: a['id'] for label, a in zip(labels, marks)})
+            tiles=labels, targets={label: a['id'] for label, a in zip(labels, marks)},
+            page_fingerprint=page['fingerprint'], marks=deepcopy(marks),
+            image_digest=hashlib.sha256(image.encode()).hexdigest())
         self.task.challenges[cid] = challenge
         reply = self.ask({'kind': 'image', 'image': image, 'challenge_id': cid,
             'text': 'Type the text exactly as shown.' if kind == 'text' else 'Reply with the tile labels to select.'})
