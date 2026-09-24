@@ -98,6 +98,32 @@ def test_amendment_invalidates_transitive_dependents_only():
         False, False, False, True]
 
 
+def test_new_fact_cannot_depend_on_an_invalidated_answer():
+    s = TaskState("t1", "Get groceries")
+    put_fact(s, "address", "Home", source="user")
+    amend(s, "Deliver to Office", {"address"})
+    with pytest.raises(ValueError):
+        put_fact(s, "delivery_offer", "o1", source="user", depends_on=("address",))
+    assert "delivery_offer" not in s.facts
+    put_fact(s, "address", "Office", source="user")
+    put_fact(s, "delivery_offer", "o2", source="user", depends_on=("address",))
+    assert s.facts["delivery_offer"]["valid"]
+
+
+def test_new_requirement_cannot_cite_evidence_from_before_amendment():
+    s = TaskState("t1", "Find a fare")
+    old = observe_state(s, {"url": "https://cab.test/", "text": "Fare ₹200", "actions": []})
+    old_evidence = cite(s, old, "Fare ₹200")
+    amend(s, "Find a fare to the airport", {"destination"})
+    with pytest.raises(ValueError):
+        s.add_requirement("fare", "Airport fare observed", "page", evidence_ids=(old_evidence,))
+    assert "fare" not in s.requirements
+    current = observe_state(s, {"url": "https://cab.test/", "text": "Airport fare ₹250", "actions": []})
+    current_evidence = cite(s, current, "Airport fare ₹250")
+    s.add_requirement("fare", "Airport fare observed", "page", evidence_ids=(current_evidence,))
+    assert s.requirements["fare"]["evidence_ids"] == (current_evidence,)
+
+
 def test_original_goal_cannot_be_replaced():
     s = TaskState("t1", "Find a fare")
     amend(s, "Make it an airport fare", set())

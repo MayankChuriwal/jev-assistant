@@ -111,8 +111,9 @@ class TaskState:
             raise ValueError("invalid completion requirement")
         if not all(isinstance(key, str) and key for key in material_keys):
             raise ValueError("invalid material fact key")
-        if not all(eid in self.evidence for eid in evidence_ids):
-            raise ValueError("unknown requirement evidence")
+        if not all(eid in self.evidence and self.evidence[eid]["revision"] == self.revision
+                   for eid in evidence_ids):
+            raise ValueError("unknown or stale requirement evidence")
         if execution_id is not None and execution_id not in self.executions:
             raise ValueError("unknown execution")
         self.requirements[requirement_id] = {
@@ -192,8 +193,9 @@ def put_fact(state: TaskState, key: str, value: object, *, source: str, scope: s
     cleaned = _safe(value)
     if cleaned is None and value is not None:
         raise ValueError("fact value must be public JSON data")
-    if any(dep not in state.facts or dep == key for dep in depends_on):
-        raise ValueError("fact dependency is unknown or self-referential")
+    if any(dep not in state.facts or dep == key or not state.facts[dep]["valid"]
+           for dep in depends_on):
+        raise ValueError("fact dependency is unknown, invalid, or self-referential")
     if source in {"page", "derived"} and not evidence:
         raise ValueError("page-derived facts require evidence")
     if any(eid not in state.evidence or state.evidence[eid]["revision"] != state.revision
