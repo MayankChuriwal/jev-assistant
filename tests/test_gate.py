@@ -1,7 +1,7 @@
 """The commit gate: nothing irreversible without one explicit yes for that exact action. Fakes only."""
 
 import pytest
-from fakes import act, agent_with, decision, fake_page
+from fakes import act, agent_with, decision
 
 from assistant import agent as loop
 from assistant.browser import StalePage
@@ -32,179 +32,36 @@ def approve(a, d):
     return act(a, d)
 
 
-def test_a_commit_click_waits_for_an_explicit_yes(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}])
-    outcomes(monkeypatch, ("success", "Order placed #A1B2"))
-    with pytest.raises(StalePage):
-        act(a, decision("e6", "CLICK"))
-    assert clicked(a) == [] and a.state["approval"]["target"] == (None, 11)
-    act(a, decision("e6", "CLICK"))
-    assert a.asked[0]["kind"] == "confirm" and a.asked[0]["options"][0]["label"] == "Yes, Pay ₹79"
-    assert len(a.asked) == 1 and clicked(a) == ["e6"] and a.state["approval"] is None and a.state["commit"] is None
-    assert a.state["memory"][-1] == "Done: Pay ₹79 (Order placed #A1B2)"
 
 
-def test_no_means_nothing_is_clicked(tmp_path):
-    a = agent_with(tmp_path, replies=[{"option": "no"}, {"option": "items"}])
-    act(a, decision("e6", "CLICK"))
-    assert clicked(a) == [] and "change the items" in a.state["memory"][-1]
 
 
-def test_one_approval_covers_exactly_one_commit(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}, {"option": "no"}, {"option": "cancel"}])
-    outcomes(monkeypatch, ("failed", "Pay ₹79"))
-    act(a, decision("CONFIRM", "CONFIRM"))
-    assert a.state["approval"]["amount"] == "₹79"
-    act(a, decision("e6", "CLICK"))
-    assert clicked(a) == ["e6"] and len(a.asked) == 1 and "didn't go through" in a.told[-1]["text"]
-    act(a, decision("e6", "CLICK"))  # a retry is a new commit: ask again
-    assert clicked(a) == ["e6"] and a.asked[1]["kind"] == "confirm" and a.state["status"] == "cancelled"
 
 
-def test_the_commit_counts_even_if_the_next_observation_fails(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}, {"option": "no"}, {"option": "cancel"}])
-    with pytest.raises(StalePage):
-        act(a, decision("e6", "CLICK"))
-    a.browser.observe.side_effect = StalePage("still navigating")
-    with pytest.raises(StalePage):
-        act(a, decision("e6", "CLICK"))
-    assert clicked(a) == ["e6"] and a.state["approval"] is None
-    assert a.state["commit"]["label"] == "Pay ₹79" and a.state["commit"]["checks"] == 0
-    a.browser.observe.side_effect = None
-    act(a, decision("e6", "CLICK"))  # a second Pay needs a second yes
-    assert a.asked[1]["kind"] == "confirm" and clicked(a) == ["e6"]
 
 
-def test_an_approval_is_for_one_action_only(tmp_path, monkeypatch):
-    complaint = {"action_label": "Submit complaint", "amount": "", "lines": [], "element": ""}
-    monkeypatch.setattr(loop.jobs, "confirm_card", lambda context, page, label, elements=(): (complaint, META))
-    a = agent_with(tmp_path, replies=[{"option": "yes"}, {"option": "no"}, {"option": "cancel"}])
-    act(a, decision("CONFIRM", "CONFIRM"))
-    act(a, decision("e6", "CLICK"))  # "Pay ₹79" is not the approved complaint
-    assert clicked(a) == [] and a.asked[1]["kind"] == "confirm"
 
 
-def test_a_confirmed_commit_the_regex_misses_still_spends_the_approval(tmp_path, monkeypatch):
-    page = fake_page(actions=[{"id": "e1", "kind": "click", "label": "Place your order", "role": "button",
-                               "node": 5}, WAIT])
-    card = {"action_label": "Place your order", "amount": "₹79", "lines": [], "element": "1"}
-    monkeypatch.setattr(loop.jobs, "confirm_card", lambda context, page, label, elements=(): (card, META))
-    outcomes(monkeypatch, ("success", "Pay ₹79"))
-    a = agent_with(tmp_path, page=page, replies=[{"option": "yes"}])
-    act(a, decision("CONFIRM", "CONFIRM"))
-    assert a.state["approval"]["target"] == (None, 5)
-    act(a, decision("e1", "CLICK"))
-    assert clicked(a) == ["e1"] and a.state["approval"] is None
-    assert a.state["memory"][-1] == "Done: Place your order (Pay ₹79)"
 
 
-def test_a_changed_total_needs_a_new_approval(tmp_path):
-    a = agent_with(tmp_path, replies=[{"option": "no"}, {"option": "items"}])
-    a.state["approval"] = {"action_label": "Pay ₹79", "amount": "₹79", "host": "shop.test", "step": 0,
-                           "target": (None, 11)}
-    page = fake_page(text="Checkout\nTotal ₹99\nPay ₹99")
-    a.state["page"] = a.browser.observe.return_value = page
-    act(a, decision("e6", "CLICK"))
-    assert a.asked[0]["kind"] == "confirm" and clicked(a) == []
 
 
-def test_enter_in_a_field_whose_form_pays_is_a_commit(tmp_path):
-    a = agent_with(tmp_path, replies=[{"option": "no"}, {"option": "payment"}])
-    act(a, decision("e3", "PRESS_KEY", key="Enter"))
-    assert a.asked[0]["kind"] == "confirm" and clicked(a) == []
-    act(a, decision("e3", "PRESS_KEY", key="Tab"))
-    assert clicked(a) == ["e3"] and len(a.asked) == 2
 
 
-def test_enter_or_space_on_the_page_checks_the_focused_control(tmp_path):
-    a = agent_with(tmp_path, replies=[{"option": "no"}, {"option": "payment"}])
-    a.browser.focused_label.return_value = "Pay ₹79"
-    page = fake_page()
-    page["actions"].append({"id": "key_page", "kind": "key", "label": "The page", "role": "page", "node": None})
-    a.state["page"] = a.browser.observe.return_value = page
-    act(a, decision("key_page", "PRESS_KEY", key="Space"))
-    assert a.asked[0]["kind"] == "confirm" and clicked(a) == []
 
 
-def test_pending_outcomes_are_rechecked_and_unclear_ones_stop_everything(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}])
-    outcomes(monkeypatch, ("pending", ""), ("unclear", ""))
-    approve(a, decision("e6", "CLICK"))
-    assert a.state["commit"]["checks"] == 1 and a.state["status"] == "ready"
-    act(a, decision("e5", "CLICK"))  # e.g. a step on the bank's page
-    assert a.state["status"] == "blocked" and "can't tell whether Pay ₹79 went through" in a.told[-1]["text"]
-    assert "bank" not in a.told[-1]["text"]  # not every commit is a payment
 
 
-def test_an_outcome_the_model_cannot_classify_stops_the_task(tmp_path, monkeypatch):
-    def broken(context, page, label):
-        raise ValueError("The text model returned an invalid outcome; nothing executed.")
-
-    monkeypatch.setattr(loop.jobs, "outcome", broken)
-    a = agent_with(tmp_path, replies=[{"option": "yes"}])
-    approve(a, decision("e6", "CLICK"))
-    assert a.state["status"] == "blocked" and "can't tell whether Pay ₹79 went through" in a.told[-1]["text"]
-    assert "bank" not in a.told[-1]["text"]  # not every commit is a payment
 
 
-def test_a_stale_page_after_approval_keeps_the_approval(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}])
-    outcomes(monkeypatch, ("success", "Pay ₹79"))
-    with pytest.raises(StalePage):
-        act(a, decision("e6", "CLICK"))
-    a.browser.act.side_effect = [StalePage("moved"), {}]
-    with pytest.raises(StalePage):
-        act(a, decision("e6", "CLICK"))
-    assert a.state["approval"] is not None
-    act(a, decision("e6", "CLICK"))
-    assert len(a.asked) == 1 and a.state["approval"] is None
 
 
-def test_card_details_are_never_offered_or_saved_after_success(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}])
-    a.state["card_parts"] = {"card.number": "4111111111111111", "card.expiry": "12/29", "card.cvv": "123"}
-    a.state["pending_vault"] = {"card.old.cvv": "123"}
-    outcomes(monkeypatch, ("success", "Pay ₹79"))
-    approve(a, decision("e6", "CLICK"))
-    assert a.vault.writes == [] and a.profile.data["cards"] == []
-    assert a.state["card_parts"] == {} and a.state["pending_vault"] == {}
-    assert len(a.asked) == 1
 
 
-def test_done_waits_for_a_payment_that_is_still_settling(tmp_path, monkeypatch):
-    a = agent_with(tmp_path)
-    a.state["commit"] = {"label": "Pay ₹79", "checks": 0}
-    outcomes(monkeypatch, ("pending", ""), ("success", "Order placed #A1B2"))
-    results = []
-    monkeypatch.setattr(loop.jobs, "result",
-                        lambda context, page: results.append(page["url"]) or ("Ordered.", "Order placed #A1B2", True,
-                                                                              META))
-    act(a, decision("DONE", "DONE"))
-    assert a.state["status"] == "ready" and results == [] and a.state["commit"]["checks"] == 1
-    assert a.state["memory"][-1] == "Waiting for the result of Pay ₹79 before finishing."
-    act(a, decision("DONE", "DONE"))
-    assert a.state["status"] == "done" and len(results) == 1
-    assert "Done: Pay ₹79 (Order placed #A1B2)" in a.state["memory"]
 
 
-def test_a_commit_the_site_is_still_working_on_is_watched_until_it_is_confirmed(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}])
-    outcomes(monkeypatch, ("processing", "Finding drivers nearby"), ("processing", "Finding drivers nearby"),
-             ("success", "Your driver is on the way"))
-    approve(a, decision("e6", "CLICK"))
-    assert [m["text"] for m in a.told].count("Pay ₹79: Finding drivers nearby. I'll tell you as soon as it's "
-                                             "confirmed.") == 1
-    assert a.state["commit"] is None and a.state["memory"][-1] == "Done: Pay ₹79 (Your driver is on the way)"
-    assert a.state["status"] == "ready"
 
 
-def test_a_commit_still_processing_after_the_wait_stops_with_what_the_site_shows(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}])
-    a.processing_ms = 0
-    outcomes(monkeypatch, ("processing", "Finding drivers nearby"))
-    approve(a, decision("e6", "CLICK"))
-    assert a.state["status"] == "blocked" and "Finding drivers nearby" in a.told[-1]["text"]
-    assert "bank" not in a.told[-1]["text"]
 
 
 @pytest.mark.parametrize('operation,action,assessment,expected', [
@@ -222,3 +79,72 @@ def test_a_commit_still_processing_after_the_wait_stops_with_what_the_site_shows
 def test_contextual_commitment_backstops(operation, action, assessment, expected):
     from assistant.rules import commitment_kind
     assert commitment_kind(operation, action, {}, assessment=assessment, key='Enter') == expected
+
+
+def reviewed_agent(tmp_path, monkeypatch, replies=()):
+    from copy import deepcopy
+
+    from test_commit import review_fixture
+
+    from assistant.commit import validate_review
+    state, page, proposal, extraction = review_fixture()
+    a = agent_with(tmp_path, page=page, replies=replies)
+    a.task = state
+    def coordinate(event):
+        if event == 'confirmation':
+            current = deepcopy(proposal)
+            ids = [eid for eid, e in a.task.evidence.items()
+                   if e['observation_id'] == next(reversed(a.task.observations))]
+            current['evidence_ids'] = ids
+            for line in current['lines']:
+                line['evidence_ids'] = ids
+            validate_review(a.task, current, extraction)
+            a.task.proposal = current
+    monkeypatch.setattr(a, 'coordinate', coordinate)
+    a.task.progress['account_reservation_key'] = 'shop:test-account'
+    return a
+
+
+def test_exact_review_waits_for_new_jev_choice_after_approval(tmp_path, monkeypatch):
+    a = reviewed_agent(tmp_path, monkeypatch, [{'option': 'yes'}])
+    act(a, decision('e6', 'CLICK'))
+    a.browser.act.assert_not_called()
+    assert a.task.approval and not a.task.approval['consumed']
+    assert 'Rain fee' in a.asked[0]['text']
+    act(a, decision('e6', 'CLICK'))
+    assert a.browser.act.call_count == 1 and a.task.approval['consumed']
+    assert [r['phase'] for r in a.journal.records()] == ['dispatching', 'executed']
+
+
+def test_declining_full_review_executes_nothing(tmp_path, monkeypatch):
+    a = reviewed_agent(tmp_path, monkeypatch, [{'option': 'no'}])
+    act(a, decision('e6', 'CLICK'))
+    a.browser.act.assert_not_called()
+    assert a.task.approval is None and len(a.asked) == 1
+
+
+def test_commit_without_complete_review_blocks(tmp_path):
+    a = agent_with(tmp_path)
+    act(a, decision('e6', 'CLICK'))
+    assert a.task.status == 'blocked' and not a.asked
+    a.browser.act.assert_not_called()
+
+
+def test_ambiguous_commit_receipt_never_repeats(tmp_path, monkeypatch):
+    from assistant.browser import ExecutionUncertain
+    a = reviewed_agent(tmp_path, monkeypatch, [{'option': 'yes'}])
+    act(a, decision('e6', 'CLICK'))
+    a.browser.act.side_effect = ExecutionUncertain('lost acknowledgment')
+    act(a, decision('e6', 'CLICK'))
+    assert a.task.approval['consumed'] and a.task.status == 'blocked'
+    assert a.journal.interrupted()
+    assert a.browser.act.call_count == 1
+
+
+def test_persisted_execution_survives_failed_observation(tmp_path, monkeypatch):
+    a = reviewed_agent(tmp_path, monkeypatch, [{'option': 'yes'}])
+    act(a, decision('e6', 'CLICK'))
+    a.browser.observe.side_effect = StalePage('navigation')
+    with pytest.raises(StalePage):
+        act(a, decision('e6', 'CLICK'))
+    assert a.task.approval['consumed'] and a.journal.records()[-1]['phase'] == 'executed'

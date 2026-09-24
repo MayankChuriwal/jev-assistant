@@ -1,6 +1,6 @@
 # Jev Assistant
 
-Read `docs/superpowers/specs/2026-09-23-jev-assistant-design.md` before editing. Loop: page → indexed elements → one Jev operation + target → execution.
+Read `docs/superpowers/specs/2026-09-24-local-agent-reliability-design.md` before editing. Loop: page → indexed elements → one Jev operation + target → execution.
 
 - Input is a natural-language goal. No site-specific scripts, plans, or field values.
 - Jev chooses every operation and target in one request per step. Use only the chosen operation's target answer.
@@ -12,3 +12,7 @@ Read `docs/superpowers/specs/2026-09-23-jev-assistant-design.md` before editing.
 - Commit per plan task. Never push unless asked.
 
 Checks: `uv run ruff check . && uv run pytest && uv run pytest -m browser && node --check assistant/snapshot.js`
+
+- Chat answers become structured facts; only a fresh Jev decision selects an action.
+- Dispatch through `dispatch_once`; completion through `completion_report`. Unknown outcomes never retry.
+- Secrets use task/origin/challenge/field scope. No card vault, device takeover, or inferred geolocation.

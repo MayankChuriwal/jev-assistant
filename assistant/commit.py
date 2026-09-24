@@ -565,7 +565,9 @@ def dispatch_once(state, journal: Journal, decision: dict, page: dict, *, act, i
                     or decision['choice'] not in challenge.get('field_ids', [])):
                 raise ValueError('input challenge scope is stale or mismatched')
         if challenge_id is not None and any(x.get('challenge_id') == challenge_id
-                and x.get('status') in {'pending', 'unknown', 'executed'} for x in state.executions.values()):
+                and (x.get('status') in {'pending', 'unknown'}
+                     or x.get('status') == 'executed' and (x.get('submission')
+                         or x.get('choice') == decision['choice'])) for x in state.executions.values()):
             raise ValueError('challenge input already submitted; observe its outcome')
         challenge = deepcopy(challenge)
         parent_id = challenge.get('commitment_execution_id')
@@ -601,6 +603,10 @@ def dispatch_once(state, journal: Journal, decision: dict, page: dict, *, act, i
                       observation_id=decision['observation_id'], operation=decision['operation'],
                       choice=decision['choice'], origin=observation['origin'], challenge_id=challenge_id,
                       commitment_execution_id=parent_id,
+                      submission=bool(challenge_id and issued['kind'] == 'authentication' and (
+                          decision['operation'] in {'CLICK', 'DOUBLE_CLICK', 'ACCEPT_DIALOG'}
+                          or decision['operation'] == 'PRESS_KEY' and decision.get('key') == 'Enter'
+                          or decision['operation'] == 'TYPE_TEXT' and action.get('auto_submit') is True)),
                       flow_id=challenge.get('flow_id'), purpose=challenge.get('purpose'),
                       field_role=challenge.get('field_role'), question_id=challenge.get('question_id'),
                       commitment=commitment, proposal_key=proposal_key(proposal) if commitment else None,
@@ -961,3 +967,26 @@ def _durable_terminal(record):
                and evidence[eid].get('revision') == receipt['revision']
                and evidence[eid].get('observation_id') in receipt.get('observation_ids', [])
                and bool(evidence[eid].get('quote')) for eid in receipt['evidence_ids'])
+
+
+def review_text(state, proposal: dict) -> str:
+    """Render only an arithmetic-checked current review, retaining inclusion/estimate terms."""
+    from decimal import Decimal
+    if not _current_review(state, proposal):
+        raise ValueError('display requires a current verified review')
+    extraction = _runtime(state)['reviews'][_digest(proposal)]['extraction']
+    exponent = extraction['exponent'] if proposal['total_kind'] != 'not_applicable' else 0
+    def amount(value):
+        return f"{proposal['currency']} {Decimal(value).scaleb(-exponent):.{exponent}f}"
+    lines = [proposal['action'], 'Service: ' + proposal['service'], 'Account: ' + proposal['account'],
+             'Destination: ' + proposal['destination'], *proposal['items'], 'Option: ' + proposal['option'],
+             'Timing: ' + proposal['timing'], 'Payment: ' + proposal['payment']]
+    for row in proposal['lines']:
+        suffix = f" (included in {row['included_in']})" if row['included_in'] else ''
+        if row['role'] == 'later_estimate':
+            suffix += ' (later estimate, excluded from payable total)'
+        lines.append(f"{row['label']}: {amount(row['amount_minor'])}{suffix}")
+    if proposal['total_minor'] is not None:
+        lines.append(f"Total ({proposal['total_kind']}): {amount(proposal['total_minor'])}")
+    lines.extend(proposal['later_terms'])
+    return '\n'.join(lines)

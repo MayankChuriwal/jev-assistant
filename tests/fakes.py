@@ -65,12 +65,22 @@ def agent_with(tmp_path, *, replies=(), page=None, vault=None, profile=None):
     a.asker = lambda message: a.asked.append(message) or (queue.pop(0) if queue else {"cancel": True})
     a.notify = a.told.append
     a.provide_file, a.screenshots, a.record_dir = None, False, None
+    def coordinate_reply(system, payload, **kwargs):
+        if 'Classify the external effect' in system:
+            return {'effect': 'preparation'}, {}
+        return dict(objective=a.task.objective, facts=[], requirements=[], completion=[], auth=None,
+                    progress=None, proposal=None, outcome=None, notice=None, recovery=None), {}
+    a.initialize_task("Order Diet Coke on Instamart", journal_dir=tmp_path / "journals",
+                      coordinator_client=coordinate_reply)
     a.state = loop.Agent.new_state(a.browser, "Order Diet Coke on Instamart", "Diet Coke", page, False)
     a.state["started_at"] = time.perf_counter()
+    a.retain_observation(page)
     return a
 
 
 def act(a, d):
-    a.state["decision"] = d
+    a.validate_decision(d, a.state["page"])
+    a.state["decision"] = {**d, "id": __import__("uuid").uuid4().hex, "revision": a.task.revision,
+                           "observation_id": next(reversed(a.task.observations))}
     a.state["status"] = "predicted"
     return a.command("act", {"fingerprint": a.state["page"]["fingerprint"]})

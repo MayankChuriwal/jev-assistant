@@ -431,7 +431,7 @@ def observe_auth(state: TaskState, event: dict) -> dict:
                 if (execution.get('flow_id') == event['flow_id']
                         and execution.get('revision') == state.revision
                         and execution.get('kind') == 'navigation'
-                        and execution.get('status') == 'succeeded'
+                        and execution.get('status') in {'succeeded', 'executed'}
                         and execution.get('origin') in allowed
                         and execution.get('destination_origin') == origin
                         and execution.get('observation_id') in order
@@ -466,7 +466,7 @@ def observe_auth(state: TaskState, event: dict) -> dict:
     if event['execution_id'] is not None or status in {'submitted', 'rejected'}:
         if (not execution or execution.get('submission') is not True
                 or execution.get('revision') != state.revision
-                or execution.get('status') not in {'dispatched', 'succeeded', 'uncertain'}
+                or execution.get('status') not in {'dispatched', 'succeeded', 'uncertain', 'executed', 'unknown'}
                 or execution.get('observation_id') not in state.observations
                 or any(execution.get(k) != event[k] for k in
                        ('flow_id', 'challenge_id', 'origin', 'purpose', 'field_role'))):

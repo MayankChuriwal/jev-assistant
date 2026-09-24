@@ -2,31 +2,37 @@
 only for what they alone can give, and no model ever sees a secret."""
 
 import base64
+import hashlib
 import json
 import re
 import sys
 import time
+from copy import deepcopy
 from pathlib import Path
 from urllib.parse import urlparse
+from uuid import uuid4
 
-from . import jobs, rules
-from .browser import Browser, ExecutionUncertain, StalePage, unique
+from . import commit, coordinator, interaction, jobs, model, rules
+from .browser import Browser, StalePage, unique
 from .model import action_space, choose, field_context, field_value, url_value
-from .profile import CARD_PARTS, HOME, SECRETS, Profile, Secrets, Vault
-from .questions import LOGIN_FIRST, MAX_ACTIONS, MAX_DECISIONS
+from .profile import HOME, SECRETS, Profile, Secrets, Vault
+from .state import (
+    TaskState,
+    begin_recovery,
+    cite,
+    observe_state,
+    public_context,
+    put_fact,
+    record_progress_change,
+    spend,
+    track_progress,
+)
+from .state import amend as amend_task
 
 STOPPED = {"done", "blocked", "failed", "cancelled"}
 TALK = {"ASK_USER", "CONFIRM", "NOTE", "DONE", "BLOCKED"}
 PRIVATE = {"browser", "answers", "unused", "pending_vault", "card_parts"}  # hold secret values
-EDITABLE = {"textbox", "searchbox", "spinbutton", "combobox"}
-COMMIT_OPS = {"CLICK", "DOUBLE_CLICK", "PRESS_KEY", "ACCEPT_DIALOG", "LOOK"}
-SAVE_AS = {f"card.{part}" for part in CARD_PARTS}
 ASK_TRIES = 5
-OUTCOME_CHECKS = 10
-HELP_ROUNDS = 2
-CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
-IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
-QUIET = {"WAIT", "SCROLL_UP", "SCROLL_DOWN", "SCROLL_LEFT", "SCROLL_RIGHT"}  # repeating these is not going in circles
 TRACE_STEP = ("step", "operation", "action", "choice", "probability", "confidence", "text", "drop", "files",
               "page_changed", "url", "elapsed_ms", "unconfirmed")
 TRACE_DECISION = ("operation", "choice", "confidence", "operation_probabilities", "latency_ms", "elapsed_ms")
@@ -50,42 +56,11 @@ def expects(action):
 
 
 class Agent:
-    interrupted = None  # set by the chat: true once the user cancelled or changed the task during a step
+    interrupted = None
     trace_dir = HOME / "traces"
-    steady_ms = 3000  # a page still changing this soon after a step is read again before the user is asked
-    processing_ms = 300000  # how long to watch a commit the site is still working on (a ride finding a driver)
-    outcome_pause = 5.0  # seconds between looks at that commit
-
-    def __init__(self, url, goal, *, asker=None, notify=None, profile=None, vault=None, record_dir=None,
-                 screenshots=False, provide_file=None, browser=None, title=None, trace_dir=None):
-        goal = goal.strip() if isinstance(goal, str) else "\n".join(goal).strip()
-        if not goal:
-            raise ValueError("Supply a task")
-        self.asker, self.notify, self.provide_file = asker, notify, provide_file
-        self.profile = profile or Profile()
-        self.vault = vault or Vault()
-        self.secrets = Secrets(self.profile.hidden_values())
-        self.record_dir = Path(record_dir) if record_dir else None
-        if trace_dir:
-            self.trace_dir = Path(trace_dir)
-        self.screenshots = screenshots or bool(record_dir)
-        title = title or goal[:60]
-        token = SECRETS.set(self.secrets)
-        try:
-            if url is None:
-                url, title, _ = jobs.start(goal)
-            self.browser = browser or Browser(url, geolocation=self.profile.geolocation())
-            try:
-                page = self.clean(self.browser.observe(screenshot=False))
-            except Exception:
-                self.browser.close()
-                raise
-        finally:
-            SECRETS.reset(token)
-        self.state = self.new_state(self.browser, goal, title, page, bool(self.record_dir))
-        if self.record_dir:
-            self.record_dir.mkdir(parents=True, exist_ok=True)
-            (self.record_dir / "000000.png").write_bytes(base64.b64decode(page["screenshot"]))
+    steady_ms = 3000
+    processing_ms = 300000
+    outcome_pause = 5.0
 
     @staticmethod
     def new_state(browser, goal, title, page, record):
@@ -96,30 +71,12 @@ class Agent:
             commit=None, pending_vault={}, card_parts={}, help_rounds={}, login=None, errors=[],
         )
 
-    # ---- what the user and the models see
-
     def snapshot(self):
         return {
             **{k: v for k, v in self.state.items() if k not in PRIVATE},
             "elements": action_space(self.state["page"]["actions"])[0],
+            "task": public_context(self.task),
         }
-
-    def context(self):
-        """The goal as Jev and the text model read it: goal, task memory, profile summary, approval."""
-        s = self.state
-        lines = [f"Goal: {s['goal']}"]
-        if s.get("login") and not s["login"]["done"]:
-            lines.append(LOGIN_FIRST.format(host=s["login"]["host"]))
-        if s["memory"]:
-            lines.append("Task memory:\n" + "\n".join(f"- {item}" for item in s["memory"][-30:]))
-        lines.append("Profile: " + json.dumps(self.profile.summary(), ensure_ascii=False))
-        approval = s["approval"]
-        if approval:
-            amount = f" ({approval['amount']})" if approval["amount"] else ""
-            lines.append(f"Approval: the user approved {approval['action_label']}{amount}.")
-        else:
-            lines.append("Approval: none.")
-        return "\n".join(lines)
 
     def say(self, text, kind="info", **extra):
         message = {"from": "agent", "kind": kind, "text": text, **extra}
@@ -136,7 +93,7 @@ class Agent:
         reply = self.asker(message) or {}
         if reply.get("cancel"):
             raise Halt("cancelled", "Cancelled. Nothing more will be done.")
-        logged = {**reply, "text": "••••"} if message["kind"] == "secret" and "text" in reply else reply
+        logged = {"text": "••••"} if message["kind"] == "secret" else self.secrets.redact(reply)
         self.state["messages"].append({"from": "user", **logged})
         return reply
 
@@ -152,43 +109,8 @@ class Agent:
             text = f"{problem} {question}"
         raise Halt("blocked", "I couldn't get a value that fits this field, so nothing was typed.")
 
-    # ---- the loop
-
     def elapsed(self):
         return round((time.perf_counter() - self.state["started_at"]) * 1000)
-
-    def clean(self, page):
-        """The page as the agent keeps it: hidden values replaced before anything reads or truncates the text,
-        fields that hold secrets masked, and screenshots taken with those fields blurred."""
-        page["text"] = self.secrets.text(page["text"])
-        page["title"] = self.secrets.text(page["title"])
-        page["actions"] = self.secrets.redact(page["actions"])
-        for action in page["actions"]:
-            if action.get("value") and (action.get("frame"), action.get("node")) in self.secrets.nodes:
-                action["value"] = "[secret]"  # an emptied field (a rejected code) still reads as empty
-        if self.screenshots:
-            page["screenshot"] = self.browser.screenshot(masked=self.secrets.nodes)
-        return page
-
-    def observe(self):
-        page = self.clean(self.state["browser"].observe(screenshot=False))
-        self.state["page"] = page
-        self.state["files"].extend(page.get("downloads", []))
-        self.forget_accepted(page)
-        return page
-
-    def forget_accepted(self, page):
-        """A value the site took no longer counts against its field: the page moved on and the field is gone.
-        The next code for that field (another login, a bank's OTP) starts with its own attempts."""
-        labels = {a["label"] for a in page["actions"]}
-        for where, typed in list(self.state["typed"].items()):
-            if typed["source"] in {"vault", "profile"}:  # a saved value may be wrong: it counts until it works
-                continue
-            moved = typed.get("url") and urlparse(typed["url"])[1:3] != urlparse(page["url"])[1:3]
-            if moved and where[1] not in labels:
-                if typed["key"]:
-                    self.state["rejected"].add((where, typed["key"]))  # a code is used once: never offer it again
-                del self.state["typed"][where]
 
     def file_name(self, path):
         """A file's name as logs and models may see it: profile values hidden, even inside names like Jane_Doe_CV."""
@@ -197,76 +119,46 @@ class Agent:
         return self.secrets.text(spaced) if self.secrets.text(spaced) != spaced else name
 
     def command(self, name, body=None):
-        token = SECRETS.set(self.secrets)  # every model request inside this step is redacted for this task
+        token = SECRETS.set(self.secrets)
         try:
-            if name == "tick":
+            if name == 'tick':
                 return self.tick()
-            if name == "predict":
+            if name == 'predict':
                 return self.predict()
-            if name == "act":
+            if name == 'act':
                 return self.act(body or {})
-            raise ValueError("Unknown command")
+            raise ValueError('Unknown command')
         except Halt as halt:
-            self.state["status"] = halt.status
-            self.state["decision"] = None
+            self.task.set_status(halt.status)
+            self.state.update(status=halt.status, decision=None)
             self.say(str(halt))
+            if halt.status in {'cancelled', 'failed'}:
+                self.release_secrets()
             return self.snapshot()
         except StalePage:
             raise
-        except (ValueError, RuntimeError) as error:  # a model or network problem: the trace keeps what it was
-            self.state["errors"].append({"step": len(self.state["history"]), "error": str(error)})
+        except (ValueError, RuntimeError) as error:
+            if self.task.status == 'blocked':
+                self.state.update(status='blocked', decision=None)
+                self.say(self.task.progress.get('blocker', str(error)))
+                return self.snapshot()
+            self.state['errors'].append({'step': len(self.state['history']),
+                                         'error': self.secrets.text(str(error))})
             raise
         finally:
             SECRETS.reset(token)
 
     def tick(self):
-        state = self.state
         try:
             self.predict()
-            return self.act({"fingerprint": state["page"]["fingerprint"]})
+            if self.state['decision'] is None:
+                return self.snapshot()
+            return self.act({'fingerprint': self.state['page']['fingerprint']})
         except StalePage:
-            state["decision"] = None
-            state["status"] = "ready"
+            self.state.update(decision=None, status='ready')
             self.observe()
-            state["elapsed_ms"] = self.elapsed()
+            self.state['elapsed_ms'] = self.elapsed()
             return self.snapshot()
-
-    def predict(self):
-        state = self.state
-        if state["started_at"] is None:
-            state["started_at"] = time.perf_counter()
-        if not state["browser"].fresh(state["page"]):
-            self.observe()
-        state["decision"] = None
-        if state["status"] in STOPPED:
-            raise ValueError("This task has stopped. Start a new one.")
-        if len(state["decisions"]) >= MAX_DECISIONS:
-            raise Halt("blocked", f"Reached the {MAX_DECISIONS}-decision budget.")
-        self.track_login(state["page"])
-        state["decision"] = choose(state["page"], self.context(), state["history"])
-        state["decisions"].append(
-            {**state["decision"], "fingerprint": state["page"]["fingerprint"], "elapsed_ms": self.elapsed()}
-        )
-        state["status"] = "predicted"
-        return self.snapshot()
-
-    def act(self, body):
-        state = self.state
-        decision, page = state["decision"], state["page"]
-        if not decision or body.get("fingerprint") != page["fingerprint"]:
-            raise ValueError("Observe and choose before acting")
-        # Consume once, before any mutation or model call. A retry cannot double-click.
-        state["decision"] = None
-        operation = decision["operation"]
-        if operation in TALK:
-            if not state["browser"].fresh(page):
-                state["status"] = "ready"
-                raise StalePage("Page changed since the decision. Choose again.")
-            if operation in {"ASK_USER", "BLOCKED"}:
-                self.steady(page)
-            return self.talk(operation, page)
-        action = next(a for a in page["actions"] if a["id"] == decision["choice"])
-        return self.perform(operation, action, decision, page)
 
     def steady(self, page):
         """Asking costs the user's time. Right after a step the site may still be switching screens (a sign-in
@@ -278,711 +170,14 @@ class Agent:
                 self.state["status"] = "ready"
                 raise StalePage("The page changed while I was about to ask. Choose again.")
 
-    def perform(self, operation, action, decision, page):
-        """Execute one browser operation through the commit gate, for Jev's choices and the user's picks alike."""
-        if len(self.state["history"]) >= MAX_ACTIONS:
-            raise Halt("blocked", f"Stopped at the {MAX_ACTIONS}-action budget.")
-        self.stop_if_interrupted()
-        if operation == "CLICK" and rules.saved_address(action["label"]) and not self.state.get("address_chosen"):
-            addresses = [a for a in page["actions"] if a["kind"] == "click" and rules.saved_address(a["label"])]
-            if len(addresses) >= 2 and not self.prefers(action, addresses):
-                return self.ask_address(page, addresses)  # the user decides where it goes
-        if operation == "CLICK":
-            choices, target = rules.priced_choice(page, action)
-            if choices and not self.prefers(target, choices):
-                return self.ask_choice(choices)  # the user picks which ride, size, or plan, seeing the prices
-        if operation == "LOOK":
-            approved = (self.state["approval"] or {}).get("look")
-            if approved and approved["fingerprint"] == page["fingerprint"]:
-                spot = {**approved, "commits": True}  # the spot the user said yes to, on the page they saw
-            else:
-                spot = self.look(page, "the control the task needs next")
-            if spot is None:
-                misses = self.state.setdefault("look_misses", {})
-                misses[page["fingerprint"]] = misses.get(page["fingerprint"], 0) + 1
-                if misses[page["fingerprint"]] >= 2:
-                    raise Halt("blocked", "I looked at this page twice and couldn't find what the next step needs.")
-                self.state["memory"].append("Looked at the screen: nothing there fits the next step.")
-                self.state["status"] = "ready"
-                return self.snapshot()
-            action = {**action, **spot}  # the gate reads its name, its words, and whether it commits
-        commit = self.gate(operation, action, decision, page)
-        if commit is False:
-            return self.snapshot()
-        inputs, helper, shown = self.inputs(operation, action, decision, page)
-        self.stop_if_interrupted()  # the last moment before anything reaches the page
-        self.execute(operation, action, decision, page, inputs, helper, shown,
-                     commit=commit if isinstance(commit, str) else None)
-        self.check_commit()
-        return self.snapshot()
-
-    def track_login(self, page):
-        """The user wants to be signed in before anything else. A site that offers sign-in makes it the next step,
-        until its sign-in controls are gone after something was typed to sign in."""
-        s = self.state
-        offered, host = rules.login_offered(page), rules.host(page["url"])
-        if s.get("login") is None:
-            if offered:
-                s["login"] = {"host": host, "since": len(s["history"]), "done": False}
-        elif not s["login"]["done"] and not offered and host == s["login"]["host"] and not rules.code_field(page):
-            # ponytail: "controls gone after a code or password"; a sign-in banner left up needs a user update.
-            if any(h.get("operation") == "TYPE_TEXT" and str(h.get("text") or "").startswith("[secret")
-                   for h in s["history"][s["login"]["since"]:]):
-                s["login"]["done"] = True
-                s["memory"].append(f"Signed in to {host}.")
-
-    def prefers(self, action, choices):
-        """Whether the user named this one of the choices, in the goal, a saved preference, or an answer: by its own
-        words, not ones the other choices share or the site's name ("uber" names no particular ride)."""
-        s = self.state
-        others = set().union(*(rules.words(a["label"]) for a in choices if a is not action))
-        mine = rules.words(action["label"]) - others - rules.words(rules.host(s["page"]["url"]).replace(".", " "))
-        said = [s["goal"], *(p["text"] for p in self.profile.data["preferences"]),
-                *(m for m in s["memory"] if m.startswith("User"))]
-        return any(mine & rules.words(text) for text in said)
-
-    def ask_choice(self, choices):
-        """Which of several priced alternatives (a ride type, a size): the user's call, with prices, in chat."""
-        s = self.state
-        options = []
-        for n, a in enumerate(choices[:10], 1):
-            name = re.split(r"\s(?=\d|[₹$€£])", a["label"])[0].strip()
-            rest = rules.PRICE.sub("", a["label"][len(name):]).strip()
-            options.append({"id": f"o{n}", "label": name[:20],
-                            "description": f"{' – '.join(rules.PRICE.findall(a['label']))} · {rest}"[:72]})
-        reply = self.ask({"kind": "choice", "text": "Which one do you want?", "options": options})
-        picked = next((a for a, o in zip(choices, options) if o["id"] == reply.get("option")), None)
-        if picked:
-            s["memory"].append(f"User chose: {picked['label']}")
-            self.click_same(picked)
-        else:
-            s["memory"].append(f"User answered “Which one do you want?”: {str(reply.get('text', '')).strip()}")
-        s["status"] = "ready"
-        return self.snapshot()
-
-    def ask_address(self, page, addresses):
-        """Which saved address: always the user's choice, unless they saved a preference for one of them."""
-        s = self.state
-        extras = [a for a in page["actions"] if a["kind"] == "click" and rules.address_extra(a["label"])]
-        choices = (addresses[:8] + extras[:2])[:10]
-        options = [{"id": f"o{n}", "label": a["label"].split(",")[0].strip()[:20], "description": a["label"][:72]}
-                   for n, a in enumerate(choices, 1)]
-        reply = self.ask({"kind": "choice", "text": "Which address should I deliver to?", "options": options,
-                          "remember": True})
-        s["address_chosen"] = True
-        picked = next((a for a, o in zip(choices, options) if o["id"] == reply.get("option")), None)
-        if picked:
-            s["memory"].append(f"User chose the address: {picked['label']}")
-            self.click_same(picked)
-        else:
-            s["memory"].append(f"User wants it delivered to: {str(reply.get('text', '')).strip()} (not a saved "
-                               "address: add it or search for it)")
-        s["status"] = "ready"
-        return self.snapshot()
-
-    def profile_field(self, page):
-        """An empty field for a detail the profile holds (phone, email, name), or None."""
-        return next((a for a in page["actions"] if a["kind"] == "fill" and not a.get("value")
-                     and rules.profile_detail(a) and self.profile.data.get(rules.profile_detail(a))), None)
-
-    def type_profile_detail(self, page):
-        """Type the profile's value (logged as a placeholder) instead of asking the user for it."""
-        field = self.profile_field(page)
-        key = rules.profile_detail(field)
-        self.state["unused"][(rules.host(page["url"]), field["label"])] = (
-            self.profile.value(key), f"[profile:{key}]", "profile", key)
-        pick = {"operation": "TYPE_TEXT", "choice": field["id"], "probabilities": {field["id"]: 1.0},
-                "confidence": 1.0, "latency_ms": 0, "usage": {}}
-        return self.perform("TYPE_TEXT", field, pick, page)
-
-    def keep_secret(self, value):
-        """Hold a secret answer for this task: registered for redaction, usable by its name, never logged."""
-        name = f"answer{len(self.state['answers']) + 1}"
-        self.state["answers"][name] = value
-        self.secrets.add(value, f"[secret:{name}]")
-        return name
-
-    def learn(self, key, value):
-        """A detail the user gave joins their profile: hidden from every model from now on, never asked again."""
-        self.profile.data[key] = value
-        self.profile.save()
-        for hidden, placeholder in self.profile.hidden_values():
-            self.secrets.add(hidden, placeholder)
-        names = {"phone": "phone number", "email": "email address", "name": "name"}
-        self.say(f"Saved your {names[key]} to your profile, so it stays hidden from the models and isn't asked again.")
-
     def stop_if_interrupted(self):
         """A cancel or a change from the user arrived while this step was decided: decide again with it."""
         if self.interrupted and self.interrupted():
             self.state["status"] = "ready"
             raise StalePage("The user cancelled or changed the task. Choose again.")
 
-    def look(self, page, purpose):
-        """Find by sight what the element list can't name: one grid question, then a closer one inside the chosen
-        cell. The text model answers with cell names only; code turns the cell into a point. Returns
-        {"point", "label", "text", "commits"}, or None when nothing on screen fits."""
-        s = self.state
-        hide = self.hidden_details()
-        image, cells = s["browser"].grid_screenshot(masked=self.secrets.nodes, hide=hide)
-        found, meta = jobs.look(self.context(), page, purpose, image, cells)
-        s["text_calls"].append({**meta, "field": "LOOK", "value": found and found["cell"]})
-        if found is None:
-            return None
-        close, finer = s["browser"].grid_screenshot(region=cells[found["cell"]], columns=4, rows=4,
-                                                    masked=self.secrets.nodes, hide=hide, scale=2)
-        cell, meta = jobs.look_closer(found["label"], close, finer)
-        s["text_calls"].append({**meta, "field": "LOOK closer", "value": cell})
-        return {"point": list(rules.centre(finer[cell])), "label": found["label"], "text": found.get("text", ""),
-                "commits": found.get("commits", False)}
-
-    def gate(self, operation, action, decision, page):
-        """True for ordinary actions; the commit's label once the user approved exactly this action; False when
-        they declined. A fresh yes re-reads the page before anything runs."""
-        s = self.state
-        key = decision.get("key")
-        if operation not in COMMIT_OPS or (operation == "PRESS_KEY" and key not in {"Enter", "Space"}):
-            return True
-        focused = s["browser"].focused_label() if operation == "PRESS_KEY" and action.get("node") is None else ""
-        label = rules.commit_label(operation, action, page, key, focused)
-        approval = s["approval"]
-        steps = len(s["history"])
-        if approval and rules.approval_valid(approval, page, steps) and self.matches(approval, action, label):
-            if not s["browser"].fresh(page, action):
-                raise StalePage("Page changed since the approval. Choose again.")
-            return label or approval["action_label"]
-        if not label:
-            return True
-        if self.confirm(page, label, action):
-            if operation == "LOOK":  # the yes is for this spot, whatever a later look would call it
-                s["approval"]["look"] = {"point": action["point"], "label": action["label"],
-                                         "text": action.get("text", ""), "fingerprint": page["fingerprint"]}
-            # The user may have taken a while and a total outside this control may have moved: read the page
-            # again, and act only if the approval still holds there.
-            raise StalePage("Approved. Reading the page again before acting.")
-        return False
-
-    def matches(self, approval, action, label):
-        """Whether this is the action the user approved: the same control, or the same words when none was named."""
-        if approval.get("look") or action.get("point"):  # a spot found by sight matches only the spot approved
-            return bool(approval.get("look")) and action.get("point") == approval["look"]["point"]
-        if approval.get("target"):
-            return (action.get("frame"), action.get("node")) == approval["target"]
-        return bool(label) and rules.overlap(label, approval["action_label"])
-
-    def check_commit(self):
-        """After a commit: success carries on, an explicit failure is reported, anything unclear stops the task.
-        Returns the outcome, or None when no commit is waiting."""
-        s = self.state
-        commit = s["commit"]
-        if not commit or s["status"] in STOPPED:
-            return None
-        while True:
-            try:
-                outcome, evidence, _ = jobs.outcome(self.context(), s["page"], commit["label"])
-            except ValueError:
-                outcome, evidence = "unclear", ""  # the commit already ran; an unreadable answer is not a failure
-            if outcome != "processing":
-                break
-            # The site is working on it (finding a driver): nothing to do but watch, and say so once.
-            if self.elapsed() - commit.get("since", 0) >= self.processing_ms:
-                s["commit"] = None
-                raise Halt("blocked", f"{commit['label']} went through, but after {self.processing_ms // 60000} "
-                                      f"minutes the site still shows “{evidence}”. I stopped watching; check the "
-                                      "site or its app for updates.")
-            if not commit.get("told"):
-                commit["told"] = True
-                self.say(f"{commit['label']}: {evidence or 'the site is working on it'}. I'll tell you as soon as "
-                         "it's confirmed.")
-            self.stop_if_interrupted()
-            time.sleep(self.outcome_pause)
-            self.observe()
-        commit["checks"] += 1
-        if outcome == "pending" and commit["checks"] < OUTCOME_CHECKS:
-            return "pending"
-        s["commit"] = None
-        if outcome == "success":
-            s["memory"].append(f"Done: {commit['label']} ({evidence})")
-            for key, value in s["pending_vault"].items():
-                if key.startswith("login."):
-                    self.vault.set(key, value)
-            s["pending_vault"].clear()
-            s["card_parts"].clear()
-        elif outcome == "failed":
-            s["memory"].append(f"{commit['label']} failed: {evidence}. Trying again needs a new approval.")
-            self.say(f"{commit['label']} didn't go through: {evidence}")
-        else:
-            raise Halt("blocked", f"I can't tell whether {commit['label']} went through, so I stopped rather than "
-                                  "risk doing it twice. Please check the site or its app before trying again.")
-        return outcome
-
-    def offer_card_save(self):
-        """After a successful payment with a card typed in this task, offer to keep it in the Keychain."""
-        parts = self.state["card_parts"]
-        number = re.sub(r"\D", "", parts.get("card.number", ""))
-        if len(number) >= 12:
-            last4 = number[-4:]
-            reply = self.ask({"kind": "choice", "text": f"Save the card ending {last4} for next time? It stays in "
-                              "this Mac's Keychain.", "options": [{"id": "save", "label": "Save card"},
-                                                                  {"id": "skip", "label": "Not now"}]})
-            if reply.get("option") == "save":
-                card = f"card{last4}"
-                for key, value in parts.items():
-                    self.vault.set(f"card.{card}.{key.split('.')[1]}", value)
-                self.profile.add_card(card, f"Card ••{last4}", last4)
-                self.say(f"Saved the card ending {last4}.")
-        parts.clear()
-
-    def execute(self, operation, action, decision, page, inputs, helper, shown, commit=None):
-        state = self.state
-        entry = {
-            "step": len(state["history"]) + 1,
-            "operation": operation,
-            "action": action["label"],
-            "kind": action["kind"],
-            "choice": decision["choice"],
-            "probability": decision["probabilities"].get(decision["choice"], 1.0),
-            "confidence": decision.get("confidence", 1.0),
-            "latency_ms": decision.get("latency_ms", 0),
-            "text": shown,
-            "key": inputs.get("key"),
-            "drop": inputs["drop"]["label"] if "drop" in inputs else None,
-            "files": [self.file_name(f) for f in inputs["files"]] if "files" in inputs else None,
-            "text_helper": helper["model"] if helper else None,
-            "text_latency_ms": helper["latency_ms"] if helper else 0,
-            "page_changed": None,
-            "url": page["url"],
-            "usage": decision.get("usage", {}),
-        }
-        try:
-            # Browser.act checks freshness immediately before input, including after text generation.
-            entry["result"] = state["browser"].act(operation, action, page, **inputs)
-        except ExecutionUncertain as error:
-            state["history"].append({**entry, "unconfirmed": str(error), "elapsed_ms": self.elapsed()})
-            raise Halt("blocked", f"I may already have done “{action['label']}” but can't confirm it, so I "
-                                  "stopped instead of repeating it. Please check before trying again.") from error
-        state["elapsed_ms"] = self.elapsed()
-        # Record execution before observing. A stale post-action observation must not erase the action.
-        state["history"].append({**entry, "executed_ms": state["elapsed_ms"], "elapsed_ms": state["elapsed_ms"]})
-        if commit:  # it ran: spend the approval and watch the outcome, even if the next observation fails
-            state["approval"] = None
-            state["commit"] = {"label": commit, "checks": 0, "since": state["elapsed_ms"]}
-        if operation == "TYPE_TEXT":
-            self.after_typing(action, page)
-        self.observe()
-        state["elapsed_ms"] = self.elapsed()
-        state["history"][-1].update(
-            page_changed=state["page"]["fingerprint"] != page["fingerprint"],
-            url=state["page"]["url"],
-            elapsed_ms=state["elapsed_ms"],
-        )
-        if state["record"]:
-            (self.record_dir / f"{state['elapsed_ms']:06d}.png").write_bytes(
-                base64.b64decode(state["page"]["screenshot"])
-            )
-        recent = state["history"][-3:]
-        # A canvas changes no text the page reports, so looking-and-clicking never counts as making no progress.
-        stuck = len(recent) == 3 and all(h["page_changed"] is False and h["operation"] not in {"WAIT", "LOOK"}
-                                         for h in recent)
-        state["status"] = "ready"
-        state["asks_since_step"] = 0
-        last = state["history"][-1]
-        again = [h for h in state["history"][-20:] if (h["operation"], h["action"], urlparse(h["url"]).path)
-                 == (last["operation"], last["action"], urlparse(last["url"]).path)]
-        looping = last["operation"] not in QUIET and len(again) >= 4
-        if (stuck or looping) and not state.get("relaying"):  # ask for help, never stop silently or circle
-            tried = ", ".join(dict.fromkeys(h["action"] for h in recent))
-            state["memory"].append(f"My last 3 steps ({tried}) changed nothing on this page." if stuck else
-                                   f"I've done “{last['action']}” {len(again)} times recently without getting closer.")
-            self.unblock(state["page"])
-
-    # ---- values an operation needs
-
-    def inputs(self, operation, action, decision, page):
-        """(inputs for the browser, text-model metadata, what the history shows)."""
-        state = self.state
-        if operation == "TYPE_TEXT":
-            value, shown, helper = self.field_input(action, page)
-            return {"text": value}, helper, shown
-        if operation == "OPEN_URL":
-            url, helper = url_value(state["goal"], page, state["history"])
-            state["text_calls"].append({**helper, "field": "URL", "value": url})
-            return {"url": url}, helper, url
-        if operation == "PRESS_KEY":
-            return {"key": decision["key"]}, None, None
-        if operation == "LOOK":
-            return {"point": action["point"]}, None, action["label"]
-        if operation == "DRAG":
-            drop = next(a for a in page["actions"] if a["id"] == decision["drop"])
-            if drop["kind"] == "look":  # a free spot on a canvas or a map
-                spot = self.look(page, f"a free spot to drop “{action['label']}” where the task needs it")
-                if spot is None:
-                    self.state["memory"].append(f"Looked for a spot to drop {action['label']}: nothing fits.")
-                    raise StalePage("Nothing on screen fits the drop. Choose again.")
-                drop = {**drop, "label": spot["label"], "point": spot["point"]}
-            return {"drop": drop}, None, None
-
-        if operation == "UPLOAD":
-            if self.provide_file:
-                return {"files": self.provide_file(action)}, None, None
-            name = action["label"].removeprefix("File input: ").removeprefix("Drop zone: ")
-            reply = self.ask({"kind": "file", "text": f"This step needs a file ({name}). Send it here."})
-            path = reply.get("file")
-            if not path or not Path(path).is_file():
-                raise Halt("blocked", "No file arrived, so nothing was attached.")
-            state["memory"].append(f"User sent the file {self.file_name(path)}")
-            return {"files": [path]}, None, None
-        return {}, None, None
-
-    def field_input(self, action, page):
-        """(value to type, what logs show, text-model metadata) for one field."""
-        s = self.state
-        if not s["browser"].fresh(page, action):
-            raise StalePage("Page changed before text generation. Choose again.")
-        where = (rules.host(page["url"]), action["label"])
-        if where in s["unused"]:  # resolved but never typed (a stale page interrupted): reuse, never re-ask
-            value, shown, _source, _key = s["unused"][where]
-            return value, shown, None
-        previous = self.previous(where)  # first: it records a rejection that allowed() must see
-        context = field_context(self.context(), action, page, s["history"], self.profile.summary(),
-                                self.allowed(where), previous)
-        form, helper = field_value(context)
-        if form[0] == "text" and rules.secret_field(action):  # a code or password is never the model's guess
-            form = self.code_form(action, where)
-        if (form[0] == "text" and rules.addressed_to_user(form[1]) and not rules.free_text(action)) or \
-                (form[0] == "ask" and not form[2] and rules.direction_question(form[1])):
-            reply = self.ask({"kind": "text", "text": form[1]})  # a question about the next step, not a value
-            s["memory"].append(f"User answered “{form[1]}”: {str(reply.get('text', '')).strip()}")
-            raise StalePage("The user answered a question about the next step. Choose again with it.")
-        value, shown, source, key = self.resolve(form, action, where)
-        s["unused"][where] = (value, shown, source, key)
-        s["text_calls"].append({**helper, "field": action["label"], "value": shown})
-        return value, shown, helper
-
-    def code_form(self, action, where):
-        """The user's newest answer that was never typed anywhere, or else a question for the code itself."""
-        s = self.state
-        used = {t["key"] for t in s["typed"].values()} | {key for _, key in s["rejected"]}
-        unused = [key for key in reversed(s["answers"]) if key not in used]
-        if unused:
-            return "secret", unused[0]
-        return "ask", f"Please send what goes in “{action['label']}”: a code or password I won't guess.", True, None
-
-    def previous(self, where):
-        """How the last value for this field fared. Choosing the same field again after a user, Keychain, or
-        profile value means the site rejected it: count it, stop at the limit, and never offer that value again."""
-        s = self.state
-        typed = s["typed"].get(where)
-        if not typed or typed["source"] == "model":
-            return None
-        limit = rules.attempt_limit(typed["key"])
-        if typed["count"] >= limit:
-            raise Halt("blocked", f"The site rejected {typed['count']} values for “{where[1]}”, so I stopped before "
-                                  "your account gets locked.")
-        if typed["key"]:
-            s["rejected"].add((where, typed["key"]))
-        if typed["source"] == "user" and typed.get("origin"):
-            s["pending_vault"].pop(typed["origin"], None)  # a rejected replacement never reaches the Keychain
-        return {"source": typed["source"], "rejected": True, "attempts": typed["count"], "left": limit - typed["count"]}
-
-    def allowed(self, where):
-        """Secret keys the text model may name for this field: never one the site already rejected here."""
-        keys = self.profile.vault_keys() + list(self.state["answers"])
-        return [key for key in keys if (where, key) not in self.state["rejected"]]
-
-    def resolve(self, form, action, where):
-        """(value, shown, source, key) for a field-value answer."""
-        kind = form[0]
-        if kind == "text":
-            text = form[1]
-            whole = re.fullmatch(r"\s*\[profile:(\w+)\]\s*", text)
-            try:
-                if "[secret" in text:  # "[secret]" marks a filled secret field; "[secret:<key>]" names one
-                    raise KeyError(text)
-                if whole:
-                    return self.profile.value(whole[1]), f"[profile:{whole[1]}]", "profile", whole[1]
-                return re.sub(r"\[profile:(\w+)\]", lambda m: self.profile.value(m[1]), text), text, "model", None
-            except KeyError:  # a placeholder copied from the model's redacted view: never type it
-                raise ValueError("The text model wrote a placeholder instead of a value; nothing typed.") from None
-        if kind == "profile":
-            return self.profile.value(form[1]), f"[profile:{form[1]}]", "profile", form[1]
-        if kind == "secret":
-            key = form[1]
-            if key in self.state["answers"]:
-                return self.state["answers"][key], f"[secret:{key}]", "user", key
-            try:
-                value = self.vault.get(key)
-            except KeyError:
-                question = f"I couldn't read your saved {key.rsplit('.', 1)[-1]} from the Keychain. Please send it."
-                return self.ask_field(question, action, True, key, where)
-            self.secrets.add(value, f"[secret:{key}]")
-            return value, f"[secret:{key}]", "vault", key
-        _, question, secret, save_as = form
-        return self.ask_field(question, action, secret, save_as, where)
-
-    def ask_field(self, question, action, secret, key, where):
-        s = self.state
-        before = s["typed"].get(where)
-        # Card details, passwords, and codes are secret whatever the model said.
-        secret = (secret or key in SAVE_AS or (action.get("constraints") or {}).get("type") == "password"
-                  or bool(action.get("group")) or rules.asks_for_secret(question))
-        if before and before["source"] != "model" and before["count"] == rules.attempt_limit(before["key"]) - 1:
-            question += " One try left before the site may lock this."
-        value = self.ask_value(question, action, secret)
-        origin = before and (before["key"] if before["source"] == "vault" else before.get("origin"))
-        if origin:
-            key = origin  # the user's replacement for a rejected Keychain value
-            s["pending_vault"][origin] = value  # the newest one; stored only after a successful commit
-        shown = value
-        if secret:
-            name = self.keep_secret(value)
-            shown = f"[secret:{name}]"
-            key = key or name  # so a rejection can exclude this exact answer
-        if key in SAVE_AS:
-            self.state["card_parts"][key] = value
-        return value, shown, "user", key
-
-    def after_typing(self, action, page):
-        s = self.state
-        where = (rules.host(page["url"]), action["label"])
-        value, shown, source, key = s["unused"].pop(where, (None, None, "model", None))
-        detail = rules.profile_detail(action)
-        told = source == "user" or any(m.startswith("User answered") and value and value in m for m in s["memory"])
-        if detail and value and told and not str(shown).startswith("[") and not self.profile.data.get(detail):
-            self.learn(detail, value)
-        if shown and shown.startswith("[secret:"):
-            for node in action.get("group") or [action["node"]]:
-                self.secrets.nodes.add((action.get("frame"), node))
-        before = s["typed"].get(where, {})
-        origin = key if source == "vault" else before.get("origin")
-        s["typed"][where] = {"source": source, "key": key, "count": before.get("count", 0) + (source != "model"),
-                             "origin": origin, "url": page["url"]}
-
-    # ---- talking operations
-
-    def talk(self, operation, page):
-        state = self.state
-        if operation in {"ASK_USER", "BLOCKED"} and rules.captcha_challenge(page):
-            return self.relay_captcha(page)
-        if operation == "DONE":
-            return self.finish(page)
-        if operation == "BLOCKED":
-            return self.unblock(page)
-        if operation == "NOTE":
-            facts, _ = jobs.note(self.context(), page)
-            state["memory"] += [f"Noted: {fact}" for fact in facts]
-        elif operation == "CONFIRM":
-            self.confirm(page, "the next step")
-        elif state.get("login") and not state["login"]["done"] and self.profile_field(page):
-            # signing in, and the profile already holds the phone or email the page asks for: type it
-            return self.type_profile_detail(page)
-        elif state.get("asks_since_step", 0) >= 2:  # asking again would repeat a question already answered
-            state["memory"].append("I asked the user twice without taking a step in between; their answers are in "
-                                   "task memory. Use them: type them into the field, or scroll or look for where "
-                                   "they go.")
-            state["asks_since_step"] = 0
-            return self.unblock(page)
-        else:
-            state["asks_since_step"] = state.get("asks_since_step", 0) + 1
-            self.ask_user(page)
-        if state["status"] not in STOPPED:
-            state["status"] = "ready"
-        return self.snapshot()
-
-    def ask_user(self, page):
-        s = self.state
-        elements, heads, _ = action_space(page["actions"])
-        question, _ = jobs.compose(self.context(), page, elements)
-        if question["kind"] != "choice" and rules.asks_for_secret(question["text"]):
-            question["kind"] = "secret"  # a code or password is hidden whatever the model called it
-        options = [{"id": f"o{n}", "label": o["label"], "description": o["description"]}
-                   for n, o in enumerate(question["options"], 1)]
-        reply = self.ask({"kind": question["kind"], "text": question["text"], "options": options,
-                          "remember": question["kind"] == "choice" and question.get("preference", False)})
-        picked = next((o for o, shown in zip(question["options"], options) if shown["id"] == reply.get("option")), None)
-        answer = picked["label"] if picked else str(reply.get("text", "")).strip()
-        if not answer:
-            raise Halt("blocked", "I needed an answer to continue.")
-        if not picked and question["kind"] != "secret" and rules.means_current_location(answer):
-            answer = ("their current location. Use the site's option to detect or use the current location; the "
-                      "browser shares this device's location")  # never a stored address
-        if question["kind"] == "secret":
-            name = self.keep_secret(answer)
-            s["memory"].append(f"User answered “{question['text']}” with [secret:{name}] (secret key {name})")
-            return
-        detail = f" ({picked['description']})" if picked and picked["description"] else ""
-        ending = "." if answer.startswith("their current location") else ""
-        s["memory"].append(f"User answered “{question['text']}”: {answer}{detail}{ending}")
-        if reply.get("remember"):
-            preference, _ = jobs.remember(question["text"], answer)
-            self.profile.remember(preference, s["goal"])
-            self.say(f"Saved for next time: {preference}")
-        target = heads.get("click_target", {}).get(picked["element"]) if picked and picked["element"] else None
-        if target and target.get("role") not in EDITABLE:
-            self.choose_option(target)
-
-    def choose_option(self, target):
-        """Click the element the user's pick is tied to, through the same gate as any other click."""
-        self.click_same(target)
-
-    def click_same(self, target):
-        """Click the element the user named on a fresh read of the page, through the same gate as any other click."""
-        page = self.observe()  # the user may have taken a while
-        clicks = [a for a in page["actions"] if a["kind"] == "click"]
-        same = (target.get("frame"), target.get("node"))
-        match = next((a for a in clicks if (a.get("frame"), a.get("node")) == same), None)
-        if match is None:
-            named = [a for a in clicks if a["label"] == target["label"]]
-            match = named[0] if len(named) == 1 else None  # two "Deliver here" buttons: never guess
-        if match is None:
-            return  # the page moved on; Jev decides with the answer in memory
-        pick = {"operation": "CLICK", "choice": match["id"], "probabilities": {match["id"]: 1.0},
-                "confidence": 1.0, "latency_ms": 0, "usage": {}}
-        try:
-            self.perform("CLICK", match, pick, page)
-        except StalePage:
-            self.observe()
-
-    def confirm(self, page, label, action=None):
-        """Show the summary card and wait for an explicit yes. True when approved; the approval is tied to the
-        control that commits (the action itself, or the one the card names)."""
-        s = self.state
-        elements, heads, _ = action_space(page["actions"])
-        card, _ = jobs.confirm_card(self.context(), page, label, elements)
-        target = (action.get("frame"), action["node"]) if action and action.get("node") is not None else None
-        if target is None and card["element"] and not (action and action.get("point")):  # LOOK binds its spot
-            bound = next((a for head in heads.values() for index, a in head.items() if index == card["element"]
-                          and a.get("node") is not None), None)
-            target = (bound.get("frame"), bound["node"]) if bound else None
-        lines = [card["action_label"], *card["lines"]] + ([f"Total: {card['amount']}"] if card["amount"] else [])
-        reply = self.ask({"kind": "confirm", "text": "\n".join(lines), "options": [
-            {"id": "yes", "label": ("Yes, " + card["action_label"])[:20]}, {"id": "no", "label": "No"}]})
-        if reply.get("option") == "yes":
-            s["approval"] = {"action_label": card["action_label"], "amount": card["amount"],
-                             "host": rules.host(page["url"]), "step": len(s["history"]), "target": target}
-            return True
-        change = self.ask({"kind": "choice", "text": "What should I change?", "options": [
-            {"id": "payment", "label": "Payment"}, {"id": "items", "label": "Items"},
-            {"id": "address", "label": "Address"}, {"id": "cancel", "label": "Cancel the task"}]})
-        if change.get("option") == "cancel":
-            raise Halt("cancelled", "Cancelled before anything was committed.")
-        what = change.get("option") or str(change.get("text", "")).strip() or "something"
-        s["memory"].append(f"User declined {card['action_label']} and wants to change the {what}.")
-        return False
-
-    def finish(self, page):
-        s = self.state
-        if s["commit"]:  # a payment still settling decides whether the task is done
-            label = s["commit"]["label"]
-            outcome = self.check_commit()
-            if outcome != "success":
-                if outcome == "pending":
-                    s["memory"].append(f"Waiting for the result of {label} before finishing.")
-                s["status"] = "ready"
-                return self.snapshot()
-        if rules.commerce_goal(s["goal"]) and not any(m.startswith("Done: ") for m in s["memory"]):
-            return self.not_done(page, "nothing was booked, ordered, or paid for in this task yet")
-        text, evidence, achieved, _ = jobs.result(self.context(), page)
-        if not achieved:
-            return self.not_done(page, "the page doesn't show the goal done yet")
-        if not evidence:
-            text += " I couldn't find proof of this on the page, so please check it yourself."
-        self.say(text, kind="result", evidence=evidence)
-        self.state["status"] = "done"
-        self.state["elapsed_ms"] = self.elapsed()
-        return self.snapshot()
-
-    def not_done(self, page, why):
-        """DONE was premature: say why in task memory and carry on; after three, ask the user for help."""
-        s = self.state
-        s["memory"].append(f"Not done: {why}. Keep going.")
-        s["done_refusals"] = s.get("done_refusals", 0) + 1
-        s["status"] = "ready"
-        if s["done_refusals"] >= 3:
-            s["done_refusals"] = 0
-            return self.unblock(page)
-        return self.snapshot()
-
-    def relay_captcha(self, page):
-        """A captcha only the user may solve: they see it with its squares numbered, and the agent clicks exactly
-        the squares they name, or keeps the text they read for typing. Nothing is solved automatically."""
-        s = self.state
-        s["captcha_rounds"] = s.get("captcha_rounds", 0) + 1
-        if s["captcha_rounds"] > CAPTCHA_ROUNDS:
-            raise Halt("blocked", f"The site kept showing new checks after {CAPTCHA_ROUNDS} rounds, so I stopped. "
-                                  "Please try this step on your own device.")
-        clicks = [a for a in page["actions"] if a["kind"] == "click" and a.get("node") is not None]
-        marks = ([a for a in clicks if a.get("frame")] or clicks)[:40]  # a captcha lives in its own frame
-        image = s["browser"].marked_screenshot(marks, masked=self.secrets.nodes, hide=self.hidden_details())
-        reply = self.ask({"kind": "image", "image": image, "text": "The site wants a check (captcha) solved. Reply "
-                          "with the numbers of the squares to pick, like 2 5 8; or type the text it shows; or say "
-                          "none if there is nothing to pick."})
-        text = str(reply.get("text", "")).strip()
-        picked = [int(n) for n in re.findall(r"\d+", text)] if re.fullmatch(r"[\d\s,]+", text) else None
-        if picked is None:
-            s["memory"].append("User says the captcha has nothing to pick: press its verify or skip button."
-                               if text.lower() in {"none", ""} else f"User read the captcha: {text}")
-        else:
-            s["relaying"] = True  # these clicks are the user's: no loop or no-progress help in between
-            try:
-                for n in picked:
-                    if 1 <= n <= len(marks):
-                        self.click_same(marks[n - 1])
-            finally:
-                s["relaying"] = False
-            s["memory"].append(f"Clicked the captcha squares the user picked ({', '.join(map(str, picked))}). "
-                               "Press its verify or next button now.")
-        s["status"] = "ready"
-        return self.snapshot()
-
     def hidden_details(self):
-        return [value for value, _ in self.profile.hidden_values()]  # screenshots blur them where the page shows them
-
-    def unblock(self, page):
-        """BLOCKED: show and ask, ask for guidance, ask for a step on the user's device, or stop cleanly."""
-        s = self.state
-        if rules.captcha_challenge(page):
-            return self.relay_captcha(page)
-        where = rules.host(page["url"]) + urlparse(page["url"]).path
-        rounds = s["help_rounds"].get(where, 0)
-        elements, heads, _ = action_space(page["actions"])
-        step, _ = jobs.unblock(self.context(), page, elements, must_stop=rounds >= HELP_ROUNDS)
-        if step["rung"] == "stop":
-            raise Halt("failed", step["text"])
-        s["help_rounds"][where] = rounds + 1
-        secret = rules.asks_for_secret(step["text"])  # a code or password is hidden, and never sent to the hint model
-        options = [] if secret else [{"id": f"o{n}", "label": o["label"], "description": o["description"]}
-                                     for n, o in enumerate(step["options"], 1)]
-        message = {"kind": "secret" if secret else "text", "text": step["text"]}
-        if len(options) >= 2:  # choices are buttons in chat; the agent clicks the one picked
-            message.update(kind="choice", options=options)
-        reply = self.ask(message)
-        picked = next((o for o, shown in zip(step["options"], options) if shown["id"] == reply.get("option")), None)
-        text = str(reply.get("text", "")).strip()
-        path = Path(reply["file"]) if reply.get("file") else None
-        if secret:
-            name = self.keep_secret(text) if text else "none"
-            s["memory"].append(f"User answered “{step['text']}” with [secret:{name}] (secret key {name})")
-        elif picked:
-            detail = f" ({picked['description']})" if picked["description"] else ""
-            s["memory"].append(f"User answered “{step['text']}”: {picked['label']}{detail}")
-            target = heads.get("click_target", {}).get(picked["element"]) if picked["element"] else None
-            if target and target.get("role") not in EDITABLE:
-                self.choose_option(target)
-        elif step["rung"] == "device":
-            s["memory"].append(f"User finished the step on their device: {text or 'done'}")
-        elif path and path.suffix.lower() in IMAGE_TYPES and path.is_file():
-            if not s.get("told_images"):
-                self.say("Images you send are read by OpenAI to work out the next step.")
-                s["told_images"] = True
-            hint, _ = jobs.hint(self.context(), page, text=text, image=base64.b64encode(path.read_bytes()).decode())
-            s["memory"].append(f"Hint from the user: {hint}")
-        elif step["rung"] == "guide":
-            hint, _ = jobs.hint(self.context(), page, text=text)
-            s["memory"].append(f"Hint from the user: {hint}")
-        else:
-            s["memory"].append(f"User answered “{step['text']}”: {text}")  # later steps reuse it as an answer
-        s["status"] = "ready"
-        return self.snapshot()
+        return [value for value, _ in self.profile.hidden_values()]
 
     def run(self):
         while self.state["status"] not in STOPPED:
@@ -1012,19 +207,23 @@ class Agent:
             "decisions": [{**{k: d.get(k) for k in TRACE_DECISION}, "seen": (d.get("request") or {}).get("state")}
                           for d in s["decisions"]],  # "seen": the page and elements Jev chose from, to replay it
             "text_calls": s["text_calls"], "memory": s["memory"], "files": [self.file_name(f) for f in s["files"]],
-            "errors": s.get("errors", []),
+            "errors": s.get("errors", []), "task": public_context(self.task),
         })
 
     def save_trace(self):
         """Write the trace to ~/.jev/traces/<time>-<title>.json, readable only by the user."""
         self.trace_dir.mkdir(parents=True, exist_ok=True)
-        slug = re.sub(r"[^a-z0-9]+", "-", self.state["title"].lower()).strip("-")[:40] or "task"
+        slug = re.sub(r"[^a-z0-9]+", "-", self.secrets.text(self.state["title"]).lower()).strip("-")[:40] or "task"
         path = unique(self.trace_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{slug}.json")
         path.write_text(json.dumps(self.trace(), indent=2, ensure_ascii=False, default=str))
         path.chmod(0o600)
         return path
 
     def close(self):
+        if self.task.status in {'blocked', 'paused', 'waiting_user', 'waiting_site'}:
+            self.save_trace()
+            return
+        self.release_secrets()
         try:
             self.save_trace()
         except OSError as error:  # a trace is a record: never a reason to leave the tabs open
@@ -1037,3 +236,753 @@ class Agent:
 
     def __exit__(self, *_args):
         self.close()
+
+    def __init__(self, url, goal, *, asker=None, notify=None, profile=None, vault=None, record_dir=None,
+                 screenshots=False, provide_file=None, browser=None, title=None, trace_dir=None, task=None):
+        goal = goal.strip() if isinstance(goal, str) else '\n'.join(goal).strip()
+        if not goal:
+            raise ValueError('Supply a task')
+        self.asker, self.notify, self.provide_file = asker, notify, provide_file
+        self.profile, self.vault = profile or Profile(), vault or Vault()
+        self.secrets = Secrets(self.profile.hidden_values())
+        self.record_dir = Path(record_dir) if record_dir else None
+        self.screenshots = screenshots or bool(record_dir)
+        if trace_dir:
+            self.trace_dir = Path(trace_dir)
+        self.initialize_task(goal, task=task)
+        token = SECRETS.set(self.secrets)
+        try:
+            initial_messages = []
+            if url is None:
+                if not self.task.constraints.get('provider') and not self.task.constraints.get('compare'):
+                    spend(self.task, 'coordinator')
+                    intent = jobs.start_intent(self.task.goal)
+                    if intent['provider']:
+                        self.task.constraints['provider'] = intent['provider']
+                    if intent['compare']:
+                        self.task.constraints['compare'] = True
+                mode = interaction.provider_mode(self.task, self.profile.data.get('defaults', {}))
+                self.state = self.new_state(None, self.task.goal, title or goal[:60],
+                                           {'actions': [], 'downloads': []}, False)
+                if mode['mode'] == 'ask':
+                    q = next(q for q in self.task.questions.values() if not q.get('closed'))
+                    q['displayed_at'] = time.time()
+                    reply = self.ask({'id': q['id'], 'kind': 'text', 'text': q['text']})
+                    self.stop_if_interrupted()
+                    interaction.answer_requirements(self.task, q['id'], {'provider': reply.get('text', '')},
+                                                    now=time.time())
+                    mode = interaction.provider_mode(self.task, self.profile.data.get('defaults', {}))
+                if mode['notice']:
+                    self.say(mode['notice'])
+                initial_messages = self.state['messages']
+                url, selected_title, _ = jobs.start(self.context())
+                title = title or selected_title
+            self.browser = browser or Browser(url, geolocation=None)
+            page = self.clean(self.browser.observe(screenshot=False))
+            self.state = self.new_state(self.browser, self.task.goal, title or goal[:60], page, bool(record_dir))
+            self.state['messages'] = initial_messages
+            self.retain_observation(page)
+        finally:
+            SECRETS.reset(token)
+
+    def initialize_task(self, goal, *, task=None, journal_dir=None, coordinator_client=None):
+        """The real constructor and browser fakes share all task-owned state."""
+        self.task = task or TaskState(uuid4().hex, self.secrets.text(goal))
+        self.secret_store = interaction.SecretStore(time.time)
+        self.field_cache = interaction.FieldCache()
+        self.journal = commit.Journal.create(journal_dir or HOME / 'journals', lambda value: self.secrets.redact(value))
+        self.coordinator_client = coordinator_client
+        self._field_pending = None
+        self._wait_until = None
+        for key in ('name', 'phone', 'email'):
+            if self.profile.data.get(key):
+                put_fact(self.task, key, f'[profile:{key}]', source='profile')
+
+    def context(self):
+        task = public_context(self.task)
+        return self.secrets.text('Goal: ' + self.task.goal + '\nStructured task: ' +
+                                 json.dumps(task, ensure_ascii=False, default=str) + '\nProfile: ' +
+                                 json.dumps(self.profile.summary(), ensure_ascii=False))
+
+    def clean(self, page):
+        page = self.secrets.redact(deepcopy(page))
+        for action in page['actions']:
+            if action.get('value') and (action.get('frame'), action.get('node')) in self.secrets.nodes:
+                action['value'] = '[secret]'
+        if self.screenshots:
+            page['screenshot'] = self.browser.screenshot(masked=self.secrets.nodes, hide=self.hidden_details())
+        return page
+
+    def retain_observation(self, page):
+        oid = observe_state(self.task, self.secrets.redact(page))
+        for line in page['text'].splitlines():
+            if line.strip():
+                cite(self.task, oid, line)
+        for event in self.task.observations[oid]['events']:
+            if event.strip():
+                cite(self.task, oid, event, kind='browser-event')
+        if self.record_dir and page.get('screenshot'):
+            self.record_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path = self.record_dir / f'{self.task._next_observation - 1:06d}.png'
+            with path.open('xb') as stream:
+                path.chmod(0o600)
+                stream.write(base64.b64decode(page['screenshot']))
+        return oid
+
+    def observe(self):
+        page = self.clean(self.browser.observe(screenshot=False))
+        self.state['page'] = page
+        self.state['files'].extend(page.get('downloads', []))
+        self.retain_observation(page)
+        self.refresh_challenges(page)
+        return page
+
+    def coordinate(self, event):
+        if event != 'outcome':
+            self.stop_if_interrupted()
+        page = self.state['page']
+        kwargs = {'client': self.coordinator_client} if self.coordinator_client else {}
+        assessment = coordinator.assess(self.task, page, event, **kwargs)
+        if event != 'outcome':
+            self.stop_if_interrupted()
+        previous_facts = deepcopy(self.task.facts)
+        coordinator.apply_assessment(self.task, assessment)
+        material_keys = {key for r in self.task.completion for key in r.get('material_keys', [])}
+        for fact in assessment['facts']:
+            value = fact['value']
+            quotes = ' '.join(self.task.evidence[eid]['quote'] for eid in fact['evidence'])
+            previous = previous_facts.get(fact['key'], {})
+            if (fact['key'] in material_keys and isinstance(value, str) and value and value in quotes
+                    and (previous.get('value') != value or not previous.get('valid'))):
+                identity = hashlib.sha256(json.dumps([fact['key'], value]).encode()).hexdigest()
+                record_progress_change(self.task, kind='relevant_content',
+                    evidence_ids=tuple(fact['evidence']), transition_id='material-fact:' + identity)
+        for requirement in assessment['requirements']:
+            interaction.require(self.task, requirement)
+        auth = assessment['auth']
+        if auth:
+            flow = interaction.observe_auth(self.task, auth)
+            if flow['blocked']:
+                raise Halt('blocked', 'The authentication attempt limit has been reached.')
+            if auth['status'] == 'authenticated':
+                record_progress_change(self.task, kind='auth_transition', evidence_ids=tuple(auth['evidence_ids']),
+                                       transition_id='auth:' + auth['flow_id'])
+            self.discard_invalid_secrets()
+        if assessment['proposal']:
+            jobs.review_proposal(self.task, assessment['proposal'])
+            self.task.proposal = assessment['proposal']
+        if assessment['outcome']:
+            outcome = assessment['outcome']
+            eid = outcome['execution_id']
+            commit.record_outcome(self.task, eid, {k: v for k, v in outcome.items() if k != 'execution_id'},
+                                  now=time.monotonic(), journal=self.journal)
+        if assessment['notice']:
+            notice = interaction.chat_update(self.task, assessment['notice'])
+            if notice:
+                self.say(notice['text'])
+        if assessment['recovery']:
+            active = self.task.progress.get('active_recovery', {})
+            objective = active.get('objective', self.task.goal)
+            if not begin_recovery(self.task, objective=objective, semantic_state=self.semantic_state(),
+                                  recovery=assessment['recovery']):
+                raise Halt('blocked', 'No new recovery approach is available. ' + self.task.objective)
+
+    def semantic_state(self):
+        page = self.state['page']
+        return json.dumps([page['url'], [(a['kind'], a['label'], a.get('context')) for a in page['actions']]],
+                          sort_keys=True)
+
+    def amend(self, text, changed_keys):
+        amend_task(self.task, self.secrets.text(text), changed_keys)
+        self.state['decision'] = None
+        self.state['status'] = 'ready'
+        self.field_cache.clear()
+        self.observe()
+        self.coordinate('user_amendment')
+
+    def resume(self):
+        self.task.set_status('running')
+        self.state.update(status='ready', decision=None)
+        self.observe()
+        self.coordinate('stage_change')
+
+    def stop(self):
+        self.task.set_status('cancelled')
+        self.state.update(status='cancelled', decision=None)
+        self.release_secrets()
+
+    def release_secrets(self):
+        self.sanitize_retained()
+        self.secret_store.purge(self.task.task_id)
+        self.field_cache.clear()
+        self.state['answers'].clear()
+        self.state['unused'].clear()
+        self.secrets = Secrets(self.profile.hidden_values())
+
+    def discard_invalid_secrets(self):
+        expired = {cid for cid, c in self.task.challenges.items()
+                   if c.get('expires_at') is not None and c['expires_at'] <= time.time()
+                   or c.get('status') in {'expired', 'rejected', 'authenticated'}}
+        for cid in expired:
+            challenge = self.task.challenges[cid]
+            if challenge.get('status') not in {'rejected', 'authenticated'}:
+                challenge['status'] = 'expired'
+        for fact in self.task.facts.values():
+            if fact.get('scope') in expired:
+                fact['valid'] = False
+            if not fact['valid'] and isinstance(fact['value'], str) and fact['value'].startswith('[secret:'):
+                ref = fact['value']
+                self.secret_store.consume(ref)
+                self.sanitize_retained()
+                self.secrets.remove(ref)
+
+    def sanitize_retained(self):
+        for key, value in list(self.state.items()):
+            if key != 'browser':
+                redacted = self.secrets.redact(value)
+                if redacted != value:
+                    self.state[key] = redacted
+        for key in ('updates', 'constraints', 'facts', 'requirements', 'questions', 'challenges', 'observations',
+                    'evidence', 'executions', 'progress', 'approval', 'proposal', 'completion', 'diagnostics'):
+            value = getattr(self.task, key)
+            redacted = self.secrets.redact(value)
+            if redacted != value:
+                setattr(self.task, key, redacted)
+
+    def validate_decision(self, decision, page):
+        op = decision.get('operation')
+        if op in TALK:
+            return
+        _, heads, controls = action_space(page['actions'])
+        head = model.OPERATION_HEAD.get(op)
+        candidates = heads.get(head, {}).values() if head else [controls.get(op)]
+        action = next((a for a in candidates if a and a['id'] == decision.get('choice')), None)
+        if not action:
+            raise ValueError('Jev selected an unavailable operation or target')
+        if op == 'PRESS_KEY' and decision.get('key') not in model.KEY_HELP:
+            raise ValueError('Jev selected an unavailable key')
+        if op == 'DRAG' and not any(a['id'] == decision.get('drop')
+                                    for a in heads.get('drag_target', {}).values()):
+            raise ValueError('Jev selected an unobserved drop target')
+
+    def predict(self):
+        s = self.state
+        if s['started_at'] is None:
+            s['started_at'] = time.perf_counter()
+        self.stop_if_interrupted()
+        self.discard_invalid_secrets()
+        if self.task.status in STOPPED or s['status'] in STOPPED:
+            raise ValueError('This task has stopped. Resume before continuing.')
+        s['decision'] = None
+        if self.task.status == 'waiting_site' and s.get('commit'):
+            pending = s['commit']
+            since = pending.setdefault('poll_started', time.monotonic())
+            if time.monotonic() - since >= 300 or pending.get('polls', 0) >= 60:
+                commit.record_outcome(self.task, pending['execution_id'],
+                    dict(status='unknown', evidence_ids=[], artifact_id=None),
+                    now=time.monotonic(), journal=self.journal)
+                raise Halt('blocked', 'The transaction is still unconfirmed after bounded observation.')
+            if not pending.get('notice_sent'):
+                self.say('The site is still processing the transaction. I am watching for its result.')
+                pending['notice_sent'] = True
+            time.sleep(self.outcome_pause)
+            self.stop_if_interrupted()
+            self.observe()
+            pending['polls'] = pending.get('polls', 0) + 1
+            self.coordinate('outcome')
+            if self.task.status in STOPPED:
+                raise Halt(self.task.status, 'Transaction outcome: ' +
+                           self.task.executions[pending['execution_id']].get('outcome', 'unknown'))
+            return self.snapshot()
+        if self.task.status == 'waiting_user' and s.get('commit'):
+            self.task.set_status('running')
+            self.coordinate('authentication')
+        if not self.browser.fresh(s['page']):
+            self.observe()
+        if self._wait_until is not None:
+            if time.monotonic() < self._wait_until:
+                time.sleep(min(0.25, self._wait_until - time.monotonic()))
+                self.observe()
+                return self.snapshot()
+            self._wait_until = None
+        for event in coordinator.events_for(self.task, s['page']):
+            self.coordinate(event)
+        revision, oid = self.task.revision, next(reversed(self.task.observations))
+        repair = ''
+        for attempt in range(2):
+            self.stop_if_interrupted()
+            spend(self.task, 'jev')
+            try:
+                decision = choose(s['page'], self.context() + repair, s['history'])
+                self.validate_decision(decision, s['page'])
+                break
+            except ValueError as error:
+                repair = '\nSelection validation error: ' + self.secrets.text(str(error))
+                self.task.diagnostics.append({'kind': 'invalid_jev', 'reason': repair})
+                if attempt or not self.browser.fresh(s['page']):
+                    raise
+        self.stop_if_interrupted()
+        if revision != self.task.revision or oid != next(reversed(self.task.observations)):
+            raise StalePage('Task changed while choosing')
+        decision = {**decision, 'id': uuid4().hex, 'revision': revision, 'observation_id': oid}
+        s['decision'] = decision
+        s['decisions'].append({**decision, 'fingerprint': s['page']['fingerprint'], 'elapsed_ms': self.elapsed()})
+        s['status'] = 'predicted'
+        return self.snapshot()
+
+    def act(self, body):
+        s = self.state
+        decision, page = s['decision'], s['page']
+        if not decision or body.get('fingerprint') != page['fingerprint']:
+            raise ValueError('Observe and choose before acting')
+        s['decision'] = None
+        self.stop_if_interrupted()
+        self.validate_decision(decision, page)
+        if not self.browser.fresh(page):
+            s['status'] = 'ready'
+            raise StalePage('Page changed since selection')
+        if (decision.get('revision') != self.task.revision
+                or decision.get('observation_id') != next(reversed(self.task.observations))):
+            raise StalePage('Decision has stale task ownership')
+        operation = decision['operation']
+        if operation in TALK:
+            return self.talk(operation, page)
+        action = next(a for a in page['actions'] if a['id'] == decision['choice'])
+        return self.perform(operation, action, decision, page)
+
+    def perform(self, operation, action, decision, page):
+        if operation == 'LOOK':
+            return self.look(page, 'Observe missing controls')
+        if any(not r.get('satisfied') for r in self.task.requirements.values() if r.get('kind') in interaction.KINDS):
+            self.ask_user(page)
+            return self.snapshot()
+        kind = rules.commitment_kind(operation, action, page, key=decision.get('key'))
+        if kind == 'unresolved':
+            kind = jobs.effect_assessment(self.task, page, action, operation, decision.get('key'),
+                                          client=self.coordinator_client)
+        self.stop_if_interrupted()
+        if kind == 'unresolved':
+            raise Halt('blocked', 'The selected action has an unresolved external effect.')
+        requires_commit = kind == 'commitment'
+        effect_id = None
+        if requires_commit:
+            self.task.progress.setdefault('account_reservation_key',
+                self.task.observations[next(reversed(self.task.observations))]['origin'])
+            self.coordinate('confirmation')
+            proposal = self.task.proposal
+            if not proposal:
+                raise Halt('blocked', 'The complete action details are not yet verified.')
+            effect_id = commit.bind_proposal_effect(self.task, proposal, operation=operation,
+                                                   choice=decision['choice'], key=decision.get('key'))
+            if not commit.can_commit(self.task, proposal):
+                self.confirm(page, action['label'], action, effect_id=effect_id)
+                return self.snapshot()
+        inputs, helper, shown = self.inputs(operation, action, decision, page)
+        self.stop_if_interrupted()
+        if not self.browser.fresh(page, action):
+            raise StalePage('Page changed during input preparation')
+        challenge = self.challenge_for(action)
+        if challenge is None and kind == 'authentication' and operation in {'CLICK', 'DOUBLE_CLICK', 'PRESS_KEY'}:
+            challenge = self.auth_submit_challenge(action)
+        bound = commit.bind_decision(self.task, decision, page, assessment=kind, effect_id=effect_id)
+        if self._field_pending:
+            payload, cid, ref = self._field_pending
+            self.field_cache.consume(self.task, payload, cid)
+            if ref:
+                self.secret_store.consume(ref)
+            self._field_pending = None
+        spend(self.task, 'actions')
+        receipt = commit.dispatch_once(self.task, self.journal, bound, page,
+            act=lambda: self.browser.act(operation, action, page, **inputs),
+            is_fresh=lambda: self.browser.fresh(page, action),
+            interrupted=lambda: bool(self.interrupted and self.interrupted()),
+            proposal=self.task.proposal if requires_commit else None,
+            challenge_id=challenge['id'] if challenge else None)
+        self.state['history'].append(dict(step=len(self.state['history']) + 1, operation=operation,
+            action=action['label'], choice=decision['choice'], text=shown, result=receipt['result'],
+            execution_id=receipt['execution_id'], elapsed_ms=self.elapsed(), executed_ms=self.elapsed(),
+            url=page['url'], page_changed=None, unconfirmed=receipt['status'] == 'unknown'))
+        if operation == 'TYPE_TEXT' and rules.secret_field(action):
+            for node in action.get('group') or [action.get('node')]:
+                self.secrets.nodes.add((action.get('frame'), node))
+        if receipt['status'] == 'not_dispatched':
+            raise StalePage('The selected action was not dispatched')
+        self.observe()  # journal receipt exists before any post-dispatch read
+        self.state['history'][-1]['page_changed'] = self.state['page']['fingerprint'] != page['fingerprint']
+        if self.interrupted and self.interrupted():
+            self.task.set_status('cancelled')
+            self.state['status'] = 'cancelled'
+            if requires_commit or receipt['status'] == 'unknown':
+                commit.record_outcome(self.task, receipt['execution_id'],
+                    dict(status='unknown', evidence_ids=[], artifact_id=None),
+                    now=time.monotonic(), journal=self.journal)
+            self.release_secrets()
+            return self.snapshot()
+        if receipt['status'] == 'unknown':
+            raise Halt('blocked', 'The action outcome is unknown; it will not be repeated.')
+        if kind == 'authentication':
+            self.record_auth_navigation(receipt)
+        if requires_commit:
+            self.state['commit'] = {'label': action['label'], 'execution_id': receipt['execution_id']}
+            self.coordinate('outcome')
+            if self.task.status in STOPPED:
+                raise Halt(self.task.status, 'The transaction outcome is ' +
+                           self.task.executions[receipt['execution_id']].get('outcome', 'unknown') + '.')
+        for event in coordinator.events_for(self.task, self.state['page']):
+            self.coordinate(event)
+        self.state['status'] = 'ready'
+        oid = next(reversed(self.task.observations))
+        changes = tuple(eid for eid in self.task.progress.get('changes', {})
+                        if self.task.evidence[eid]['observation_id'] == oid)
+        progress = track_progress(self.task, operation=operation, semantic_state=self.semantic_state(),
+                                  change_evidence=changes, now=time.monotonic())
+        if progress == 'wait':
+            self._wait_until = time.monotonic() + 1.0
+        elif progress == 'recover':
+            self.coordinate('stalled')
+        elif progress == 'blocked':
+            raise Halt('blocked', self.task.progress.get('blocker', 'Progress could not be verified.'))
+        return self.snapshot()
+
+    def look(self, page, purpose):
+        if rules.captcha_challenge(page):
+            return self.relay_captcha(page)
+        image, cells = self.browser.grid_screenshot(columns=16, rows=12, masked=self.secrets.nodes,
+                                                     hide=self.hidden_details())
+        annotations = jobs.visual_annotations(self.task, page, image, cells)
+        actions = self.browser.visual_candidates(page, annotations)
+        page['actions'].extend(actions)
+        self.retain_observation(page)
+        self.state['status'] = 'ready'
+        return self.snapshot()
+
+    def challenge_for(self, action):
+        oid = next(reversed(self.task.observations))
+        return next((c for c in self.task.challenges.values()
+                     if c.get('revision') == self.task.revision and c.get('observation_id') == oid
+                     and action['id'] in c.get('field_ids', [])
+                     and c.get('status') in {'challenge', 'issued', 'answer_ready', 'awaiting_answer', 'pending'}),
+                    None)
+
+    def inputs(self, operation, action, decision, page):
+        if operation == 'TYPE_TEXT':
+            value, shown, helper = self.field_input(action, page)
+            return {'text': value}, helper, shown
+        if operation == 'OPEN_URL':
+            url, helper = url_value(self.context(), page, self.state['history'])
+            if urlparse(url).scheme not in {'http', 'https'} or not urlparse(url).hostname:
+                raise ValueError('Invalid navigation URL')
+            return {'url': url}, helper, url
+        if operation == 'PRESS_KEY':
+            return {'key': decision['key']}, None, None
+        if operation == 'DRAG':
+            drop = next(a for a in page['actions'] if a['id'] == decision['drop'])
+            if drop['kind'] == 'look' or drop.get('point'):
+                raise ValueError('Drag needs an observed DOM or visual target')
+            return {'drop': drop}, None, None
+        if operation == 'UPLOAD':
+            paths = self.provide_file(action) if self.provide_file else None
+            if paths is None:
+                reply = self.ask({'kind': 'file', 'text': 'Send the file to attach here.'})
+                paths = [reply['file']] if reply.get('file') else []
+            if not paths or not all(Path(path).is_file() for path in paths):
+                raise Halt('blocked', 'No valid file arrived.')
+            return {'files': paths}, None, None
+        return {}, None, None
+
+    def field_input(self, action, page):
+        challenge = self.challenge_for(action)
+        if rules.secret_field(action):
+            if challenge is None:
+                self.coordinate('authentication')
+                challenge = self.register_challenge(action)
+            fact = self.task.facts.get('secret:' + challenge['id'], {})
+            if not fact.get('valid'):
+                self.ask_user(page)
+                raise StalePage('Secret answer recorded; Jev must select the next operation')
+            ref = fact['value']
+            value = self.secret_store.resolve(ref, **self.secret_scope(challenge))
+            problem = rules.format_error(value, action)
+            if problem:
+                raise ValueError(problem)
+            self._field_pending = ({'field': action, 'challenge': challenge['id']}, challenge['id'], ref)
+            return value, ref, None
+        cid = challenge['id'] if challenge else None
+        allowed = [f['value'] for f in self.task.facts.values() if f['valid'] and f['scope'] == cid] if cid else []
+        payload = field_context(self.context(), action, page, self.state['history'], self.profile.summary(), allowed)
+        payload['field_scope'] = dict(context=action.get('context'), origin=urlparse(page['url']).netloc,
+                                      field_id=action['id'], revision=self.task.revision, challenge_id=cid)
+        cached = self.field_cache.get(self.task, payload, cid)
+        if cached is None:
+            form, helper = field_value(payload)
+            kind, value = form[:2]
+            if kind == 'profile':
+                value, shown = self.profile.value(value), f'[profile:{value}]'
+                ref = None
+            elif kind == 'secret':
+                if not challenge or value not in allowed:
+                    raise ValueError('Secret is not bound to the selected field')
+                ref, shown = value, value
+                value = self.secret_store.resolve(ref, **self.secret_scope(challenge))
+            elif kind == 'text' and not rules.secret_field(action):
+                shown, ref = value, None
+            elif kind == 'ask':
+                self.coordinate('missing_information')
+                self.ask_user(page)
+                raise StalePage('Answer recorded; Jev must select the next action')
+            else:
+                raise ValueError('Field helper cannot invent secret values')
+            problem = rules.format_error(value, action)
+            if problem:
+                raise ValueError(problem)
+            cached = {'value': ref or value, 'shown': shown, 'helper': helper, 'ref': ref}
+            self.field_cache.put(self.task, payload, cid, cached)
+        value = (self.secret_store.resolve(cached['ref'], **self.secret_scope(challenge))
+                 if cached['ref'] else cached['value'])
+        self._field_pending = (payload, cid, cached['ref'])
+        self.state['text_calls'].append({**(cached['helper'] or {}), 'field': action['label'],
+                                         'value': cached['shown']})
+        return value, cached['shown'], cached['helper']
+
+    def secret_scope(self, challenge):
+        return dict(task_id=self.task.task_id, **{k: challenge[k] for k in
+                    ('question_id', 'origin', 'purpose', 'field_role')}, challenge_id=challenge['id'])
+
+    def talk(self, operation, page):
+        if operation in {'ASK_USER', 'BLOCKED'} and rules.captcha_challenge(page):
+            return self.relay_captcha(page)
+        if operation == 'DONE':
+            return self.finish(page)
+        if operation == 'BLOCKED':
+            self.coordinate('stalled')
+            if not self.task.progress.get('active_recovery'):
+                raise Halt('blocked', 'No verified browser path is available. ' + self.task.objective)
+        elif operation == 'CONFIRM':
+            self.coordinate('confirmation')
+            # CONFIRM carries no executable target: approval awaits an actual Jev-selected effect.
+        elif operation == 'NOTE':
+            self.coordinate('stage_change')
+        else:
+            self.coordinate('missing_information')
+            self.ask_user(page)
+        self.state['status'] = 'ready'
+        return self.snapshot()
+
+    def ask_user(self, page):
+        question = next((q for q in self.task.questions.values() if q.get('answered_at') is None
+                         and not q.get('closed') and q['revision'] == self.task.revision), None)
+        if not question:
+            self.state['status'] = 'ready'
+            return
+        question['displayed_at'] = time.time()
+        self.task.set_status('waiting_user')
+        reply = self.ask({k: v for k, v in question.items() if k in {'id', 'kind', 'text', 'options', 'challenge_id'}})
+        self.stop_if_interrupted()
+        self.task.set_status('running')
+        keys = [key for rid in question['requirement_ids'] for key in self.task.requirements[rid]['keys']
+                if not self.task.facts.get(key, {}).get('valid')
+                or self.task.facts[key]['value'] in (None, '')]
+        values = reply.get('values')
+        if values is None:
+            if len(keys) != 1 and question['kind'] == 'text':
+                values = jobs.answer_facts(reply.get('text', ''), keys)
+            elif len(keys) == 1:
+                values = {keys[0]: reply.get('option') if question['kind'] == 'choice' else reply.get('text', '')}
+            else:
+                raise Halt('blocked', 'This reply has no unambiguous current information requirement.')
+        if any(key in {'location', 'address', 'pickup', 'delivery_address'}
+               and isinstance(value, str) and rules.means_current_location(value)
+               for key, value in values.items()):
+            self.say('Please provide an address or landmark in chat for your current location.')
+            return
+        if question['kind'] == 'secret':
+            challenge = self.task.challenges.get(question.get('challenge_id'))
+            if not challenge:
+                raise Halt('blocked', 'This secret question has no current challenge.')
+            raw = values[keys[0]]
+            action = next((a for a in page['actions'] if a['id'] in challenge['field_ids']), None)
+            if action is None:
+                raise StalePage('The secret field is no longer observed')
+            raw = rules.clean(raw, action)
+            if rules.format_error(raw, action):
+                raw = self.ask_value(rules.format_error(raw, action), action, True)
+            ref = self.secret_store.put(raw, **self.secret_scope(challenge),
+                                        expires_at=challenge.get('expires_at') or time.time() + 600)
+            self.secrets.add(raw, ref)
+            values = {keys[0]: ref}
+        interaction.answer_requirements(self.task, question['id'], values, now=time.time())
+        self.observe()
+        self.coordinate('user_answer')
+
+    def confirm(self, page, label, action=None, *, effect_id=None):
+        proposal = self.task.proposal
+        if not proposal or not effect_id:
+            raise ValueError('Confirmation requires a reviewed proposal and observed effect')
+        qid = uuid4().hex
+        q = dict(id=qid, kind='confirm', revision=self.task.revision, proposal_key=commit.proposal_key(proposal),
+                 effect_id=effect_id, displayed_at=time.time(), answered_at=None)
+        self.task.questions[qid] = q
+        text = commit.review_text(self.task, proposal) + '\nControl: ' + label
+        reply = self.ask({'id': qid, 'kind': 'confirm', 'text': text,
+                          'options': [{'id': 'yes', 'label': 'Yes, approve'}, {'id': 'no', 'label': 'No'}]})
+        self.stop_if_interrupted()
+        if reply.get('option') == 'yes':
+            commit.approve(self.task, proposal, question_id=qid, response='yes')
+        else:
+            q.update(answered_at=time.time(), closed=True)
+            self.task.approval = None
+        self.observe()
+        self.state['status'] = 'ready'
+        return reply.get('option') == 'yes'
+
+    def finish(self, page):
+        self.coordinate('completion')
+        if self.task.completion:
+            self.task.completion, _ = jobs.completion_bindings(self.task)
+        report = commit.completion_report(self.task)
+        if not report['verified']:
+            raise Halt('blocked', 'Completion is unverified. Missing evidence: ' +
+                       ', '.join(report['missing'] or ['goal requirements']))
+        self.task.status = 'done'
+        self.state['status'] = 'done'
+        self.say('Completed with verified evidence.', kind='result', evidence=report['evidence_ids'])
+        self.release_secrets()
+        return self.snapshot()
+
+
+    def refresh_challenges(self, page):
+        oid = next(reversed(self.task.observations))
+        for challenge in self.task.challenges.values():
+            same_field = any(a['kind'] == 'fill' and a['label'] == challenge.get('field_label')
+                and (a.get('context') or {}) == challenge.get('field_context')
+                and (a.get('constraints') or {}) == challenge.get('field_constraints')
+                for a in page['actions'])
+            if ((challenge.get('page_fingerprint') == page['fingerprint'] or same_field)
+                    and challenge.get('origin') == self.task.observations[oid]['origin']
+                    and challenge.get('revision') == self.task.revision
+                    and challenge.get('status') in {'challenge', 'answer_ready', 'awaiting_answer'}):
+                challenge['observation_id'] = oid
+
+    def register_challenge(self, action):
+        oid = next(reversed(self.task.observations))
+        origin = self.task.observations[oid]['origin']
+        flows = [f for f in self.task.progress.get('auth_flows', {}).values()
+                 if f['revision'] == self.task.revision and origin in f['allowed_origins']
+                 and f['status'] in {'required', 'challenge', 'rejected', 'expired'} and not f.get('blocked')]
+        if len(flows) != 1:
+            raise Halt('blocked', 'The secret field has no unambiguous, permitted authentication flow.')
+        flow = flows[0]
+        cid = uuid4().hex
+        ttl = 900 if flow['field_role'] in {'cvv', 'card_number', 'card_expiry', 'card_name'} else 600
+        challenge = dict(id=cid, flow_id=flow['flow_id'], revision=self.task.revision, origin=origin,
+            purpose=flow['purpose'], field_role=flow['field_role'], observation_id=oid,
+            field_ids=[action['id']], status='challenge', expires_at=time.time() + ttl,
+            page_fingerprint=self.state['page']['fingerprint'], field_context=action.get('context') or {},
+            field_label=action['label'], field_constraints=action.get('constraints') or {})
+        if flow['purpose'] == 'payment':
+            parents = [e for e in self.task.executions.values() if e.get('commitment')
+                       and e.get('status') == 'executed' and e.get('approval_id')
+                       and e.get('outcome') not in {'success', 'failed'}]
+            if len(parents) != 1:
+                raise Halt('blocked', 'Payment verification is not bound to one approved transaction.')
+            challenge.update(commitment_execution_id=parents[0]['execution_id'],
+                             proposal_key=parents[0]['proposal_key'])
+        self.task.challenges[cid] = challenge
+        q = interaction.require(self.task, dict(id='secret:' + cid, kind='secret', purpose=flow['purpose'],
+            keys=['secret:' + cid], scope=cid, depends_on=[], options=[], reason='Observed secret field'))
+        q['text'] = 'Please send the value for ' + action['label'] + '.'
+        q['challenge_id'] = cid
+        challenge['question_id'] = q['id']
+        key = 'login.' + urlparse(origin).netloc
+        role = (action.get('context') or {}).get('field_role')
+        if (flow['purpose'] == 'login' and flow['field_role'] == 'password'
+                and role == 'current-password' and key in self.profile.vault_keys()
+                and flow.get('rejections', 0) == 0):
+            try:
+                raw = self.vault.get(key)
+            except (KeyError, RuntimeError):
+                pass  # unavailable noninteractive vault falls back to masked chat
+            else:
+                ref = self.secret_store.put(raw, **self.secret_scope(challenge),
+                                            expires_at=challenge['expires_at'])
+                self.secrets.add(raw, ref)
+                put_fact(self.task, 'secret:' + cid, ref, source='profile', scope=cid)
+                self.task.requirements['secret:' + cid]['satisfied'] = True
+                q.update(answered_at=time.time(), closed=True)
+        return challenge
+
+
+    def relay_captcha(self, page):
+        rounds = self.task.progress.get('captcha_rounds', 0)
+        if rounds >= 8:
+            raise Halt('blocked', 'The human challenge exceeded eight rounds.')
+        marks = [a for a in page['actions'] if a['kind'] == 'click' and a.get('node') is not None][:40]
+        image = self.browser.marked_screenshot(marks, masked=self.secrets.nodes, hide=self.hidden_details())
+        kind_reply = self.ask({'kind': 'choice', 'image': image,
+            'text': 'What kind of human check is displayed?', 'options': [
+                {'id': 'text', 'label': 'Type the text'}, {'id': 'tiles', 'label': 'Pick labelled tiles'},
+                {'id': 'unsupported', 'label': 'Another gesture'}]})
+        kind = kind_reply.get('option')
+        if kind not in {'text', 'tiles'}:
+            raise Halt('blocked', 'This human challenge cannot be completed through chat.')
+        if not self.browser.fresh(page):
+            raise StalePage('The human challenge changed')
+        cid = uuid4().hex
+        labels = [str(i) for i in range(1, len(marks) + 1)]
+        challenge = dict(id=cid, kind=kind, purpose='captcha', revision=rounds,
+            observation_id=next(reversed(self.task.observations)), rounds=rounds,
+            tiles=labels, targets={label: a['id'] for label, a in zip(labels, marks)})
+        self.task.challenges[cid] = challenge
+        reply = self.ask({'kind': 'image', 'image': image, 'challenge_id': cid,
+            'text': 'Type the text exactly as shown.' if kind == 'text' else 'Reply with the tile labels to select.'})
+        if not self.browser.fresh(page):
+            raise StalePage('The human challenge changed while you answered')
+        interaction.record_captcha_answer(self.task, cid, reply.get('text', ''), revision=rounds)
+        self.task.progress['captcha_rounds'] = rounds + 1
+        self.state['status'] = 'ready'
+        return self.snapshot()
+
+
+    def auth_submit_challenge(self, action):
+        """Bind a selected authentication control to one already observed field group."""
+        oid = next(reversed(self.task.observations))
+        context = action.get('context') or {}
+        candidates = [c for c in self.task.challenges.values()
+            if c.get('observation_id') == oid and c.get('revision') == self.task.revision
+            and c.get('origin') == self.task.observations[oid]['origin']
+            and c.get('status') in {'challenge', 'answer_ready', 'awaiting_answer'}
+            and any(context.get(key) and context[key] == c.get('field_context', {}).get(key)
+                    for key in ('form', 'section'))]
+        if not candidates and not any(c.get('origin') == self.task.observations[oid]['origin']
+                and c.get('status') in {'challenge', 'answer_ready', 'awaiting_answer'}
+                for c in self.task.challenges.values()):
+            return None  # requesting the first challenge is not submission of an existing secret
+        if len(candidates) != 1:
+            raise Halt('blocked', 'Authentication submission has no unambiguous observed challenge.')
+        challenge = candidates[0]
+        if action['id'] not in challenge['field_ids']:
+            challenge['field_ids'].append(action['id'])
+        return challenge
+
+
+    def record_auth_navigation(self, receipt):
+        observation = next(reversed(self.task.observations.values()))
+        destination = observation['origin']
+        if destination == receipt['origin'] or receipt['status'] != 'executed':
+            return
+        flows = [f for f in self.task.progress.get('auth_flows', {}).values()
+                 if receipt['origin'] in f['allowed_origins'] and f['revision'] == self.task.revision
+                 and f['status'] in {'required', 'challenge', 'submitted'}]
+        if len(flows) != 1:
+            return
+        ids = [eid for eid, e in self.task.evidence.items() if e['observation_id'] == observation['id']
+               and e['kind'] in {'page', 'browser-event'}]
+        if not ids:
+            return
+        nav_id = receipt['execution_id'] + ':navigation'
+        navigation = dict(execution_id=nav_id, phase='navigation', kind='navigation', status='executed',
+            task_id=self.task.task_id, revision=self.task.revision, flow_id=flows[0]['flow_id'],
+            origin=receipt['origin'], destination_origin=destination,
+            observation_id=receipt['observation_id'], evidence_ids=ids)
+        self.journal.append(navigation)
+        self.task.executions[nav_id] = navigation

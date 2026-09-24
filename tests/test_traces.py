@@ -52,11 +52,11 @@ def test_errors_are_kept_in_the_trace(tmp_path, monkeypatch):
     def broken(*_args, **_kwargs):
         raise ValueError("The text model returned an invalid confirmation; nothing executed.")
 
-    monkeypatch.setattr(loop.jobs, "confirm_card", broken)
+    monkeypatch.setattr(loop.jobs, "effect_assessment", broken)
     a = agent_with(tmp_path)
     a.trace_dir = tmp_path / "traces"
     with pytest.raises(ValueError):
-        act(a, decision("e6", "CLICK"))  # "Pay ₹79": the summary card cannot be written
+        act(a, decision("e5", "CLICK"))  # selected effect assessment is invalid
     trace = json.loads(a.save_trace().read_text())
     error = "The text model returned an invalid confirmation; nothing executed."
     assert trace["errors"] == [{"step": 0, "error": error}]

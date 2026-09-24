@@ -106,10 +106,10 @@ def test_paying_commits_need_an_amount_and_a_real_element(monkeypatch):
     assert jobs.confirm_card("c", PAGE, "Pay ₹79", ELEMENTS)[0]["element"] == "2"
 
 
-def test_the_start_job_is_told_to_use_a_grocery_section_for_groceries():
+def test_the_start_job_preserves_selected_provider_and_prefers_root():
     from assistant import questions
 
-    assert "grocery section" in questions.START and "Instamart" in questions.START
+    assert "official root URL" in questions.START and "never invent a deep link" in questions.START
 
 
 def test_choice_questions_say_whether_they_are_lasting_preferences(monkeypatch):
@@ -163,3 +163,12 @@ def test_completion_binding_job_rolls_back_partial_bindings(monkeypatch):
     with pytest.raises(ValueError):
         jobs.completion_bindings(s)
     assert s.completion[0]['evidence_ids'] == []
+
+
+def test_answer_facts_keeps_partial_literal_answers(monkeypatch):
+    reply(monkeypatch, {'values': {'address': '12 Main Street'}})
+    assert jobs.answer_facts('Use 12 Main Street', ['address', 'phone']) == {'address': '12 Main Street'}
+    for values in ({'phone': '5550000'}, {'operation': 'CLICK'}, {'address': ''}):
+        reply(monkeypatch, {'values': values})
+        with pytest.raises(ValueError, match='reply facts'):
+            jobs.answer_facts('Use 12 Main Street', ['address', 'phone'])

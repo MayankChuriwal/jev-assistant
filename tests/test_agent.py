@@ -26,16 +26,12 @@ def test_loading_waits_do_not_trigger_the_no_progress_stop(tmp_path):
     assert len(a.state["history"]) == 5 and a.state["status"] == "ready"
 
 
-def test_three_actions_without_change_ask_the_user_for_help(tmp_path, monkeypatch):
-    help_step = {"rung": "guide", "text": "I'm stuck on this page. What should I do?", "options": []}
-    monkeypatch.setattr(loop.jobs, "unblock", lambda context, page, elements, must_stop=False: (help_step, {}))
-    monkeypatch.setattr(loop.jobs, "hint", lambda context, page, text=None, image=None: ("Type the phone number", {}))
-    a = agent_with(tmp_path, replies=[{"text": "type my number in the phone box"}])
+def test_three_actions_without_change_request_semantic_recovery(tmp_path):
+    a = agent_with(tmp_path)
     for _ in range(3):
-        act(a, decision("e5", "CLICK"))
-    assert a.asked[-1]["text"] == "I'm stuck on this page. What should I do?"  # never a silent stop
-    assert a.state["memory"][-2] == "My last 3 steps (Office) changed nothing on this page."
-    assert a.state["memory"][-1] == "Hint from the user: Type the phone number" and a.state["status"] == "ready"
+        act(a, decision('e5', 'CLICK'))
+    assert not a.asked
+    assert any(d.get('kind') == 'stalled' for d in a.task.diagnostics)
 
 
 def test_stale_observation_preserves_the_executed_action(tmp_path):
@@ -48,7 +44,7 @@ def test_stale_observation_preserves_the_executed_action(tmp_path):
 
 
 @pytest.mark.parametrize("operation, choice, extra", [
-    ("PRESS_KEY", "e1", {"key": "Tab"}), ("DRAG", "e4", {"drop": "e5"}), ("CLICK", "e5", {}),
+    ("PRESS_KEY", "e1", {"key": "Tab"}), ("CLICK", "e5", {}),
 ])
 def test_operation_inputs_reach_the_browser(tmp_path, operation, choice, extra):
     a = agent_with(tmp_path)
@@ -71,14 +67,16 @@ def test_open_url_asks_the_text_model_for_the_address(tmp_path, monkeypatch):
 
 def test_a_file_provider_answers_uploads_without_asking(tmp_path):
     a = agent_with(tmp_path)
-    a.provide_file = Mock(return_value=["/tmp/statement.pdf"])
+    path = tmp_path / "statement.pdf"
+    path.write_bytes(b"PDF")
+    a.provide_file = Mock(return_value=[str(path)])
     act(a, decision("e7", "UPLOAD"))
-    assert a.browser.act.call_args.kwargs == {"files": ["/tmp/statement.pdf"]} and a.asked == []
+    assert a.browser.act.call_args.kwargs == {"files": [str(path)]} and a.asked == []
 
 
 def test_the_action_budget_stops_before_input(tmp_path):
     a = agent_with(tmp_path)
-    a.state["history"] = [{}] * MAX_ACTIONS
+    a.task.progress["counts"] = {"actions": MAX_ACTIONS}
     act(a, decision("e5", "CLICK"))
     a.browser.act.assert_not_called()
     assert a.state["status"] == "blocked"
@@ -105,29 +103,12 @@ def test_uncertain_execution_is_logged_and_stops_the_task(tmp_path):
     a.browser.act.side_effect = ExecutionUncertain("Browser input did not return")
     act(a, decision("e5", "CLICK"))
     assert a.state["history"][-1]["action"] == "Office" and a.state["history"][-1]["unconfirmed"]
-    assert a.state["status"] == "blocked" and "can't confirm" in a.told[-1]["text"]
+    assert a.state["status"] == "blocked" and "unknown" in a.told[-1]["text"]
 
 
-def test_going_in_circles_asks_the_user_for_help(tmp_path, monkeypatch):
-    from copy import deepcopy
-    from itertools import count
-
-    from assistant.browser import fingerprint
-
-    help_step = {"rung": "guide", "text": "I keep going in circles. What should I do?", "options": []}
-    monkeypatch.setattr(loop.jobs, "unblock", lambda context, page, elements, must_stop=False: (help_step, {}))
-    monkeypatch.setattr(loop.jobs, "hint", lambda context, page, text=None, image=None: ("Use Instamart", {}))
-    a = agent_with(tmp_path, replies=[{"text": "open Instamart"}])
-    shown, n = a.browser.observe.return_value, count(1)
-
-    def moving(screenshot=False):  # every click changes the page, so only the repetition gives the loop away
-        page = deepcopy(shown)
-        page["text"] += f"\nMenu section {next(n)}"
-        page["fingerprint"] = fingerprint(page)
-        return page
-
-    a.browser.observe.side_effect = moving
-    for _ in range(4):
-        act(a, decision("e5", "CLICK"))
-    assert a.asked[-1]["text"] == "I keep going in circles. What should I do?"
-    assert a.state["memory"][-2] == "I've done “Office” 4 times recently without getting closer."
+def test_repeated_semantic_actions_request_recovery(tmp_path):
+    a = agent_with(tmp_path)
+    for _ in range(2):
+        act(a, decision('e5', 'CLICK'))
+    assert any(d.get('kind') == 'stalled' for d in a.task.diagnostics)
+    assert not a.asked

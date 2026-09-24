@@ -255,6 +255,9 @@ def commitment_kind(operation, action, page, *, assessment=None, key=None):
     assessment is a validated coordinator classification, never a raw Jev field.
     This intentionally leaves the legacy commit_label/approval_valid API unchanged.
     """
+    if operation in {'WAIT', 'SCROLL_UP', 'SCROLL_DOWN', 'SCROLL_LEFT', 'SCROLL_RIGHT',
+                     'HOVER', 'GO_BACK', 'GO_FORWARD', 'SWITCH_TAB', 'SAVE_PDF'}:
+        return 'preparation'
     if operation == 'CONFIRM' or assessment == 'commitment':
         return 'commitment'
     if action.get('commits') or action.get('account_change'):
