@@ -400,6 +400,7 @@ class Browser:
         self.guard_targets, self.guard_sessions = {}, set()
         self.tabs, self.opener, self.frames, self.dialogs, self.titles = {}, {}, {}, {}, {}
         self.alerts, self.downloads, self.pending_downloads = [], [], {}
+        self.pdf_exports = {}  # private, code-owned receipts; paths never selected by a model
         self.chooser = self.intercepted = self.after_input = self.active = None
         self.downloads_dir = Path(downloads) if downloads else HOME / "downloads"
         self.geolocation = geolocation
@@ -749,6 +750,9 @@ class Browser:
         page["downloads"] = self.downloads[:]
         del self.downloads[:len(page["downloads"])]
         page["fingerprint"] = fingerprint(page)
+        for export in self.pdf_exports.values():
+            if export.get('fingerprint') == page['fingerprint'] and export.get('url') == page['url']:
+                page.setdefault('events', []).append(export['event'])
         self.check_reservation()
         return page
 
@@ -796,6 +800,10 @@ class Browser:
             if self.mutated:  # input may have reached the page: never let the loop retry it as stale
                 raise ExecutionUncertain(f"{error} (input may have reached the page; not retried)") from error
             raise
+        if operation == 'SAVE_PDF' and result.get('file') in self.pdf_exports and self.fresh(page):
+            export = self.pdf_exports[result['file']]
+            export.update(fingerprint=page['fingerprint'], url=page['url'],
+                          event='PDF export ' + export['correlation'] + ': ' + page['text'])
         self.after_input = None if operation == "WAIT" else action
         return result
 
@@ -1221,9 +1229,16 @@ class Browser:
         data = self.call("Page.printToPDF", timeout=60.0, printBackground=True)["data"]
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
         path = unique(self.downloads_dir / (safe_name(self.evaluate("document.title") or "page") + ".pdf"))
-        path.write_bytes(base64.b64decode(data))
+        contents = base64.b64decode(data, validate=True)
+        if not contents.startswith(b'%PDF-'):
+            raise RuntimeError('Chrome did not return a PDF')
+        path.write_bytes(contents)
+        path.chmod(0o600)
+        correlation = uuid.uuid4().hex
+        self.pdf_exports[str(path)] = dict(correlation=correlation,
+                                           digest=hashlib.sha256(contents).hexdigest())
         self.downloads.append(str(path))
-        return {"file": str(path)}
+        return {"file": str(path), "correlation": correlation}
 
     def _do_switch_tab(self, action, **_):
         if action["tab"] not in self.tabs:

@@ -201,6 +201,43 @@ class Agent:
         del browser.downloads[:len(arrived)]
         self.state["files"].extend(arrived)
 
+    def bind_delivered_export(self, path, media_id):
+        """Attest only an explicit current-page PDF export, never an invoice retrieval or upload.
+
+        Browser receipts are private capabilities. The channel supplies its own media ID;
+        neither model text nor a downloaded filename can mint one of these receipts.
+        """
+        if self.task.updates or not re.fullmatch(
+                r'\s*(?:please )?(?:save|export|print) (?:this|the current|current) page '
+                r'(?:as|to) (?:a )?pdf[.!]?\s*', self.task.goal, re.I):
+            return
+        export = getattr(self.browser, 'pdf_exports', {}).get(str(path), {})
+        if (not export.get('event') or not Path(path).is_file()
+                or hashlib.sha256(Path(path).read_bytes()).hexdigest() != export.get('digest')):
+            return
+        executions = [e for e in self.task.executions.values()
+                      if e.get('operation') == 'SAVE_PDF' and e.get('status') == 'executed'
+                      and e.get('revision') == self.task.revision
+                      and e.get('result', {}).get('correlation') == export['correlation']]
+        requirements = [r for r in self.task.completion if r.get('kind') == 'artifact']
+        if len(executions) != 1 or len(requirements) != 1:
+            return
+        latest = next(reversed(self.task.observations))
+        ids = [eid for eid, evidence in self.task.evidence.items()
+               if evidence['observation_id'] == latest and evidence['kind'] == 'browser-event'
+               and evidence['quote'] == self.secrets.text(export['event'])]
+        if not ids:
+            return
+        requirement, execution = requirements[0], executions[0]
+        try:
+            commit.record_artifact(self.task, media_id, requirement_id=requirement['id'], evidence_ids=ids,
+                                   direction='download', execution_id=execution['execution_id'])
+            commit.bind_completion_evidence(self.task, requirement['id'], evidence_ids=ids,
+                                           execution_id=execution['execution_id'], artifact_id=media_id)
+        except ValueError:
+            # Missing/wrong material, stale revision, or a mismatched contract is not success.
+            return
+
     def trace(self):
         """The task as the smoke set judges it, redacted like everything that leaves the task: its outcome, the
         questions it asked, and every step and decision with probabilities. No screenshots, no request bodies."""

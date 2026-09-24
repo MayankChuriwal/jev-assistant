@@ -583,6 +583,10 @@ class Core:
                 receipt = self.channel.send(self.user, {"type": "document", "document": {
                     "id": media_id, "filename": path.name}})
                 commit.record_delivery(task.flow, media_id, message_id=receipt)
+                if hasattr(task.agent, 'bind_delivered_export'):
+                    registered_path = self.channel.media(media_id)[0]
+                    if Path(registered_path) == path:
+                        task.agent.bind_delivered_export(path, media_id)
             else:
                 self.say("A downloaded file could not be delivered here.", task)
                 return
