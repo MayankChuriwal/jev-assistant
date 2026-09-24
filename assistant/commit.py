@@ -150,7 +150,7 @@ def _money_in_source(text, quote, source):
     for row in re.finditer(re.escape(quote), source):
         for amount in re.finditer(r"(?<![0-9.,+\-])" + re.escape(text) + r"(?![0-9.,])", quote):
             start, end = row.start() + amount.start(), row.start() + amount.end()
-            left, right = source[:start].rstrip(" \t\u00a0"), source[end:].lstrip(" \t\u00a0")
+            left, right = source[:start].rstrip(), source[end:].lstrip()
             if (left and (unicodedata.category(left[-1]) == "Sc" or left[-1] in "+-")):
                 continue
             if right and unicodedata.category(right[0]) == "Sc":

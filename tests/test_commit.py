@@ -276,3 +276,25 @@ def test_complete_matching_currency_token_remains_valid(token):
         item["evidence_ids"] = [eid]
     x["total_text"], x["total_quote"] = token, "Total " + token
     assert validate_review(s, p, x) == p
+
+
+@pytest.mark.parametrize("separator", ["\u202f", "\u2009", "\u2007", "\u2002", "\u3000"])
+@pytest.mark.parametrize("prefix", [True, False])
+def test_unicode_spacing_cannot_hide_currency_context(separator, prefix):
+    s, _, p, x = review_fixture()
+    token = "€" + separator + "110" if prefix else "110" + separator + "EUR"
+    text = "Shop Home Tomorrow Visa ••1234\nTea × 2 ₹100\nRain fee ₹10\nTotal " + token
+    oid = observe_state(s, {"url": "https://shop.test", "text": text})
+    eid = cite(s, oid, text)
+    p["evidence_ids"] = [eid]
+    for item in p["lines"]:
+        item["evidence_ids"] = [eid]
+    x["total_text"], x["total_quote"] = "110", "Total " + token
+    with pytest.raises(ValueError):
+        validate_review(s, p, x)
+
+
+@pytest.mark.parametrize("token,amount", [("₹\u202f1,23,456.78", 12345678),
+                                        ("123,456.78\u2009INR", 12345678)])
+def test_supported_grouping_with_unicode_currency_spacing(token, amount):
+    assert money_minor(token, currency="INR", exponent=2) == amount
