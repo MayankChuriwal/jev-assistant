@@ -1,0 +1,138 @@
+<!doctype html><meta charset="utf-8"><title>Journey fixture</title>
+<style>body{font:16px system-ui;margin:24px}button,label{display:block;margin:12px 0}section{max-width:600px}</style>
+<section id="stage"></section>
+<script>
+const query=new URLSearchParams(location.search);
+const kind=query.get('kind')||'shop', variant=query.get('variant')||'base';
+const stage=document.getElementById('stage');
+window.log=[];
+window.__taskCorrelation=crypto.randomUUID();
+let step=kind==='compare'?'login-a':kind==='form'?'form-entry':
+  kind==='account'?'account-choice':'provider';
+let provider='', address='', option='', quantity=1, surcharge=0, message='';
+let codeA='', codeB='';
+const button=(text,fn,receipt=false)=>{
+  const node=document.createElement('button');node.textContent=text;
+  if(receipt)node.setAttribute('data-fixture-receipt','');
+  node.onclick=fn;stage.append(node);return node;
+};
+const paragraph=text=>{const p=document.createElement('p');p.textContent=text;stage.append(p)};
+function render(){
+  stage.replaceChildren();
+  if(step==='form-entry'){
+    const heading=document.createElement('h1');heading.textContent='Write to reception';stage.append(heading);
+    const label=document.createElement('label');label.textContent='Message';stage.append(label);
+    const field=document.createElement('textarea');field.setAttribute('aria-label','Message');label.append(field);
+    button('Review message',()=>{message=field.value;step='review';render()});
+  }else if(step==='account-choice'){
+    const heading=document.createElement('h1');heading.textContent='Stream Plan account';stage.append(heading);
+    paragraph('Active monthly subscription');
+    button('Review cancellation',()=>{step='review';render()});
+  }else if(step==='provider'){
+    paragraph('Choose provider');
+    button(kind==='ride'?'Metro Cars':'Market A',()=>{provider=kind==='ride'?'Metro Cars':'Market A';step='address';render()});
+    button(kind==='ride'?'City Rides':'Market B',()=>{provider=kind==='ride'?'City Rides':'Market B';step='address';render()});
+  }else if(step==='address'){
+    paragraph(kind==='ride'?'Choose pickup':'Choose delivery address');
+    button('Home — 12 MG Road',()=>{address='Home — 12 MG Road';step='option';render()});
+    button('Office — 4 Residency Road',()=>{address='Office — 4 Residency Road';step='option';render()});
+  }else if(step==='option'){
+    paragraph(kind==='ride'?'Choose vehicle':'Choose tea');
+    button(kind==='ride'?'Compact — 4 seats, 3 minutes':'Green tea — 100 g',()=>{
+      option=kind==='ride'?'Compact — 4 seats, 3 minutes':'Green tea — 100 g';
+      step=kind==='ride'?'review':'promotion';render()});
+    button(kind==='ride'?'Large — 6 seats, 8 minutes':'Black tea — 100 g',()=>{
+      option=kind==='ride'?'Large — 6 seats, 8 minutes':'Black tea — 100 g';
+      step=kind==='ride'?'review':'promotion';render()});
+  }else if(step==='promotion'){
+    paragraph('Free delivery requires qualifying subtotal at least ₹199.');
+    paragraph('One Green tea costs ₹95 plus delivery ₹39: total ₹134.');
+    paragraph('Two Green teas cost ₹190 plus delivery ₹39: total ₹229; threshold missed.');
+    paragraph('Three Green teas cost ₹285 with free delivery: total ₹285, ₹151 more overall.');
+    button('Keep one pack',()=>{quantity=1;step='review';render()});
+    button('Add two packs',()=>{quantity=3;step='review';render()});
+  }else if(step==='login-a'||step==='login-b'){
+    const name=step==='login-a'?'Market A':'Market B';
+    const form=document.createElement('form');form.onsubmit=e=>e.preventDefault();stage.append(form);
+    const heading=document.createElement('h1');heading.textContent='One-time code for '+name;form.append(heading);
+    const input=document.createElement('input');input.type='password';input.setAttribute('aria-label',name+' one-time code');
+    input.maxLength=6;form.append(input);
+    const verify=button('Verify '+name,()=>{
+      if(input.value!==('Market A'===name?'482913':'615204')){paragraph('Invalid code');return}
+      if(name==='Market A')codeA=input.value;else codeB=input.value;
+      log.push({authentication:name,accepted:true});
+      step=name==='Market A'?'quote-a':'quote-b';render();
+    });
+    form.append(verify);
+  }else if(step==='payment-auth'){
+    const form=document.createElement('form');form.onsubmit=e=>e.preventDefault();stage.append(form);
+    const heading=document.createElement('h1');heading.textContent='Card verification';form.append(heading);
+    const input=document.createElement('input');input.type='password';input.setAttribute('aria-label','CVV');
+    input.maxLength=3;form.append(input);
+    const verify=button('Complete payment',()=>{
+      if(input.value!=='123'){paragraph('Invalid CVV');return}
+      log.push({payment_verified:true});
+      window.__taskReceipt={correlation:window.__taskCorrelation,status:'success',
+        description:'Order placed Green tea'};
+      step='done';render();
+    });
+    form.append(verify);
+  }else if(step==='quote-a'){
+    paragraph('Market A quote: Green tea ₹95, delivery ₹39, total ₹134.');
+    button('Compare Market B',()=>{step='login-b';render()});
+    button('Skip Market B',()=>{step='choice';render()});
+  }else if(step==='quote-b'){
+    paragraph('Market B quote: Green tea ₹99, delivery ₹25, total ₹124.');
+    button('Review both quotes',()=>{step='choice';render()});
+  }else if(step==='choice'){
+    paragraph('Choose quote: Market A ₹134'+(codeB?', Market B ₹124':' (Market B skipped)'));
+    button('Choose Market A',()=>{provider='Market A';address='Home — 12 MG Road';
+      option='Green tea — 100 g';step='review';render()});
+    if(codeB)button('Choose Market B',()=>{provider='Market B';address='Home — 12 MG Road';
+      option='Green tea — 100 g';step='review';render()});
+  }else if(step==='review'){
+    const heading=document.createElement('h1');heading.textContent='Final review';stage.append(heading);
+    if(kind==='form'||kind==='account'){
+      paragraph(kind==='form'?'Reception':'Stream Plan');
+      paragraph(kind==='form'?'Message to reception':'Cancel subscription');
+      if(kind==='form')paragraph(message);
+      button(kind==='form'?'Send message':'Cancel subscription',()=>{
+        log.push({commitment:kind,message});
+        window.__taskReceipt={correlation:window.__taskCorrelation,status:'success',
+          description:kind==='form'?'Message to reception sent':'Stream Plan cancellation confirmed'};
+        step='done';render();
+      },true);
+      return;
+    }
+    paragraph(provider);paragraph(address);paragraph(option);
+    paragraph(kind==='ride'?'Tomorrow 09:00':'Tomorrow');
+    paragraph(query.has('cvv')?'HDFC Visa ••1234':'Cash');
+    const item=kind==='ride'?'Compact ride':`Green tea × ${quantity}`;
+    const price=kind==='ride'?129:(provider==='Market B'?99:95)*quantity;
+    const fee=(kind==='ride'?16:(quantity===3?0:provider==='Market B'?25:39))+surcharge;
+    paragraph(item+' ₹'+price);paragraph((variant==='renamed'?'Handling charge':'Delivery fee')+' ₹'+fee);
+    paragraph('Total ₹'+(price+fee));
+    if(surcharge)paragraph('Previous total ₹'+(price+fee-surcharge));
+    if(variant==='reordered')stage.prepend(stage.lastElementChild);
+    if(variant==='delayed')paragraph('Preparing review…');
+    button(kind==='ride'?'Request ride':'Place order',()=>{
+      log.push({commitment:kind,provider,address,option,quantity,total:price+fee});
+      const status=query.has('cvv')?'pending_user':query.has('pending')||variant==='delayed'?
+        'processing':'success';
+      window.__taskReceipt={correlation:window.__taskCorrelation,status,
+        description:kind==='ride'?(status==='success'?'Driver confirmed Compact ride':'Finding a driver'):
+          (status==='success'?'Order placed Green tea':'Order processing Green tea')};
+      step=query.has('cvv')?'payment-auth':'done';render();
+      if(variant==='delayed')setTimeout(()=>{
+        window.__taskReceipt={correlation:window.__taskCorrelation,status:'success',
+          description:kind==='ride'?'Driver confirmed Compact ride':'Order placed Green tea'};
+        render();
+      },900);
+    },true);
+  }else if(step==='done'){
+    paragraph(window.__taskReceipt.description+' '+window.__taskCorrelation);
+  }
+}
+window.changeFee=()=>{surcharge=16;render()};
+render();
+</script>
