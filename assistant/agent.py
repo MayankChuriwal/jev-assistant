@@ -629,7 +629,7 @@ class Agent:
                 self.secrets.nodes.add((action.get('frame'), node))
         if receipt['status'] == 'not_dispatched':
             raise StalePage('The selected action was not dispatched')
-        self.record_captcha_execution(operation, action, receipt)
+        self.record_captcha_execution(operation, action, receipt, key=decision.get('key'))
         self.observe()  # journal receipt exists before any post-dispatch read
         self.state['history'][-1]['page_changed'] = self.state['page']['fingerprint'] != page['fingerprint']
         if self.interrupted and self.interrupted():
@@ -894,16 +894,20 @@ class Agent:
                 action.pop('value', None)
         return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
 
-    def captcha_image_digest(self, challenge):
+    def captcha_image(self, challenge):
         masked = self.secrets.nodes | set(challenge.get('masked_fields', []))
-        image = self.browser.marked_screenshot(challenge['marks'], masked=masked, hide=self.hidden_details())
-        return hashlib.sha256(image.encode()).hexdigest()
+        return self.browser.marked_screenshot(challenge['marks'], masked=masked, hide=self.hidden_details())
 
-    def record_captcha_execution(self, operation, action, receipt):
+    def captcha_image_digest(self, challenge):
+        return hashlib.sha256(self.captcha_image(challenge).encode()).hexdigest()
+
+    def record_captcha_execution(self, operation, action, receipt, *, key=None):
         for c in self.task.challenges.values():
             if c.get('purpose') != 'captcha' or c.get('kind') != 'text' or c.get('status') == 'expired':
                 continue
-            if c.get('status') == 'answer_applied':
+            submits = ((operation == 'CLICK' and action['id'] in c.get('submit_targets', []))
+                       or (operation == 'PRESS_KEY' and key == 'Enter' and action['id'] == c.get('text_field')))
+            if c.get('status') == 'answer_applied' and submits:
                 c['status'] = 'submitted'  # includes unknown; never replay submission
             elif operation == 'TYPE_TEXT' and receipt['status'] == 'executed':
                 c.update(status='checking_application', applied_execution_id=receipt['execution_id'])
@@ -1098,7 +1102,8 @@ class Agent:
                  any((field.get('context') or {}).get(k) and (field.get('context') or {})[k] ==
                      (a.get('context') or {}).get(k) for k in ('form', 'section')))
             and a['label'].strip().lower() in {'verify', 'verify captcha', 'submit', 'submit captcha'}]
-        challenge['image_digest'] = self.captcha_image_digest(challenge)
+        image = self.captcha_image(challenge)
+        challenge['image_digest'] = hashlib.sha256(image.encode()).hexdigest()
         self.task.challenges[cid] = challenge
         reply = self.ask({'kind': 'image', 'image': image, 'challenge_id': cid,
             'text': 'Type the text exactly as shown.' if kind == 'text' else 'Reply with the tile labels to select.'})

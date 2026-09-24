@@ -228,3 +228,37 @@ def test_text_captcha_submit_does_not_cross_same_named_forms(tmp_path):
     a.relay_captcha(page)
     c = list(a.task.challenges.values())[-1]
     assert c['submit_targets'] == ['verify']
+
+
+@pytest.mark.parametrize('kind,answer', [('text', 'new text'), ('tiles', '1')])
+def test_captcha_answer_image_matches_digest_after_kind_wait_replacement(tmp_path, kind, answer):
+    import hashlib
+
+    a = agent_with(tmp_path, page=fake_page(text='Select all images captcha'))
+    a.browser.marked_screenshot = Mock(return_value='old-image')
+    shown = []
+    def ask(message):
+        shown.append(message['image'])
+        if message['kind'] == 'choice':
+            a.browser.marked_screenshot.return_value = 'new-image'
+            return {'option': kind}
+        return {'text': answer}
+    a.asker = ask
+    a.relay_captcha(a.state['page'])
+    c = next(iter(a.task.challenges.values()))
+    assert shown == ['old-image', 'new-image']
+    assert c['image_digest'] == hashlib.sha256(shown[-1].encode()).hexdigest()
+
+
+def test_text_captcha_wait_preserves_applied_answer_for_verify(tmp_path):
+    a = text_captcha_with_submit(tmp_path)
+    wait = dict(id='wait', kind='wait', label='Wait', node=None)
+    a.state['page']['actions'].append(wait)
+    a.browser.observe.return_value['actions'].append(wait)
+    a.asker = lambda message: {'option': 'text'} if message['kind'] == 'choice' else {'text': 'abCD'}
+    a.relay_captcha(a.state['page'])
+    act(a, decision('code', 'TYPE_TEXT'))
+    act(a, decision('wait', 'WAIT'))
+    assert list(a.task.challenges.values())[-1]['status'] == 'answer_applied'
+    act(a, decision('verify', 'CLICK'))
+    assert [c.args[0] for c in a.browser.act.call_args_list] == ['TYPE_TEXT', 'WAIT', 'CLICK']
