@@ -128,3 +128,14 @@ def test_visual_annotations_use_coordinator_schema(monkeypatch):
         {"annotations": [{"cell": "A1", "label": "Map", "text": ""}]}, {}))
     assert jobs.visual_annotations(s, page, "image", {"A1": {}}) == [
         {"cell": "A1", "label": "Map", "text": ""}]
+
+
+def test_confirmation_preserves_all_observed_charge_lines(monkeypatch):
+    from assistant import jobs
+
+    lines = [f"Charge {n}: ₹1" for n in range(30)]
+    monkeypatch.setattr(jobs, "text_json", lambda *args, **kwargs: (
+        {"action_label": "Pay ₹30", "amount": "₹30", "lines": lines, "element": ""}, {}))
+    card, _ = jobs.confirm_card("review", {"url": "https://shop.test", "title": "Review",
+                                           "text": "\n".join(lines) + " Total ₹30"}, "Pay ₹30")
+    assert card["lines"] == lines

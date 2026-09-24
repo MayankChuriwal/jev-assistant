@@ -252,22 +252,34 @@ def _validate(state, output, *, event=None):
         put_fact(trial, fact["key"], fact["value"], source=fact["source"], scope=fact["scope"],
                  depends_on=tuple(fact["depends_on"]), evidence=tuple(fact["evidence"]))
     requirement_ids = set(state.requirements)
+    emitted_requirements = set()
     for req in output["requirements"]:
         _shape(req, SCHEMA["requirements"][0], "requirements")
         for name in ("id", "purpose", "scope", "reason"):
             _string(req[name], "requirements." + name)
         _enum(req["kind"], {"text", "choice", "secret", "file", "image"}, "requirements.kind")
+        if req["id"] in emitted_requirements:
+            raise ValueError("requirements.id: duplicate")
+        emitted_requirements.add(req["id"])
         _strings(req["keys"], "requirements.keys")
+        if len(req["keys"]) != len(set(req["keys"])):
+            raise ValueError("requirements.keys: duplicate")
         if not req["keys"]:
             raise ValueError("requirements.keys: empty")
         _strings(req["depends_on"], "requirements.depends_on")
         for dep in req["depends_on"]:
             _reference(dep, requirement_ids, "requirements.depends_on")
         _list(req["options"], "requirements.options")
+        if req["options"] and req["kind"] != "choice":
+            raise ValueError("requirements.options: needs choice kind")
+        option_ids = set()
         for option in req["options"]:
             _shape(option, {"id", "label", "description", "evidence_ids"}, "requirements.options")
             for name in ("id", "label", "description"):
                 _string(option[name], "requirements.options." + name, empty=name == "description")
+            if option["id"] in option_ids:
+                raise ValueError("requirements.options.id: duplicate")
+            option_ids.add(option["id"])
             _evidence(state, option["evidence_ids"], "requirements.options.evidence_ids")
         requirement_ids.add(req["id"])
     if output["completion"] and event not in {"start", "user_amendment"}:

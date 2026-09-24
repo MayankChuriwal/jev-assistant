@@ -15,6 +15,11 @@ def render(message, question_id=None, image_id=None, title=None):
     options = message.get("options") or []
     payloads = [{"type": "image", "image": {"id": image_id}}] if image_id else []
     if options and len(options) <= ROWS:
+        # Channel titles are short; preserve every material distinction in plain body text.
+        if any(o.get("description") or len(o["label"]) > (BUTTON_TITLE if len(options) <= BUTTONS else ROW_TITLE)
+               for o in options):
+            details = [o["label"] + (f" — {o['description']}" if o.get("description") else "") for o in options]
+            text += "\n\n" + "\n".join(details)
         body = text
         if len(text) > BODY_LIMIT:
             payloads += text_payloads(text)

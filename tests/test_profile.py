@@ -168,3 +168,30 @@ def test_parallel_saves_never_collide(tmp_path):
     for thread in threads:
         thread.join()
     assert errors == [] and json.loads((tmp_path / "profile.json").read_text())["cards"] == []
+
+
+def test_explicit_default_requires_consent_and_roundtrips(tmp_path):
+    profile = Profile(tmp_path / "profile.json")
+    with pytest.raises(ValueError, match="consent"):
+        profile.set_default("provider", "Chosen shop", consent=False)
+    profile.set_default("provider", "Chosen shop", consent=True)
+    saved = Profile(profile.path)
+    assert saved.summary()["defaults"]["provider"] == {
+        "value": "Chosen shop", "source": "user", "consent": True, "scope": "task"}
+    saved.remember("Used Old shop last time", "t1")
+    assert saved.summary()["defaults"]["provider"]["value"] == "Chosen shop"
+
+
+def test_defaults_cannot_persist_secrets(tmp_path):
+    profile = Profile(tmp_path / "profile.json")
+    with pytest.raises(ValueError):
+        profile.set_default("password", "sensitive", consent=True)
+    with pytest.raises(ValueError):
+        profile.set_default("provider", {"otp": "123456"}, consent=True)
+
+
+def test_hidden_profile_fields_cannot_be_exposed_as_plain_defaults(tmp_path):
+    profile = Profile(tmp_path / "profile.json")
+    with pytest.raises(ValueError):
+        profile.set_default("phone", "+91 9876543210", consent=True)
+    assert not profile.data["defaults"]

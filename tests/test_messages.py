@@ -37,7 +37,7 @@ def test_long_bodies_go_first_as_text_and_titles_are_cut():
     long_text = "x" * 1500
     payloads = messages.render({"kind": "choice", "text": long_text, "options": [
         {"id": "a", "label": "A" * 30}, {"id": "b", "label": "B"}]}, question_id=1)
-    assert payloads[0]["type"] == "text" and payloads[0]["text"]["body"] == long_text
+    assert payloads[0]["type"] == "text" and payloads[0]["text"]["body"].startswith(long_text)
     assert payloads[1]["interactive"]["body"]["text"] == "Choose one:"
     assert payloads[1]["interactive"]["action"]["buttons"][0]["reply"]["title"] == "A" * 20
 
@@ -62,3 +62,23 @@ def test_replies_map_back_to_the_question_they_answer():
     assert messages.reply_for(3, opts, {"type": "text", "text": "13"}) == {"text": "13"}
     assert messages.reply_for(3, [], {"type": "text", "text": "Home"}) == {"text": "Home"}
     assert messages.reply_for(3, [], {"type": "document", "media_id": "m9", "text": ""}) == {"media_id": "m9"}
+
+
+def test_long_review_keeps_every_charge_before_confirmation():
+    lines = [f"Observed unfamiliar charge {n}: ₹1" for n in range(130)]
+    payloads = messages.render({"kind": "confirm", "text": "\n".join(lines),
+                               "options": [{"id": "yes", "label": "Confirm"}, {"id": "no", "label": "Change"}]},
+                              question_id="t1-q1")
+    bodies = [p["text"]["body"] if p["type"] == "text" else p["interactive"]["body"]["text"] for p in payloads]
+    assert all(line in "".join(bodies) for line in lines)
+    assert payloads[-1]["type"] == "interactive"
+    assert payloads[-1]["x_question"] == "t1-q1"
+
+
+def test_button_summaries_preserve_material_differences_as_plain_text():
+    details = "<b>6 seats</b>, ₹180, arrives in 4 minutes; tolls excluded"
+    payloads = messages.render({"kind": "choice", "text": "Which ride?", "options": [
+        {"id": "a", "label": "Standard premium XL with luggage", "description": details},
+        {"id": "b", "label": "Standard", "description": "4 seats, ₹95"}]}, question_id="t1-q1")
+    assert details in payloads[-1]["interactive"]["body"]["text"]
+    assert "Standard premium XL with luggage" in payloads[-1]["interactive"]["body"]["text"]

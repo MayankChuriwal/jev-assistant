@@ -22,7 +22,7 @@ class Profile:
         self.path = Path(path) if path else HOME / "profile.json"
         stored = json.loads(self.path.read_text()) if self.path.exists() else {}
         self.data = {"name": "", "phone": "", "email": "", "upi_id": "", "addresses": [], "preferences": [],
-                     "cards": [], "logins": [], **stored}
+                     "cards": [], "logins": [], "defaults": {}, **stored}
 
     def save(self):
         with SAVING:
@@ -46,6 +46,7 @@ class Profile:
         return {
             "addresses": [{k: a[k] for k in ("label", "text") if k in a} for a in self.data["addresses"]],
             "preferences": [p["text"] for p in self.data["preferences"]],
+            "defaults": self.data["defaults"],
             "cards": [{k: c[k] for k in ("id", "label", "last4")} for c in self.data["cards"]],
             "profile_keys": [k for k in HIDDEN if self.data.get(k)],
             "vault_keys": self.vault_keys(),
@@ -59,6 +60,22 @@ class Profile:
 
     def remember(self, text, task):
         self.data["preferences"].append({"text": text, "from_task": task})
+        self.save()
+
+    def set_default(self, key: str, value: object, *, consent: bool) -> None:
+        """Save a public, explicitly authorized default; never infer it from history."""
+        from .state import _safe
+
+        if consent is not True:
+            raise ValueError("saving a default requires explicit consent")
+        if (not isinstance(key, str) or not key.strip() or key in HIDDEN
+                or _safe({key: value}) != {key: value}):
+            raise ValueError("defaults must contain only public JSON data")
+        if value is None or value == "":
+            raise ValueError("default must be nonempty")
+        # Validate serializability before mutating or persisting the profile.
+        value = json.loads(json.dumps(value, allow_nan=False))
+        self.data["defaults"][key] = {"value": value, "source": "user", "consent": True, "scope": "task"}
         self.save()
 
     def add_card(self, card_id, label, last4):

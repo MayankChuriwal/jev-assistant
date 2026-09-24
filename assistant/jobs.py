@@ -91,7 +91,7 @@ def confirm_card(context, page, commit, elements=()):
         raise invalid("confirmation card")  # the model may not invent a total
     if not amount and MONEY.search(commit):
         raise invalid("confirmation card")  # a paying commit always shows its amount
-    lines = [x.strip() for x in lines if x.strip()][:8]
+    lines = [x.strip() for x in lines if x.strip()]
     return {"action_label": action, "amount": amount, "lines": lines, "element": element}, meta
 
 

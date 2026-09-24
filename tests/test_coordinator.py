@@ -377,3 +377,24 @@ def test_pending_commitment_and_outcome_still_trigger_coordination():
     assert events_for(s, page, event="outcome") == ("outcome",)
     assess(s, page, "outcome", client=client)
     assert len(calls) == 3
+
+
+@pytest.mark.parametrize("field", ["options", "requirements", "keys", "kind"])
+def test_requirement_identity_is_unambiguous_before_owner_receives_it(field):
+    s, page, oid = observed("XL ₹80")
+    eid = cite(s, oid, "XL ₹80")
+    req = {"id": "ride", "kind": "choice", "purpose": "booking", "keys": ["ride"], "scope": "task",
+           "depends_on": [], "options": [{"id": "xl", "label": "XL", "description": "₹80", "evidence_ids": [eid]}],
+           "reason": "missing"}
+    requirements = [req]
+    if field == "options":
+        req["options"] *= 2
+    elif field == "requirements":
+        requirements *= 2
+    elif field == "keys":
+        req["keys"] *= 2
+    else:
+        req["kind"] = "text"
+    client, _ = scripted(assessment(requirements=requirements))
+    with pytest.raises(ValueError):
+        assess(s, page, "start", client=client)
