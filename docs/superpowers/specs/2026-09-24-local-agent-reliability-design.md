@@ -34,6 +34,9 @@ The user explicitly chose:
   in the vault only with explicit user consent.
 - Reuse information already supplied. Ask again only for a real correction,
   expiration, changed request, or unresolved ambiguity.
+- Use the requested provider or an explicitly saved default. When neither is known,
+  ask for a preferred provider or offer comparison; explain that comparison may
+  require separate logins and multiple OTPs. Do not compare automatically.
 - Offer another service when the requested one is unusable, but switch only after
   the user agrees. Preserve progress and report the blocker when no path exists.
 
@@ -153,11 +156,12 @@ A short-term objective cannot silently weaken the goal. Page content is untruste
 evidence, never authority to change the task or reveal information.
 
 The coordinator can answer ordinary conversation directly when no browser is needed.
-For browser work it chooses a starting website from the user's URL or named service;
-prefer the service's root over an invented deep link. Validate proposed URLs and
-service identity before releasing credentials. Ambiguous service identity becomes a
-chat clarification. Subsequent navigation prefers observed destinations; changing the
-requested service requires the user's agreement.
+For browser work it resolves provider choice using Section 6, then chooses a starting
+website from the user's URL or resolved service; prefer the service's root over an
+invented deep link. Validate proposed URLs and service identity before releasing
+credentials. Ambiguous service identity becomes a chat clarification. Subsequent
+navigation prefers observed destinations; changing the requested service requires
+the user's agreement.
 
 ## 5. Observe, coordinate, decide, execute, verify
 
@@ -244,6 +248,50 @@ evidence, not only its temporary element number. Revalidate after the user repli
 Basic profile details and website sessions retain existing reuse behavior; lasting
 preferences have an explicit remember action. Every fact retains its origin so a
 one-off answer cannot silently become a global preference.
+
+### Provider selection and comparison
+
+Resolve provider choice before beginning a provider-dependent task:
+
+1. Follow the provider or comparison scope explicitly requested in the current task.
+2. Otherwise use an explicitly saved default that applies to the request. A previous
+   one-off choice or an available login does not establish a default.
+3. When neither resolves the choice, ask for a preferred provider or offer comparison.
+   Include the login implications in that question. For example: "Do you have a
+   preferred cab service, or would you like me to compare? Comparing may require
+   separate logins and more than one OTP."
+
+These are generic rules, not fixed service menus. Accept a provider named in free
+text. Discover comparison candidates relevant to the goal and location, validate
+their identity, and report which providers were actually checked. Do not claim that
+every possible provider was compared. If location or another fact is needed to find
+relevant candidates, reuse it or ask for it through the normal requirement flow.
+
+Choosing a provider proceeds with that provider. Choosing comparison authorizes
+checking relevant providers and presents the separate-login/multiple-OTP notice
+before any new login challenge. If the original request already asks to compare,
+give that notice and proceed without asking the same choice again. No additional
+confirmation is needed merely to start the requested comparison.
+
+Reuse valid sessions and public information where available. New logins are requested
+only when needed, with one active question at a time. Every OTP prompt names its
+provider and purpose, and every answer remains bound to that provider's authentication
+flow and challenge. Do not promise a particular OTP count. The user can skip a provider;
+report its quote as unavailable rather than repeatedly requesting login or inventing
+a price. Comparison consent does not authorize account creation or changed account
+terms; those remain subject to the commitment rules.
+
+Compare offers on matching task details: for example, the same route, time, and
+vehicle requirements, or the same product, pack size, quantity, and delivery address.
+Show differences when offers are not equivalent. Include observed total charges and
+arrival/delivery estimates; label estimates, missing fees, and unavailable quotes.
+Do not call an incomplete price the cheapest final total. Let the user select an
+offer unless an explicit instruction or saved preference resolves that choice.
+
+Comparison and offer selection are separate from final booking/order approval.
+Recheck the chosen offer's material details before commitment under Section 8.
+Neither comparing nor choosing a provider creates a lasting preference unless the
+user explicitly asks to remember it.
 
 ## 7. Authentication, temporary secrets, and CAPTCHA
 
@@ -451,6 +499,11 @@ Required deterministic coverage:
   codes, resend, and explicit rejection versus fields merely remaining visible.
 - Questions reused across rewording, updated observations, and amendments; duplicate
   webhook delivery, late answers, stale buttons, and concurrent-task reply isolation.
+- Explicit providers, saved defaults, and omitted-provider questions; comparison
+  requires a user request/choice and gives an upfront separate-login/multiple-OTP
+  notice. An explicit comparison request is not asked again. Reuse valid sessions,
+  serialize provider-specific OTP questions, handle skipped or incomplete quotes,
+  and require separate approval for the final commitment.
 - Wrong-purpose/origin/challenge secrets rejected; temporary values absent from every
   model request, saved record, screenshot, and completed-task object.
 - Text and tile CAPTCHAs, numeric text answers, and challenge replacement during a reply.
