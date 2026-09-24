@@ -1,10 +1,10 @@
 # Jev Assistant — design
 
-Date: 2026-09-23 · Status: approved in brainstorming, awaiting spec review
+Date: 2026-09-23 · Status: historical baseline; see the approved revision below
 
-Revision note (2026-09-24): this document describes the original baseline. The proposed
+Revision note (2026-09-24): this document describes the original baseline. The approved
 [local agent reliability design](2026-09-24-local-agent-reliability-design.md) records
-the subsequently agreed direction and awaits written-spec review. Once approved, it
+the subsequently agreed direction, approved in writing on 2026-09-24. It
 supersedes conflicting rules here, especially card/CVV storage, outside-chat device
 actions, action-selection authority, question handling, and completion verification.
 

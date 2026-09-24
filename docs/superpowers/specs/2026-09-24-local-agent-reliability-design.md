@@ -2,10 +2,10 @@
 
 Date: 2026-09-24
 
-Status: conversational direction approved; written spec awaiting user review.
+Status: written spec approved by the user on 2026-09-24; implementation planning.
 
-This is the proposed replacement for the behavioral and orchestration portions of
-[the original design](2026-09-23-jev-assistant-design.md). Once approved, this document
+This replaces the behavioral and orchestration portions of
+[the original design](2026-09-23-jev-assistant-design.md). This document
 takes precedence wherever the designs differ. The existing browser implementation
 remains the foundation; this document does not claim that the changes are implemented.
 
