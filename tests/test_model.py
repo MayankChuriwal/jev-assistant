@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from assistant import model
+from assistant import coordinator, model
 
 
 def reply(content):
@@ -219,6 +219,19 @@ def test_text_request_uses_only_parameters_openai_accepts(monkeypatch):
     assert url == "https://api.openai.com/v1/chat/completions" and key == "sk-test"
     assert set(body) == {"model", "messages", "response_format", "max_tokens"}
     assert body["response_format"] == {"type": "json_object"}
+
+
+def test_first_message_json_mode_request_instructs_json(monkeypatch):
+    def post(_url, _key, body):
+        assert body["response_format"] == {"type": "json_object"}
+        assert "json" in body["messages"][0]["content"].lower()
+        return {"choices": [{"message": {"content": (
+            '{"intent":"NEW_TASK","task_id":null,"ambiguous":false,"reply":""}'
+        )}}]}
+
+    monkeypatch.setattr(model, "post_json", post)
+    result = coordinator.interpret_message("Book an Uber.", [], [])
+    assert result["intent"] == "NEW_TASK"
 
 
 def test_missing_key_stops_before_guessing(monkeypatch):
