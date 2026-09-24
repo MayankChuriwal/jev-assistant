@@ -9,6 +9,7 @@ an approval-ready review. Unknown fees and unresolved material choices block it.
 """
 
 import re
+import unicodedata
 from copy import deepcopy
 from decimal import Decimal, localcontext
 
@@ -95,7 +96,8 @@ def review_total(lines: list[dict], total_minor: int, *, currency: str) -> dict:
     if any(row["role"] == "subtotal" for row in roots) and any(row["role"] == "item" for row in roots):
         reasons.append("item/subtotal coverage is ambiguous")
     for subtotal in (row for row in lines if row["role"] == "subtotal"):
-        children = [row for row in lines if row["included_in"] == subtotal["id"] and row["role"] == "item"]
+        children = [row for row in lines if row["included_in"] == subtotal["id"]
+                    and row["role"] in {"item", "subtotal"}]
         adjustments = [row for row in lines if row["included_in"] == subtotal["id"]
                        and row["role"] in {"discount", "fee", "tip", "rounding"}]
         if children and sum(row["amount_minor"] for row in children + adjustments) != subtotal["amount_minor"]:
@@ -137,6 +139,26 @@ def promotion_advice(base: dict, alternative: dict, terms: dict) -> dict:
 def _amount_in_quote(text, quote):
     # Substrings of larger numeric tokens are not observed amounts.
     return bool(re.search(r"(?<![0-9.,+\-])" + re.escape(text) + r"(?![0-9.,])", quote))
+
+
+def _money_in_source(text, quote, source):
+    """Keep adjacent currency/sign context at the exact row occurrence in the page.
+
+    Checking only the model's row quote would allow it to trim a suffix currency
+    from that quote as well as from the amount. Unsupported markers fail closed.
+    """
+    for row in re.finditer(re.escape(quote), source):
+        for amount in re.finditer(r"(?<![0-9.,+\-])" + re.escape(text) + r"(?![0-9.,])", quote):
+            start, end = row.start() + amount.start(), row.start() + amount.end()
+            left, right = source[:start].rstrip(" \t\u00a0"), source[end:].lstrip(" \t\u00a0")
+            if (left and (unicodedata.category(left[-1]) == "Sc" or left[-1] in "+-")):
+                continue
+            if right and unicodedata.category(right[0]) == "Sc":
+                continue
+            if re.search(r"(?<![A-Za-z])[A-Z]{3}$", left) or re.match(r"[A-Z]{3}(?![A-Za-z])", right):
+                continue
+            return True
+    return False
 
 
 def validate_review(state, proposal: dict, extraction: dict) -> dict:
@@ -187,6 +209,7 @@ def validate_review(state, proposal: dict, extraction: dict) -> dict:
     total_text, total_quote = extraction["total_text"], extraction["total_quote"]
     if (not isinstance(total_quote, str) or not isinstance(total_text, str) or not total_text
             or not _amount_in_quote(total_text, total_quote)
+            or not _money_in_source(total_text, total_quote, observation["text"])
             or not any(_amount_in_quote(total_quote, q) for q in material)):
         raise ValueError("review: total not observed")
     currency, exponent = proposal["currency"], extraction["exponent"]
@@ -202,6 +225,7 @@ def validate_review(state, proposal: dict, extraction: dict) -> dict:
         text, quote = extraction["amounts"][line["id"]], extraction["line_quotes"][line["id"]]
         if (not isinstance(text, str) or not text or not isinstance(quote, str)
                 or not _amount_in_quote(text, quote) or line["label"] not in quote
+                or not _money_in_source(text, quote, observation["text"])
                 or not any(_amount_in_quote(quote, q) for q in quotes(line["evidence_ids"]))
                 or money_minor(text, currency=currency, exponent=exponent) != line["amount_minor"]):
             raise ValueError("review: line extraction mismatch")

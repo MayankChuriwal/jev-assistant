@@ -221,3 +221,58 @@ def test_truncated_row_quote_cannot_shorten_an_observed_amount():
     x["line_quotes"] = {"tea": "Tea × 2 ₹10", "rain": "Rain fee ₹1"}
     with pytest.raises(ValueError):
         validate_review(s, p, x)
+
+
+@pytest.mark.parametrize("token", ["$100", "$ 100", "USD 100", "100 USD", "€100", "100 EUR"])
+@pytest.mark.parametrize("target", ["line", "total"])
+def test_review_rejects_stripped_foreign_currency(token, target):
+    s, _, p, x = review_fixture()
+    row = "Tea × 2 " + token if target == "line" else "Total " + token.replace("100", "110")
+    text = "Shop Home Tomorrow Visa ••1234\n" + (
+        row + "\nRain fee ₹10\nTotal ₹110" if target == "line"
+        else "Tea × 2 ₹100\nRain fee ₹10\n" + row)
+    oid = observe_state(s, {"url": "https://shop.test", "text": text})
+    eid = cite(s, oid, text)
+    p["evidence_ids"] = [eid]
+    for item in p["lines"]:
+        item["evidence_ids"] = [eid]
+    if target == "line":
+        x["amounts"]["tea"], x["line_quotes"]["tea"] = "100", row
+    else:
+        x["total_text"], x["total_quote"] = "110", row
+    with pytest.raises(ValueError):
+        validate_review(s, p, x)
+
+
+@pytest.mark.parametrize("outer,inner,item,valid", [(10000, 20000, 20000, False),
+    (20000, 20000, 10000, False), (20000, 20000, 20000, True)])
+def test_nested_subtotals_reconcile_at_every_level(outer, inner, item, valid):
+    lines = [line("outer", outer, "subtotal"), line("inner", inner, "subtotal", "outer"),
+             line("item", item, "item", "inner"), line("tax", 500, "tax", "inner")]
+    assert review_total(lines, outer, currency="INR")["valid"] is valid
+
+
+def test_currency_context_cannot_be_removed_from_row_and_evidence_quotes():
+    s, _, p, x = review_fixture()
+    text = "Shop Home Tomorrow Visa ••1234\nTea × 2 ₹100\nRain fee ₹10\nTotal 110 USD"
+    oid = observe_state(s, {"url": "https://shop.test", "text": text})
+    eid = cite(s, oid, text.removesuffix(" USD"))
+    p["evidence_ids"] = [eid]
+    for item in p["lines"]:
+        item["evidence_ids"] = [eid]
+    x["total_text"], x["total_quote"] = "110", "Total 110"
+    with pytest.raises(ValueError):
+        validate_review(s, p, x)
+
+
+@pytest.mark.parametrize("token", ["INR 110", "110 INR", "₹110"])
+def test_complete_matching_currency_token_remains_valid(token):
+    s, _, p, x = review_fixture()
+    text = "Shop Home Tomorrow Visa ••1234\nTea × 2 ₹100\nRain fee ₹10\nTotal " + token
+    oid = observe_state(s, {"url": "https://shop.test", "text": text})
+    eid = cite(s, oid, text)
+    p["evidence_ids"] = [eid]
+    for item in p["lines"]:
+        item["evidence_ids"] = [eid]
+    x["total_text"], x["total_quote"] = token, "Total " + token
+    assert validate_review(s, p, x) == p
