@@ -90,3 +90,23 @@ def test_later_redirect_or_fetch_is_blocked_before_reserved_account_request(rese
             agent.browser.observe()
     finally:
         agent.close()
+
+
+def test_nested_cross_origin_frame_cannot_fetch_reserved_account(reserved_site):
+    site = reserved_site
+    agent = open_agent(site, site.a + '/')
+    try:
+        child = site.b + '/private'
+        agent.browser.evaluate(f"""(() => {{
+            const middle = document.createElement('iframe');
+            middle.srcdoc = '<iframe src=\"{child}\"></iframe>';
+            document.body.append(middle);
+        }})()""")
+        assert until(lambda: agent.browser.reservation_blocked
+                     or any(r[0].startswith('localhost:') for r in site.requests)), (
+                         site.requests, agent.browser.guard_targets)
+        assert not [r for r in site.requests if r[0].startswith('localhost:')]
+        with pytest.raises(ReservationBlocked):
+            agent.browser.observe()
+    finally:
+        agent.close()

@@ -218,3 +218,67 @@ def test_visual_reannotation_cannot_refresh_an_existing_frame_baseline():
     b.evaluate = Mock(side_effect=lambda expression, session=None: ["same"] if session is None else ["changed"])
     with pytest.raises(StalePage, match="frame"):
         b.visual_candidates(page, annotation)
+
+
+def test_nested_attached_target_resolves_same_origin_parent_before_resuming(monkeypatch):
+    owner = bare()
+    owner.reserve_origin = lambda _: True
+    owner.guard_targets, owner.guard_sessions = {}, set()
+    owner.reservation_blocked = False
+    owner._frame_ids = lambda _: ['T', 'same-origin-middle']
+    calls = []
+    owner._guard_requests = lambda session: calls.append(('guard', session))
+    monkeypatch.setattr(browser, 'OWNERS', {'T': owner})
+    monkeypatch.setattr(browser.PUMP, 'register', lambda *_: None)
+    monkeypatch.setattr(browser, 'cdp', lambda method, **_: calls.append((method, 'child-session')))
+    browser.on_browser_event({'method': 'Target.attachedToTarget', 'params': {
+        'sessionId': 'child-session', 'targetInfo': {'targetId': 'child', 'type': 'iframe',
+                                                    'parentFrameId': 'same-origin-middle'}}})
+    assert until(lambda: calls)
+    assert calls[0] == ('guard', 'child-session')
+    assert until(lambda: ('Runtime.runIfWaitingForDebugger', 'child-session') in calls)
+
+
+def test_unresolved_child_target_is_not_resumed(monkeypatch):
+    owner = bare()
+    owner.reserve_origin = lambda _: True
+    owner.guard_targets, owner.guard_sessions = {}, set()
+    owner.reservation_blocked = False
+    owner._frame_ids = lambda _: ['T']
+    calls = []
+    monkeypatch.setattr(browser, 'OWNERS', {'T': owner})
+    monkeypatch.setattr(browser, 'cdp', lambda method, **_: calls.append(method))
+    browser.on_browser_event({'method': 'Target.attachedToTarget', 'params': {
+        'sessionId': 'child-session', 'targetInfo': {'targetId': 'child', 'type': 'iframe',
+                                                    'parentFrameId': 'unknown-middle'}}})
+    assert owner.reservation_blocked
+    assert 'Runtime.runIfWaitingForDebugger' not in calls
+
+
+def test_attached_child_guard_failure_stays_paused(monkeypatch):
+    owner = bare()
+    owner.reserve_origin = lambda _: True
+    owner.guard_targets, owner.guard_sessions = {}, set()
+    owner.reservation_blocked = False
+    owner._guard_requests = Mock(side_effect=RuntimeError('interception unavailable'))
+    calls = []
+    monkeypatch.setattr(browser, 'OWNERS', {'T': owner})
+    monkeypatch.setattr(browser.PUMP, 'register', lambda *_: None)
+    monkeypatch.setattr(browser, 'cdp', lambda method, **_: calls.append(method))
+    browser.on_browser_event({'method': 'Target.attachedToTarget', 'params': {
+        'sessionId': 'child-session', 'targetInfo': {'targetId': 'child', 'type': 'iframe', 'parentFrameId': 'T'}}})
+    assert owner.reservation_blocked
+    assert 'Runtime.runIfWaitingForDebugger' not in calls
+
+
+def test_frame_adoption_guard_failure_blocks_before_page_enable(monkeypatch):
+    owner = bare()
+    owner.guard_targets = {'child': 'guarded-session'}
+    owner._frame_ids = lambda _: ['T']
+    owner._guard_requests = Mock(side_effect=RuntimeError('interception unavailable'))
+    owner.call = Mock()
+    with pytest.raises(browser.ReservationBlocked):
+        owner._sync_frames([{'targetId': 'child', 'type': 'iframe', 'parentFrameId': 'T'}])
+    owner._guard_requests.assert_called_once_with('guarded-session')
+    owner.call.assert_not_called()
+    assert owner.reservation_blocked

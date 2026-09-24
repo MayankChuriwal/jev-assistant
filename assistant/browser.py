@@ -293,6 +293,27 @@ def on_browser_event(event):
         parent = info.get('openerId') or info.get('parentFrameId')
         owner = OWNERS.get(parent) or next((o for o in list(OWNERS.values())
                 if parent in o.guard_targets or parent in o.frames), None)
+        if parent and owner is None:
+            # Same-origin intermediate frames have no Target session of their own.
+            # Resolve their IDs from the complete trees before allowing a child to run.
+            for candidate in set(OWNERS.values()):
+                sessions = set(candidate.tabs.values()) | set(candidate.guard_targets.values())
+                for candidate_session in sessions:
+                    try:
+                        if parent in candidate._frame_ids(candidate_session):
+                            owner = candidate
+                            break
+                    except (RuntimeError, TimeoutError):
+                        continue
+                if owner:
+                    break
+        if owner is None and (parent or info.get('type') != 'page'):
+            # Ownership cannot be guessed. Leave the child paused and surface the
+            # blocker to guarded tasks rather than letting an unknown renderer fetch.
+            for candidate in set(OWNERS.values()):
+                if candidate.reserve_origin is not None:
+                    candidate.reservation_blocked = True
+            return
         if owner and owner.reserve_origin is not None:
             owner.guard_targets[info['targetId']] = session
             PUMP.register(session, owner._on_event)
@@ -620,12 +641,21 @@ class Browser:
                 progress = True
                 try:
                     if fid not in self.frames:
-                        session = cdp("Target.attachToTarget", targetId=fid, flatten=True)["sessionId"]
+                        session = self.guard_targets.get(fid)
+                        if session is None:
+                            session = cdp("Target.attachToTarget", targetId=fid, flatten=True)["sessionId"]
+                        try:
+                            self._guard_requests(session)
+                        except Exception as error:
+                            self.reservation_blocked = True
+                            raise ReservationBlocked("Frame request guard could not be installed.") from error
                         self.frames[fid] = {"session": session}
                         PUMP.register(session, self._on_event)
                         self.call("Page.enable", session)
                         self.call("DOM.enable", session)
                     children = self._frame_ids(self.frames[fid]["session"])
+                except ReservationBlocked:
+                    raise
                 except RuntimeError:  # the frame went away after Chrome listed it (the page navigated): drop it
                     if fid in self.frames:
                         PUMP.unregister(self.frames.pop(fid)["session"])
