@@ -177,3 +177,10 @@ def look_closer(label, image, cells):
     if out.get("cell") not in cells:
         raise invalid("look")
     return out["cell"], meta
+
+
+def visual_annotations(state, page, image, cells):
+    """Staged visual job: annotate references; the browser and Jev own eventual selection."""
+    from .coordinator import annotate_visual
+
+    return annotate_visual(state, page, image, cells, client=text_json)

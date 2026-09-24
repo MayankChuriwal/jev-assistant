@@ -227,6 +227,14 @@ def choose(state, goal, history):
     )
     return decision
 
+class TextJSONError(ValueError):
+    """Malformed model output, separate from transport errors; no raw content retained."""
+
+    def __init__(self, metadata):
+        super().__init__("Text model returned no JSON object; nothing typed or executed.")
+        self.metadata = metadata
+
+
 def text_json(system, payload, *, max_tokens=512, images=()):
     """One JSON object from the OpenAI-compatible text model, plus call metadata."""
     key = os.environ.get("OPENAI_API_KEY")
@@ -255,13 +263,11 @@ def text_json(system, payload, *, max_tokens=512, images=()):
         output = json.loads(result["choices"][0]["message"]["content"])
     except (ValueError, KeyError, TypeError, IndexError):
         output = None
+    metadata = {"model": name, "latency_ms": round((time.perf_counter() - started) * 1000),
+                "usage": result.get("usage", {})}
     if not isinstance(output, dict):
-        raise ValueError("Text model returned no JSON object; nothing typed or executed.")
-    return output, {
-        "model": name,
-        "latency_ms": round((time.perf_counter() - started) * 1000),
-        "usage": result.get("usage", {}),
-    }
+        raise TextJSONError(metadata)
+    return output, metadata
 
 
 def field_context(context, action, page, history, profile, allowed, previous=None):

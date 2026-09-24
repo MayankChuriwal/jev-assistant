@@ -119,3 +119,12 @@ def test_choice_questions_say_whether_they_are_lasting_preferences(monkeypatch):
     reply(monkeypatch, {"kind": "choice", "text": "What next?", "options": [
         {"label": "View full menu", "element": "1"}, {"label": "Search items", "element": "2"}]})
     assert jobs.compose("Goal: order", PAGE, ELEMENTS)[0]["preference"] is False
+
+
+def test_visual_annotations_use_coordinator_schema(monkeypatch):
+    from reliability_fakes import observed
+    s, page, _ = observed()
+    monkeypatch.setattr(jobs, "text_json", lambda *args, **kwargs: (
+        {"annotations": [{"cell": "A1", "label": "Map", "text": ""}]}, {}))
+    assert jobs.visual_annotations(s, page, "image", {"A1": {}}) == [
+        {"cell": "A1", "label": "Map", "text": ""}]

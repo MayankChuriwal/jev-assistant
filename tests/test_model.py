@@ -306,3 +306,13 @@ def test_a_dropped_connection_is_tried_again(monkeypatch):
     monkeypatch.setattr(model.CLIENT, "post", flaky)
     monkeypatch.setattr(model.time, "sleep", lambda seconds: None)
     assert model.post_json("https://example.test", "key", {}) == {"ok": True} and len(calls) == 3
+
+
+def test_malformed_text_json_preserves_metadata_for_schema_repair(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "fake")
+    monkeypatch.setattr(model, "post_json", lambda *args: {
+        "choices": [{"message": {"content": "not json"}}], "usage": {"total_tokens": 3}})
+    with pytest.raises(ValueError) as caught:
+        model.text_json("schema", {})
+    assert caught.value.metadata["usage"] == {"total_tokens": 3}
+    assert "not json" not in str(caught.value)
