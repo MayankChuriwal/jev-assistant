@@ -1,60 +1,82 @@
 # Jev Assistant
 
-A chat assistant that completes real web tasks. TypeSafe's Jev chooses every browser operation; GPT-4.1 mini writes text only when needed. The core comes from [jev-ultrafast](https://github.com/browser-use/jev-ultrafast).
+A local text-chat assistant for browser tasks. Jev chooses each browser operation and its observed target;
+GPT-4.1 mini coordinates intent, facts, questions and progress. Application code gates approvals,
+secret use, one-time dispatch and completion. The browser foundation comes from
+[jev-ultrafast](https://github.com/browser-use/jev-ultrafast).
 
-Design: `docs/superpowers/specs/2026-09-23-jev-assistant-design.md`
+Design: [local reliability](docs/superpowers/specs/2026-09-24-local-agent-reliability-design.md).
+Implementation is locally tested; live acceptance is pending. Fixture success does not establish real-site reliability.
 
-## Setup
+## Setup and chat
 
     uv sync
-    cp .env.example .env      # add TYPESAFE_API_KEY and OPENAI_API_KEY
-    uv run jev probe          # optional: check the smoke-set sites for 403s and captchas
-
-## Chat
-
-    uv run jev                # starts the hidden agent Chrome if needed, then serves the chat
+    cp .env.example .env      # add TYPESAFE_API_KEY and OPENAI_API_KEY; keep .env ignored
+    uv run jev probe          # optional diagnostic; not an acceptance test
+    uv run jev                # dedicated agent Chrome, then local chat
                               # open http://127.0.0.1:8766/
 
-Type a goal, such as "Order a Diet Coke on Instamart". The agent works in its own hidden Chrome and asks only for
-what it needs, one question at a time: buttons and lists for choices, a hidden field for OTPs and CVVs, and a
-summary card before anything is paid for or booked. Up to three tasks run at once (one per site). Messages sent
-mid-task count as answers, changes, new tasks, cancellations, or status questions. Files the agent saves, such as
-receipts or PDFs, arrive in chat as documents. When a control can't be named from the page (a canvas, a map,
-an image-only button), the agent finds it on a masked screenshot.
+Use the local chat for goals, choices, files, login challenges, corrections and final approvals.
+For example: “Compare the available Diet Coke sizes on Instamart.” The agent uses only its dedicated
+Chrome profile (`BU_NAME=jev`, CDP port 9333), never your everyday Chrome. Do not point `BU_CDP_URL`
+at another browser. Up to three tasks run concurrently; tasks sharing an account/site are serialized.
+Unknown external outcomes keep their account reservation.
 
-The chat uses WhatsApp Cloud API shapes: a webhook comes in, send-message payloads go out, and files travel as
-media ids. A WhatsApp channel can therefore replace `assistant/channel_web.py` without touching the conversation core
-(`assistant/core.py`). The server listens on 127.0.0.1 only and checks a per-launch token. `JEV_DEBUG=1` adds
-`/api/debug` with each task's recent steps.
+Name the provider you want, or explicitly save a default in chat. Order history or a saved address alone
+is not a default. With no provider specified, the assistant asks for one or offers comparison.
+Comparison is opt-in and may involve separate logins and multiple OTPs; switching provider requires your agreement.
+There is no inferred device location: supply the pickup or address in chat.
 
-## Traces and the smoke set
+Review the complete material details and all observed fees before approving an external action:
+item/variant/quantity or route, address, timing, payment method, discount conditions, taxes, delivery/service
+charges and final payable total. A larger basket can reduce delivery fees while increasing total spend.
+Purchases, bookings, messages, submissions, cancellations, deletions and account changes require final
+confirmation. Material changes invalidate that approval. An uncertain dispatch is never retried automatically.
 
-Every task writes a redacted trace to `~/.jev/traces/` when it ends; `uv run jev traces` lists the latest ones with
-their outcome, question count, and quoted evidence. The live smoke set that defines v1 as done is in
-`docs/smoke.md`. Known issues and their status are in `docs/known-issues.md`.
+Passwords, OTPs, card details and CVVs use masked, scoped chat input. Card details, CVVs and OTPs are temporary;
+there is no card vault or CVV saving. Login credentials may be saved only with explicit consent.
+The agent does not require a native Keychain prompt, banking-app approval or browser takeover.
+A site with no usable chat/browser path is reported as blocked after available alternatives are considered.
+CAPTCHA images and their answers stay in chat.
 
-## One task in the terminal
+Use chat to cancel, correct or resume a blocked task. Resume reobserves and revalidates; it does not replay an
+uncertain action. Questions pause after 15 minutes from display and cancel after 24 hours without an answer.
+A restart does not automatically resume active work: interrupted dispatches remain unknown and can be
+reconciled by a requested read-only account-history inspection. Approvals and temporary secrets do not survive restart.
 
-    uv run jev chrome         # hidden agent Chrome with its own profile
-    uv run jev run "Order a Diet Coke on Instamart"
+Files travel through opaque media IDs. Uploads are supplied with the chat attachment control, and downloaded
+files are sent as chat documents. **Delivery is not proof that the requested artifact was produced.**
+A narrow explicit “Save this page as PDF” export binds Chrome-generated bytes to its execution and chat receipt.
+General invoice retrieval and server upload correlation remain open; those file tasks can remain unverified
+even after bytes arrive. See [evaluation limitations](docs/reliability-evaluation.md).
 
-Questions are asked in the terminal; type `cancel` to stop.
+The server binds to 127.0.0.1 and requires a per-launch token for protected HTTP endpoints. `JEV_DEBUG=1`
+enables `/api/debug`. The channel uses WhatsApp-shaped payloads, but this milestone is one-user local chat;
+a hosted service and WhatsApp deployment are separate work.
 
-## Use the loop
+## Traces and evaluation
 
-    from assistant.agent import Agent
+    uv run jev traces
 
-    with Agent("https://en.wikipedia.org/wiki/Main_Page", "Open the article about Gödel's incompleteness theorems") as agent:
-        for state in agent.run():
-            print(state["elapsed_ms"], state["status"], state["history"][-1:])
+Task traces are saved under `~/.jev/traces/`. Review the task outcome, question count, decisions, evidence and
+execution journal together. See [the candidate smoke set](docs/smoke.md),
+[declared evaluation records](docs/reliability-evaluation.md), and [known issues](docs/known-issues.md).
+No live purchases or bookings are authorized by installation or implementation approval.
 
-Run with `uv run --env-file .env python script.py` after `uv run jev chrome`. Without an `asker`, goals that need
-the user (logins, OTPs, files, approvals) stop at BLOCKED.
+## Developer interfaces
+
+    uv run jev chrome
+    uv run jev run "Compare the Diet Coke sizes on Instamart"
+
+The terminal runner remains available for diagnostics; local chat is the supported milestone interaction.
+Without an asker, the Python `Agent` interface stops when user input is needed. Start only the dedicated
+agent Chrome before using that interface. Keep credentials in ignored `.env`; never paste them into traces.
 
 ## Checks
 
     uv run ruff check .
-    uv run pytest             # offline logic
-    uv run pytest -m browser  # real headless Chrome on local fixtures
+    uv run pytest             # offline logic; no paid APIs
+    uv run pytest -m browser  # throwaway headless Chrome on local fixtures
     node --check assistant/snapshot.js
     node --check assistant/static/app.js
+    git diff --check

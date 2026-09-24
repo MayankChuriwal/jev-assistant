@@ -1,6 +1,12 @@
 # Known issues
 
-Minor findings deferred by the final reviews of each plan. Each keeps its ID for good; when one is scheduled, its
+Historical findings retained for traceability. The current contract is the
+[local reliability design](superpowers/specs/2026-09-24-local-agent-reliability-design.md).
+Older “fixed (live run …)” entries describe their historical revision only; they are not current live
+acceptance. Device geolocation, browser takeover, saving cards/CVVs and newest-unused-secret fallback
+are no longer supported. See [evaluation scope and gaps](reliability-evaluation.md).
+
+Findings deferred by the final reviews of each plan. Each keeps its ID for good; when one is scheduled, its
 status names the plan and task; when fixed, the plan and task that fixed it. New findings from live runs are added here too.
 
 Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won't fix: <reason>`
@@ -42,10 +48,10 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 |---|---|---|---|
 | P3-01 | A superscript digit ("²") passes `isdigit()` but fails `int()`, so a numbered reply is refused as "Not delivered"; the server also reports any error inside the core as a bad webhook body. | `core.py`, `messages.py`, `server.py` | open |
 | P3-02 | Deeply nested JSON under 64 KB raises `RecursionError`, which drops the connection instead of answering 400 (the server keeps running). | `server.py` | open |
-| P3-03 | The 15-minute pause and 24-hour cancel timers start when a question is queued, not when it is shown. | `core.py` | open |
+| P3-03 | The 15-minute pause and 24-hour cancel timers start when a question is queued, not when it is shown. | `core.py` | fixed (local reliability Task 12): display-based timers; `tests/test_core.py::test_unanswered_questions_pause_their_task_then_cancel_it`, `tests/test_interaction.py::test_pending_rewording_keeps_id_and_display_timer` |
 | P3-04 | With no task running, an ambiguous message such as "hi" can start a task instead of asking. | `core.py` | open |
 | P3-05 | "Which task?" offers at most 2 tasks (3 for stop or change), and titles cut to 20 characters can look identical. | `core.py` | open |
-| P3-06 | Tapping a button of an already-answered question gives no feedback. | `core.py` | open |
+| P3-06 | Tapping a button of an already-answered question gives no feedback. | `core.py` | open: `tests/test_core.py::test_taps_on_answered_questions_are_ignored` proves no stale replay, but does not assert user-visible acknowledgement |
 | P3-07 | Files the user sends reach websites under a random media-id name (and `.bin` without a MIME type), not the original filename. | `channel_web.py`, `core.py` | fixed (Plan 4 Task 7) |
 | P3-08 | `_forget` iterates the tab-owner map while other task threads add to it, which can raise and leave tabs open. | `browser.py` | open |
 | P3-09 | Cancelled or interrupted downloads stay in the download maps and keep closed browsers in memory. | `browser.py` | open |
@@ -54,7 +60,7 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | P3-12 | After `jev` restarts, an open chat page gets 403 with its old token and shows "offline, retrying" forever instead of asking for a reload. | `static/app.js` | fixed (Plan 4 Task 7) |
 | P3-13 | The attach button stays highlighted if a file question is answered another way. | `static/app.js` | open |
 | P3-14 | The password-type composer may make Chrome offer to save OTPs, CVVs, or passwords. | `static/app.js` | open |
-| P3-15 | Each webhook is handled on its own thread, so a goal and a quick follow-up change can be routed out of order. | `server.py`, `core.py` | open |
+| P3-15 | Each webhook is handled on its own thread, so a goal and a quick follow-up change can be routed out of order. | `server.py`, `core.py` | fixed (local reliability Task 12): serialized inbound routing and ID deduplication; `tests/test_core.py::test_inbound_processing_serializes_classifier_and_routing`, `test_duplicate_inbound_id_starts_one_task` |
 | P3-16 | Documents sent to chat carry no task title when several tasks run. | `core.py` | open |
 | P3-17 | Nothing confirms when a task that was asked to stop has actually stopped. | `core.py` | fixed (Plan 4 Task 7) |
 
@@ -84,19 +90,32 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | L2-01 | Icon-only tiles carry labels like "IM" and "DO", so Jev cannot tell that "IM" is Instamart. | `snapshot.js` labels | open |
 | L2-02 | The user's name shown by a site after sign-in reaches the models unless it is in the profile; set it once with `jev profile --name …`. | `profile.py` | open (mitigated: `jev profile`; phone and email are learned when typed) |
 | L3-01 | On Uber, the summary card for "Request Uber Go AC" failed three times, so the ride was never requested; the error was not recorded then. Traces now keep errors, so the next run shows the cause. | `jobs.confirm_card` | open |
-| L3-02 | Ola's login form was not seen after "LOG IN" (only a scroll panel and a reCAPTCHA badge), so the phone number had nowhere to go. Repeated questions now turn into help, where the user can say "scroll down". | `snapshot.js`, Jev | open |
+| L3-02 | Ola's login form was not seen after "LOG IN" (only a scroll panel and a reCAPTCHA badge), so the phone number had nowhere to go. Historical recovery required browsing directions; current chat-only recovery must choose its own browser strategy or report a blocker. | `snapshot.js`, Jev | open |
 | L4-01 | Instamart: the agent picked the saved "HOME" address itself instead of asking which address. | `agent.py` | fixed (live run 4): two or more saved addresses always become a question unless a saved preference names one |
-| L4-02 | Uber: "current location" can't work in the agent's hidden Chrome (no location), and Uber's airport suggestion became the pickup. | `agent.py`, Jev | fixed (live run 4): the agent Chrome shares the device's location, and "current location" uses the site's own detect-location option; nothing is stored; suggestions must match the user's words |
+| L4-02 | Uber: "current location" can't work in the agent's hidden Chrome (no location), and Uber's airport suggestion became the pickup. | `agent.py`, Jev | superseded by local reliability: no inferred/device location; ask for pickup/address in chat; historical device-location behavior is removed |
 | L5-01 | Uber sign-in: the agent asked for the phone number the profile already held, then a dropped connection surfaced as a problem. | `agent.py`, `model.py` | fixed (live run 5): while signing in, profile details are typed, never asked; dropped connections are retried twice |
 | L5-02 | Uber's pickup and dropoff boxes share the label "Search for a location", so the pickup value was typed into the dropoff box and the wrong suggestions followed. | `snapshot.js` | fixed (live run 5): fields sharing a label get their placeholder or position added |
 | L6-01 | Uber: the page navigated while its iframes were being attached, and Chrome's "No target with given id found" reached chat as a Problem. | `browser.py` `_sync_frames` | fixed (live run 6): a frame that disappears while it is being attached is skipped |
 | L6-02 | Uber sign-in: Jev asked the user while the site was still changing screens (after Continue, and while it checked a code), so the phone number was asked once and the code three more times. | `agent.py` | fixed (live run 6): for 3 s after a step, a question waits first; if the page changes, Jev chooses again |
-| L6-03 | The text model typed an invented code ("1234") into Uber's OTP field instead of the code the user sent, and the site rejected it. | `agent.py` `field_input` | fixed (live run 6): code and password fields take only a value from the user or the Keychain; model text becomes the user's newest unused code, or a question |
+| L6-03 | The text model typed an invented code ("1234") into Uber's OTP field instead of the code the user sent, and the site rejected it. | `agent.py` `field_input` | superseded by local reliability Tasks 5/6/11: exact task/origin/challenge/field secret scope; no newest-unused-code fallback; `tests/test_interaction.py::test_temporary_secret_scope_expiry_and_consumption`, `tests/test_commit.py::test_secret_typing_requires_current_challenge_and_records_scope` |
 | L6-04 | Retyping a code into boxes a rejected code left filled typed nothing (each box holds one character). | `browser.py` | fixed (live run 6): each box's contents are selected before typing |
 | L6-05 | The start page for an Uber ride was www.uber.com/global/en/ride/, which is a 404. Jev recovered by clicking "Go to Uber.com". | `jobs.start` | open |
-| L7-01 | Uber: when stuck, help sent a half-cut screenshot and told the user to act on the site ("You can do so by typing your destination in the destination input field"). | `agent.py` `unblock`, `questions.py` | fixed (live run 7): help sends no screenshots and never asks the user to click or type on the site; choices the page shows come as buttons in chat, and the agent clicks the one picked. A captcha still comes as a picture, since only the user can solve it |
+| L7-01 | Uber: when stuck, help sent a half-cut screenshot and told the user to act on the site ("You can do so by typing your destination in the destination input field"). | `agent.py` `unblock`, `questions.py` | fixed (live run 7): help sends no screenshots and never asks the user to click or type on the site; choices the page shows come as buttons in chat; current reliability code records the answer as a fact and requires a fresh Jev operation/target selection. A captcha still comes as a picture, since only the user can solve it |
 | L7-02 | Uber: the agent picked Uber Go AC itself; Go Non AC and Premier AC were never offered. | `agent.py`, `rules.py` | fixed (live run 7): two or more priced options (ride types, sizes, plans) become a choice with prices, unless the goal or an answer names one; a commit that names one ("Request Uber Go AC") asks first too |
 | L7-03 | After "Request Uber Go AC" the site showed "Finding drivers nearby"; after 10 checks the agent stopped with "check your bank or account" and never reported the driver. | `agent.py` `check_commit`, `questions.py` | fixed (live run 7): a commit the site is still working on is watched for up to 5 minutes, and the user is told once; the result reports the driver, car, number plate, and PIN when the page shows them; the "can't tell" message no longer mentions a bank |
 | L7-04 | Uber: for a "current location" pickup, the agent opened the pickup box 4 times without finding the site's detect-location option, then asked the user to pick a suggestion. | Jev, `snapshot.js` | open |
 | L7-05 | Option names keep icon text ("Uber Go AC Person"). | `snapshot.js` labels | open |
 
+
+## Local reliability milestone — current limitations
+
+| ID | Issue | Evidence / status |
+|---|---|---|
+| R14-01 | General downloaded invoice/artifact identity lacks execution/requirement correlation. | Open. Task ownership and GUID/filename are insufficient. Only explicit current-page PDF export is supported by the narrow production adapter; `tests/test_artifact_exports.py` tests owned bytes, material, revision and channel delivery. |
+| R14-02 | Local file selection is not server upload acceptance. | Open. CDP attachment and fixture upload tests cannot attest arbitrary server transfer; final submission is separate. |
+| R14-03 | Live-model reliability and acceptance have not been evaluated for this milestone. | Open. Zero Task 14 live attempts; candidate parameters and two unrelated user holdouts pending. |
+| R14-04 | Exact helper call and historical reask totals are not fully instrumented. | Open. `text_calls` includes cached resolutions and omits helper jobs. Existing Jev/coordinator counters reserve budgets, not confirmed transport calls. |
+| R14-05 | Conservative page confirmation rejects unsupported wording, history links, ambiguous totals and absent novel references. | Open limitation; `tests/test_page_confirmation.py` checks immediate/delayed success, contradictions, history variants and cancellation. Unknown is retained with one dispatch. |
+| R14-06 | Full outside-chat-auth alternative journeys and all blocked-resume permutations are not covered end to end. | Open acceptance breadth; component tests do not replace full journeys. |
+| R14-07 | Native credential interaction and legacy card values must not be reused. | Current login-only vault, consent and noninteractive keychain checks: `tests/test_profile.py::test_vault_namespaces_and_explicit_legacy_cleanup`, `tests/test_keychain.py`. Card/CVV saves are refused; legacy cleanup is explicit. Historical P4-05 card-save behavior is superseded, not a supported workflow. |
+| R14-08 | Dispute upload fixture intermittently reached blocked despite its local result. | Open stability observation: first Task 14 full run failed this case; focused rerun and final full run passed. No unrelated gate was relaxed. See evaluation run accounting. |

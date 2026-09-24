@@ -814,8 +814,8 @@ Inspect test counts and results; a skipped Chrome suite is not a passing browser
 
 **Interfaces:** Preserve existing `uv run jev`, `jev chrome`, `jev probe` and `jev traces`. Trace summaries add observed counts for coordinator/Jev/helper calls, questions/reasks, mutations, outcome state, elapsed time and verification evidence. Never label fixture counts as live reliability.
 
-- [ ] **Step 1: Write current operating instructions.** Remove instructions to save CVVs/cards, answer native Keychain prompts, or operate banking apps. Explain local text chat, dedicated agent Chrome, explicit defaults, opt-in comparison/multiple OTPs, complete fee review, final confirmation, blocked/resume and restart interruption behavior. Retain current HTTP protections, uploads/downloads and configuration. Mark historical known issues fixed only with the regression/test evidence; unresolved items stay open.
-- [ ] **Step 2: Add a concrete evaluation record format.** `docs/reliability-evaluation.md` must include this schema and separate fixture/live sections:
+- [x] **Step 1: Write current operating instructions.** Remove instructions to save CVVs/cards, answer native Keychain prompts, or operate banking apps. Explain local text chat, dedicated agent Chrome, explicit defaults, opt-in comparison/multiple OTPs, complete fee review, final confirmation, blocked/resume and restart interruption behavior. Retain current HTTP protections, uploads/downloads and configuration. Mark historical known issues fixed only with the regression/test evidence; unresolved items stay open.
+- [x] **Step 2: Add a concrete evaluation record format.** `docs/reliability-evaluation.md` must include this schema and separate fixture/live sections:
 
 ```json
 {
@@ -840,7 +840,16 @@ This is a documented input/output schema, not a fabricated result. Actual record
 - [ ] **Step 4: Launch live evaluation separately when explicitly authorized.** Start only the dedicated agent Chrome and local server, with real keys read from ignored `.env` without printing them. Run through the chat and the implemented agent. The developer must not complete the website task manually or patch in selectors/site scripts to make a run pass. User supplies OTPs and approvals in chat. A supported user correction is normal input; developer intervention is recorded as a failed run requiring a fix and rerun. If evaluation cannot run yet, report the implementation as locally verified with live acceptance pending; leave this step unchecked.
 - [ ] **Step 5: Verify outcomes and close regressions.** Independently inspect the browser/page artifact or receipt through the agent's own evidence and traces; check requested product/route/recipient/quantity/destination and actual charge. A finding-driver page is not a completed cab goal if a confirmed driver was required. Downloads must arrive in chat. External CAPTCHA/app-only/site-blocking limitations count as recorded blockers, not successful completions. Any duplicate/unauthorized action, secret disclosure, false success or unnecessary repeated question blocks acceptance until fixed and freshly reevaluated.
 - [ ] **Step 6: Report honest acceptance results.** Include tested commit, fixture checks, attempted live sample size, successful feasible goals, blockers, unknown outcomes, model calls/latency and unresolved defects. Every declared feasible acceptance goal must have a verified successful run; unresolved product failures remain work. Make no claim that a finite set proves every website works. Do not mark the whole milestone complete while live evaluation is pending.
-- [ ] **Step 7: Verify docs/summary changes and commit.** Run `git diff --check`, `uv run pytest tests/test_traces.py -q` if trace code changed, and Ruff for changed Python. Rerun broader checks only for relevant new runtime changes. Commit `docs: document reliability validation and live results` when actual work/results are recorded; do not populate success records in advance. Never push.
+- [x] **Step 7: Verify docs/summary changes and commit.** Run `git diff --check`, `uv run pytest tests/test_traces.py -q` if trace code changed, and Ruff for changed Python. Rerun broader checks only for relevant new runtime changes. Commit `docs: document reliability validation and live results` when actual work/results are recorded; do not populate success records in advance. Never push.
+
+Task 14 local evidence (2026-09-25): runtime commit `0951818ab776610796fc17e3afde9a3db3bbc5b5`
+adds the narrow current-page PDF export receipt, with eight real-Agent/Chrome tests. Ruff, 718 offline tests,
+171 browser tests, both JavaScript syntax checks and diff checks passed. README, smoke instructions,
+known issues and `docs/reliability-evaluation.md` record the local scope and ten not-run candidates.
+No paid APIs, live transactions or push. Steps 3–6 remain open: exact user parameters/holdouts are not yet
+supplied, live evaluation is not authorized, and no live outcome or acceptance has been verified. General
+invoice/download attribution, server upload acceptance and complete helper/reask accounting remain open.
+The initial failed browser attempt and successful reruns are retained in the evaluation record.
 
 ## Dependency and acceptance map
 
