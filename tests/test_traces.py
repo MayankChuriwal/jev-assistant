@@ -60,3 +60,31 @@ def test_errors_are_kept_in_the_trace(tmp_path, monkeypatch):
     trace = json.loads(a.save_trace().read_text())
     error = "The text model returned an invalid confirmation; nothing executed."
     assert trace["errors"] == [{"step": 0, "error": error}]
+
+
+def test_durable_journal_redacts_nested_task_summary_and_results(tmp_path):
+    from assistant.commit import Journal
+    from assistant.profile import Secrets
+    secrets = Secrets({})
+    secrets.add('4111 1111 1111 1111', '[temporary-card]')
+    secrets.add('654321', '[temporary-code]')
+    journal = Journal.create(tmp_path / 'private', redact=secrets.redact)
+    journal.append({'execution_id': 'd1', 'phase': 'dispatching',
+                    'summary': {'objective': 'Use 4111111111111111'},
+                    'result': {'message': 'code 654321'}})
+    raw = journal.path.read_text()
+    assert '4111' not in raw and '654321' not in raw
+    assert '[temporary-card]' in raw and '[temporary-code]' in raw
+    assert journal.interrupted()[0]['status'] == 'unknown'
+
+
+def test_recovery_ignores_only_unterminated_tail(tmp_path):
+    import pytest
+
+    from assistant.commit import Journal
+    journal = Journal.create(tmp_path / 'private', redact=lambda x: x)
+    journal.append({'execution_id': 'd1', 'phase': 'dispatching'})
+    with journal.path.open('ab') as stream:
+        stream.write(b'{invalid}\n')
+    with pytest.raises(ValueError):
+        journal.records()

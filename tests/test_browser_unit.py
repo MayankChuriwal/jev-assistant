@@ -126,14 +126,15 @@ def test_the_agent_never_falls_back_to_the_default_daemon():
     assert refused.returncode != 0 and "BU_NAME" in refused.stderr
 
 
-def test_a_failure_after_input_is_uncertain_never_stale():
+@pytest.mark.parametrize("error", [StalePage, RuntimeError, ValueError, TimeoutError])
+def test_a_failure_after_input_is_uncertain_never_stale(error):
     b = bare()
     b.fresh = Mock(return_value=True)
     b.call = Mock(return_value={})
 
     def half_done(action, **_):
         b.input("Input.dispatchMouseEvent", type="mousePressed", x=1, y=1, button="left", clickCount=1)
-        raise StalePage("re-rendered after the press")
+        raise error("failed after the press")
 
     b._do_click = half_done
     with pytest.raises(browser.ExecutionUncertain):

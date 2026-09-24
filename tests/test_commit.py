@@ -298,3 +298,361 @@ def test_unicode_spacing_cannot_hide_currency_context(separator, prefix):
                                         ("123,456.78\u2009INR", 12345678)])
 def test_supported_grouping_with_unicode_currency_spacing(token, amount):
     assert money_minor(token, currency="INR", exponent=2) == amount
+
+
+def test_item_price_and_destination_cannot_keep_old_proposal_approved():
+    from assistant.commit import proposal_key
+    _, _, p, _ = review_fixture()
+    assert proposal_key(p) != proposal_key({**p, 'total_minor': 9500})
+    assert proposal_key(p) != proposal_key({**p, 'destination': 'Office'})
+    assert proposal_key(p) == proposal_key({**p, 'evidence_ids': ['fresh']})
+    changed = deepcopy(p)
+    changed['lines'][0]['amount_minor'] += 100
+    changed['lines'][1]['amount_minor'] -= 100
+    assert proposal_key(p) != proposal_key(changed)
+
+
+def confirmation(s, p):
+    from assistant.commit import proposal_key
+    s.questions['q1'] = dict(id='q1', kind='confirm', revision=s.revision, displayed_at=1,
+                             answered_at=None, proposal_key=proposal_key(p))
+
+
+def test_approval_requires_validated_review_and_current_affirmative_question():
+    from assistant.commit import approve, can_commit, consume_approval
+    s, page, p, x = review_fixture()
+    confirmation(s, p)
+    with pytest.raises(ValueError):
+        approve(s, p, question_id='q1', response='yes')
+    validate_review(s, p, x)
+    for response in ['no', 'yes but change address', 'maybe', '']:
+        with pytest.raises(ValueError):
+            approve(s, p, question_id='q1', response=response)
+    a = approve(s, p, question_id='q1', response='yes')
+    p = fresh_review(s, page, p, x)
+    assert can_commit(s, p)
+    assert consume_approval(s, p) == a['id']
+    assert not can_commit(s, p)
+    with pytest.raises(ValueError):
+        consume_approval(s, p)
+
+
+def test_approval_fresh_review_cosmetic_rerender_and_restart():
+    from assistant.commit import approve, can_commit
+    s, page, p, x = review_fixture()
+    validate_review(s, p, x)
+    confirmation(s, p)
+    approve(s, p, question_id='q1', response='yes')
+    oid = observe_state(s, page)
+    assert not can_commit(s, p)
+    fresh = deepcopy(p)
+    eid = cite(s, oid, page['text'])
+    fresh['evidence_ids'] = [eid]
+    for row in fresh['lines']:
+        row['evidence_ids'] = [eid]
+    validate_review(s, fresh, x)
+    assert can_commit(s, fresh)
+    recovered = deepcopy(s)
+    assert not can_commit(recovered, fresh)
+
+
+def bound(s, page, **changes):
+    from assistant.commit import bind_decision
+    return bind_decision(s, dict(id='d1', operation='CLICK', choice='e1', **changes), page,
+                         assessment='preparation')
+
+
+def test_uncertain_dispatch_is_recorded_and_never_replayed(tmp_path):
+    from assistant.browser import ExecutionUncertain
+    from assistant.commit import Journal, dispatch_once
+    s, page, _ = observed()
+    journal = Journal(tmp_path / 'task.jsonl', redact=lambda x: x)
+    calls = []
+    def act():
+        calls.append(1)
+        assert journal.records()[-1]['phase'] == 'dispatching'
+        raise ExecutionUncertain('transport disconnected')
+    decision = bound(s, page)
+    result = dispatch_once(s, journal, decision, page, act=act,
+                           is_fresh=lambda: True, interrupted=lambda: False)
+    assert result['status'] == 'unknown'
+    with pytest.raises(ValueError):
+        dispatch_once(s, journal, decision, page, act=act,
+                      is_fresh=lambda: True, interrupted=lambda: False)
+    assert calls == [1] and journal.records()[-1]['phase'] == 'unknown'
+
+
+@pytest.mark.parametrize('when', ['before', 'during_write', 'amendment', 'intent_failure', 'result_failure', 'stale'])
+def test_dispatch_interruptions_and_disk_failures_never_repeat(tmp_path, monkeypatch, when):
+    from assistant.browser import StalePage
+    from assistant.commit import Journal, dispatch_once
+    from assistant.state import amend
+    s, page, _ = observed()
+    journal = Journal(tmp_path / 'task.jsonl', redact=lambda x: x)
+    decision = bound(s, page)
+    calls = []
+    cancelled = when == 'before'
+    append = journal.append
+    def write(record):
+        nonlocal cancelled
+        if when == 'intent_failure' or (when == 'result_failure' and record['phase'] != 'dispatching'):
+            raise OSError('disk full')
+        append(record)
+        if when == 'during_write':
+            cancelled = True
+    monkeypatch.setattr(journal, 'append', write)
+    if when == 'amendment':
+        amend(s, 'different address', {'address'})
+    def act():
+        calls.append(1)
+        if when == 'stale':
+            raise StalePage('pre-input stale')
+        return {}
+    kwargs = dict(act=act, is_fresh=lambda: True, interrupted=lambda: cancelled)
+    if when in {'before', 'amendment', 'intent_failure'}:
+        with pytest.raises((ValueError, OSError)):
+            dispatch_once(s, journal, decision, page, **kwargs)
+    else:
+        result = dispatch_once(s, journal, decision, page, **kwargs)
+        assert result['status'] == ('unknown' if when == 'result_failure' else 'not_dispatched')
+    assert len(calls) == int(when in {'result_failure', 'stale'})
+
+
+def test_journal_recovery_privacy_and_unresolved_commitments(tmp_path):
+    import os
+
+    from assistant.commit import Journal
+    path = tmp_path / 'private' / 'task.jsonl'
+    j = Journal(path, redact=lambda x: {k: '[redacted]' if k == 'secret' else v for k, v in x.items()})
+    intent = dict(execution_id='d1', phase='dispatching', commitment=True, account_key='opaque', secret='123')
+    j.append(intent)
+    j.append(dict(intent, phase='executed'))
+    assert j.interrupted()[0]['execution_id'] == 'd1'
+    assert '123' not in path.read_text()
+    assert os.stat(path).st_mode & 0o777 == 0o600
+    assert os.stat(path.parent).st_mode & 0o777 == 0o700
+    with path.open('ab') as f:
+        f.write(b'{"incomplete"')
+    assert len(j.records()) == 2
+    with pytest.raises(ValueError):
+        j.append(dict(execution_id='d2', phase='dispatching'))
+    link = tmp_path / 'link.jsonl'
+    link.symlink_to(path)
+    with pytest.raises((ValueError, OSError)):
+        Journal(link, redact=lambda x: x).records()
+
+
+def test_missing_evidence_after_review_and_mutated_authority_fail_closed():
+    from assistant.commit import approve, can_commit
+    s, _, p, x = review_fixture()
+    validate_review(s, p, x)
+    confirmation(s, p)
+    approve(s, p, question_id='q1', response='yes')
+    s.evidence.clear()
+    assert not can_commit(s, p)
+
+
+def test_commit_dispatch_consumes_once_and_restores_account_reservation(tmp_path):
+    from assistant.commit import Journal, approve, bind_decision, dispatch_once
+    s, page, p, x = review_fixture()
+    validate_review(s, p, x)
+    confirmation(s, p)
+    approve(s, p, question_id='q1', response='yes')
+    p = fresh_review(s, page, p, x)
+    s.progress['account_reservation_key'] = 'site-account-opaque'
+    d = bind_decision(s, dict(id='d1', operation='CLICK', choice='e6'), page, assessment='preparation')
+    j = Journal.create(tmp_path / 'journal', redact=lambda x: x)
+    calls = []
+    def act():
+        calls.append(1)
+        assert s.approval['consumed']
+        return {'browser_receipt': 'ok'}
+    r = dispatch_once(s, j, d, page, act=act, is_fresh=lambda: True,
+                      interrupted=lambda: False, proposal=p)
+    assert r['status'] == 'executed' and calls == [1]
+    unresolved = Journal(j.path, redact=lambda x: x).interrupted()
+    assert unresolved[0]['account_key'] == 'site-account-opaque'
+    assert unresolved[0]['summary']['objective'] == s.objective
+    d2 = bind_decision(s, dict(id='d2', operation='CLICK', choice='e1'), page, assessment='preparation')
+    with pytest.raises(ValueError):
+        dispatch_once(s, j, d2, page, act=act, is_fresh=lambda: True, interrupted=lambda: False)
+    assert calls == [1]
+    j.append(dict(execution_id='d1', phase='outcome', outcome='success', evidence_ids=['e-confirm']))
+    assert j.interrupted() == []
+
+
+def test_decision_target_must_be_observed_and_owned(tmp_path):
+    from assistant.commit import Journal, bind_decision, dispatch_once
+    s, page, _ = observed()
+    forged = deepcopy(page)
+    forged['actions'][0]['label'] = 'Forged field'
+    with pytest.raises(ValueError):
+        bind_decision(s, dict(id='d1', operation='TYPE_TEXT', choice='e1'), forged, assessment='preparation')
+    d = bound(s, page)
+    calls = []
+    j = Journal(tmp_path / 'j.jsonl', redact=lambda x: x)
+    with pytest.raises(ValueError):
+        dispatch_once(s, j, {**d, 'choice': 'e6'}, page, act=lambda: calls.append(1),
+                      is_fresh=lambda: True, interrupted=lambda: False)
+    assert calls == []
+
+
+def test_redaction_failure_after_input_retains_unknown_and_blocks(tmp_path):
+    from assistant.commit import Journal, dispatch_once
+    s, page, _ = observed()
+    def redact(obj):
+        if obj == {'payload': 'result'}:
+            raise RuntimeError('redactor failure')
+        return obj
+    j = Journal(tmp_path / 'j.jsonl', redact=redact)
+    d = bound(s, page)
+    r = dispatch_once(s, j, d, page, act=lambda: {'payload': 'result'},
+                      is_fresh=lambda: True, interrupted=lambda: False)
+    assert r['status'] == 'unknown'
+    assert j.interrupted()
+
+
+def test_challenge_expiry_and_wrong_target_block_input(tmp_path):
+    from assistant.commit import Journal, dispatch_once
+    s, page, oid = observed()
+    s.challenges['c1'] = dict(revision=0, origin='https://shop.test', status='challenge',
+        observation_id=oid, fields=['e2'], expires_at=1, purpose='login', field_role='otp')
+    d = bound(s, page)
+    j = Journal(tmp_path / 'j.jsonl', redact=lambda x: x)
+    calls = []
+    with pytest.raises(ValueError):
+        dispatch_once(s, j, d, page, act=lambda: calls.append(1), is_fresh=lambda: True,
+                      interrupted=lambda: False, challenge_id='c1')
+    assert calls == [] and j.records() == []
+
+
+def test_approval_requires_an_observation_after_the_user_reply():
+    from assistant.commit import approve, can_commit
+    s, _, p, x = review_fixture()
+    validate_review(s, p, x)
+    confirmation(s, p)
+    approve(s, p, question_id='q1', response='yes')
+    assert not can_commit(s, p)
+
+
+def fresh_review(s, page, p, x):
+    p = deepcopy(p)
+    oid = observe_state(s, page)
+    eid = cite(s, oid, page['text'])
+    p['evidence_ids'] = [eid]
+    for row in p['lines']:
+        row['evidence_ids'] = [eid]
+    return validate_review(s, p, x)
+
+
+def test_secret_typing_requires_current_challenge_and_records_scope(tmp_path):
+    import time
+
+    from assistant.commit import Journal, bind_decision, dispatch_once
+    s, page, oid = observed()
+    d = bind_decision(s, dict(id='otp1', operation='TYPE_TEXT', choice='e2'), page,
+                      assessment='authentication')
+    j = Journal(tmp_path / 'j.jsonl', redact=lambda x: x)
+    calls = []
+    kwargs = dict(act=lambda: calls.append(1) or {}, is_fresh=lambda: True, interrupted=lambda: False)
+    with pytest.raises(ValueError):
+        dispatch_once(s, j, d, page, **kwargs)
+    s.challenges['c1'] = dict(id='c1', revision=0, origin='https://shop.test', status='challenge',
+        observation_id=oid, field_ids=['e2'], expires_at=time.time() + 30, flow_id='login1',
+        purpose='login', field_role='otp', question_id='q-code')
+    result = dispatch_once(s, j, d, page, challenge_id='c1', **kwargs)
+    assert calls == [1] and result['status'] == 'executed'
+    assert result['purpose'] == 'login' and result['field_role'] == 'otp' and result['flow_id'] == 'login1'
+
+
+def test_same_state_approval_record_cannot_be_rewritten():
+    from assistant.commit import approve, can_commit
+    s, page, p, x = review_fixture()
+    validate_review(s, p, x)
+    confirmation(s, p)
+    approve(s, p, question_id='q1', response='yes')
+    p = fresh_review(s, page, p, x)
+    s.approval['id'] = 'rewritten'
+    assert not can_commit(s, p)
+
+
+def test_freshness_is_rechecked_after_durable_intent(tmp_path, monkeypatch):
+    from assistant.commit import Journal, dispatch_once
+    s, page, _ = observed()
+    d = bound(s, page)
+    j = Journal(tmp_path / 'j.jsonl', redact=lambda x: x)
+    fresh = True
+    append = j.append
+    def write(record):
+        nonlocal fresh
+        append(record)
+        fresh = False
+    monkeypatch.setattr(j, 'append', write)
+    calls = []
+    result = dispatch_once(s, j, d, page, act=lambda: calls.append(1), is_fresh=lambda: fresh,
+                           interrupted=lambda: False)
+    assert calls == [] and result['status'] == 'not_dispatched'
+
+
+@pytest.mark.parametrize("case", ["approved", "unknown", "changed_hash", "purchase"])
+def test_only_scoped_payment_authentication_can_follow_an_executed_commitment(tmp_path, case):
+    import time
+
+    from assistant.commit import Journal, approve, bind_decision, dispatch_once, proposal_key
+    s, page, p, x = review_fixture()
+    validate_review(s, p, x)
+    confirmation(s, p)
+    approve(s, p, question_id='q1', response='yes')
+    p = fresh_review(s, page, p, x)
+    s.progress['account_reservation_key'] = 'reserved-account'
+    j = Journal.create(tmp_path / 'private', redact=lambda x: x)
+    d = bind_decision(s, dict(id='purchase', operation='CLICK', choice='e6'), page, assessment='commitment')
+    dispatch_once(s, j, d, page, act=lambda: {}, is_fresh=lambda: True, interrupted=lambda: False, proposal=p)
+    oid = observe_state(s, page)
+    s.challenges['payment-otp'] = dict(id='payment-otp', revision=0, origin='https://shop.test',
+        status='challenge', observation_id=oid, field_ids=['e2'], expires_at=time.time() + 30,
+        flow_id='payment1', purpose='payment', field_role='otp', question_id='q-pay',
+        commitment_execution_id='purchase', proposal_key=proposal_key(p))
+    if case == 'unknown':
+        s.executions['purchase']['status'] = 'unknown'
+    if case == 'changed_hash':
+        s.challenges['payment-otp']['proposal_key'] = 'changed-total'
+    d2 = bind_decision(s, dict(id='otp', operation='TYPE_TEXT', choice='e2'), page,
+                       assessment='commitment' if case == 'purchase' else 'authentication')
+    calls = []
+    kwargs = dict(act=lambda: calls.append(1) or {}, is_fresh=lambda: True, interrupted=lambda: False,
+                  challenge_id='payment-otp')
+    if case != 'approved':
+        with pytest.raises(ValueError):
+            dispatch_once(s, j, d2, page, **kwargs)
+        assert calls == []
+        return
+    r = dispatch_once(s, j, d2, page, **kwargs)
+    d4 = bind_decision(s, dict(id='repeated-code', operation='TYPE_TEXT', choice='e2'), page,
+                       assessment='authentication')
+    with pytest.raises(ValueError):
+        dispatch_once(s, j, d4, page, **kwargs)
+    assert r['status'] == 'executed' and r['commitment_execution_id'] == 'purchase' and calls == [1]
+    d3 = bind_decision(s, dict(id='duplicate', operation='CLICK', choice='e6'), page, assessment='commitment')
+    with pytest.raises(ValueError):
+        dispatch_once(s, j, d3, page, proposal=p, **kwargs)
+    assert calls == [1]
+    assert j.interrupted()[0]['execution_id'] == 'purchase'
+
+
+def test_equivalent_fresh_line_ids_keep_material_hash():
+    from assistant.commit import proposal_key
+    _, _, p, _ = review_fixture()
+    changed = deepcopy(p)
+    changed['lines'][0]['id'] = 'new-item-id'
+    changed['lines'][1]['id'] = 'new-fee-id'
+    changed['lines'].reverse()
+    assert proposal_key(changed) == proposal_key(p)
+
+
+def test_decision_cannot_bind_identical_content_from_another_origin():
+    from assistant.commit import bind_decision
+    s, page, _ = observed()
+    page['url'] = 'https://other.test/'
+    with pytest.raises(ValueError):
+        bind_decision(s, dict(id='d1', operation='CLICK', choice='e1'), page, assessment='preparation')

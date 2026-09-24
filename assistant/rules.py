@@ -247,3 +247,30 @@ def grid(region, columns, rows):
 
 def centre(cell):
     return cell["x"] + cell["w"] / 2, cell["y"] + cell["h"] / 2
+
+
+def commitment_kind(operation, action, page, *, assessment=None, key=None):
+    """New runtime gate: an assessment is required for unresolved external effects.
+
+    assessment is a validated coordinator classification, never a raw Jev field.
+    This intentionally leaves the legacy commit_label/approval_valid API unchanged.
+    """
+    if operation == 'CONFIRM' or assessment == 'commitment':
+        return 'commitment'
+    if action.get('commits') or action.get('account_change'):
+        return 'commitment'
+    submitting = (operation in {'CLICK', 'DOUBLE_CLICK', 'LOOK', 'ACCEPT_DIALOG'}
+                  or operation == 'PRESS_KEY' and key in {'Enter', 'Space'}
+                  or operation == 'TYPE_TEXT' and action.get('auto_submit'))
+    label = ' '.join(str(x) for x in (action.get('label', ''), action.get('submit', ''),
+                                    page.get('text', '') if operation == 'ACCEPT_DIALOG' else ''))
+    if submitting and (COMMIT.search(label) or re.search(
+            r'\b(send|submit|publish|save changes|update account|change password)\b', label, re.I)):
+        # Generic authentication submit buttons are not a new external commitment.
+        if assessment == 'authentication' and not COMMIT.search(label) and not re.search(
+                r'\b(send|publish|save changes|update account|change password)\b', label, re.I):
+            return 'authentication'
+        return 'commitment'
+    if assessment in {'preparation', 'authentication'}:
+        return assessment
+    return 'unresolved'

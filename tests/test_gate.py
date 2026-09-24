@@ -205,3 +205,20 @@ def test_a_commit_still_processing_after_the_wait_stops_with_what_the_site_shows
     approve(a, decision("e6", "CLICK"))
     assert a.state["status"] == "blocked" and "Finding drivers nearby" in a.told[-1]["text"]
     assert "bank" not in a.told[-1]["text"]
+
+
+@pytest.mark.parametrize('operation,action,assessment,expected', [
+    ('CLICK', {'label': 'Continue'}, None, 'unresolved'),
+    ('CLICK', {'label': 'Continue'}, 'commitment', 'commitment'),
+    ('CLICK', {'label': 'Send message'}, 'preparation', 'commitment'),
+    ('TYPE_TEXT', {'label': 'Account name', 'auto_submit': True}, None, 'unresolved'),
+    ('TYPE_TEXT', {'label': 'Account name', 'account_change': True}, 'preparation', 'commitment'),
+    ('TYPE_TEXT', {'label': 'OTP', 'auto_submit': True}, 'authentication', 'authentication'),
+    ('PRESS_KEY', {'label': 'Message', 'submit': 'Send'}, 'preparation', 'commitment'),
+    ('ACCEPT_DIALOG', {}, None, 'unresolved'),
+    ('CONFIRM', {}, 'preparation', 'commitment'),
+    ('TYPE_TEXT', {'label': 'Search'}, 'preparation', 'preparation'),
+])
+def test_contextual_commitment_backstops(operation, action, assessment, expected):
+    from assistant.rules import commitment_kind
+    assert commitment_kind(operation, action, {}, assessment=assessment, key='Enter') == expected
