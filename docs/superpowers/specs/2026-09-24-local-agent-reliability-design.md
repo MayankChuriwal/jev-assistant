@@ -536,6 +536,17 @@ does not establish success. Missing proof produces further observation or an exp
 unverified result with `blocked` status, never `done`. Historical account records
 must not be mistaken for the result of the current task.
 
+Implementation decision (2026-09-25): a site may provide a confirmation page without
+a structured transaction receipt. For an approved, single-dispatch action, a new
+terminal reference and goal material may establish success if they appear in two
+consecutive post-dispatch observations of the same page, were absent before dispatch,
+and any exact payable total matches the approved proposal with no conflicting total.
+The coordinator must cite the current page lines; code checks their provenance,
+terminal meaning, material details, amount, stability, and execution ownership before
+recording success. Processing text, old history, unrelated confirmations, or ambiguous
+amounts remain unknown. A model success claim alone never creates this proof. A
+structured provider receipt remains an alternative when available.
+
 ## 10. Cancellation, restart, and records
 
 Check cancellations and amendments before model work, after user replies, and immediately

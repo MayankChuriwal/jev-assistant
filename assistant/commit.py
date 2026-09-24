@@ -691,16 +691,25 @@ def _material_matches(state, requirement, evidence):
 
 
 def _execution_proof(state, execution, evidence):
-    """A later quote must correlate with an independently captured dispatch receipt.
+    """Require a code-owned receipt or a stable post-dispatch page attestation.
 
-    A result.correlation is provided by the browser/event adapter, never copied
-    from coordinator output. Sites without such a receipt remain uncertain.
+    A result.correlation comes from the browser/event adapter. Page confirmation
+    is separately attested against the approved proposal and two browser reads.
     """
     if (execution.get('task_id') != state.task_id or execution.get('revision') != state.revision
             or execution.get('status') != 'executed' or not evidence):
         return False
     observations = list(state.observations)
     before = execution.get('observation_id')
+    receipt = _runtime(state).get('terminal_receipts', {}).get(execution.get('execution_id'), {})
+    if receipt.get('mode') == 'page-confirmation':
+        first, second = receipt.get('observation_ids', [None, None])
+        return (before in observations and first in observations and second in observations
+                and observations.index(before) < observations.index(first) < observations.index(second)
+                and second == observations[-1]
+                and all(e['kind'] == 'page' and e['observation_id'] == second
+                        and e['origin'] == execution.get('origin')
+                        and e['quote'] in state.observations[first]['text'] for e in evidence))
     correlation = execution.get('result', {}).get('correlation')
     if (before not in observations or not isinstance(correlation, str) or not correlation.strip()
             or correlation in state.observations[before]['text']):
@@ -818,6 +827,17 @@ def record_outcome(state, execution_id: str, outcome: dict, *, now: float, journ
         correlated = (_execution_proof(state, execution, evidence)
                       and all(e['observation_id'] == next(reversed(state.observations))
                               for e in evidence))
+        if status == 'processing' and not correlated and execution.get('commitment'):
+            observations = list(state.observations)
+            before = execution.get('observation_id')
+            correlated = (before in observations and bool(evidence)
+                and all(e['kind'] == 'page' and e['origin'] == execution.get('origin')
+                        and e['observation_id'] == observations[-1]
+                        and observations.index(e['observation_id']) > observations.index(before)
+                        for e in evidence)
+                and any(re.search(r'\b(processing|pending|finding)\b', e['quote'], re.I)
+                        and e['quote'] not in state.observations[before]['text'] for e in evidence)
+                and state.observations[before]['text'] != state.observations[observations[-1]]['text'])
         if status != 'unknown' and not correlated:
             status = 'unknown'
         if status in {'success', 'failed'} and not _terminal_proof(state, execution_id, status, evidence):
@@ -943,11 +963,115 @@ def record_terminal_receipt(state, execution_id: str, *, status: str, evidence_i
         observation_ids=list(dict.fromkeys(e['observation_id'] for e in evidence)))
 
 
+_TERMINAL_BY_ACTION = (
+    (re.compile(r'\b(order|purchase|buy|pay)\b', re.I), re.compile(
+        r'\b(order placed|order confirmed|purchase confirmed|payment successful)\b', re.I)),
+    (re.compile(r'\b(ride|book)\b', re.I), re.compile(
+        r'\b(booking confirmed|ride confirmed|driver confirmed)\b', re.I)),
+    (re.compile(r'\b(send|message)\b', re.I), re.compile(r'\bmessage sent\b', re.I)),
+    (re.compile(r'\b(submit|dispute|claim)\b', re.I), re.compile(
+        r'\b(dispute submitted|claim submitted|request submitted|form submitted)\b', re.I)),
+    (re.compile(r'\bcancel\b', re.I), re.compile(
+        r'\b(subscription cancelled|booking cancelled|cancellation confirmed)\b', re.I)),
+)
+_TERMINAL_REFERENCE = re.compile(r'(?:#|\b(?:reference|ref|order id|booking id)\s*[:# ]\s*)([A-Z0-9-]{4,})\b',
+                                 re.I)
+_CONFIRMED_TOTAL = re.compile(r'^(?:total|amount paid|fare paid)\s+([₹$€£]\s*[\d,]+(?:\.\d{1,2})?)\s*$', re.I)
+
+
+def record_page_confirmation(state, execution_id: str, *, evidence_ids: list[str],
+                             first_observation_id: str) -> bool:
+    """Attest a stable, new confirmation page for one approved browser dispatch.
+
+    This accepts cited page evidence, not a model boolean. A novel reference and
+    matching material/total must appear in two consecutive post-dispatch reads.
+    Ambiguous pages remain unverified; no site-specific response is assumed.
+    """
+    execution = state.executions.get(execution_id, {})
+    observations = list(state.observations)
+    second_id = observations[-1] if observations else None
+    before_id = execution.get('observation_id')
+    approval = state.approval or {}
+    if (execution.get('status') != 'executed' or not execution.get('commitment')
+            or not execution.get('approval_id') or approval.get('id') != execution.get('approval_id')
+            or approval.get('consumed') is not True or before_id not in observations
+            or first_observation_id not in observations or second_id == first_observation_id
+            or observations.index(before_id) >= observations.index(first_observation_id)
+            or observations.index(second_id) != observations.index(first_observation_id) + 1
+            or execution.get('revision') != state.revision or execution.get('task_id') != state.task_id):
+        return False
+    before = state.observations[before_id]
+    first = state.observations[first_observation_id]
+    second = state.observations[second_id]
+    if (first['origin'] != execution.get('origin') or second['origin'] != first['origin']
+            or first['url'] != second['url'] or first.get('completeness') != second.get('completeness')
+            or any(first.get('completeness', {}).values())):
+        return False
+    proposal = state.proposal or {}
+    if not proposal or execution.get('proposal_key') != proposal_key(proposal):
+        return False
+    action = proposal.get('action', '')
+    terminal = next((pattern for trigger, pattern in _TERMINAL_BY_ACTION if trigger.search(action)), None)
+    if terminal is None:
+        return False
+    cited = _proof(state, evidence_ids)
+    if (not cited or any(e['kind'] != 'page' or e['observation_id'] != second_id for e in cited)
+            or any(e['quote'] not in first['text'] for e in cited)):
+        return False
+    terminal_lines = [e['quote'] for e in cited if terminal.search(e['quote'])]
+    if len(terminal_lines) != 1 or terminal_lines[0] in before['text']:
+        return False
+    page_lines = second['text'].splitlines()
+    terminal_positions = [index for index, line in enumerate(page_lines) if terminal.search(line)]
+    if len(terminal_positions) != 1 or terminal_lines[0] not in page_lines[terminal_positions[0]]:
+        return False
+    confirmation_lines = page_lines[terminal_positions[0]:terminal_positions[0] + 9]
+    matches = list(_TERMINAL_REFERENCE.finditer(terminal_lines[0]))
+    if len(matches) != 1 or matches[0].group(1) in before['text']:
+        return False
+    if any(re.search(r'\b(processing|pending|finding|awaiting|may be|not yet)\b', line, re.I)
+           for line in terminal_lines):
+        return False
+    for item in proposal.get('items', []):
+        if (not item or not any(_amount_in_quote(item, e['quote']) for e in cited)
+                or not any(_amount_in_quote(item, line) for line in confirmation_lines)):
+            return False
+    if proposal.get('total_kind') == 'exact':
+        currency = proposal.get('currency')
+        totals = []
+        for line in page_lines:
+            match = _CONFIRMED_TOTAL.fullmatch(line.strip())
+            if match:
+                try:
+                    totals.append(money_minor(match.group(1), currency=currency,
+                                              exponent=CURRENCY_EXPONENTS[currency]))
+                except (KeyError, ValueError):
+                    return False
+        if (len(totals) != 1 or totals[0] != proposal.get('total_minor')
+                or not any(_CONFIRMED_TOTAL.fullmatch(e['quote'].strip()) for e in cited)
+                or not any(_CONFIRMED_TOTAL.fullmatch(line.strip()) for line in confirmation_lines)):
+            return False
+    elif proposal.get('total_kind') != 'not_applicable':
+        return False
+    if not all(_material_matches(state, requirement, cited) for requirement in state.completion
+               if requirement.get('kind') == 'action'):
+        return False
+    _runtime(state).setdefault('terminal_receipts', {})[execution_id] = dict(
+        mode='page-confirmation', status='success', task_id=state.task_id, revision=state.revision,
+        evidence_ids=list(evidence_ids), observation_ids=[first_observation_id, second_id],
+        reference=matches[0].group(1))
+    return True
+
+
 def _terminal_proof(state, execution_id, status, evidence):
     receipt = _runtime(state).get('terminal_receipts', {}).get(execution_id, {})
     if (receipt.get('status') != status or receipt.get('revision') != state.revision
             or not evidence or not set(receipt.get('evidence_ids', [])).issubset(e['id'] for e in evidence)):
         return False
+    if receipt.get('mode') == 'page-confirmation':
+        return (status == 'success' and len(receipt.get('observation_ids', [])) == 2
+                and all(e['kind'] == 'page' and e['observation_id'] == receipt['observation_ids'][1]
+                        for e in evidence))
     return set(e['observation_id'] for e in evidence) == set(receipt.get('observation_ids', []))
 
 
@@ -962,8 +1086,9 @@ def _durable_terminal(record):
             or not _evidence_ids(receipt.get('evidence_ids'))):
         return False
     evidence = {e.get('id'): e for e in record.get('evidence', []) if isinstance(e, dict)}
+    expected_kind = 'page' if receipt.get('mode') == 'page-confirmation' else 'browser-event'
     return all(eid in record.get('evidence_ids', []) and eid in evidence
-               and evidence[eid].get('kind') == 'browser-event'
+               and evidence[eid].get('kind') == expected_kind
                and evidence[eid].get('revision') == receipt['revision']
                and evidence[eid].get('observation_id') in receipt.get('observation_ids', [])
                and bool(evidence[eid].get('quote')) for eid in receipt['evidence_ids'])

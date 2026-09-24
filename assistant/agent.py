@@ -357,6 +357,16 @@ class Agent:
         page = self.state['page']
         kwargs = {'client': self.coordinator_client} if self.coordinator_client else {}
         assessment = coordinator.assess(self.task, page, event, **kwargs)
+        page_confirmation_first = None
+        if (assessment.get('outcome') or {}).get('status') == 'success':
+            pending = [row for row in self.task.executions.values()
+                       if row.get('commitment') and row.get('outcome') not in {'success', 'failed'}]
+            if len(pending) == 1 and not pending[0].get('result', {}).get('correlation'):
+                # A generic confirmation page needs a second read and a fresh cited
+                # assessment. The first model success claim alone has no authority.
+                page_confirmation_first = next(reversed(self.task.observations))
+                page = self.observe()
+                assessment = coordinator.assess(self.task, page, 'outcome', **kwargs)
         if event != 'outcome':
             self.stop_if_interrupted()
         previous_facts = deepcopy(self.task.facts)
@@ -393,7 +403,12 @@ class Agent:
                 raise ValueError('Outcome needs exactly one pending commitment')
             eid = pending[0]
             if outcome['status'] == 'success' and self.task.completion:
-                self.task.completion, _ = jobs.completion_bindings(self.task)
+                page_attested = True
+                if page_confirmation_first is not None:
+                    page_attested = commit.record_page_confirmation(self.task, eid,
+                        evidence_ids=outcome['evidence_ids'], first_observation_id=page_confirmation_first)
+                if page_attested:
+                    self.task.completion, _ = jobs.completion_bindings(self.task)
             commit.record_outcome(self.task, eid, {k: v for k, v in outcome.items() if k != 'execution_id'},
                                   now=time.monotonic(), journal=self.journal)
         if assessment['notice']:

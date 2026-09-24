@@ -35,7 +35,7 @@ def _fact(goal, key):
     return task['facts'].get(key, {}).get('value')
 
 
-def install_models(monkeypatch, kind, *, skip=False):
+def install_models(monkeypatch, kind):
     sent = []
 
     def text(system, payload):
@@ -67,6 +67,8 @@ def install_models(monkeypatch, kind, *, skip=False):
                                                      else 'Black tea — 100 g')]),
                     'promotion': ('pack_choice', 'promotion', [('one', 'Keep one pack'),
                                                              ('three', 'Add two packs')]),
+                    'quote-a': ('comparison_path', 'comparison scope', [('compare', 'Compare Market B'),
+                                                                      ('skip', 'Skip Market B')]),
                     'choice': ('quote_choice', 'comparison', [('a', 'Choose Market A'),
                                                            ('b', 'Choose Market B')])}
             if stage in keys:
@@ -74,9 +76,15 @@ def install_models(monkeypatch, kind, *, skip=False):
                 if key not in task['facts']:
                     if stage == 'choice' and 'Market B skipped' in page['text']:
                         options = options[:1]
+                    descriptions = {
+                        'one': 'One pack ₹95 + delivery ₹39 = ₹134.',
+                        'three': ('Two packs ₹190 miss the ₹199 delivery threshold; three packs '
+                                  'cost ₹285 with free delivery, ₹151 more overall than one.'),
+                        'compare': 'Compare Market B; a separate login and OTP may be required.',
+                        'skip': 'Skip Market B and continue with only the Market A quote.'}
                     result['requirements'] = [dict(id=key, kind='choice', purpose=purpose, keys=[key],
                         scope='task', depends_on=[], reason='Choose '+purpose, options=[
-                            dict(id=oid, label=label, description=label, evidence_ids=ids)
+                            dict(id=oid, label=label, description=descriptions.get(oid, label), evidence_ids=ids)
                             for oid, label in options])]
             if stage in {'login-a', 'login-b'}:
                 name = 'Market A' if stage == 'login-a' else 'Market B'
@@ -174,18 +182,19 @@ def install_models(monkeypatch, kind, *, skip=False):
         stage = stage_of(page)
         goal = q['operation']['instructions']['goal']
         key = {'provider': 'provider_choice', 'address': 'address_choice', 'option': 'item_choice',
-               'promotion': 'pack_choice', 'choice': 'quote_choice'}.get(stage)
+               'promotion': 'pack_choice', 'quote-a': 'comparison_path',
+               'choice': 'quote_choice'}.get(stage)
         selected = _fact(goal, key) if key else None
         if key and not selected:
             operation, label = 'ASK_USER', None
         elif stage == 'provider':
-            operation, label = 'CLICK', 'Metro Cars' if kind == 'ride' else 'Market A'
+            operation, label = 'CLICK', selected['label']
         elif stage == 'address':
-            operation, label = 'CLICK', 'Home — 12 MG Road'
+            operation, label = 'CLICK', selected['label']
         elif stage == 'option':
-            operation, label = 'CLICK', 'Compact —' if kind == 'ride' else 'Green tea —'
+            operation, label = 'CLICK', selected['label']
         elif stage == 'promotion':
-            operation, label = 'CLICK', 'Keep one pack'
+            operation, label = 'CLICK', selected['label']
         elif stage == 'form-entry':
             recent = json['state']['recent_actions']
             operation = 'CLICK' if recent and recent[-1]['operation'] == 'TYPE_TEXT' else 'TYPE_TEXT'
@@ -201,11 +210,11 @@ def install_models(monkeypatch, kind, *, skip=False):
             operation = 'CLICK' if recent and recent[-1]['operation'] == 'TYPE_TEXT' else 'TYPE_TEXT'
             label = 'Complete payment' if operation == 'CLICK' else 'CVV'
         elif stage == 'quote-a':
-            operation, label = 'CLICK', 'Skip Market B' if skip else 'Compare Market B'
+            operation, label = 'CLICK', selected['label']
         elif stage == 'quote-b':
             operation, label = 'CLICK', 'Review both quotes'
         elif stage == 'choice':
-            operation, label = 'CLICK', 'Choose Market A' if skip else 'Choose Market B'
+            operation, label = 'CLICK', selected['label']
         elif stage == 'review':
             operation, label = 'CLICK', {'ride': 'Request ride', 'form': 'Send message',
                                          'account': 'Cancel subscription'}.get(kind, 'Place order')
@@ -270,6 +279,38 @@ def test_staged_cart_fee_change_requires_new_review(chrome, site, tmp_path, monk
     assert len([row for row in agent.task.executions.values() if row['commitment']]) == 1
 
 
+def test_promotion_choice_shows_threshold_and_three_packs_cost_more(chrome, site, tmp_path, monkeypatch):
+    install_models(monkeypatch, 'shop')
+    promotion_question = []
+    confirmations = []
+    def answer(question):
+        if question['kind'] == 'choice':
+            if any(option['id'] == 'three' for option in question['options']):
+                promotion_question.append(question)
+                assert agent.browser.evaluate('window.log') == []
+                options = {option['id']: option for option in question['options']}
+                assert '₹190' in options['three']['description']
+                assert 'miss the ₹199' in options['three']['description']
+                assert '₹285' in options['three']['description']
+                assert '₹151 more overall' in options['three']['description']
+                assert '₹134' in options['one']['description']
+                return {'option': 'three'}
+            return {'option': question['options'][0]['id']}
+        confirmations.append(question['text'])
+        return {'option': 'yes'}
+    with fixture_agent_class()(site['a']+'/journey.html?kind=shop', 'Order Green tea',
+            asker=answer, profile=Profile(tmp_path/'p.json')) as agent:
+        list(agent.run())
+        log = agent.browser.evaluate('window.log')
+    assert agent.state['status'] == 'done', agent.state['messages']
+    assert len(promotion_question) == len(confirmations) == 1
+    assert agent.task.facts['pack_choice']['question_id'] == promotion_question[0]['id']
+    assert agent.task.facts['pack_choice']['value']['label'] == 'Add two packs'
+    assert 'Green tea × 3' in confirmations[0] and 'INR 285.00' in confirmations[0]
+    assert len(log) == 1 and log[0]['quantity'] == 3 and log[0]['total'] == 285
+    assert agent.task.approval['consumed']
+
+
 def test_staged_shop_cvv_belongs_to_approved_purchase(chrome, site, tmp_path, monkeypatch):
     sent = install_models(monkeypatch, 'shop')
     asked = []
@@ -311,14 +352,24 @@ def test_distinct_message_and_account_change_preparation(chrome, site, tmp_path,
 
 @pytest.mark.parametrize('skip', [False, True])
 def test_sequential_provider_comparison_and_skip(chrome, site, tmp_path, monkeypatch, skip):
-    sent = install_models(monkeypatch, 'compare', skip=skip)
+    sent = install_models(monkeypatch, 'compare')
     asked = []
+    path_question = []
+    quote_question = []
     codes = iter(['482913', '615204'])
     def answer(question):
         asked.append(question)
         if question['kind'] == 'secret':
             return {'text': next(codes)}
-        return {'option': 'a' if skip else 'b'} if question['kind'] == 'choice' else {'option': 'yes'}
+        if question['kind'] == 'choice':
+            ids = {option['id'] for option in question['options']}
+            if 'skip' in ids:
+                path_question.append(question)
+                assert agent.browser.evaluate('window.log') == [{'authentication': 'Market A', 'accepted': True}]
+                return {'option': 'skip' if skip else 'compare'}
+            quote_question.append(question)
+            return {'option': 'a' if skip else 'b'}
+        return {'option': 'yes'}
     with fixture_agent_class()(site['a']+'/journey.html?kind=compare',
             'Compare Market A and Market B, then order Green tea', asker=answer,
             profile=Profile(tmp_path/'p.json')) as agent:
@@ -331,5 +382,14 @@ def test_sequential_provider_comparison_and_skip(chrome, site, tmp_path, monkeyp
     assert len([entry for entry in log if 'commitment' in entry]) == 1
     assert [q['kind'] for q in asked].count('secret') == (1 if skip else 2)
     assert [q['kind'] for q in asked].count('confirm') == 1
+    assert len(path_question) == len(quote_question) == 1
+    assert agent.task.facts['comparison_path']['question_id'] == path_question[0]['id']
+    assert agent.task.facts['comparison_path']['value']['label'] == (
+        'Skip Market B' if skip else 'Compare Market B')
+    assert agent.task.facts['quote_choice']['question_id'] == quote_question[0]['id']
+    assert log[-1]['provider'] == ('Market A' if skip else 'Market B')
+    assert log[-1]['total'] == (134 if skip else 124)
+    assert ('INR 134.00' if skip else 'INR 124.00') in next(
+        q['text'] for q in asked if q['kind'] == 'confirm')
     for code in ('482913', '615204'):
         assert code not in str(sent) and code not in str(public_context(agent.task))

@@ -1,0 +1,31 @@
+<!doctype html><meta charset="utf-8"><title>Confirmation page fixture</title>
+<section id="review"><h1>Final review</h1><p>Market A</p><p>Home — 12 MG Road</p>
+<p>Tomorrow</p><p>Cash</p><p>Green tea × 1 ₹95</p><p>Delivery fee ₹39</p>
+<p>Total ₹134</p><button id="place" type="button">Place order</button></section>
+<section id="result" hidden></section>
+<script>
+const variant=new URLSearchParams(location.search).get('variant')||'success';
+window.log=[];
+const review=document.getElementById('review'),result=document.getElementById('result');
+if(variant==='old'){
+  const old=document.createElement('p');old.textContent='Order placed #ORD-4821';review.prepend(old);
+}
+document.getElementById('place').onclick=()=>{
+  log.push('place');review.hidden=true;result.hidden=false;
+  const render=processing=>{
+    result.replaceChildren();
+    const heading=processing||variant==='processing'?'Order processing #ORD-4821':
+      variant==='unrelated'?'Message sent #MSG-4821':'Order placed #ORD-4821';
+    const item=variant==='wrong-item'?'Black tea × 1':'Green tea × 1';
+    const total=variant==='wrong-amount'?'Total ₹150':'Total ₹134';
+    for(const value of [heading,item,total]){
+      const p=document.createElement('p');p.textContent=value;result.append(p);
+    }
+    if(variant==='old-total'){
+      const changed=document.createElement('p');changed.textContent='Total ₹150';result.append(changed);
+    }
+  };
+  render(variant==='delayed');
+  if(variant==='delayed')setTimeout(()=>render(false),900);
+};
+</script>
