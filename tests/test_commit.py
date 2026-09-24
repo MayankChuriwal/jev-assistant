@@ -598,7 +598,7 @@ def test_freshness_is_rechecked_after_durable_intent(tmp_path, monkeypatch):
     assert calls == [] and result['status'] == 'not_dispatched'
 
 
-@pytest.mark.parametrize("case", ["approved", "unknown", "changed_hash", "purchase"])
+@pytest.mark.parametrize("case", ["approved", "pending_user", "unknown", "changed_hash", "purchase"])
 def test_only_scoped_payment_authentication_can_follow_an_executed_commitment(tmp_path, case):
     import time
 
@@ -612,8 +612,16 @@ def test_only_scoped_payment_authentication_can_follow_an_executed_commitment(tm
     j = Journal.create(tmp_path / 'private', redact=lambda x: x)
     d = bind_decision(s, dict(id='purchase', operation='CLICK', choice='e6'), page, assessment='commitment',
                       effect_id=purchase_effect(s, p))
-    dispatch_once(s, j, d, page, act=lambda: {}, is_fresh=lambda: True, interrupted=lambda: False, proposal=p)
+    dispatch_once(s, j, d, page, act=lambda: {'correlation': 'PAY-1'}, is_fresh=lambda: True,
+                  interrupted=lambda: False, proposal=p)
+    if case == 'pending_user':
+        page['text'] += ' PAY-1 authentication required'
     oid = observe_state(s, page)
+    if case == 'pending_user':
+        from assistant.commit import record_outcome
+        eid = cite(s, oid, 'PAY-1 authentication required')
+        assert record_outcome(s, 'purchase', dict(status='pending_user', evidence_ids=[eid],
+                              artifact_id=None), now=1, journal=j) == 'pending_user'
     s.challenges['payment-otp'] = dict(id='payment-otp', revision=0, origin='https://shop.test',
         status='challenge', observation_id=oid, field_ids=['e2'], expires_at=time.time() + 30,
         flow_id='payment1', purpose='payment', field_role='otp', question_id='q-pay',
@@ -627,7 +635,7 @@ def test_only_scoped_payment_authentication_can_follow_an_executed_commitment(tm
     calls = []
     kwargs = dict(act=lambda: calls.append(1) or {}, is_fresh=lambda: True, interrupted=lambda: False,
                   challenge_id='payment-otp')
-    if case != 'approved':
+    if case not in {'approved', 'pending_user'}:
         with pytest.raises(ValueError):
             dispatch_once(s, j, d2, page, **kwargs)
         assert calls == []
@@ -800,3 +808,171 @@ def test_consequential_effect_requires_observed_semantic_container(context):
     p = fresh_review(s, page, p, x)
     with pytest.raises(ValueError, match='context'):
         bind_proposal_effect(s, p, operation='CLICK', choice='e6')
+
+
+def completion_fixture(kind='action'):
+    from assistant.state import TaskState, cite, observe_state, put_fact
+    s = TaskState('proof', 'Arrange a blue parcel')
+    before = observe_state(s, dict(url='https://example.test/', text='Review blue parcel'))
+    s.executions['x'] = dict(execution_id='x', task_id=s.task_id, revision=0,
+        observation_id=before, origin='https://example.test', status='executed',
+        commitment=True, approval_id='approved', account_key='account',
+        result={'correlation': 'REF-42'})
+    s.progress['account_reservation_key'] = 'account'
+    after = observe_state(s, dict(url='https://example.test/result', text='REF-42 blue parcel accepted'))
+    eid = cite(s, after, 'REF-42 blue parcel accepted')
+    put_fact(s, 'parcel', 'blue parcel', source='user')
+    s.completion = [dict(id='r', description='Requested parcel arranged', kind=kind,
+        material_keys=['parcel'], evidence_ids=[eid], execution_id='x', artifact_id=None)]
+    return s, eid
+
+
+def test_done_or_delivery_alone_is_never_completion():
+    from assistant.commit import completion_report, record_delivery
+    from assistant.state import TaskState
+    s = TaskState('t', 'Download my latest invoice and send it here')
+    s.completion = [dict(id='invoice', description='Current invoice delivered', kind='artifact',
+        material_keys=[], evidence_ids=[], execution_id=None, artifact_id='file1')]
+    assert not completion_report(s)['verified']
+    record_delivery(s, 'file1', message_id='m1')
+    assert not completion_report(s)['verified']
+
+
+def test_durable_correlated_outcome_completes_and_releases(tmp_path):
+    from assistant.commit import Journal, completion_report, record_outcome
+    s, eid = completion_fixture()
+    j = Journal.create(tmp_path, lambda v: v)
+    assert record_outcome(s, 'x', dict(status='success', evidence_ids=[eid], artifact_id=None),
+                          now=5, journal=j) == 'success'
+    assert completion_report(s)['verified']
+    assert 'account_reservation_key' not in s.progress
+    assert j.records()[-1]['evidence'][0]['quote'] == 'REF-42 blue parcel accepted'
+    assert not j.interrupted()
+
+
+@pytest.mark.parametrize('change', ['old', 'unrelated', 'wrong_task', 'uncorrelated'])
+def test_invalid_action_proof_fails_closed(tmp_path, change):
+    from assistant.commit import Journal, completion_report, record_outcome
+    from assistant.state import cite
+    s, eid = completion_fixture()
+    if change == 'old':
+        eid = cite(s, next(iter(s.observations)), 'Review blue parcel')
+    elif change == 'unrelated':
+        eid = cite(s, next(reversed(s.observations)), 'accepted')
+    elif change == 'wrong_task':
+        s.executions['x']['task_id'] = 'another'
+    else:
+        s.executions['x']['result'] = {}
+    assert record_outcome(s, 'x', dict(status='success', evidence_ids=[eid], artifact_id=None),
+                          now=5, journal=Journal.create(tmp_path, lambda v: v)) == 'unknown'
+    assert not completion_report(s)['verified']
+    assert s.progress['account_reservation_key'] == 'account'
+
+
+def test_cancelled_inflight_outcome_is_still_recorded(tmp_path):
+    from assistant.commit import Journal, record_outcome
+    s, eid = completion_fixture()
+    s.status = 'cancelled'
+    assert record_outcome(s, 'x', dict(status='success', evidence_ids=[eid], artifact_id=None),
+                          now=5, journal=Journal.create(tmp_path, lambda v: v)) == 'success'
+    assert s.status == 'cancelled'
+
+
+def test_outcome_journal_failure_retains_reservation():
+    from assistant.commit import record_outcome
+    s, eid = completion_fixture()
+    class Broken:
+        def append(self, value):
+            raise OSError('disk full')
+    assert record_outcome(s, 'x', dict(status='success', evidence_ids=[eid], artifact_id=None),
+                          now=5, journal=Broken()) == 'unknown'
+    assert s.progress['account_reservation_key'] == 'account'
+
+
+def test_artifact_needs_owned_matching_receipt_and_delivery():
+    from assistant.commit import completion_report, record_artifact, record_delivery
+    s, eid = completion_fixture('artifact')
+    s.completion[0]['artifact_id'] = 'file1'
+    assert not completion_report(s)['verified']
+    record_artifact(s, 'file1', requirement_id='r', evidence_ids=[eid], direction='download',
+                    execution_id='x')
+    assert not completion_report(s)['verified']
+    record_delivery(s, 'file1', message_id='m1')
+    assert completion_report(s)['verified']
+    other, _ = completion_fixture('artifact')
+    other.completion[0]['artifact_id'] = 'file1'
+    other.delivered = s.delivered.copy()
+    assert not completion_report(other)['verified']
+
+
+def test_processing_wait_is_bounded_and_notice_deduplicated(tmp_path):
+    from assistant.commit import Journal, await_outcome
+    s, eid = completion_fixture()
+    ticks, notices = [0], []
+    def wait(seconds):
+        ticks[0] += seconds
+    result = await_outcome(s, 'x', journal=Journal.create(tmp_path, lambda v: v),
+        observe=lambda: dict(status='processing', evidence_ids=[eid], artifact_id=None),
+        clock=lambda: ticks[0], wait=wait, notice=notices.append)
+    assert result == 'unknown' and ticks[0] == 300
+    assert len(notices) == 1
+    assert s.progress['account_reservation_key'] == 'account'
+
+
+def test_read_only_goal_can_complete_without_execution():
+    from assistant.commit import bind_completion_evidence, completion_report
+    s, eid = completion_fixture('page')
+    s.completion[0].update(evidence_ids=[], execution_id=None)
+    bind_completion_evidence(s, 'r', evidence_ids=[eid])
+    assert completion_report(s)['verified']
+
+
+def test_completion_binding_does_not_rewrite_goal_contract():
+    from assistant.commit import bind_completion_evidence
+    s, eid = completion_fixture()
+    original = s.completion[0].copy()
+    bind_completion_evidence(s, 'r', evidence_ids=[eid], execution_id='x')
+    for key in ('description', 'kind', 'material_keys', 'id'):
+        assert s.completion[0][key] == original[key]
+
+
+def test_failed_outcome_releases_but_unknown_retains(tmp_path):
+    from assistant.commit import Journal, record_outcome
+    for status in ('failed', 'unknown', 'pending_user'):
+        s, eid = completion_fixture()
+        result = record_outcome(s, 'x', dict(status=status, evidence_ids=[eid], artifact_id=None),
+                                now=1, journal=Journal.create(tmp_path, lambda v: v))
+        assert result == status
+        assert ('account_reservation_key' in s.progress) == (status != 'failed')
+
+
+def test_journal_failure_cannot_be_recovered_to_success_without_restart(tmp_path):
+    from assistant.commit import Journal, record_outcome
+    s, eid = completion_fixture()
+    class Broken:
+        def append(self, value):
+            raise OSError('full')
+    value = dict(status='success', evidence_ids=[eid], artifact_id=None)
+    record_outcome(s, 'x', value, now=1, journal=Broken())
+    assert record_outcome(s, 'x', value, now=2, journal=Journal.create(tmp_path, lambda v: v)) == 'unknown'
+    assert s.progress['account_reservation_key'] == 'account'
+
+
+def test_outcome_cannot_reuse_an_earlier_result_after_new_observation(tmp_path):
+    from assistant.commit import Journal, record_outcome
+    from assistant.state import observe_state
+    s, eid = completion_fixture()
+    observe_state(s, {'url': 'https://example.test/result', 'text': 'Result withdrawn'})
+    assert record_outcome(s, 'x', dict(status='success', evidence_ids=[eid], artifact_id=None),
+                          now=1, journal=Journal.create(tmp_path, lambda v: v)) == 'unknown'
+
+
+def test_processing_observation_that_exceeds_deadline_cannot_complete(tmp_path):
+    from assistant.commit import Journal, await_outcome
+    s, eid = completion_fixture()
+    ticks = [0]
+    def observe():
+        ticks[0] = 301
+        return dict(status='success', evidence_ids=[eid], artifact_id=None)
+    assert await_outcome(s, 'x', journal=Journal.create(tmp_path, lambda v: v),
+        observe=observe, clock=lambda: ticks[0], wait=lambda seconds: None) == 'unknown'

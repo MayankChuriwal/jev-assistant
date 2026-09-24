@@ -210,3 +210,35 @@ def review_proposal(state, proposal):
     output, metadata = text_json(REVIEW_AMOUNTS, _redact({"proposal": proposal,
                                  "observation": observation}), max_tokens=4096)
     return validate_review(state, proposal, _redact(output)), metadata
+
+
+def completion_bindings(state):
+    """Staged proof proposal; returns validated candidates without marking done."""
+    from copy import deepcopy
+
+    from .commit import artifact_ids, bind_completion_evidence
+    from .coordinator import _redact
+    from .questions import COMPLETION_PROOF
+    from .state import public_context
+
+    output, metadata = text_json(COMPLETION_PROOF, _redact({
+        'task': public_context(state), 'executions': state.executions,
+        'artifact_ids': sorted(artifact_ids(state))}))
+    if (not isinstance(output, dict) or set(output) != {'bindings'}
+            or not isinstance(output['bindings'], list)):
+        raise invalid('completion bindings')
+    original = deepcopy(state.completion)
+    seen = set()
+    try:
+        for binding in output['bindings']:
+            if (not isinstance(binding, dict) or set(binding) != {
+                    'requirement_id', 'evidence_ids', 'execution_id', 'artifact_id'}
+                    or not isinstance(binding['requirement_id'], str)
+                    or binding['requirement_id'] in seen):
+                raise invalid('completion binding')
+            seen.add(binding['requirement_id'])
+            bind_completion_evidence(state, **binding)
+        return deepcopy(state.completion), metadata
+    finally:
+        # Owner applies the reviewed candidates; no partial model updates survive.
+        state.completion = original

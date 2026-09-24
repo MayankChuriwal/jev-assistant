@@ -202,9 +202,9 @@ def _evidence(state, ids, path, *, required=True):
 
 
 def _artifact_ids(state):
-    # Artifacts become code-owned receipts in the completion owner; prose is not an ID.
-    return {a["id"] for o in state.observations.values() for a in o.get("artifact_records", [])
-            if isinstance(a, dict) and isinstance(a.get("id"), str)} | set(state.delivered)
+    from .commit import artifact_ids
+
+    return artifact_ids(state)
 
 
 def _public_json(value, path, depth=0):
@@ -285,9 +285,13 @@ def _validate(state, output, *, event=None):
         raise ValueError("completion: only creation or user amendment may set requirements")
     if output["completion"] and event == "start" and state.completion:
         raise ValueError("completion: already established")
+    completion_ids = set()
     for req in output["completion"]:
         _shape(req, SCHEMA["completion"][0], "completion")
         _string(req["id"], "completion.id")
+        if req["id"] in completion_ids:
+            raise ValueError("completion.id: duplicate")
+        completion_ids.add(req["id"])
         _string(req["description"], "completion.description")
         _enum(req["kind"], {"page", "state", "action", "artifact"}, "completion.kind")
         _strings(req["material_keys"], "completion.material_keys")

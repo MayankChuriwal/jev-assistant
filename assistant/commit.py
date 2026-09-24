@@ -582,8 +582,11 @@ def dispatch_once(state, journal: Journal, decision: dict, page: dict, *, act, i
             raise ValueError('payment challenge is not bound to the approved transaction')
         unresolved = journal.interrupted()
         pending = [x for x in state.executions.values() if x.get('status') in {'pending', 'unknown'}
-                   or x.get('commitment') and x.get('status') == 'executed']
-        if any(not payment_followup or x.get('execution_id') != parent_id or x.get('phase') != 'executed'
+                   or x.get('commitment') and x.get('status') == 'executed'
+                   and x.get('outcome') not in {'success', 'failed'}]
+        if any(not payment_followup or x.get('execution_id') != parent_id
+               or not (x.get('phase') == 'executed'
+                       or x.get('phase') == 'outcome' and x.get('outcome') == 'pending_user')
                for x in unresolved + pending):
             raise ValueError('unresolved execution blocks further mutations')
         commitment = issued['kind'] == 'commitment'
@@ -646,3 +649,253 @@ def dispatch_once(state, journal: Journal, decision: dict, page: dict, *, act, i
             runtime['journal_failed'] = True
             receipt['status'] = receipt['phase'] = 'unknown'
         return deepcopy(receipt)
+
+
+def _proof(state, ids, *, revision=None):
+    """Recheck provenance, including quote membership, rather than trusting an ID."""
+    if not _evidence_ids(ids):
+        return []
+    revision = state.revision if revision is None else revision
+    result = []
+    for eid in ids:
+        e = state.evidence.get(eid, {})
+        o = state.observations.get(e.get('observation_id'), {})
+        source = {'page': [o.get('text', '')], 'browser-event': o.get('events', []),
+                  'artifact': o.get('artifacts', [])}.get(e.get('kind'), [])
+        if (e.get('id') != eid or not eid.startswith(state.task_id + ':')
+                or e.get('revision') != revision or o.get('revision') != revision
+                or e.get('origin') != o.get('origin') or not e.get('quote')
+                or not any(e['quote'] in text for text in source)):
+            return []
+        result.append(deepcopy(e))
+    return result
+
+
+def _material_matches(state, requirement, evidence):
+    keys = requirement.get('material_keys')
+    if not isinstance(keys, list) or not keys:
+        return False
+    for key in keys:
+        fact = state.facts.get(key, {})
+        value = fact.get('value')
+        if (not fact.get('valid') or not isinstance(value, str) or not value.strip()
+                or value.startswith('[')
+                or not any(_amount_in_quote(value, e['quote']) for e in evidence)):
+            return False
+    return True
+
+
+def _execution_proof(state, execution, evidence):
+    """A later quote must correlate with an independently captured dispatch receipt.
+
+    A result.correlation is provided by the browser/event adapter, never copied
+    from coordinator output. Sites without such a receipt remain uncertain.
+    """
+    if (execution.get('task_id') != state.task_id or execution.get('revision') != state.revision
+            or execution.get('status') != 'executed' or not evidence):
+        return False
+    observations = list(state.observations)
+    before = execution.get('observation_id')
+    correlation = execution.get('result', {}).get('correlation')
+    if (before not in observations or not isinstance(correlation, str) or not correlation.strip()
+            or correlation in state.observations[before]['text']):
+        return False
+    return all(e['observation_id'] in observations
+               and observations.index(e['observation_id']) > observations.index(before)
+               and e['origin'] == execution.get('origin')
+               and _amount_in_quote(correlation, e['quote']) for e in evidence)
+
+
+def record_artifact(state, artifact_id: str, *, requirement_id: str, evidence_ids: list[str],
+                    direction: str, execution_id: str) -> None:
+    """Called only after the adapter verifies a completed download/upload receipt.
+
+    IDs are opaque application-owned references, never paths. An upload receipt
+    establishes file transfer only; a separate action requirement proves submission.
+    """
+    requirement = next((r for r in state.completion if r['id'] == requirement_id), {})
+    evidence = _proof(state, evidence_ids)
+    if (not isinstance(artifact_id, str) or not artifact_id.strip()
+            or direction not in {'upload', 'download'} or requirement.get('kind') != 'artifact'
+            or not _material_matches(state, requirement, evidence)
+            or not _execution_proof(state, state.executions.get(execution_id, {}), evidence)):
+        raise ValueError('artifact receipt is missing task, execution or goal context')
+    _runtime(state).setdefault('artifacts', {})[artifact_id] = dict(
+        id=artifact_id, task_id=state.task_id, revision=state.revision, requirement_id=requirement_id,
+        direction=direction, execution_id=execution_id, evidence_ids=list(evidence_ids))
+
+
+def artifact_ids(state):
+    """Only this process's verified receipts are selectable by the coordinator."""
+    return set(_runtime(state).get('artifacts', {}))
+
+
+def record_delivery(state, artifact_id: str, *, message_id: str) -> None:
+    """Channel adapter calls this after successful document delivery, never before."""
+    if any(not isinstance(v, str) or not v.strip() for v in (artifact_id, message_id)):
+        raise ValueError('delivery needs artifact and channel message IDs')
+    receipt = dict(task_id=state.task_id, revision=state.revision, message_id=message_id)
+    _runtime(state).setdefault('deliveries', {})[artifact_id] = receipt
+    state.delivered[artifact_id] = deepcopy(receipt)
+
+
+def requirement_verified(state, requirement: dict) -> bool:
+    if not isinstance(requirement, dict):
+        return False
+    evidence = _proof(state, requirement.get('evidence_ids'))
+    if not evidence or not _material_matches(state, requirement, evidence):
+        return False
+    kind = requirement.get('kind')
+    if kind in {'page', 'state'}:
+        # Read-only findings need current observations; arbitrary prose without
+        # goal-linked material facts cannot prove a requirement.
+        return all(e['observation_id'] == next(reversed(state.observations)) for e in evidence)
+    execution = state.executions.get(requirement.get('execution_id'), {})
+    if not _execution_proof(state, execution, evidence):
+        return False
+    if kind == 'action':
+        outcome = _runtime(state).get('outcomes', {}).get(execution.get('execution_id'), {})
+        return (outcome.get('status') == 'success' and outcome.get('revision') == state.revision
+                and set(requirement['evidence_ids']).issubset(outcome.get('evidence_ids', [])))
+    if kind == 'artifact':
+        artifact = _runtime(state).get('artifacts', {}).get(requirement.get('artifact_id'), {})
+        delivery = _runtime(state).get('deliveries', {}).get(requirement.get('artifact_id'), {})
+        return (artifact.get('revision') == state.revision
+                and artifact.get('requirement_id') == requirement.get('id')
+                and artifact.get('execution_id') == requirement.get('execution_id')
+                and set(requirement['evidence_ids']).issubset(artifact.get('evidence_ids', []))
+                and (artifact.get('direction') == 'upload'
+                     or delivery.get('revision') == state.revision and bool(delivery.get('message_id'))))
+    return False
+
+
+def completion_report(state) -> dict:
+    missing, evidence = [], []
+    for requirement in state.completion:
+        if requirement_verified(state, requirement):
+            evidence.extend(requirement['evidence_ids'])
+        else:
+            missing.append(requirement.get('id', 'invalid'))
+    return dict(verified=bool(state.completion) and not missing, missing=missing,
+                evidence_ids=list(dict.fromkeys(evidence)))
+
+
+def record_outcome(state, execution_id: str, outcome: dict, *, now: float, journal: Journal) -> str:
+    """Persist proof before changing outcome/reservation; never dispatch a retry."""
+    import math
+    if (not isinstance(outcome, dict) or set(outcome) != {'status', 'evidence_ids', 'artifact_id'}
+            or not isinstance(outcome['status'], str)
+            or outcome['status'] not in {'pending_user', 'processing', 'success', 'failed', 'unknown'}
+            or not isinstance(outcome['evidence_ids'], list)
+            or not all(isinstance(e, str) for e in outcome['evidence_ids'])
+            or (outcome['artifact_id'] is not None and (not isinstance(outcome['artifact_id'], str)
+                or outcome['artifact_id'] not in artifact_ids(state)))
+            or isinstance(now, bool) or not isinstance(now, (int, float)) or not math.isfinite(now)):
+        raise ValueError('invalid outcome schema')
+    runtime = _runtime(state)
+    with runtime['lock']:
+        execution = state.executions.get(execution_id)
+        if execution is None:
+            raise ValueError('unknown execution')
+        if runtime.get('journal_failed'):
+            return 'unknown'
+        previous = runtime.get('outcomes', {}).get(execution_id, {})
+        if previous.get('status') in {'success', 'failed'}:
+            return previous['status']
+        evidence = _proof(state, outcome['evidence_ids'])
+        status = outcome['status']
+        correlated = (_execution_proof(state, execution, evidence)
+                      and all(e['observation_id'] == next(reversed(state.observations))
+                              for e in evidence))
+        if status != 'unknown' and not correlated:
+            status = 'unknown'
+        if status == 'success':
+            requirements = [r for r in state.completion if r.get('execution_id') == execution_id
+                            and r.get('kind') in {'action', 'artifact'}]
+            if not requirements or not all(_material_matches(state, r, evidence) for r in requirements):
+                status = 'unknown'
+        if status == 'pending_user' and not (execution.get('approval_id') and execution.get('commitment')):
+            status = 'unknown'
+        record = dict(phase='outcome', execution_id=execution_id, status=status, outcome=status,
+                      evidence_ids=[e['id'] for e in evidence], evidence=evidence,
+                      artifact_id=outcome['artifact_id'], task_id=state.task_id,
+                      revision=state.revision, at=now, account_key=execution.get('account_key'),
+                      commitment=execution.get('commitment', False))
+        try:
+            journal.append(record)
+        except Exception:
+            runtime['journal_failed'] = True
+            execution['outcome'] = 'unknown'
+            if state.status not in {'cancelled', 'done', 'failed'}:
+                state.set_status('blocked')
+            state.diagnostics.append('Outcome persistence failed; account remains reserved.')
+            return 'unknown'
+        execution['outcome'] = status
+        execution['outcome_evidence_ids'] = record['evidence_ids']
+        runtime.setdefault('outcomes', {})[execution_id] = deepcopy(record)
+        if status in {'success', 'failed'}:
+            unresolved = any(eid != execution_id and e.get('commitment')
+                and e.get('status') in {'pending', 'executed', 'unknown'}
+                and e.get('outcome') not in {'success', 'failed'} for eid, e in state.executions.items())
+            if not unresolved and state.progress.get('account_reservation_key') == execution.get('account_key'):
+                state.progress.pop('account_reservation_key', None)
+        if state.status not in {'cancelled', 'done', 'failed'}:
+            state.set_status({'processing': 'waiting_site', 'pending_user': 'waiting_user',
+                              'unknown': 'blocked', 'failed': 'failed', 'success': 'running'}[status])
+        return status
+
+
+def await_outcome(state, execution_id: str, *, journal: Journal, observe, clock, wait,
+                  notice=lambda status: None) -> str:
+    """Bounded read-only polling; injected monotonic clock/wait enable offline tests.
+
+    observe must itself have a bounded I/O timeout. No callback may mutate the site.
+    Repeated processing notices are deduplicated across calls and observations.
+    """
+    start = clock()
+    for _ in range(61):
+        now = clock()
+        if now < start or now - start >= 300:
+            break
+        try:
+            outcome = observe()
+        except Exception:
+            break
+        now = clock()
+        if now < start or now - start >= 300:
+            break
+        status = record_outcome(state, execution_id, outcome, now=now, journal=journal)
+        if status != 'processing':
+            return status
+        key = (execution_id, status)
+        notices = _runtime(state).setdefault('outcome_notices', set())
+        if key not in notices:
+            notices.add(key)
+            notice(status)
+        remaining = 300 - (clock() - start)
+        if remaining <= 0:
+            break
+        wait(min(5, remaining))
+    return record_outcome(state, execution_id, dict(status='unknown', evidence_ids=[], artifact_id=None),
+                          now=clock(), journal=journal)
+
+
+def bind_completion_evidence(state, requirement_id: str, *, evidence_ids: list[str],
+                             execution_id: str | None = None, artifact_id: str | None = None) -> None:
+    """Attach candidate proof without letting a coordinator weaken the contract."""
+    if (not isinstance(requirement_id, str)
+            or execution_id is not None and not isinstance(execution_id, str)
+            or artifact_id is not None and not isinstance(artifact_id, str)):
+        raise ValueError('completion binding identifiers must be strings')
+    requirement = next((r for r in state.completion if r['id'] == requirement_id), None)
+    evidence = _proof(state, evidence_ids)
+    if requirement is None or not evidence or not _material_matches(state, requirement, evidence):
+        raise ValueError('completion binding needs current goal-linked evidence')
+    if requirement['kind'] in {'action', 'artifact'}:
+        if not _execution_proof(state, state.executions.get(execution_id, {}), evidence):
+            raise ValueError('completion binding needs correlated execution')
+    elif execution_id is not None:
+        raise ValueError('read-only requirement cannot bind an execution')
+    if artifact_id is not None and artifact_id not in artifact_ids(state):
+        raise ValueError('completion binding needs owned artifact')
+    requirement.update(evidence_ids=list(evidence_ids), execution_id=execution_id, artifact_id=artifact_id)

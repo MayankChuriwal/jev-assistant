@@ -139,3 +139,27 @@ def test_confirmation_preserves_all_observed_charge_lines(monkeypatch):
     card, _ = jobs.confirm_card("review", {"url": "https://shop.test", "title": "Review",
                                            "text": "\n".join(lines) + " Total ₹30"}, "Pay ₹30")
     assert card["lines"] == lines
+
+
+def test_completion_binding_job_rejects_boolean_proof(monkeypatch):
+    from assistant import jobs
+    from assistant.state import TaskState
+    monkeypatch.setattr(jobs, 'text_json', lambda *a, **k: ({'achieved': True}, {}))
+    with pytest.raises(ValueError, match='completion'):
+        jobs.completion_bindings(TaskState('t', 'Fetch my statement'))
+
+
+def test_completion_binding_job_rolls_back_partial_bindings(monkeypatch):
+    from assistant import jobs
+    from assistant.state import TaskState, cite, observe_state, put_fact
+    s = TaskState('t', 'Compare blue parcel prices')
+    oid = observe_state(s, {'url': 'https://example.test', 'text': 'blue parcel costs 10'})
+    eid = cite(s, oid, 'blue parcel costs 10')
+    put_fact(s, 'item', 'blue parcel', source='user')
+    s.completion = [dict(id='r', description='Comparison', kind='page', material_keys=['item'],
+                        evidence_ids=[], execution_id=None, artifact_id=None)]
+    binding = dict(requirement_id='r', evidence_ids=[eid], execution_id=None, artifact_id=None)
+    monkeypatch.setattr(jobs, 'text_json', lambda *a, **k: ({'bindings': [binding, binding]}, {}))
+    with pytest.raises(ValueError):
+        jobs.completion_bindings(s)
+    assert s.completion[0]['evidence_ids'] == []
