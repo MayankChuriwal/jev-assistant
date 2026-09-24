@@ -478,22 +478,31 @@ def observe_auth(state: TaskState, event: dict) -> dict:
             raise ValueError('auth outcome requires subsequent evidence')
     if status == 'authenticated' and challenge and execution is None:
         raise ValueError('challenge authentication requires matching submission')
-    if status in {'challenge', 'submitted'} and challenge.get('status') in {'expired', 'rejected', 'authenticated'}:
+    terminal = {'expired', 'rejected', 'authenticated'}
+    if challenge and challenge.get('status') in terminal and status not in terminal:
         raise ValueError('challenge is no longer usable')
-    if (previous and previous['status'] == 'submitted' and status in {'challenge', 'required', 'unknown'}
-            and previous.get('challenge_id') == event['challenge_id']):
-        raise ValueError('auth submission is pending; wait for observed outcome')
-    if (previous and previous['status'] == 'submitted' and status == 'submitted'
-            and previous.get('execution_id') != event['execution_id']):
-        raise ValueError('auth submission is pending; cannot submit again')
+    if previous and previous['status'] == 'submitted':
+        pending = state.executions[previous['execution_id']]
+        same_submission = status == 'submitted' and event['execution_id'] == previous['execution_id']
+        outcome = (event['challenge_id'] == pending['challenge_id']
+                   and ((status in {'rejected', 'authenticated'}
+                         and event['execution_id'] == previous['execution_id'])
+                        or (status == 'expired'
+                            and order.index(latest) > order.index(pending['observation_id']))))
+        replacement = (status == 'challenge' and challenge
+                       and event['challenge_id'] != pending['challenge_id']
+                       and order.index(challenge['observation_id']) > order.index(pending['observation_id']))
+        if not (same_submission or outcome or replacement):
+            raise ValueError('auth submission is pending; wait for observed outcome or new challenge')
     rejected = list(previous.get('rejected_executions', [])) if previous else []
     if status == 'rejected' and event['execution_id'] not in rejected:
         rejected.append(event['execution_id'])
     limit = 2 if event['field_role'] == 'cvv' or event['purpose'] == 'cvv' else 3
-    if len(rejected) >= limit and status in {'challenge', 'submitted'}:
+    blocked = bool(previous and previous.get('blocked')) or len(rejected) >= limit
+    if blocked and status in {'challenge', 'submitted'}:
         raise ValueError('auth rejection limit reached')
     flow = {**deepcopy(event), 'expires_at': expiry, 'revision': state.revision, 'rejections': len(rejected),
-            'rejected_executions': rejected, 'blocked': len(rejected) >= limit}
+            'rejected_executions': rejected, 'blocked': blocked}
     if previous and challenge and previous.get('challenge_id') != event['challenge_id']:
         old = state.challenges.get(previous.get('challenge_id'))
         if old:

@@ -665,3 +665,63 @@ def test_missing_expiry_on_followup_does_not_extend_a_challenge():
     submit_auth(s, oid)
     assert s.challenges['c1']['expires_at'] == 60
     assert s.progress['auth_flows']['f1']['expires_at'] == 60
+
+
+@pytest.mark.parametrize('status', ['required', 'unknown'])
+def test_pending_submission_identity_survives_challengeless_updates(status):
+    s, _, oid = auth_state()
+    submit_auth(s, oid)
+    with pytest.raises(ValueError, match='pending'):
+        observe_auth(s, dict(auth_event(s, oid, status), challenge_id=None))
+    assert s.progress['auth_flows']['f1']['execution_id'] == 'x1'
+    s.executions['x2'] = dict(s.executions['x1'], id='x2')
+    with pytest.raises(ValueError, match='pending'):
+        observe_auth(s, dict(auth_event(s, oid, 'submitted'), execution_id='x2'))
+
+
+@pytest.mark.parametrize('terminal', ['expired', 'rejected'])
+@pytest.mark.parametrize('status', ['required', 'unknown'])
+def test_terminal_auth_challenge_cannot_be_resurrected_by_neutral_update(terminal, status):
+    s, _, oid = auth_state()
+    s.challenges['c1']['status'] = terminal
+    with pytest.raises(ValueError, match='usable'):
+        observe_auth(s, auth_event(s, oid, status))
+    assert s.challenges['c1']['status'] == terminal
+    with pytest.raises(ValueError, match='usable'):
+        observe_auth(s, auth_event(s, oid))
+
+
+def test_cvv_exhausted_payment_flow_stays_blocked_when_role_changes_to_otp():
+    s, page, oid = auth_state()
+    for attempt in range(2):
+        cid, xid = f'cvv{attempt}', f'x{attempt}'
+        s.challenges[cid] = dict(s.challenges['c1'], id=cid, field_role='cvv', purpose='payment',
+                                 status='challenge', observation_id=oid)
+        event = dict(auth_event(s, oid), challenge_id=cid, field_role='cvv', purpose='payment')
+        observe_auth(s, event)
+        s.executions[xid] = dict(id=xid, flow_id='f1', challenge_id=cid, revision=0,
+            observation_id=oid, origin='https://shop.test', purpose='payment', field_role='cvv',
+            submission=True, status='dispatched')
+        observe_auth(s, dict(event, status='submitted', execution_id=xid))
+        oid = observe_state(s, dict(page, text=f'CVV rejected {attempt}'))
+        event.update(status='rejected', execution_id=xid,
+                     evidence_ids=evidence_for(s, oid, s.observations[oid]['text']))
+        result = observe_auth(s, event)
+    assert result['blocked']
+    event.update(challenge_id=None, status='required', field_role='otp', execution_id=None)
+    assert observe_auth(s, event)['blocked']
+    s.challenges['otp'] = dict(s.challenges['c1'], id='otp', purpose='payment', observation_id=oid)
+    with pytest.raises(ValueError, match='limit'):
+        observe_auth(s, dict(event, challenge_id='otp', status='challenge'))
+
+
+def test_pending_challenge_replacement_needs_a_new_observed_challenge():
+    s, page, oid = auth_state()
+    submit_auth(s, oid)
+    s.challenges['c2'] = dict(s.challenges['c1'], id='c2', status='challenge')
+    with pytest.raises(ValueError, match='pending'):
+        observe_auth(s, dict(auth_event(s, oid), challenge_id='c2'))
+    new = observe_state(s, dict(page, text='New code issued'))
+    s.challenges['c2']['observation_id'] = new
+    assert observe_auth(s, dict(auth_event(s, new), challenge_id='c2'))['status'] == 'challenge'
+    assert s.challenges['c1']['status'] == 'expired'
