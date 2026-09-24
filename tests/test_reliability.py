@@ -273,3 +273,22 @@ def test_expired_challenge_cannot_be_rebound_as_current(tmp_path, monkeypatch):
     monkeypatch.setattr(loop.time, 'time', lambda: 2)
     a.discard_invalid_secrets()
     assert a.task.challenges['otp']['status'] == 'expired'
+
+
+@pytest.mark.browser
+def test_masked_form_guards_remain_fresh_without_retaining_secret(browser_at):
+    from helpers import find
+
+    from assistant.profile import Secrets
+    browser = browser_at('/shop.html')
+    page = browser.observe()
+    browser.act('TYPE_TEXT', find(page, 'Phone number', 'fill'), page, text='9876543210')
+    page = browser.observe()
+    secrets = Secrets([])
+    secrets.add('9876543210', '[profile:phone]')
+    clean = secrets.redact(page)
+    assert '9876543210' not in str(clean['frames'])
+    assert browser.fresh(clean)
+    assert browser.fresh(clean, find(clean, 'Continue', 'click'))
+    browser.evaluate("document.getElementById('phone').value = '1234567890'")
+    assert not browser.fresh(clean, find(clean, 'Continue', 'click'))

@@ -502,14 +502,14 @@ def bind_decision(state, decision: dict, page: dict, *, assessment: str | None =
     assessment must come from the validated coordinator/action-form assessment.
     """
     from .rules import commitment_kind
-    from .state import _url_parts
+    from .state import _safe, _url_parts
     oid = next(reversed(state.observations), None)
     observation = state.observations.get(oid, {})
     action = next((a for a in page.get('actions', []) if a['id'] == decision.get('choice')), None)
     if (not isinstance(decision.get('id'), str) or not decision['id'] or action is None
             or observation.get('revision') != state.revision or observation.get('text') != page.get('text')
             or observation.get('url') != _url_parts(page.get('url'))[0]
-            or not any(all(action.get(k) == v for k, v in observed.items())
+            or not any(all(_safe(action.get(k)) == v for k, v in observed.items())
                        for observed in observation.get('actions', []))):
         raise ValueError('decision has no current observed owner/target')
     bound = {**deepcopy(decision), 'task_id': state.task_id, 'revision': state.revision,

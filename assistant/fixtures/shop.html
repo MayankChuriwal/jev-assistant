@@ -10,7 +10,7 @@
 </style>
 </head>
 <body>
-<script>window.log = [];</script>
+<script>window.log = []; window.__taskCorrelation = crypto.randomUUID();</script>
 <section id="login" class="on">
   <h1>Log in</h1>
   <form onsubmit="event.preventDefault(); sent.textContent = 'Code sent to •••• ' + phone.value.replace(/\D/g, '').slice(-4); show('otp')">
@@ -28,7 +28,7 @@
   <button type="button" onclick="verify()">Verify</button>
 </section>
 <section id="checkout">
-  <h1>Checkout</h1>
+  <h1>Checkout</h1><a href="#login">Sign in</a><p>Arriving in 12 minutes</p>
   <p>Diet Coke 300 ml × 1 — ₹40</p>
   <p>Delivery ₹39</p>
   <p>Total ₹79</p>
@@ -38,9 +38,9 @@
     <label><input type="radio" name="address" value="office"> Office — 4 Residency Road</label>
   </fieldset>
   <p>Pay with HDFC Visa ••1234</p>
-  <label>CVV <input id="cvv" type="password" inputmode="numeric" maxlength="3"></label>
-  <p id="pay-error" role="alert"></p>
-  <button type="button" onclick="pay()">Pay ₹79</button>
+  <div id="payment-challenge" hidden><label>Login Code <input autocomplete="one-time-code" readonly></label><label>CVV <input id="cvv" type="password" inputmode="numeric" maxlength="3"></label>
+  <p id="pay-error" role="alert"></p><button type="button" onclick="pay()">Complete payment</button></div>
+  <button data-fixture-receipt id="purchase" type="button" onclick="beginPayment()">Pay ₹79</button>
 </section>
 <section id="done">
   <h1>Order placed #A1B2</h1>
@@ -57,13 +57,19 @@
     document.getElementById('otp-error').textContent = 'Invalid OTP. Try again.';
     boxes().forEach(b => b.value = '');
   }
+  function beginPayment() {
+    window.__taskReceipt = {correlation: window.__taskCorrelation, status: 'pending_user', description: 'Diet Coke payment needs CVV'};
+    document.getElementById('payment-challenge').hidden = false;
+    document.getElementById('purchase').hidden = true;
+  }
   function pay() {
     const address = document.querySelector('[name=address]:checked')?.value;
     const cvv = document.getElementById('cvv').value;
     log.push(`pay:${address}:${cvv.length}`);  // never the CVV itself
-    if (address && cvv === '123') return show('done');
+    if (address && cvv === '123') { window.__taskReceipt = {...window.__taskReceipt, status: 'success', description: 'Order placed #A1B2 Diet Coke'}; return show('done'); }
     document.getElementById('pay-error').textContent = address ? 'Incorrect CVV.' : 'Choose an address.';
   }
+  if (location.search.includes('session')) show('checkout');
 </script>
 </body>
 </html>

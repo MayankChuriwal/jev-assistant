@@ -117,6 +117,10 @@ def _context(state):
                            if e["revision"] == state.revision and e["observation_id"] == latest}
     context["observation_ids"] = [latest] if latest else []
     context["execution_ids"] = list(state.executions)
+    context["executions"] = {eid: {k: row.get(k) for k in (
+        "execution_id", "operation", "status", "submission", "commitment", "challenge_id", "flow_id",
+        "origin", "purpose", "field_role", "observation_id", "outcome")}
+        for eid, row in state.executions.items()}
     # Operational diagnostics are not semantic task evidence and grow independently of the page.
     context.pop("diagnostics", None)
     return context

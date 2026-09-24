@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -763,7 +764,7 @@ class Browser:
                     and grid["tab"] == self.active and grid["session"] == self.session
                     and not page.get("completeness", {}).get("frames_incomplete")
                     and page.get("frames", {}).get("main", {}).get("marker") == grid["marker"]
-                    and self.evaluate(MARKER) == grid["marker"]
+                    and guard_digest(self.evaluate(MARKER)) == grid["marker"]
                     and self._visual_render_fresh(grid) and self._visual_frames_fresh(grid))
         # Node actions compare their own target; anything else compares only its own document, so a ticking
         # third-party frame (chat widget, ad) never makes the rest of the page stale.
@@ -774,8 +775,9 @@ class Browser:
             if action is not None and action.get("node") is not None:
                 node = int(action["node"])
                 current = self.evaluate(f"({GUARD})({node})", session)
-                return current == [snap["page_key"], snap["guards"].get(str(node))]
-            return self.evaluate(MARKER, session) == snap["marker"]
+                return bool(current) and [guard_digest(part) for part in current] == [
+                    snap["page_key"], snap["guards"].get(str(node))]
+            return guard_digest(self.evaluate(MARKER, session)) == snap["marker"]
         except (KeyError, RuntimeError):
             return False
 
@@ -871,7 +873,7 @@ class Browser:
         if before != after:
             raise StalePage("Screenshot changed during capture. Observe again.")
         self._visual_grid = {"screenshot_ref": uuid.uuid4().hex, "cells": cells,
-                             "marker": self.evaluate(MARKER), "tab": self.active, "session": self.session,
+                             "marker": guard_digest(self.evaluate(MARKER)), "tab": self.active, "session": self.session,
                              "candidates": {}, "render_hash": after, "clip": clip,
                              "masked": masked, "hide": hide}
         return image, cells
@@ -888,7 +890,7 @@ class Browser:
 
     def _visual_frames_fresh(self, grid):
         try:
-            return all(self.evaluate(MARKER, self._session_for(fid)) == marker
+            return all(guard_digest(self.evaluate(MARKER, self._session_for(fid))) == marker
                        for fid, marker in grid["frame_markers"].items())
         except (StalePage, RuntimeError, TimeoutError):
             return False
@@ -898,14 +900,14 @@ class Browser:
         grid = getattr(self, "_visual_grid", None)
         if (grid is None or grid["tab"] != self.active or grid["session"] != self.session or
                 page.get("frames", {}).get("main", {}).get("marker") != grid["marker"] or
-                self.evaluate(MARKER) != grid["marker"] or not self._visual_render_fresh(grid)):
+                guard_digest(self.evaluate(MARKER)) != grid["marker"] or not self._visual_render_fresh(grid)):
             raise StalePage("Screenshot no longer matches this observation. Observe again.")
         if page.get("completeness", {}).get("frames_incomplete"):
             raise StalePage("A frame was incomplete. Observe again before interpreting the screenshot.")
         if "frame_markers" not in grid:
             try:
                 observed = {fid: state["marker"] for fid, state in page["frames"].items() if fid != "main"}
-                current = {fid: self.evaluate(MARKER, self._session_for(fid)) for fid in observed}
+                current = {fid: guard_digest(self.evaluate(MARKER, self._session_for(fid))) for fid in observed}
             except (StalePage, RuntimeError, TimeoutError):
                 raise StalePage("A frame changed during screenshot interpretation. Observe again.") from None
             if current != observed:
@@ -946,7 +948,7 @@ class Browser:
         saved = grid and grid["candidates"].get(action.get("id"))
         if (not saved or action.get("visual_ref") != grid["screenshot_ref"] or
                 grid["tab"] != self.active or grid["session"] != self.session or
-                action.get("rect") != saved["rect"] or self.evaluate(MARKER) != grid["marker"]):
+                action.get("rect") != saved["rect"] or guard_digest(self.evaluate(MARKER)) != grid["marker"]):
             raise StalePage("Visual target is stale. Observe again.")
         if not self._visual_render_fresh(grid):
             raise StalePage("Visual target's screenshot changed. Observe again.")
@@ -1259,6 +1261,14 @@ class Browser:
         self.guard_targets.clear()
 
 
+_GUARD_KEY = os.urandom(32)
+
+
+def guard_digest(value):
+    """Keep freshness comparison exact without exposing form values to redaction."""
+    return hmac.new(_GUARD_KEY, json.dumps(value, sort_keys=True).encode(), hashlib.sha256).hexdigest()
+
+
 def merge(parts):
     """One page state from the main document and its cross-origin frames. Element ids are page-wide."""
     main = parts[0][1]
@@ -1268,7 +1278,10 @@ def merge(parts):
     texts, count = [], 0
     for index, (frame, state) in enumerate(parts):
         host = urlparse(state["url"]).netloc
-        page["frames"][frame or "main"] = {k: state[k] for k in ("url", "marker", "page_key", "guards")}
+        page["frames"][frame or "main"] = {
+            "url": state["url"], "marker": guard_digest(state["marker"]),
+            "page_key": guard_digest(state["page_key"]),
+            "guards": {node: guard_digest(value) for node, value in state["guards"].items()}}
         page["omitted_actions"] += state["omitted_actions"]
         page["completeness"]["omitted_actions"] += state["omitted_actions"]
         page["completeness"]["text_truncated"] |= state.get("completeness", {}).get("text_truncated", False)

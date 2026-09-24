@@ -153,7 +153,7 @@ def require(state: TaskState, requirement: dict) -> dict | None:
     if req["satisfied"]:
         return None
     for q in state.questions.values():
-        if (req["id"] in q["requirement_ids"] and q["revision"] == state.revision
+        if (req["id"] in q.get("requirement_ids", []) and q["revision"] == state.revision
                 and q["answered_at"] is None and not q.get("closed")):
             return q
     # Related text needs can be grouped only before the question is displayed.
@@ -238,7 +238,7 @@ def reopen(state: TaskState, requirement_id: str, reason: str, evidence_ids: tup
     req["satisfied"] = False
     req["reopened"] = {"reason": reason, "evidence_ids": tuple(evidence_ids), "revision": state.revision}
     for q in state.questions.values():
-        if requirement_id in q["requirement_ids"]:
+        if requirement_id in q.get("requirement_ids", []):
             q["closed"] = True
 
 

@@ -10,7 +10,7 @@
   :root { --ink:#1b2430; --muted:#5b6675; --line:#d7dce3; --brand:#0b5cad; --bad:#b3261e; --bg:#f5f7fa; }
   * { box-sizing:border-box; }
   body { margin:0; font:15px/1.5 system-ui, sans-serif; color:var(--ink); background:var(--bg); }
-  header { background:var(--brand); color:#fff; padding:14px 20px; font-weight:600; }
+  header { position:sticky; top:0; z-index:2; background:var(--brand); color:#fff; padding:14px 20px; font-weight:600; }
   main { max-width:640px; margin:24px auto; padding:0 16px; }
   form, #done { background:#fff; border:1px solid var(--line); border-radius:10px; padding:24px; }
   h1 { font-size:22px; margin:0 0 16px; }
@@ -85,7 +85,8 @@
       <input type="file" id="extra" multiple>
     </label>
 
-    <button type="submit">Submit dispute</button>
+    <output id="review-summary"></output>
+    <button data-fixture-receipt type="submit">Submit dispute</button>
     <p id="progress" aria-live="polite"></p>
     <p class="error" id="form-error" role="alert"></p>
   </form>
@@ -100,11 +101,19 @@
   </section>
 </main>
 <script>
+  window.__taskCorrelation = crypto.randomUUID();
   const $ = id => document.getElementById(id);
   const picked = { statement: null, receipt: null, extra: [] };
   const size = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
   const label = f => f ? `${f.name} · ${size(f.size)}` : '';
 
+  const review = () => {
+    const form = $('dispute');
+    $('review-summary').textContent = [form.txn.selectedOptions[0]?.textContent,
+      form.querySelector('[name=reason]:checked')?.parentElement.textContent, form.details.value].filter(Boolean).join(' · ');
+  };
+  $('dispute').addEventListener('change', review);
+  $('dispute').addEventListener('input', review);
   $('statement-button').addEventListener('click', () => $('statement').click());
   $('statement').addEventListener('change', e => {
     const f = e.target.files[0];
@@ -147,6 +156,8 @@
     if (errors.length) return;
 
     form.querySelector('[type=submit]').disabled = true;
+    const correlation = window.__taskCorrelation;
+    window.__taskReceipt = {correlation, status: 'processing', description: 'Dispute uploading ZENITH'};
     for (let p = 0; p <= 100; p += 20) {
       $('progress').textContent = `Uploading… ${p}%`;
       await new Promise(r => setTimeout(r, 200));
@@ -166,6 +177,7 @@
     }
     form.hidden = true;
     $('done').hidden = false;
+    window.__taskReceipt = {correlation, status: 'success', description: 'Dispute submitted ZENITH'};
     window.__uploadResult = { ref, txn: form.txn.value, reason: form.reason.value, details: form.details.value.trim(), files };
   });
 </script>

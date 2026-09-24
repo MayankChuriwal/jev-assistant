@@ -387,7 +387,13 @@ class Agent:
             self.task.proposal = assessment['proposal']
         if assessment['outcome']:
             outcome = assessment['outcome']
-            eid = outcome['execution_id']
+            pending = [eid for eid, row in self.task.executions.items()
+                       if row.get('commitment') and row.get('outcome') not in {'success', 'failed'}]
+            if len(pending) != 1:
+                raise ValueError('Outcome needs exactly one pending commitment')
+            eid = pending[0]
+            if outcome['status'] == 'success' and self.task.completion:
+                self.task.completion, _ = jobs.completion_bindings(self.task)
             commit.record_outcome(self.task, eid, {k: v for k, v in outcome.items() if k != 'execution_id'},
                                   now=time.monotonic(), journal=self.journal)
         if assessment['notice']:
@@ -676,6 +682,8 @@ class Agent:
         for event in coordinator.events_for(self.task, self.state['page']):
             self.coordinate(event)
         self.state['status'] = 'ready'
+        if self.task.status in {'waiting_user', 'waiting_site'}:
+            return self.snapshot()
         oid = next(reversed(self.task.observations))
         changes = tuple(eid for eid in self.task.progress.get('changes', {})
                         if self.task.evidence[eid]['observation_id'] == oid)

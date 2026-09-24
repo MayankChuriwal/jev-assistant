@@ -6,8 +6,8 @@ import re
 
 import pytest
 from fakes import FakeVault
+from reliability_fakes import fixture_agent_class, shop_coordinate, terminal_bindings
 
-from assistant import agent as loop
 from assistant import model, questions
 from assistant.model import OPERATION_HEAD
 from assistant.profile import Profile
@@ -42,14 +42,27 @@ def jev(body):
     if "Verify" in text:
         return pick("TYPE_TEXT", "One-time code") if not element("One-time code")["value"] else pick("CLICK", "Verify")
     if not any(e.get("checked") == "true" for e in elements if e.get("role") == "radio"):
-        return pick("ASK_USER")
-    if not element("CVV")["value"]:
-        return pick("TYPE_TEXT", "CVV")
+        goal = q['operation']['instructions']['goal']
+        return pick("CLICK", "Home") if '"delivery_address"' in goal else pick("ASK_USER")
+    if element("CVV"):
+        return pick("TYPE_TEXT", "CVV") if not element("CVV")["value"] else pick("CLICK", "Complete payment")
     return pick("CLICK", "Pay ₹79")
 
 
 def text_model(system, payload):
     """A scripted stand-in for GPT-4.1 mini, one answer per job."""
+    if system == questions.COORDINATE:
+        return shop_coordinate(payload)
+    if system.startswith('Classify the external effect'):
+        label = payload['selected_action']['label']
+        return {'effect': 'commitment' if 'Pay ₹' in label else
+                'authentication' if label in {'Verify', 'Continue', 'Complete payment', 'CVV'} else 'preparation'}
+    if system == questions.REVIEW_AMOUNTS:
+        return dict(exponent=2, total_text='₹79', total_quote='Total ₹79',
+                    amounts={'item': '₹40', 'delivery': '₹39'},
+                    line_quotes={'item': 'Diet Coke 300 ml × 1 — ₹40', 'delivery': 'Delivery ₹39'})
+    if system == questions.COMPLETION_PROOF:
+        return terminal_bindings(payload)
     if system == questions.FIELD_VALUE:
         label = payload["field"]["label"]
         if label == "Phone number":
@@ -75,7 +88,9 @@ def text_model(system, payload):
     raise AssertionError(f"unexpected job: {system[:40]}")
 
 
-def test_login_otp_address_confirm_and_temporary_cvv_without_leaks(chrome, site, tmp_path, monkeypatch):
+@pytest.mark.parametrize('existing_session', [False, True])
+def test_login_otp_address_confirm_and_temporary_cvv_without_leaks(chrome, site, tmp_path, monkeypatch,
+                                                                 existing_session):
     sent = []
 
     class Response:
@@ -98,7 +113,7 @@ def test_login_otp_address_confirm_and_temporary_cvv_without_leaks(chrome, site,
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setattr(model.CLIENT, "post", post)
-    codes = ["111111", "482913", "123"]
+    codes = ["123"] if existing_session else ["111111", "482913", "123"]
 
     def asker(message):
         if message["kind"] == "secret":
@@ -113,20 +128,23 @@ def test_login_otp_address_confirm_and_temporary_cvv_without_leaks(chrome, site,
     profile = Profile(tmp_path / "profile.json")
     profile.data.update(name="Mayank Churiwal", phone="+91 98765 43210",
                         cards=[{"id": "hdfc", "label": "HDFC Visa", "last4": "1234"}])
-    with loop.Agent(site["a"] + "/shop.html", "Order a Diet Coke", asker=asker, notify=told.append, profile=profile,
+    with fixture_agent_class()(site["a"] + "/shop.html" + ("?session" if existing_session else ""),
+                    "Order a Diet Coke", asker=asker, notify=told.append,
+                    profile=profile,
                     vault=FakeVault()) as agent:
         for state in agent.run():
-            assert len(state["decisions"]) < 40
+            assert len(state["decisions"]) < 40, (state["history"], state["errors"], state["messages"])
         log = agent.browser.evaluate("window.log")
     assert agent.state["status"] == "done", agent.state["messages"][-3:]
-    assert log == ["otp:111111", "otp:482913", "pay:home:3"]
-    assert [m["kind"] for m in agent.state["messages"] if m["from"] == "agent" and m["kind"] != "info"] == [
-        "secret", "secret", "choice", "secret", "confirm", "result"]
-    assert told[-1]["evidence"] == "Order placed #A1B2"
+    assert log == (["pay:home:3"] if existing_session else ["otp:111111", "otp:482913", "pay:home:3"])
+    assert [m["kind"] for m in agent.state["messages"] if m["from"] == "agent" and m["kind"] != "info"] == (
+        (["secret", "secret"] if not existing_session else []) + ["choice", "confirm", "secret", "result"])
+    assert told[-1]["evidence"] and all(eid in agent.task.evidence for eid in told[-1]["evidence"])
     everything = jsonlib.dumps(sent, ensure_ascii=False)
     for secret in ("98765", "9876543210", "Mayank", "482913", "111111"):
         assert secret not in everything, secret
-    assert not re.search(r"(?<!\d)123(?!\d)", everything)
+    found = re.search(r"(?<![\da-f.])123(?![\da-f.])", everything)
+    assert not found, everything[found.start()-100:found.end()+100] if found else ""
     assert "[profile:phone]" in everything and "[secret:" in everything
 
 

@@ -7,7 +7,7 @@ import tempfile
 os.environ["BU_NAME"] = "jev-test"
 os.environ["BH_TELEMETRY"] = "0"
 os.environ["BH_TAB_MARKER"] = "0"
-os.environ["JEV_HOME"] = tempfile.mkdtemp(prefix="jev-test-")
+os.environ["JEV_HOME"] = os.path.realpath(tempfile.mkdtemp(prefix="jev-test-"))
 
 import functools  # noqa: E402
 import http.server  # noqa: E402

@@ -187,11 +187,11 @@ def test_the_event_pump_survives_an_unexpected_error(monkeypatch):
 def test_visual_candidates_reject_unknown_cells_coordinates_and_incomplete_frames():
     b = bare()
     b._visual_grid = {"cells": {"A1": {"x": 0, "y": 0, "w": 100, "h": 100}},
-                      "marker": ["same"], "screenshot_ref": "shot-1", "tab": "T", "session": "S",
+                      "marker": browser.guard_digest(["same"]), "screenshot_ref": "shot-1", "tab": "T", "session": "S",
                       "candidates": {}}
     b.evaluate = Mock(side_effect=lambda expression: ["same"] if expression == browser.MARKER else 42)
     b._visual_render_fresh = Mock(return_value=True)
-    page = {"frames": {"main": {"marker": ["same"]}},
+    page = {"frames": {"main": {"marker": browser.guard_digest(["same"])}},
             "completeness": {"frames_incomplete": []}, "fingerprint": "page-1"}
     with pytest.raises(ValueError, match="cell"):
         b.visual_candidates(page, [{"cell": "Z9", "label": "Blue", "text": ""}])
@@ -207,11 +207,12 @@ def test_visual_reannotation_cannot_refresh_an_existing_frame_baseline():
     b = bare()
     b.frames["F1"] = {"session": "FS"}
     b._visual_grid = {"cells": {"A1": {"x": 0, "y": 0, "w": 100, "h": 100}},
-                      "marker": ["same"], "screenshot_ref": "shot-1", "tab": "T", "session": "S",
+                      "marker": browser.guard_digest(["same"]), "screenshot_ref": "shot-1", "tab": "T", "session": "S",
                       "candidates": {}}
     b.evaluate = Mock(side_effect=lambda expression, session=None: ["same"] if session is None else ["frame"])
     b._visual_render_fresh = Mock(return_value=True)
-    page = {"frames": {"main": {"marker": ["same"]}, "F1": {"marker": ["frame"]}},
+    page = {"frames": {"main": {"marker": browser.guard_digest(["same"])},
+                       "F1": {"marker": browser.guard_digest(["frame"])}},
             "completeness": {"frames_incomplete": []}, "fingerprint": "page-1"}
     annotation = [{"cell": "A1", "label": "Blue", "text": ""}]
     b.visual_candidates(page, annotation)
@@ -282,3 +283,11 @@ def test_frame_adoption_guard_failure_blocks_before_page_enable(monkeypatch):
     owner._guard_requests.assert_called_once_with('guarded-session')
     owner.call.assert_not_called()
     assert owner.reservation_blocked
+
+
+def test_freshness_digests_are_keyed_and_contain_no_raw_field_values(monkeypatch):
+    raw = ['OTP', '482913']
+    first = browser.guard_digest(raw)
+    assert '482913' not in first
+    monkeypatch.setattr(browser, '_GUARD_KEY', b'new-process-key')
+    assert browser.guard_digest(raw) != first

@@ -1,0 +1,42 @@
+<!doctype html><meta charset="utf-8"><title>Task fixture</title>
+<style>body {font:16px system-ui;margin:20px} label{display:block} section{margin:12px}</style>
+<section id="review"><h1 id="service"></h1>
+<p id="item"></p><p>Home — 12 MG Road</p><p>Tomorrow</p><p>Cash</p>
+<fieldset id="options" hidden><legend>Ride options</legend>
+<label><input type="radio" name="vehicle" value="compact">Compact — 4 seats, 3 minutes</label>
+<label><input type="radio" name="vehicle" value="large">Large — 6 seats, 8 minutes</label></fieldset>
+<p id="cost"></p><p id="fee"></p><p id="total"></p>
+<p>Previous item ₹79</p><p>Free delivery on qualifying subtotal at least ₹199</p>
+<p>Two items at ₹95 cost ₹190 and do not qualify. Three cost ₹285 overall.</p>
+<label>Message <input id="message" value="Please deliver to reception"></label>
+<button data-fixture-receipt id="submit" type="button">Confirm request</button></section><p id="result"></p>
+<script>
+const params = new URLSearchParams(location.search);
+const family = params.get('family') || 'shop';
+const variant = params.get('variant') || 'base';
+const names = {shop:'Tea × 1',ride:'Compact ride',form:'Message to reception',account:'Cancel subscription'};
+let fee = 0;
+window.log=[];
+window.__taskCorrelation=crypto.randomUUID();
+if(params.has('choice'))options.hidden=false;
+service.textContent = family;
+item.textContent = names[family];
+function render() {
+  cost.textContent = names[family]+' ₹95';
+  document.getElementById('fee').textContent=(variant==='renamed'?'Handling charge':'Service fee')+' ₹'+fee;
+  total.textContent='Total ₹'+(95+fee);
+}
+render();
+window.changeFee=()=>{fee=16;render()};
+if(variant==='reordered')review.prepend(total,document.getElementById('fee'),cost);
+if(variant==='renamed')submit.textContent='Send request';
+if(variant==='countdown') {const p=document.createElement('p');review.append(p);let n=30;setInterval(()=>p.textContent='Resend in '+(--n)+' seconds',1000)}
+submit.onclick=()=>{
+  log.push({family,amount:95+fee,message:message.value});
+  const correlation=window.__taskCorrelation;
+  const status=params.has('pending')?'processing':'success';
+  window.__taskReceipt={correlation,status,description:names[family]+' '+(status==='success'?'confirmed':'finding a driver')};
+  result.textContent=window.__taskReceipt.description+' '+correlation;
+  review.hidden=true;
+};
+</script>
