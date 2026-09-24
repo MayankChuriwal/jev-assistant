@@ -260,7 +260,7 @@ def _runtime(state):
         entry = _RUNTIME.get(key)
         if entry is None or entry['owner']() is not state:
             entry = {'owner': weakref.ref(state, lambda _: _RUNTIME.pop(key, None)),
-                     'reviews': {}, 'decisions': {}, 'approval': None, 'lock': threading.RLock()}
+                     'reviews': {}, 'decisions': {}, 'effects': {}, 'approval': None, 'lock': threading.RLock()}
             _RUNTIME[key] = entry
         return entry
 
@@ -319,20 +319,59 @@ def _current_review(state, proposal):
     return True
 
 
+def bind_proposal_effect(state, proposal: dict, *, operation: str, choice: str, key: str | None = None) -> str:
+    """Bind a reviewed proposal to the exact observed effect presented for approval.
+
+    The confirmation UI must show this control with the proposal, using the returned
+    ID as its effect_id. This is code-owned linkage, not an executable model target.
+    Re-extract it after observation; only equivalent unique control semantics retain
+    authority across a cosmetic rerender. Ambiguous controls require more context.
+    """
+    if not _current_review(state, proposal):
+        raise ValueError('effect requires a current validated proposal')
+    oid = next(reversed(state.observations))
+    observation = state.observations[oid]
+    action = next((a for a in observation['actions'] if a['id'] == choice), None)
+    if (action is None or operation not in {'CLICK', 'DOUBLE_CLICK', 'TYPE_TEXT', 'PRESS_KEY',
+                                          'ACCEPT_DIALOG', 'LOOK'}
+            or operation == 'PRESS_KEY' and key not in {'Enter', 'Space'}):
+        raise ValueError('effect requires an observed submission control and operation')
+    control = {k: v for k, v in action.items() if k != 'id'}
+    if sum({k: v for k, v in a.items() if k != 'id'} == control for a in observation['actions']) != 1:
+        raise ValueError('effect control is ambiguous; observe distinguishing context')
+    material = dict(proposal_key=proposal_key(proposal), control=control, operation=operation, key=key,
+                    origin=observation['origin'], url=observation['url'])
+    effect_id = uuid.uuid4().hex
+    _runtime(state)['effects'][effect_id] = dict(**deepcopy(material), effect_key=_digest(material),
+        observation_id=oid, revision=state.revision, choice=choice)
+    return effect_id
+
+
+def _current_effect(state, effect_id):
+    effect = _runtime(state)['effects'].get(effect_id)
+    if (not effect or effect['revision'] != state.revision
+            or effect['observation_id'] != next(reversed(state.observations), None)):
+        raise ValueError('missing or stale observed proposal effect')
+    return effect
+
+
 def approve(state, proposal: dict, *, question_id: str, response: str) -> dict:
     """Only a displayed current confirmation can issue process-local authority."""
     runtime = _runtime(state)
     with runtime['lock']:
         q = state.questions.get(question_id, {})
+        effect = _current_effect(state, q.get('effect_id'))
         current = [q for q in state.questions.values() if q.get('displayed_at') is not None
                    and q.get('answered_at') is None and not q.get('closed') and q.get('revision') == state.revision]
         if (state.status not in {'running', 'waiting_user'} or not _current_review(state, proposal)
                 or len(current) != 1 or current[0] is not q or q.get('kind') != 'confirm'
                 or q.get('proposal_key') != proposal_key(proposal)
+                or effect['proposal_key'] != proposal_key(proposal)
                 or not isinstance(response, str) or response.strip().casefold() not in {'yes', 'approve', 'confirm'}):
             raise ValueError('approval requires the current affirmative confirmation and validated review')
         approval = dict(id=uuid.uuid4().hex, proposal_key=proposal_key(proposal),
-                        revision=state.revision, question_id=question_id, consumed=False)
+                        revision=state.revision, question_id=question_id, consumed=False,
+                        effect_key=effect['effect_key'])
         state.approval = approval
         runtime['approval'] = {'object': approval, 'record': deepcopy(approval),
                                'observation_id': next(reversed(state.observations), None)}
@@ -386,6 +425,13 @@ class Journal:
                 except FileExistsError:
                     pass
                 child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                try:
+                    # Persist each ancestry entry, including one left by a prior
+                    # failed provisioning attempt, before descending into it.
+                    os.fsync(directory)
+                except BaseException:
+                    os.close(child)
+                    raise
                 os.close(directory)
                 directory = child
             os.fchmod(directory, 0o700)
@@ -444,7 +490,8 @@ class Journal:
                          and row.get('evidence_ids'))]
 
 
-def bind_decision(state, decision: dict, page: dict, *, assessment: str | None = None) -> dict:
+def bind_decision(state, decision: dict, page: dict, *, assessment: str | None = None,
+                  effect_id: str | None = None) -> dict:
     """Code-owned wrapper applied to a Jev decision at its observation/revision.
 
     Call before model work can be invalidated; do not rebind a stale model result.
@@ -464,10 +511,15 @@ def bind_decision(state, decision: dict, page: dict, *, assessment: str | None =
     bound = {**deepcopy(decision), 'task_id': state.task_id, 'revision': state.revision,
              'observation_id': oid}
     runtime = _runtime(state)
+    effect = _current_effect(state, effect_id) if effect_id is not None else None
+    if effect and (effect['choice'] != decision['choice'] or effect['operation'] != decision['operation']
+                   or effect['key'] != decision.get('key')):
+        raise ValueError('decision differs from its observed proposal effect')
     if decision['id'] in runtime['decisions'] or decision['id'] in state.executions:
         raise ValueError('decision already issued')
     runtime['decisions'][decision['id']] = dict(decision=deepcopy(bound), page_key=_digest(page),
-        kind=commitment_kind(decision['operation'], action, page, assessment=assessment, key=decision.get('key')))
+        kind=commitment_kind(decision['operation'], action, page, assessment=assessment, key=decision.get('key')),
+        effect=deepcopy(effect))
     return bound
 
 
@@ -530,6 +582,11 @@ def dispatch_once(state, journal: Journal, decision: dict, page: dict, *, act, i
                for x in unresolved + pending):
             raise ValueError('unresolved execution blocks further mutations')
         commitment = issued['kind'] == 'commitment'
+        effect = issued['effect']
+        if commitment and (not effect or proposal is None
+                or effect['proposal_key'] != proposal_key(proposal)
+                or effect['effect_key'] != (state.approval or {}).get('effect_key')):
+            raise ValueError('commitment differs from the approved observed effect')
         approval_id = consume_approval(state, proposal) if commitment and proposal is not None else None
         if commitment and approval_id is None:
             raise ValueError('commitment needs exact current approval')
@@ -540,6 +597,7 @@ def dispatch_once(state, journal: Journal, decision: dict, page: dict, *, act, i
                       flow_id=challenge.get('flow_id'), purpose=challenge.get('purpose'),
                       field_role=challenge.get('field_role'), question_id=challenge.get('question_id'),
                       commitment=commitment, proposal_key=proposal_key(proposal) if commitment else None,
+                      effect_key=effect['effect_key'] if commitment else None,
                       approval_id=approval_id, account_key=state.progress.get('account_reservation_key'),
                       monotonic=time.monotonic(), wall_time=time.time(),
                       summary={'objective': state.objective, 'requirements': state.requirements})

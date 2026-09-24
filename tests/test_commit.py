@@ -313,18 +313,19 @@ def test_item_price_and_destination_cannot_keep_old_proposal_approved():
 
 
 def confirmation(s, p):
-    from assistant.commit import proposal_key
+    from assistant.commit import bind_proposal_effect, proposal_key
+    effect_id = bind_proposal_effect(s, p, operation='CLICK', choice='e6')
     s.questions['q1'] = dict(id='q1', kind='confirm', revision=s.revision, displayed_at=1,
-                             answered_at=None, proposal_key=proposal_key(p))
+                             answered_at=None, proposal_key=proposal_key(p), effect_id=effect_id)
 
 
 def test_approval_requires_validated_review_and_current_affirmative_question():
     from assistant.commit import approve, can_commit, consume_approval
     s, page, p, x = review_fixture()
-    confirmation(s, p)
     with pytest.raises(ValueError):
         approve(s, p, question_id='q1', response='yes')
     validate_review(s, p, x)
+    confirmation(s, p)
     for response in ['no', 'yes but change address', 'maybe', '']:
         with pytest.raises(ValueError):
             approve(s, p, question_id='q1', response=response)
@@ -460,7 +461,8 @@ def test_commit_dispatch_consumes_once_and_restores_account_reservation(tmp_path
     approve(s, p, question_id='q1', response='yes')
     p = fresh_review(s, page, p, x)
     s.progress['account_reservation_key'] = 'site-account-opaque'
-    d = bind_decision(s, dict(id='d1', operation='CLICK', choice='e6'), page, assessment='preparation')
+    d = bind_decision(s, dict(id='d1', operation='CLICK', choice='e6'), page, assessment='preparation',
+                      effect_id=purchase_effect(s, p))
     j = Journal.create(tmp_path / 'journal', redact=lambda x: x)
     calls = []
     def act():
@@ -606,7 +608,8 @@ def test_only_scoped_payment_authentication_can_follow_an_executed_commitment(tm
     p = fresh_review(s, page, p, x)
     s.progress['account_reservation_key'] = 'reserved-account'
     j = Journal.create(tmp_path / 'private', redact=lambda x: x)
-    d = bind_decision(s, dict(id='purchase', operation='CLICK', choice='e6'), page, assessment='commitment')
+    d = bind_decision(s, dict(id='purchase', operation='CLICK', choice='e6'), page, assessment='commitment',
+                      effect_id=purchase_effect(s, p))
     dispatch_once(s, j, d, page, act=lambda: {}, is_fresh=lambda: True, interrupted=lambda: False, proposal=p)
     oid = observe_state(s, page)
     s.challenges['payment-otp'] = dict(id='payment-otp', revision=0, origin='https://shop.test',
@@ -656,3 +659,108 @@ def test_decision_cannot_bind_identical_content_from_another_origin():
     page['url'] = 'https://other.test/'
     with pytest.raises(ValueError):
         bind_decision(s, dict(id='d1', operation='CLICK', choice='e1'), page, assessment='preparation')
+
+
+@pytest.mark.parametrize("binding", ["missing", "delete_effect"])
+def test_purchase_approval_never_authorizes_delete_account(tmp_path, binding):
+    from assistant.commit import Journal, approve, bind_decision, bind_proposal_effect, dispatch_once
+    s, page, p, x = review_fixture()
+    page['actions'].append(dict(id='delete', kind='click', label='Delete account', role='button', node=20))
+    p = fresh_review(s, page, p, x)
+    confirmation(s, p)
+    approve(s, p, question_id='q1', response='yes')
+    p = fresh_review(s, page, p, x)
+    s.progress['account_reservation_key'] = 'reserved-account'
+    effect_id = (bind_proposal_effect(s, p, operation='CLICK', choice='delete')
+                 if binding == 'delete_effect' else None)
+    d = bind_decision(s, dict(id='delete-decision', operation='CLICK', choice='delete'), page,
+                      assessment='commitment', effect_id=effect_id)
+    j = Journal.create(tmp_path / 'private', redact=lambda value: value)
+    calls = []
+    with pytest.raises(ValueError):
+        dispatch_once(s, j, d, page, act=lambda: calls.append(1) or {}, is_fresh=lambda: True,
+                      interrupted=lambda: False, proposal=p)
+    assert calls == [] and not s.approval['consumed'] and not j.records()
+
+
+@pytest.mark.parametrize('fail_parent_sync', [False, True])
+def test_new_journal_ancestors_are_durable_before_dispatch(tmp_path, monkeypatch, fail_parent_sync):
+    import os
+
+    from assistant.commit import Journal, dispatch_once
+    s, page, _ = observed()
+    d = bound(s, page)
+    j = Journal(tmp_path / 'new' / 'nested' / 'j.jsonl', redact=lambda value: value)
+    mkdir, fsync = os.mkdir, os.fsync
+    pending, events = set(), []
+    def make(path, mode=0o777, *, dir_fd=None):
+        mkdir(path, mode, dir_fd=dir_fd)
+        inode = os.fstat(dir_fd).st_ino
+        pending.add(inode)
+        events.append(('mkdir', path, inode))
+    def sync(fd):
+        inode = os.fstat(fd).st_ino
+        if inode in pending:
+            events.append(('parent_sync', inode))
+            if fail_parent_sync:
+                raise OSError('parent directory sync failed')
+            pending.remove(inode)
+        fsync(fd)
+    monkeypatch.setattr(os, 'mkdir', make)
+    monkeypatch.setattr(os, 'fsync', sync)
+    calls = []
+    def act():
+        calls.append(1)
+        assert not pending, events
+        return {}
+    kwargs = dict(act=act, is_fresh=lambda: True, interrupted=lambda: False)
+    if fail_parent_sync:
+        with pytest.raises(OSError, match='parent directory sync failed'):
+            dispatch_once(s, j, d, page, **kwargs)
+        assert calls == []
+    else:
+        result = dispatch_once(s, j, d, page, **kwargs)
+        assert result['status'] == 'executed' and calls == [1]
+        assert [event[0] for event in events] == ['mkdir', 'parent_sync', 'mkdir', 'parent_sync']
+
+
+def purchase_effect(s, p):
+    from assistant.commit import bind_proposal_effect
+    return bind_proposal_effect(s, p, operation='CLICK', choice='e6')
+
+
+@pytest.mark.parametrize('invalid', ['wrong_target', 'wrong_operation', 'stale_observation'])
+def test_observed_effect_cannot_be_rebound_to_another_decision(invalid):
+    from assistant.commit import bind_decision, bind_proposal_effect
+    s, page, p, x = review_fixture()
+    validate_review(s, p, x)
+    effect_id = bind_proposal_effect(s, p, operation='CLICK', choice='e6')
+    decision = dict(id='effect-bound', operation='CLICK', choice='e6')
+    if invalid == 'wrong_target':
+        decision['choice'] = 'e1'
+    if invalid == 'wrong_operation':
+        decision['operation'] = 'DOUBLE_CLICK'
+    if invalid == 'stale_observation':
+        fresh_review(s, page, p, x)
+    with pytest.raises(ValueError):
+        bind_decision(s, decision, page, assessment='commitment', effect_id=effect_id)
+
+
+def test_same_approved_effect_survives_a_cosmetic_target_id_change(tmp_path):
+    from assistant.commit import Journal, approve, bind_decision, bind_proposal_effect, dispatch_once
+    s, page, p, x = review_fixture()
+    validate_review(s, p, x)
+    confirmation(s, p)
+    approve(s, p, question_id='q1', response='yes')
+    page['actions'][5]['id'] = 'new-pay-id'
+    p = fresh_review(s, page, p, x)
+    effect_id = bind_proposal_effect(s, p, operation='CLICK', choice='new-pay-id')
+    d = bind_decision(s, dict(id='new-decision', operation='CLICK', choice='new-pay-id'), page,
+                      assessment='commitment', effect_id=effect_id)
+    s.progress['account_reservation_key'] = 'reserved'
+    j = Journal.create(tmp_path / 'private', redact=lambda value: value)
+    calls = []
+    r = dispatch_once(s, j, d, page, act=lambda: calls.append(1) or {}, is_fresh=lambda: True,
+                      interrupted=lambda: False, proposal=p)
+    assert r['status'] == 'executed' and calls == [1]
+    assert r['effect_key'] == s.approval['effect_key']
