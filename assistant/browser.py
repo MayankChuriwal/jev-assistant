@@ -663,7 +663,8 @@ class Browser:
                     and grid["tab"] == self.active and grid["session"] == self.session
                     and not page.get("completeness", {}).get("frames_incomplete")
                     and page.get("frames", {}).get("main", {}).get("marker") == grid["marker"]
-                    and self.evaluate(MARKER) == grid["marker"])
+                    and self.evaluate(MARKER) == grid["marker"]
+                    and self._visual_render_fresh(grid) and self._visual_frames_fresh(grid))
         # Node actions compare their own target; anything else compares only its own document, so a ticking
         # third-party frame (chat widget, ad) never makes the rest of the page stale.
         try:
@@ -750,31 +751,65 @@ class Browser:
 
     def grid_screenshot(self, region=None, columns=8, rows=6, masked=(), scale=1, hide=()):
         """(PNG of the viewport or `region` under a labelled grid, the grid's cells in viewport coordinates)."""
+        self._visual_grid = None
         width, height, sx, sy = self.evaluate("[innerWidth, innerHeight, scrollX, scrollY]")
         region = region or {"x": 0, "y": 0, "w": width, "h": height}
         cells = rules.grid(region, columns, rows)
+        masked, hide = tuple(masked), tuple(hide)
+        # Capture the unobstructed pixels on both sides of the grid capture. A changing page cannot produce a
+        # candidate tied to an image that already differs from what the model saw.
+        clip = {"x": region["x"] + sx, "y": region["y"] + sy, "width": region["w"], "height": region["h"],
+                "scale": scale}
+        before = self._render_hash(clip, masked, hide)
         self.evaluate(f"({GRID})({json.dumps(cells)})")
         try:
             # Cells stay in viewport coordinates, where clicks land; the capture's clip is in page coordinates.
-            clip = {"x": region["x"] + sx, "y": region["y"] + sy, "width": region["w"], "height": region["h"],
-                    "scale": scale}
             image = self.screenshot(masked=masked, clip=clip, hide=hide)
         finally:
             self.evaluate(f"({GRID})(null)")
+        after = self._render_hash(clip, masked, hide)
+        if before != after:
+            raise StalePage("Screenshot changed during capture. Observe again.")
         self._visual_grid = {"screenshot_ref": uuid.uuid4().hex, "cells": cells,
                              "marker": self.evaluate(MARKER), "tab": self.active, "session": self.session,
-                             "candidates": {}}
+                             "candidates": {}, "render_hash": after, "clip": clip,
+                             "masked": masked, "hide": hide}
         return image, cells
+
+    def _render_hash(self, clip, masked, hide):
+        image = self.screenshot(masked=masked, clip=clip, hide=hide)
+        return hashlib.sha256(base64.b64decode(image)).digest()
+
+    def _visual_render_fresh(self, grid):
+        try:
+            return self._render_hash(grid["clip"], grid["masked"], grid["hide"]) == grid["render_hash"]
+        except (StalePage, RuntimeError, TimeoutError):
+            return False
+
+    def _visual_frames_fresh(self, grid):
+        try:
+            return all(self.evaluate(MARKER, self._session_for(fid)) == marker
+                       for fid, marker in grid["frame_markers"].items())
+        except (StalePage, RuntimeError, TimeoutError):
+            return False
 
     def visual_candidates(self, page: dict, annotations: list[dict]) -> list[dict]:
         """Annotate supplied grid cells. Geometry and hit targets come only from the captured grid and live DOM."""
         grid = getattr(self, "_visual_grid", None)
         if (grid is None or grid["tab"] != self.active or grid["session"] != self.session or
                 page.get("frames", {}).get("main", {}).get("marker") != grid["marker"] or
-                self.evaluate(MARKER) != grid["marker"]):
+                self.evaluate(MARKER) != grid["marker"] or not self._visual_render_fresh(grid)):
             raise StalePage("Screenshot no longer matches this observation. Observe again.")
         if page.get("completeness", {}).get("frames_incomplete"):
             raise StalePage("A frame was incomplete. Observe again before interpreting the screenshot.")
+        if "frame_markers" not in grid:
+            try:
+                grid["frame_markers"] = {fid: self.evaluate(MARKER, self._session_for(fid))
+                                         for fid in page["frames"] if fid != "main"}
+            except (StalePage, RuntimeError, TimeoutError):
+                raise StalePage("A frame changed during screenshot interpretation. Observe again.") from None
+        elif not self._visual_frames_fresh(grid):
+            raise StalePage("A frame changed since this screenshot. Observe again.")
         if not isinstance(annotations, list):
             raise ValueError("Visual annotations must be a list of supplied cells.")
         candidates = []
@@ -810,6 +845,10 @@ class Browser:
                 grid["tab"] != self.active or grid["session"] != self.session or
                 action.get("rect") != saved["rect"] or self.evaluate(MARKER) != grid["marker"]):
             raise StalePage("Visual target is stale. Observe again.")
+        if not self._visual_render_fresh(grid):
+            raise StalePage("Visual target's screenshot changed. Observe again.")
+        if not self._visual_frames_fresh(grid):
+            raise StalePage("Visual target's frame changed. Observe again.")
         x, y = rules.centre(saved["rect"])
         hit = self.evaluate(f"(() => {{ const e=document.elementFromPoint({x}, {y});"
                             "return e ? window.__jevFast?.ids.get(e) ?? null : null; })()")

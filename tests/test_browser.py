@@ -333,3 +333,15 @@ def test_truncated_observation_reports_omissions(browser_at):
     assert len(codes) == 2
     assert {a["context"]["form"] for a in codes} == {"Login", "Payment"}
     assert {a["context"]["placeholder"] for a in codes} == {"Login code", "Payment code"}
+
+
+def test_identically_labeled_fields_have_distinct_jev_context(browser_at):
+    from assistant.model import action_space, criteria
+
+    page = browser_at("/reliability.html").observe()
+    elements, heads, _controls = action_space(page["actions"])
+    codes = [e for e in elements if e["label"].startswith("Code")]
+    assert len(codes) == 2
+    descriptions = criteria(heads["type_text_target"])
+    assert "form: Login" in descriptions[codes[0]["index"]]["element"]
+    assert "form: Payment" in descriptions[codes[1]["index"]]["element"]

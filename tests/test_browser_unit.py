@@ -189,6 +189,7 @@ def test_visual_candidates_reject_unknown_cells_coordinates_and_incomplete_frame
                       "marker": ["same"], "screenshot_ref": "shot-1", "tab": "T", "session": "S",
                       "candidates": {}}
     b.evaluate = Mock(side_effect=lambda expression: ["same"] if expression == browser.MARKER else 42)
+    b._visual_render_fresh = Mock(return_value=True)
     page = {"frames": {"main": {"marker": ["same"]}},
             "completeness": {"frames_incomplete": []}, "fingerprint": "page-1"}
     with pytest.raises(ValueError, match="cell"):
@@ -199,3 +200,20 @@ def test_visual_candidates_reject_unknown_cells_coordinates_and_incomplete_frame
         b.visual_candidates({**page, "completeness": {"frames_incomplete": ["F1"]}},
                             [{"cell": "A1", "label": "Blue", "text": ""}])
     assert b.visual_candidates(page, [{"cell": "A1", "label": "Blue", "text": ""}])[0]["visual_ref"] == "shot-1"
+
+
+def test_visual_reannotation_cannot_refresh_an_existing_frame_baseline():
+    b = bare()
+    b.frames["F1"] = {"session": "FS"}
+    b._visual_grid = {"cells": {"A1": {"x": 0, "y": 0, "w": 100, "h": 100}},
+                      "marker": ["same"], "screenshot_ref": "shot-1", "tab": "T", "session": "S",
+                      "candidates": {}}
+    b.evaluate = Mock(side_effect=lambda expression, session=None: ["same"] if session is None else ["frame"])
+    b._visual_render_fresh = Mock(return_value=True)
+    page = {"frames": {"main": {"marker": ["same"]}, "F1": {"marker": ["frame"]}},
+            "completeness": {"frames_incomplete": []}, "fingerprint": "page-1"}
+    annotation = [{"cell": "A1", "label": "Blue", "text": ""}]
+    b.visual_candidates(page, annotation)
+    b.evaluate = Mock(side_effect=lambda expression, session=None: ["same"] if session is None else ["changed"])
+    with pytest.raises(StalePage, match="frame"):
+        b.visual_candidates(page, annotation)

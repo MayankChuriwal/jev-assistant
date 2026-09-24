@@ -282,9 +282,10 @@ def test_captures_follow_a_scrolled_page(browser_at, monkeypatch):
     _image, cells = b.grid_screenshot()
     b.grid_screenshot(region=cells["C4"], columns=4, rows=4, scale=2)
     b.screenshot(find(page, "Pin", "drag"))
-    assert clips[0]["y"] == 300 and clips[1]["y"] == cells["C4"]["y"] + 300
+    assert len(clips) == 7  # each grid capture checks ungridded pixels before and after
+    assert clips[0]["y"] == 300 and clips[3]["y"] == cells["C4"]["y"] + 300
     pin_top = b.evaluate("document.getElementById('pin').getBoundingClientRect().top + scrollY")
-    assert abs(clips[2]["y"] + 16 - pin_top) <= 2  # the crop sits on the element, not a scroll's height above it
+    assert abs(clips[6]["y"] + 16 - pin_top) <= 2  # the crop sits on the element, not a scroll's height above it
 
 
 @pytest.mark.browser
@@ -301,7 +302,7 @@ def test_captures_hide_the_users_details_shown_as_text(browser_at, monkeypatch):
 
     monkeypatch.setattr(b, "call", spy)
     b.grid_screenshot(hide=["Mayank Churiwal", "+91 98765 43210", "9876543210"])
-    assert seen == ["blur(12px)"] and b.evaluate("document.getElementById('out').style.filter") == ""
+    assert seen == ["blur(12px)"] * 3 and b.evaluate("document.getElementById('out').style.filter") == ""
 
 
 @pytest.mark.browser
@@ -365,3 +366,53 @@ def test_visual_candidates_join_jev_indexed_targets():
     assert elements == [{"index": "1", "label": "Blue button", "operations": [
         "CLICK", "DOUBLE_CLICK", "RIGHT_CLICK", "HOVER"], "visual": True}]
     assert heads["click_target"]["1"] is visual
+
+
+@pytest.mark.browser
+def test_canvas_repaint_invalidates_visual_candidate_without_dom_change(browser_at):
+    b = browser_at("/look.html")
+    page = b.observe()
+    rect = b.evaluate("(() => {const r=document.getElementById('board').getBoundingClientRect();"
+                      "return {x:r.x,y:r.y,w:r.width,h:r.height}})()")
+    b.grid_screenshot(region=rect, columns=1, rows=1)
+    target = b.visual_candidates(page, [{"cell": "A1", "label": "Board", "text": ""}])[0]
+    b.evaluate("(() => {const ctx2=document.getElementById('board').getContext('2d');"
+               "ctx2.fillStyle='yellow';ctx2.fillRect(0,0,600,300)})()")
+    assert b.evaluate("document.getElementById('board').isConnected")
+    with pytest.raises(StalePage):
+        b.act("CLICK", target, page)
+    assert log(b) == []
+
+
+@pytest.mark.browser
+def test_frame_repaint_invalidates_visual_candidate_without_main_dom_change(browser_at):
+    from helpers import observe_until
+
+    b = browser_at("/pay.html")
+    page = observe_until(b, lambda p: any(a.get("frame") for a in p["actions"]))
+    fid = next(a["frame"] for a in page["actions"] if a.get("frame"))
+    rect = b.evaluate("(() => {const r=document.querySelector('iframe').getBoundingClientRect();"
+                      "return {x:r.x,y:r.y,w:r.width,h:r.height}})()")
+    b.grid_screenshot(region=rect, columns=1, rows=1)
+    target = b.visual_candidates(page, [{"cell": "A1", "label": "Payment frame", "text": ""}])[0]
+    b.evaluate("document.documentElement.style.filter='invert(1)'", b.frames[fid]["session"])
+    with pytest.raises(StalePage):
+        b.act("CLICK", target, page)
+    assert log(b) == []
+
+
+@pytest.mark.browser
+def test_frame_semantics_invalidate_visual_candidate_even_when_pixels_match(browser_at):
+    from helpers import observe_until
+
+    b = browser_at("/pay.html")
+    page = observe_until(b, lambda p: any(a.get("frame") for a in p["actions"]))
+    fid = next(a["frame"] for a in page["actions"] if a.get("frame"))
+    rect = b.evaluate("(() => {const r=document.querySelector('iframe').getBoundingClientRect();"
+                      "return {x:r.x,y:r.y,w:r.width,h:r.height}})()")
+    b.grid_screenshot(region=rect, columns=1, rows=1)
+    target = b.visual_candidates(page, [{"cell": "A1", "label": "Payment frame", "text": ""}])[0]
+    b.evaluate("document.querySelector('button').setAttribute('aria-label','Different action')",
+               b.frames[fid]["session"])
+    assert not b.fresh(page, target)
+    assert log(b) == []

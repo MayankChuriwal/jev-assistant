@@ -104,7 +104,7 @@ def action_space(actions):
                    else ("visual", action["visual_ref"], action["id"]))
             if key not in indices:
                 indices[key] = str(len(elements) + 1)
-                keys = ("role", "value", "checked", "selected", "expanded", "popup")
+                keys = ("role", "value", "checked", "selected", "expanded", "popup", "context")
                 element = {k: action[k] for k in keys if k in action}
                 element.update(index=indices[key], label=action["label"].split(" → ")[0], operations=[])
                 if action.get("visual_ref"):
@@ -137,9 +137,18 @@ def action_space(actions):
 
 
 def criteria(candidates):
+    def description(index, action):
+        indexed = action.get("node") is not None or action.get("visual_ref")
+        label = f"[{index}] {action['label']}" if indexed else action["label"]
+        context = action.get("context") or {}
+        details = [f"{name}: {context[field][:80]}" for field, name in (
+            ("form", "form"), ("section", "section"), ("placeholder", "placeholder"), ("field_role", "role"))
+                   if isinstance(context.get(field), str) and context[field]]
+        return f"{label} ({'; '.join(details)})" if details else label
+
     return {
         index: {
-            "element": f"[{index}] {a['label']}" if a.get("node") is not None or a.get("visual_ref") else a["label"],
+            "element": description(index, a),
             "current_value": a.get("current_value", a.get("value", "")),
             **{k: a[k] for k in ("role", "checked", "selected", "expanded", "popup", "current") if k in a},
         }
