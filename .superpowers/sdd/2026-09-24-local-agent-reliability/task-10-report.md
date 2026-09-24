@@ -36,3 +36,17 @@ Implemented bounded progress/recovery and full-input field cache validity. Exist
 - Pass a stable stalled objective and semantic state to begin_recovery; do not substitute question wording or a recovery's proposed new objective for the original stalled objective. A duplicate approach returns false without granting browser authority. Jev still chooses every operation and target.
 - Keep one FieldCache per task; pass the complete sanitized helper payload. Resolve raw secrets only through SecretStore. After freshness checks, call consume BEFORE dispatch and retain it consumed for uncertain results. Retain the existing execution/outcome gate so a changed helper key cannot authorize an uncertain mutation retry. Clear cache on terminal cleanup; do not serialize it.
 - A changed observation alone intentionally does not invalidate field values if the complete semantic helper input and task/challenge binding remain equivalent. Callers must remove volatile observation IDs from the helper request itself only if they are not helper inputs; this cache never silently drops payload fields.
+
+## Review corrections — recovery episodes and transition identity
+
+Addressed both Important review findings with regressions before implementation.
+
+- Recovery history no longer serves as the unsuccessful-attempt count for later stalls. Validated meaningful progress settles the current episode, retains its active context/attempts in `recovery_settled` diagnostics, and clears the episode's recovery counts. An approach that previously produced progress can be used again in a later independent stall without duplicate rejection or premature blocking. Without validated progress, the existing two-approach limit remains enforced.
+- `record_progress_change` now **requires `transition_id`**, a stable code-owned field/execution identity or semantic transition identity. Progress deduplication binds revision, kind, origin and that identity rather than generic evidence wording. Distinct shipping/billing acceptances with identical `Saved` evidence count separately; repeated observation/citation of the same transition does not count again. Citation provenance and semantic registration remain necessary.
+- Integration update: owning gates must supply the same transition ID when re-observing an event, and a distinct ID only for a distinct validated event. Do not generate transition IDs per observation/citation or accept arbitrary model-generated nonces. For an accepted field, bind its semantic field identity and execution identity. This supersedes the earlier quote-identity deduplication description.
+
+RED: `uv run pytest tests/test_state.py -q` produced **2 failed, 36 passed**. The successful-recovery regression was rejected as a duplicate on a later stall; the distinct acceptance regression exposed the absent transition identity API.
+
+GREEN: `uv run pytest tests/test_state.py tests/test_coordinator.py tests/test_interaction.py -q` produced **168 passed**. `uv run ruff check .` passed. Full validation results are recorded below.
+
+Review-fix full checks: `uv run pytest` **689 passed, 93 deselected** (10.12s); `uv run pytest -m browser` **93 passed, 689 deselected** (64.85s); both JavaScript syntax checks and `git diff --check` passed. No paid APIs were called.

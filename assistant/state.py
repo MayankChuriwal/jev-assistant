@@ -287,17 +287,23 @@ def _current_progress_evidence(state, evidence_ids):
     return records
 
 
-def record_progress_change(state: TaskState, *, kind: str, evidence_ids: tuple[str, ...]) -> None:
+def record_progress_change(state: TaskState, *, kind: str, evidence_ids: tuple[str, ...],
+                           transition_id: str) -> None:
     """Register an already validated semantic change, never just a new observation.
 
     The loop calls this after acceptance/auth/outcome gates or a validated semantic
     assessment. Citations prove provenance, not relevance; callers must establish
-    the stated change. Raw assessment summaries are deliberately not registered.
+    the stated change. ``transition_id`` is a stable code-owned field/execution or
+    semantic-transition identity, reused when observing the same event again. It
+    must not be a new observation/citation ID or model-invented nonce. Raw
+    assessment summaries are deliberately not registered.
     """
     import re
 
     if kind not in PROGRESS_KINDS:
         raise ValueError('unknown progress change kind')
+    if not isinstance(transition_id, str) or not transition_id.strip() or len(transition_id) > 512:
+        raise ValueError('progress change requires a stable transition identity')
     records = _current_progress_evidence(state, evidence_ids)
     timer = re.compile(r'\b(?:resend|retry|expires?|remaining)(?:\s+in)?\s+\d+\s*(?:seconds?|secs?|s)\b', re.I)
     if any(e['kind'] == 'visual-observation' or not timer.sub('', e['quote']).strip(' .,:;')
@@ -305,8 +311,7 @@ def record_progress_change(state: TaskState, *, kind: str, evidence_ids: tuple[s
         raise ValueError('progress evidence cannot be a timer or screenshot alone')
     registered = state.progress.setdefault('changes', {})
     for e in records:
-        registered[e['id']] = {'kind': kind, 'identity': [state.revision, kind, e['origin'],
-                                                        e['kind'], ' '.join(timer.sub('', e['quote']).split())]}
+        registered[e['id']] = {'kind': kind, 'identity': [state.revision, kind, e['origin'], transition_id]}
 
 
 def track_progress(state: TaskState, *, operation: str, semantic_state: str,
@@ -339,7 +344,14 @@ def track_progress(state: TaskState, *, operation: str, semantic_state: str,
     progress['checked_at'] = now
     if fresh:
         seen.extend(fresh)
-        progress.pop('active_recovery', None)
+        active = progress.pop('active_recovery', None)
+        if progress.get('recoveries'):
+            state.diagnostics.append({'kind': 'recovery_settled', 'at': now,
+                                      'active': active, 'approaches': progress['recoveries'],
+                                      'evidence_ids': list(change_evidence)})
+            # These counts belong to the stall episode, not task history. The
+            # diagnostics retain attempted approaches after meaningful progress.
+            progress['recoveries'] = {}
         progress.update(last_meaningful_change=now, non_wait_actions=0, cycles=[], wait_since=None)
         state.diagnostics.append({'kind': 'progress', 'evidence_ids': list(change_evidence), 'at': now})
         return 'continue'

@@ -224,14 +224,14 @@ def test_progress_needs_registered_current_nonreplayed_semantic_evidence():
     eid = cite(s, oid, 'Requested option available')
     with pytest.raises(ValueError, match='progress evidence'):
         track_progress(s, operation='LOOK', semantic_state='a', change_evidence=(eid,), now=0)
-    record_progress_change(s, kind='requested_options', evidence_ids=(eid,))
+    record_progress_change(s, kind='requested_options', evidence_ids=(eid,), transition_id='options:available')
     assert track_progress(s, operation='LOOK', semantic_state='a', change_evidence=(eid,), now=0) == 'continue'
     for now in range(1, 4):
         result = track_progress(s, operation='LOOK', semantic_state='a', change_evidence=(eid,), now=now)
     assert result == 'recover'
     fresh = observe_state(s, {'url': 'https://shop.test', 'text': 'Requested option available'})
     repeated = cite(s, fresh, 'Requested option available')
-    record_progress_change(s, kind='requested_options', evidence_ids=(repeated,))
+    record_progress_change(s, kind='requested_options', evidence_ids=(repeated,), transition_id='options:available')
     assert track_progress(s, operation='LOOK', semantic_state='a', change_evidence=(repeated,), now=4) == 'recover'
 
 
@@ -243,7 +243,7 @@ def test_countdown_and_screenshot_are_not_progress(text, kind):
     oid = observe_state(s, {'url': 'https://shop.test', 'text': text, 'screenshot': 'image'})
     eid = cite(s, oid, text, kind=kind)
     with pytest.raises(ValueError, match='progress evidence'):
-        record_progress_change(s, kind='relevant_content', evidence_ids=(eid,))
+        record_progress_change(s, kind='relevant_content', evidence_ids=(eid,), transition_id='result:available')
 
 
 def test_two_recovery_approaches_then_block_with_remaining_objective():
@@ -300,10 +300,50 @@ def test_stale_evidence_and_backwards_clock_cannot_reset_stall():
     s = TaskState('t1', 'Find result')
     oid = observe_state(s, {'url': 'https://shop.test', 'text': 'Result available'})
     eid = cite(s, oid, 'Result available')
-    record_progress_change(s, kind='relevant_content', evidence_ids=(eid,))
+    record_progress_change(s, kind='relevant_content', evidence_ids=(eid,), transition_id='result:available')
     track_progress(s, operation='WAIT', semantic_state='pending', change_evidence=(), now=10)
     with pytest.raises(ValueError, match='clock'):
         track_progress(s, operation='WAIT', semantic_state='pending', change_evidence=(), now=9)
     amend(s, 'Find another result', set())
     with pytest.raises(ValueError, match='stale'):
         track_progress(s, operation='LOOK', semantic_state='pending', change_evidence=(eid,), now=11)
+
+
+def test_validated_progress_settles_recovery_episode_without_losing_history():
+    from assistant.state import begin_recovery, record_progress_change, track_progress
+
+    s = TaskState('t1', 'Find requested option')
+    oid = observe_state(s, {'url': 'https://shop.test', 'text': 'No results. Requested option found'})
+    blocked = cite(s, oid, 'No results')
+    found = cite(s, oid, 'Requested option found')
+    approach = {'objective': 'Inspect region', 'reason': 'No results', 'evidence_ids': [blocked]}
+    assert begin_recovery(s, objective=s.objective, semantic_state='empty', recovery=approach)
+    record_progress_change(s, kind='requested_options', evidence_ids=(found,), transition_id='options:found')
+    assert track_progress(s, operation='LOOK', semantic_state='results', change_evidence=(found,), now=1) == 'continue'
+    # A later independent stall may reuse an approach that succeeded earlier.
+    assert begin_recovery(s, objective=s.objective, semantic_state='empty', recovery=approach)
+    assert begin_recovery(s, objective=s.objective, semantic_state='empty',
+                          recovery={**approach, 'objective': 'Resolve ambiguity'})
+    assert s.status == 'running'
+    assert any(d['kind'] == 'recovery' and d['approach'] == 'inspect region' for d in s.diagnostics)
+
+
+def test_identical_saved_toasts_bind_distinct_transitions_and_deduplicate_same_event():
+    from assistant.state import record_progress_change, track_progress
+
+    s = TaskState('t1', 'Save shipping and billing addresses')
+    for now, transition in enumerate(['shipping:execution-1', 'billing:execution-2']):
+        oid = observe_state(s, {'url': 'https://shop.test', 'text': 'Saved'})
+        eid = cite(s, oid, 'Saved')
+        record_progress_change(s, kind='accepted_input', evidence_ids=(eid,), transition_id=transition)
+        assert track_progress(s, operation='TYPE_TEXT', semantic_state='address-form',
+                              change_evidence=(eid,), now=now) == 'continue'
+        assert s.progress['last_meaningful_change'] == now
+    # Fresh observations of the same billing acceptance are not new progress.
+    for now in range(2, 5):
+        oid = observe_state(s, {'url': 'https://shop.test', 'text': 'Saved'})
+        eid = cite(s, oid, 'Saved')
+        record_progress_change(s, kind='accepted_input', evidence_ids=(eid,), transition_id='billing:execution-2')
+        result = track_progress(s, operation='LOOK', semantic_state='address-form', change_evidence=(eid,), now=now)
+    assert result == 'recover'
+    assert s.progress['last_meaningful_change'] == 1
