@@ -191,3 +191,22 @@ def visual_annotations(state, page, image, cells):
     from .coordinator import annotate_visual
 
     return annotate_visual(state, page, image, cells, client=text_json)
+
+
+def review_proposal(state, proposal):
+    """Staged strict review job. Legacy confirm_card callers migrate in Task 11/12.
+
+    Takes a coordinator proposal and extracts original observed amount text; it
+    never invents fee lines, changes baskets or requests browser operations.
+    """
+    from .commit import validate_review
+    from .coordinator import _redact, _validate_proposal
+    from .questions import REVIEW_AMOUNTS
+
+    _validate_proposal(state, proposal)
+    if not state.observations:
+        raise ValueError("review: observation required")
+    observation = next(reversed(state.observations.values()))
+    output, metadata = text_json(REVIEW_AMOUNTS, _redact({"proposal": proposal,
+                                 "observation": observation}), max_tokens=4096)
+    return validate_review(state, proposal, _redact(output)), metadata

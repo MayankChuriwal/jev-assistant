@@ -358,7 +358,14 @@ def _validate_proposal(state, value):
         _evidence(state, line["evidence_ids"], "proposal.lines.evidence_ids")
     for line in value["lines"]:
         _reference(line["included_in"], ids - {line["id"]}, "proposal.lines.included_in", nullable=True)
-    # Arithmetic, extraction and permission belong to commit.py, not an assessment.
+    # Assessment validates arithmetic, but never grants approval. The staged jobs.review_proposal
+    # also binds the extracted amount strings to current rows before Task 11/12 presents a review.
+    if value["total_kind"] != "not_applicable":
+        from .commit import review_total
+
+        result = review_total(value["lines"], value["total_minor"], currency=value["currency"])
+        if not result["valid"]:
+            raise ValueError("proposal.breakdown: " + "; ".join(result["reasons"]))
 
 
 def assess(state: TaskState, page: dict, event: str, *, client=model.text_json) -> dict:

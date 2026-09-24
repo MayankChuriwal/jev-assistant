@@ -128,3 +128,34 @@ def test_login_otp_address_confirm_and_temporary_cvv_without_leaks(chrome, site,
         assert secret not in everything, secret
     assert not re.search(r"(?<!\d)123(?!\d)", everything)
     assert "[profile:phone]" in everything and "[secret:" in everything
+
+
+def test_expanded_cart_fee_is_required_in_validated_review(browser_at):
+    from helpers import find
+    from test_commit import review_fixture
+
+    from assistant.commit import validate_review
+    from assistant.state import cite, observe_state
+
+    browser = browser_at("/reliability.html?cart")
+    page = browser.observe()
+    assert "Rain fee ₹10" not in page["text"]
+    state, _, proposal, extraction = review_fixture()
+    oid = observe_state(state, page)
+    eid = cite(state, oid, page["text"])
+    proposal["evidence_ids"] = [eid]
+    for row in proposal["lines"]:
+        row["evidence_ids"] = [eid]
+    with pytest.raises(ValueError):
+        validate_review(state, proposal, extraction)
+    browser.act("CLICK", find(page, "Charge breakdown", "click"), page)
+    page = browser.observe()
+    assert "Rain fee ₹10" in page["text"]
+    oid = observe_state(state, page)
+    eid = cite(state, oid, page["text"])
+    proposal["evidence_ids"] = [eid]
+    for row in proposal["lines"]:
+        row["evidence_ids"] = [eid]
+    review = validate_review(state, proposal, extraction)
+    assert review["total_minor"] == 11000
+    assert review["lines"][1]["label"] == "Rain fee"

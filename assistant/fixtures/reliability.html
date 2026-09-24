@@ -17,9 +17,15 @@
   <button type="button" data-tile="A1">Tile A1</button>
   <button type="button" data-tile="B2">Tile B2</button>
 </section>
+<section id="cart" hidden>
+  <h2>Shop</h2><p>Home</p><p>Tomorrow</p><p>Visa ••1234</p>
+  <p>Tea × 2 ₹100</p><p>Total ₹110</p>
+  <details><summary>Charge breakdown</summary><p>Rain fee ₹10</p></details>
+</section>
 <div id="controls"></div><div id="long"></div><iframe id="remote" title="Remote status"></iframe>
 <script>
   window.log = [];
+  if (location.search.includes('cart')) document.getElementById('cart').hidden = false;
   if (location.search.includes('captcha')) {
     document.getElementById('captcha').hidden = false;
     document.querySelectorAll('[data-tile]').forEach(button => {
