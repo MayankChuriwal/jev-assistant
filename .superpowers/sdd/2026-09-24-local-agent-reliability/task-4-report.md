@@ -43,3 +43,23 @@ No paid API calls, live-site tests, or everyday Chrome interaction. Browser test
 - Coordinator `apply_assessment` still does not apply requirements/notices: Task 11 must call the corresponding owners after validated assessment. This preserves Task 3's staging and existing callers.
 - `jobs.confirm_card` now preserves all returned charge lines, but it remains the legacy helper. Full arithmetic/material proposal verification belongs to Task 7 and rollout to Task 11. `messages.render` retains full option descriptions, splits long text before the actionable question, and preserves the supplied question ID. An existing long-label test was adjusted to allow the newly preserved label summary while still asserting text-first order and channel title limits.
 - Root instructions reference RTK.md, absent as confirmed by the parent. Read available AGENTS.md, both approved designs, Task 4 brief, and the TDD skill/reference. No task outside Task 4 was implemented and no live-reliability claim is made.
+
+## Review follow-up: evolving dependencies and explicit material choices
+
+Both Important findings were reproduced and fixed:
+
+1. Canonical requirements now reconcile dependency changes. Added/replaced prerequisites close obsolete questions, record a genuine-ambiguity reopen, and invalidate accepted answers and their downstream facts. Missing prerequisites block the dependent question until ready. Dependency removal drops obsolete fact provenance while preserving an otherwise valid answer; order-only changes preserve answers. Requirement cycles, including through a reworded canonical ID, are rejected before updating the existing record. Facts reused from explicit instructions acquire requirement dependency provenance, so subsequent amendments/reopens invalidate them correctly.
+2. Explicit current user fact strings resolve only against a unique full observed option label (case/outer whitespace normalized). The selected fact retains its source and receives the full option label/description and current evidence. Shared-word/prefix matches, duplicate labels with different material details, and history still require clarification. Explicit profile-default facts use code-owned `explicit_default=True` metadata; the caller must set that only after validating saved consent and applicability. Ordinary source=profile facts and page-derived option facts never become user consent. The coordinator wire schema cannot emit this metadata, and Task 11's profile adapter must establish it when importing an authorized default. Answers still create facts only; no browser actions were introduced.
+
+Exact regression evidence:
+
+- RED: `uv run pytest tests/test_interaction.py -q` — **5 failed, 24 passed in 0.26s**. Failures: pending question ignored added prerequisite, accepted/downstream answer survived dependency addition, removed prerequisite retained obsolete provenance, explicit user string was reasked, and explicit saved-default string was reasked. Existing ambiguous/history cases remained passing.
+- First GREEN: `uv run pytest tests/test_interaction.py -q` — **29 passed in 0.16s**.
+- Additional boundary RED: same command — **2 failed, 30 passed in 0.24s** for a cycle through a canonical requirement and page-derived option meaning accepted as a user choice. The dependency-order/reused-instruction provenance regression also ran and passed.
+- Final targeted GREEN: `uv run pytest tests/test_interaction.py tests/test_messages.py tests/test_profile.py tests/test_coordinator.py -q` — **101 passed in 0.70s**.
+- `uv run ruff check .` — passed after wrapping one new overlong line.
+- `uv run pytest` — **433 passed, 91 deselected in 9.93s**.
+- `node --check assistant/snapshot.js`, `node --check assistant/static/app.js`, and `git diff --check` — passed.
+- `uv run pytest -m browser` — **91 passed, 433 deselected in 64.18s**, on the final implementation.
+
+No known failing checks. No paid APIs, browser shortcuts, site-specific policy, or live-reliability claims.

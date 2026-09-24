@@ -90,15 +90,47 @@ def require(state: TaskState, requirement: dict) -> dict | None:
         state.requirements[req["id"]] = req
     elif req["kind"] != requirement["kind"]:
         raise ValueError("requirement kind changed")
+    pending_deps, visited = list(requirement["depends_on"]), set()
+    while pending_deps:
+        dep = pending_deps.pop()
+        if dep == req["id"]:
+            raise ValueError("requirement dependency cycle")
+        if dep not in visited:
+            visited.add(dep)
+            pending_deps.extend(state.requirements[dep]["depends_on"])
+    previous_deps = set(req["depends_on"])
+    current_deps = set(requirement["depends_on"])
+    if current_deps != previous_deps:
+        req["depends_on"] = list(requirement["depends_on"])
+        if current_deps - previous_deps:
+            # An old answer did not account for the newly discovered prerequisite.
+            reopen(state, req["id"], "genuine ambiguity", ())
+        else:
+            removed_keys = {key for rid in previous_deps - current_deps for key in state.requirements[rid]["keys"]}
+            retained_keys = {key for rid in current_deps for key in state.requirements[rid]["keys"]}
+            for key in req["keys"]:
+                fact = state.facts.get(key)
+                if fact and fact["scope"] in {req["scope"], "task"}:
+                    fact["depends_on"] = tuple(k for k in fact["depends_on"] if k not in removed_keys - retained_keys)
+    if any(_missing(state, state.requirements[dep]) for dep in req["depends_on"]):
+        req["satisfied"] = False
+        return None
     if req["kind"] == "choice":
         meanings = {(o["label"], o["description"]): o for o in requirement["options"]}
         for key in req["keys"]:
             fact = state.facts.get(key)
             if fact and fact["valid"] and fact["scope"] in {req["scope"], "task"}:
                 value = fact["value"]
+                explicit = fact["source"] == "user" or (
+                    fact["source"] == "profile" and fact.get("explicit_default") is True)
                 selected = (meanings.get((value.get("label"), value.get("description")))
-                            if isinstance(value, dict) else None)
+                            if explicit and isinstance(value, dict) else None)
+                if explicit and isinstance(value, str):
+                    matches = [o for o in requirement["options"]
+                               if o["label"].strip().casefold() == value.strip().casefold()]
+                    selected = matches[0] if len(matches) == 1 else None
                 if selected:
+                    fact["value"] = {"label": selected["label"], "description": selected["description"]}
                     fact["evidence"] = tuple(selected["evidence_ids"])
                 else:
                     reopen(state, req["id"], "genuine ambiguity", tuple(
@@ -112,10 +144,13 @@ def require(state: TaskState, requirement: dict) -> dict | None:
                 for option in pending["options"]:
                     option["evidence_ids"] = list(meanings[(option["label"], option["description"])]["evidence_ids"])
         req["options"] = deepcopy(requirement["options"])
+    for key in req["keys"]:
+        if key not in _missing(state, req):
+            fact = state.facts[key]
+            fact["depends_on"] = tuple(dict.fromkeys((*fact["depends_on"], *(
+                k for rid in req["depends_on"] for k in state.requirements[rid]["keys"]))))
     req["satisfied"] = not _missing(state, req)
     if req["satisfied"]:
-        return None
-    if any(_missing(state, state.requirements[dep]) for dep in req["depends_on"]):
         return None
     for q in state.questions.values():
         if (req["id"] in q["requirement_ids"] and q["revision"] == state.revision

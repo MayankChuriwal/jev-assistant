@@ -247,3 +247,117 @@ def test_reopening_dependency_invalidates_dependent_answers():
     answer_requirements(s, q2["id"], {"slot": "Tomorrow"}, now=2)
     reopen(s, "address", "invalid format", ())
     assert s.facts["slot"]["valid"] is False
+
+
+def test_added_requirement_dependency_blocks_pending_question_and_old_reply():
+    s = TaskState("t1", "Plan delivery")
+    slot = requirement("slot", purpose="delivery")
+    old = require(s, slot)
+    old["displayed_at"] = 1
+    address = require(s, requirement("address", purpose="delivery"))
+    assert require(s, {**slot, "depends_on": ["address"]}) is None
+    assert s.requirements["slot"]["depends_on"] == ["address"]
+    with pytest.raises(ValueError, match="stale"):
+        answer_requirements(s, old["id"], {"slot": "Tomorrow"}, now=2)
+    answer_requirements(s, address["id"], {"address": "New address"}, now=3)
+    fresh = require(s, {**slot, "depends_on": ["address"]})
+    answer_requirements(s, fresh["id"], {"slot": "Tomorrow"}, now=4)
+    assert s.facts["slot"]["depends_on"] == ("address",)
+    reopen(s, "address", "invalid format", ())
+    assert s.facts["slot"]["valid"] is False
+
+
+def test_added_dependency_reopens_accepted_answer_and_invalidates_downstream():
+    s = TaskState("t1", "Plan delivery")
+    slot = requirement("slot", purpose="delivery")
+    q = require(s, slot)
+    answer_requirements(s, q["id"], {"slot": "Tomorrow"}, now=1)
+    q2 = require(s, requirement("instructions", purpose="delivery", depends_on=["slot"]))
+    answer_requirements(s, q2["id"], {"instructions": "Leave outside"}, now=2)
+    require(s, requirement("address", purpose="delivery"))
+    assert require(s, {**slot, "depends_on": ["address"]}) is None
+    assert s.facts["slot"]["valid"] is False
+    assert s.facts["instructions"]["valid"] is False
+    assert s.requirements["slot"]["satisfied"] is False
+
+
+def test_removed_dependency_keeps_valid_answer_without_obsolete_provenance():
+    s = TaskState("t1", "Plan delivery")
+    q = require(s, requirement("address"))
+    answer_requirements(s, q["id"], {"address": "Home"}, now=1)
+    slot = requirement("slot", depends_on=["address"])
+    q = require(s, slot)
+    answer_requirements(s, q["id"], {"slot": "Tomorrow"}, now=2)
+    assert require(s, {**slot, "depends_on": []}) is None
+    reopen(s, "address", "invalid format", ())
+    assert s.facts["slot"]["valid"] is True
+    assert s.facts["slot"]["depends_on"] == ()
+
+
+@pytest.mark.parametrize("source,default", [("user", False), ("profile", True)])
+def test_exact_user_choice_or_explicit_default_reuses_observed_option(source, default):
+    s = TaskState("t1", "Choose Standard XL")
+    eid = observed(s)
+    put_fact(s, "ride", "Standard XL", source=source)
+    if default:
+        s.facts["ride"]["explicit_default"] = True
+    req = requirement("ride", kind="choice", options=[
+        {"id": "a", "label": "Standard", "description": "₹50, 4 seats", "evidence_ids": [eid]},
+        {"id": "b", "label": "Standard XL", "description": "₹80, 6 seats", "evidence_ids": [eid]}])
+    assert require(s, req) is None
+    assert s.facts["ride"]["value"] == {"label": "Standard XL", "description": "₹80, 6 seats"}
+    assert s.facts["ride"]["source"] == source
+    assert s.facts["ride"]["evidence"] == (eid,)
+    assert s.questions == {} and s.executions == {}
+
+
+@pytest.mark.parametrize("value,source,labels", [
+    ("Standard", "user", ["Standard XL", "Standard Premium"]),
+    ("Standard XL", "user", ["Standard XL", "Standard XL"]),
+    ("Standard XL", "profile", ["Standard", "Standard XL"]),
+])
+def test_overlapping_ambiguous_or_historical_choice_still_requires_answer(value, source, labels):
+    s = TaskState("t1", "Choose ride")
+    eid = observed(s)
+    put_fact(s, "ride", value, source=source)
+    req = requirement("ride", kind="choice", options=[
+        {"id": "a", "label": labels[0], "description": "₹50, 4 seats", "evidence_ids": [eid]},
+        {"id": "b", "label": labels[1], "description": "₹80, 6 seats", "evidence_ids": [eid]}])
+    assert require(s, req) is not None
+    assert s.facts["ride"]["valid"] is False
+
+
+def test_dependency_change_cannot_create_cycle_through_canonical_requirement():
+    s = TaskState("t1", "Plan delivery")
+    first = requirement("address")
+    require(s, first)
+    require(s, requirement("slot", depends_on=["address"]))
+    with pytest.raises(ValueError, match="cycle"):
+        require(s, {**first, "id": "reworded_address", "depends_on": ["slot"]})
+    assert s.requirements["address"]["depends_on"] == []
+
+
+def test_observed_choice_fact_does_not_replace_user_choice():
+    s = TaskState("t1", "Choose ride")
+    eid = observed(s)
+    put_fact(s, "ride", {"label": "Standard XL", "description": "₹80, 6 seats"},
+             source="page", evidence=(eid,))
+    req = requirement("ride", kind="choice", options=[
+        {"id": "b", "label": "Standard XL", "description": "₹80, 6 seats", "evidence_ids": [eid]}])
+    assert require(s, req) is not None
+
+
+def test_dependency_order_change_preserves_answer_and_explicit_choice_tracks_dependencies():
+    s = TaskState("t1", "Choose ride")
+    for key in ("pickup", "destination"):
+        q = require(s, requirement(key))
+        answer_requirements(s, q["id"], {key: "Place"}, now=1)
+    eid = observed(s)
+    put_fact(s, "ride", "Standard XL", source="user")
+    req = requirement("ride", kind="choice", depends_on=["pickup", "destination"], options=[
+        {"id": "b", "label": "Standard XL", "description": "₹80, 6 seats", "evidence_ids": [eid]}])
+    assert require(s, req) is None
+    assert require(s, {**req, "depends_on": ["destination", "pickup"]}) is None
+    assert s.questions.keys() == {"t1-q1", "t1-q2"}
+    reopen(s, "pickup", "changed request", ())
+    assert s.facts["ride"]["valid"] is False
