@@ -15,7 +15,8 @@ document.getElementById('place').onclick=()=>{
   const render=processing=>{
     result.replaceChildren();
     const heading=processing||variant==='processing'?'Order processing #ORD-4821':
-      variant==='unrelated'?'Message sent #MSG-4821':'Order placed #ORD-4821';
+      variant==='unrelated'?'Message sent #MSG-4821':
+      variant==='unsuccessful'?'Order placed #ORD-4821 unsuccessful':'Order placed #ORD-4821';
     const item=variant==='wrong-item'?'Black tea × 1':'Green tea × 1';
     const total=variant==='wrong-amount'?'Total ₹150':'Total ₹134';
     for(const value of [heading,item,total]){
@@ -23,6 +24,16 @@ document.getElementById('place').onclick=()=>{
     }
     if(variant==='old-total'){
       const changed=document.createElement('p');changed.textContent='Total ₹150';result.append(changed);
+    }
+    if(variant==='final-total'||variant==='amount-charged'){
+      const changed=document.createElement('p');
+      changed.textContent=variant==='final-total'?'Final total: ₹150':'Amount charged ₹150';result.append(changed);
+    }
+    if(variant==='pending-line'){
+      const pending=document.createElement('p');pending.textContent='Payment pending';result.append(pending);
+    }
+    if(variant==='history'){
+      const old=document.createElement('h2');old.textContent='Previous orders';result.prepend(old);
     }
   };
   render(variant==='delayed');

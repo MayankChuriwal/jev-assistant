@@ -543,8 +543,10 @@ consecutive post-dispatch observations of the same page, were absent before disp
 and any exact payable total matches the approved proposal with no conflicting total.
 The coordinator must cite the current page lines; code checks their provenance,
 terminal meaning, material details, amount, stability, and execution ownership before
-recording success. Processing text, old history, unrelated confirmations, or ambiguous
-amounts remain unknown. A model success claim alone never creates this proof. A
+recording success. Contradictory status anywhere on the result page, a history heading,
+or any competing payable-amount assertion makes the outcome unknown. Processing text,
+old history, unrelated confirmations, and ambiguous amounts cannot establish success.
+A model success claim alone never creates this proof. A
 structured provider receipt remains an alternative when available.
 
 ## 10. Cancellation, restart, and records

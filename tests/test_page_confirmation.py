@@ -15,7 +15,9 @@ pytestmark = pytest.mark.browser
 @pytest.mark.parametrize('variant,expected', [('success', 'done'), ('delayed', 'done'), ('old', 'blocked'),
                                               ('processing', 'blocked'), ('wrong-amount', 'blocked'),
                                               ('old-total', 'blocked'), ('wrong-item', 'blocked'),
-                                              ('unrelated', 'blocked')])
+                                              ('unrelated', 'blocked'), ('pending-line', 'blocked'),
+                                              ('unsuccessful', 'blocked'), ('history', 'blocked'),
+                                              ('final-total', 'blocked'), ('amount-charged', 'blocked')])
 def test_page_confirmation_is_bound_to_current_order(chrome, site, tmp_path, monkeypatch, variant, expected):
     sent = []
 
@@ -101,6 +103,8 @@ def test_page_confirmation_is_bound_to_current_order(chrome, site, tmp_path, mon
     assert len([row for row in agent.task.executions.values() if row.get('commitment')]) == 1
     outcome = next(row.get('outcome') for row in agent.task.executions.values() if row.get('commitment'))
     assert outcome == ('success' if expected == 'done' else 'unknown')
+    if expected == 'blocked':
+        assert agent.task.progress.get('account_reservation_key') == site['a']
     assert not agent.state['errors']
     assert len([body for body in sent if body.get('messages', [{}])[0].get('content') == questions.COORDINATE
                 and json.loads(body['messages'][1]['content'])['event'] == 'outcome']) >= 2

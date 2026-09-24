@@ -976,7 +976,20 @@ _TERMINAL_BY_ACTION = (
 )
 _TERMINAL_REFERENCE = re.compile(r'(?:#|\b(?:reference|ref|order id|booking id)\s*[:# ]\s*)([A-Z0-9-]{4,})\b',
                                  re.I)
-_CONFIRMED_TOTAL = re.compile(r'^(?:total|amount paid|fare paid)\s+([₹$€£]\s*[\d,]+(?:\.\d{1,2})?)\s*$', re.I)
+_CONTRADICTORY_STATUS = re.compile(
+    r'\b(pending|processing|finding|awaiting|unconfirmed|unsuccessful|failed|failure|declined|'
+    r'rejected|cancelled|canceled|provisional|not\s+(?:yet\s+)?(?:completed|confirmed|successful)|'
+    r'in\s+progress|unable\s+to)\b', re.I)
+_HISTORY_CONTEXT = re.compile(
+    r'^(?:(?:previous|past|recent)\s+(?:orders|bookings|transactions)|'
+    r'(?:order|booking|transaction)\s+history)\b', re.I)
+_PAYABLE_LABEL = re.compile(
+    r'^(?:(?:final|grand)\s+total|total(?:\s+paid)?|'
+    r'amount\s+(?:charged|paid|due|payable)|fare(?:\s+paid)?|charged|paid)\b', re.I)
+_PAYABLE_ASSERTION = re.compile(
+    r'^(?:(?:final|grand)\s+total|total(?:\s+paid)?|'
+    r'amount\s+(?:charged|paid|due|payable)|fare(?:\s+paid)?|charged|paid)'
+    r'\s*[:\-]?\s*([₹$€£]\s*[\d,]+(?:\.\d{1,2})?)\s*$', re.I)
 
 
 def record_page_confirmation(state, execution_id: str, *, evidence_ids: list[str],
@@ -1018,19 +1031,19 @@ def record_page_confirmation(state, execution_id: str, *, evidence_ids: list[str
     if (not cited or any(e['kind'] != 'page' or e['observation_id'] != second_id for e in cited)
             or any(e['quote'] not in first['text'] for e in cited)):
         return False
-    terminal_lines = [e['quote'] for e in cited if terminal.search(e['quote'])]
+    terminal_lines = [e['quote'] for e in cited if terminal.match(e['quote'].strip())]
     if len(terminal_lines) != 1 or terminal_lines[0] in before['text']:
         return False
     page_lines = second['text'].splitlines()
-    terminal_positions = [index for index, line in enumerate(page_lines) if terminal.search(line)]
+    if any(_CONTRADICTORY_STATUS.search(line) or _HISTORY_CONTEXT.match(line.strip())
+           for line in page_lines):
+        return False
+    terminal_positions = [index for index, line in enumerate(page_lines) if terminal.match(line.strip())]
     if len(terminal_positions) != 1 or terminal_lines[0] not in page_lines[terminal_positions[0]]:
         return False
     confirmation_lines = page_lines[terminal_positions[0]:terminal_positions[0] + 9]
     matches = list(_TERMINAL_REFERENCE.finditer(terminal_lines[0]))
     if len(matches) != 1 or matches[0].group(1) in before['text']:
-        return False
-    if any(re.search(r'\b(processing|pending|finding|awaiting|may be|not yet)\b', line, re.I)
-           for line in terminal_lines):
         return False
     for item in proposal.get('items', []):
         if (not item or not any(_amount_in_quote(item, e['quote']) for e in cited)
@@ -1040,16 +1053,20 @@ def record_page_confirmation(state, execution_id: str, *, evidence_ids: list[str
         currency = proposal.get('currency')
         totals = []
         for line in page_lines:
-            match = _CONFIRMED_TOTAL.fullmatch(line.strip())
-            if match:
-                try:
-                    totals.append(money_minor(match.group(1), currency=currency,
-                                              exponent=CURRENCY_EXPONENTS[currency]))
-                except (KeyError, ValueError):
-                    return False
+            value = line.strip()
+            if not _PAYABLE_LABEL.match(value):
+                continue
+            match = _PAYABLE_ASSERTION.fullmatch(value)
+            if not match:
+                return False
+            try:
+                totals.append(money_minor(match.group(1), currency=currency,
+                                          exponent=CURRENCY_EXPONENTS[currency]))
+            except (KeyError, ValueError):
+                return False
         if (len(totals) != 1 or totals[0] != proposal.get('total_minor')
-                or not any(_CONFIRMED_TOTAL.fullmatch(e['quote'].strip()) for e in cited)
-                or not any(_CONFIRMED_TOTAL.fullmatch(line.strip()) for line in confirmation_lines)):
+                or not any(_PAYABLE_ASSERTION.fullmatch(e['quote'].strip()) for e in cited)
+                or not any(_PAYABLE_ASSERTION.fullmatch(line.strip()) for line in confirmation_lines)):
             return False
     elif proposal.get('total_kind') != 'not_applicable':
         return False
