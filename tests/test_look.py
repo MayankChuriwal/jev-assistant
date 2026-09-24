@@ -340,3 +340,28 @@ def test_numbers_are_drawn_for_one_capture_only(browser_at, monkeypatch):
     image = b.marked_screenshot([find(page, "Pin", "drag")])
     assert base64.b64decode(image)[:8] == b"\x89PNG\r\n\x1a\n" and seen == [True]
     assert b.fresh(page) and b.evaluate("document.getElementById('__jev_marks') === null")
+
+@pytest.mark.browser
+def test_visual_target_is_stale_after_screenshot_change_and_rejects_occlusion(browser_at):
+    b = browser_at("/look.html")
+    page = b.observe()
+    _image, cells = b.grid_screenshot()
+    target = b.visual_candidates(page, [{"cell": "C4", "label": "Board", "text": ""}])[0]
+    b.evaluate("const cover=document.createElement('div'); cover.style.cssText="
+               "'position:fixed;inset:0;z-index:999;background:white';document.body.append(cover)")
+    with pytest.raises(StalePage):
+        b.act("CLICK", target, page)
+    b.evaluate("document.querySelector('div[style*=z-index]').remove()")
+    b.grid_screenshot()
+    with pytest.raises(StalePage):
+        b.act("CLICK", target, page)
+    assert cells["C4"]["w"] > 0
+
+
+def test_visual_candidates_join_jev_indexed_targets():
+    visual = {"id": "v1", "kind": "click", "node": None, "label": "Blue button",
+              "visual_ref": "shot-1", "observation_ref": "page-1"}
+    elements, heads, _controls = model.action_space([visual])
+    assert elements == [{"index": "1", "label": "Blue button", "operations": [
+        "CLICK", "DOUBLE_CLICK", "RIGHT_CLICK", "HOVER"], "visual": True}]
+    assert heads["click_target"]["1"] is visual

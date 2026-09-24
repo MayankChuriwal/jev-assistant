@@ -93,3 +93,20 @@ def test_a_frame_that_closes_while_being_attached_is_skipped(browser_at):
     gone = {"type": "iframe", "targetId": "0" * 32, "parentFrameId": main}  # listed, then navigated away
     b._sync_frames([gone])  # Chrome answers "No target with given id found": the page moved on, observe again
     assert "0" * 32 not in b.frames and page["actions"]
+
+
+def test_incomplete_visible_frame_is_reported(browser_at, monkeypatch):
+    b = browser_at("/pay.html")
+    page = observe_until(b, HAS_FRAME)
+    fid = next(a["frame"] for a in page["actions"] if a.get("frame"))
+    original = b.evaluate
+
+    def interrupted(expression, session=None):
+        if session == b.frames[fid]["session"]:
+            raise StalePage("frame navigating")
+        return original(expression, session)
+
+    monkeypatch.setattr(b, "evaluate", interrupted)
+    page = b.observe()
+    assert fid in page["completeness"]["frames_incomplete"]
+    assert not any(a.get("frame") == fid for a in page["actions"])

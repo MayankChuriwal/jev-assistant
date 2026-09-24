@@ -1,0 +1,26 @@
+<!doctype html><meta charset="utf-8"><title>Reliability fixture</title>
+<style>
+  body { margin: 0; font: 12px sans-serif; }
+  section { display: inline-block; vertical-align: top; width: 220px; }
+  #controls { display: grid; grid-template-columns: repeat(20, 39px); gap: 1px; }
+  #controls button { width: 38px; height: 25px; padding: 0; font-size: 9px; }
+  #long { font-size: 1px; line-height: 2px; overflow-wrap: anywhere; }
+  iframe { width: 200px; height: 40px; border: 0; }
+</style>
+<section><h2>Login</h2><form aria-label="Login"><label>Code <input placeholder="Login code"></label></form></section>
+<section><h2>Payment</h2><form aria-label="Payment"><label>Code <input placeholder="Payment code"></label></form></section>
+<div id="countdown">Resend code in 0:29</div>
+<div id="controls"></div><div id="long"></div><iframe id="remote" title="Remote status"></iframe>
+<script>
+  const controls = document.getElementById('controls');
+  if (location.search.includes('large')) {
+    controls.innerHTML = Array.from({length: 260}, (_, i) => `<button type="button">${i}</button>`).join('');
+    document.getElementById('long').textContent = 'visible long text '.repeat(450);
+  }
+  document.getElementById('remote').src = location.href.replace('127.0.0.1', 'localhost').split('/reliability.html')[0] + '/widget-frame.html';
+  setInterval(() => {
+    const el = document.getElementById('countdown');
+    const n = Number(el.textContent.match(/\d+$/)[0]);
+    el.textContent = `Resend code in 0:${String((n + 59) % 60).padStart(2, '0')}`;
+  }, 1000);
+</script>

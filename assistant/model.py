@@ -99,13 +99,16 @@ def action_space(actions):
             continue
         head, operations = HEADS[kind]
         index = action["id"]  # page-level targets (page scroll, page key, tabs) keep their ids
-        if action.get("node") is not None:
-            key = (action.get("frame"), action["node"])
+        if action.get("node") is not None or action.get("visual_ref"):
+            key = ((action.get("frame"), action["node"]) if action.get("node") is not None
+                   else ("visual", action["visual_ref"], action["id"]))
             if key not in indices:
                 indices[key] = str(len(elements) + 1)
                 keys = ("role", "value", "checked", "selected", "expanded", "popup")
                 element = {k: action[k] for k in keys if k in action}
                 element.update(index=indices[key], label=action["label"].split(" → ")[0], operations=[])
+                if action.get("visual_ref"):
+                    element["visual"] = True
                 if action.get("frame"):
                     element["in_frame"] = True
                 elements.append(element)
@@ -121,7 +124,8 @@ def action_space(actions):
         heads.setdefault(head, {})[index] = action
         if kind == "fill" or action.get("role") == "slider":
             heads.setdefault("press_key_target", {})[index] = action
-    drops = {i: a for h in DROPS for i, a in heads.get(h, {}).items() if a.get("node") is not None}
+    drops = {i: a for h in DROPS for i, a in heads.get(h, {}).items()
+             if a.get("node") is not None or a.get("visual_ref")}
     if "LOOK" in controls:  # a free spot on a canvas or a map, found by sight
         drops["look"] = {**controls["LOOK"], "label": "A free spot on the screen, found by looking"}
     if "drag_source" in heads:
@@ -135,7 +139,7 @@ def action_space(actions):
 def criteria(candidates):
     return {
         index: {
-            "element": f"[{index}] {a['label']}" if a.get("node") is not None else a["label"],
+            "element": f"[{index}] {a['label']}" if a.get("node") is not None or a.get("visual_ref") else a["label"],
             "current_value": a.get("current_value", a.get("value", "")),
             **{k: a[k] for k in ("role", "checked", "selected", "expanded", "popup", "current") if k in a},
         }

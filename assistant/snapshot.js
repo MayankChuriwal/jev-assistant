@@ -123,6 +123,7 @@
   // Visible text first. Text asking to drag or drop a file marks its container as an upload target.
   const words = [], zones = new Set();
   const FILE_WORDS = /\b(files?|upload\w*|documents?|attach\w*|pdfs?|images?|photos?|pictures?|receipts?|statements?|resumes?|cvs?|browse|docx?|jpe?g|png|csv|xlsx?)\b/i;
+  const textLimit = 6000, actionLimit = 250;
   let length = 0;
   const dropZone = (e, text, dx, dy) => {
     for (let i = 0; e && i < 4; e = e.parentElement, i++) {
@@ -141,18 +142,19 @@
     const doc = root.ownerDocument || root, start = root.body || root;
     const walker = doc.createTreeWalker(start, NodeFilter.SHOW_TEXT), range = doc.createRange();
     let node;
-    while ((node = walker.nextNode()) && length < 6000) {
+    while ((node = walker.nextNode()) && length <= textLimit) {
       const value = node.textContent.trim(), parent = node.parentElement;
       if (!value || !parent || parent.closest('script,style,noscript,template') || !visible(parent)) continue;
       range.selectNodeContents(node);
       const r = range.getBoundingClientRect(), x = r.x + dx, y = r.y + dy;
       if (!(r.width > 0 && r.height > 0 && y + r.height > 0 && y < innerHeight && x + r.width > 0 && x < innerWidth)) continue;
       words.push(value);
-      length += value.length;
+      length += value.length + (words.length > 1 ? 1 : 0);
       if (/\b(drag|drop)\b/i.test(value) && FILE_WORDS.test(value)) dropZone(parent, value, dx, dy);  // not "Drop-off"
     }
   }
-  const text = words.join('\n').slice(0, 6000);
+  const fullText = words.join('\n');
+  const text = fullText.slice(0, textLimit);
 
   const pointer = e => style(e).cursor === 'pointer';
   // ponytail: cursor/onclick/tabindex heuristic for React-style clickable divs; listeners added in JS are invisible.
@@ -195,6 +197,17 @@
     for (const key of ['inputmode', 'pattern']) if (e.getAttribute(key)) c[key] = e.getAttribute(key);
     return c;
   };
+  const context = e => {
+    const form = e.form || e.closest('form');
+    const section = e.closest('section,article,[role="region"],fieldset');
+    const heading = section?.querySelector('h1,h2,h3,h4,h5,h6,legend,[role="heading"]') ||
+      e.closest('h1,h2,h3,h4,h5,h6');
+    return {form: (form?.getAttribute('aria-label') || form?.getAttribute('name') ||
+      form?.querySelector('legend')?.textContent || '').trim().slice(0, 120),
+    section: (heading?.textContent || section?.getAttribute('aria-label') || '').trim().slice(0, 120),
+    placeholder: (e.getAttribute('placeholder') || '').slice(0, 120),
+    field_role: e.getAttribute('autocomplete') || e.getAttribute('role') || e.type || ''};
+  };
   const taken = new Set();
   const within = e => { for (let p = e.parentElement; p; p = p.parentElement) if (taken.has(p)) return true; return false; };
 
@@ -225,7 +238,7 @@
       const rname = role(e) || (clickable ? 'clickable' : null);
       if (!rname || (rname === 'gridcell' && e.querySelector('button,[role="button"]'))) continue;
       taken.add(e);
-      const base = states(e, {node, role: rname, label: label(e) || rname, rect});
+      const base = states(e, {node, role: rname, label: label(e) || rname, rect, context: context(e)});
       if (e.tagName === 'SELECT') {
         const current = [...e.selectedOptions].map(o => o.label).join(', ');
         for (const o of e.options) if (!o.selected && !o.disabled && !o.closest('optgroup[disabled]'))
@@ -282,8 +295,10 @@
     });
   }
   actions.push(...options);
-  const omitted_actions = Math.max(0, actions.length - 250);
-  actions.splice(250);
+  const candidates = actions;
+  const omitted_actions = Math.max(0, candidates.length - actionLimit);
+  actions.splice(actionLimit);
+  const completeness = {text_truncated: fullText.length > textLimit, omitted_actions, frames_incomplete: []};
   const memo = new Map(), guards = {};
   for (const a of actions) if (!(a.node in guards)) guards[a.node] = cache.guard(cache.nodes.get(a.node), memo);
   const page_key = cache.pageKey();
@@ -301,5 +316,5 @@
   page('left', scrollX > 0);
   actions.push({id: 'wait', kind: 'wait', node: null, label: 'Wait for the page to update'});
   return {url: location.href, title: document.title, text, scroll: {x: scrollX, y: scrollY, height, width},
-    actions, marker, page_key, guards, omitted_actions};
+    actions, marker, page_key, guards, omitted_actions, completeness};
 })()

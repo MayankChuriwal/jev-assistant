@@ -8,6 +8,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 import weakref
 from pathlib import Path
 from urllib.parse import urlparse
@@ -581,21 +582,30 @@ class Browser:
         main = self.evaluate(READ_STATE)
         if main is None:
             raise StalePage("Document is navigating")
-        parts, shown = [(None, main)], set()
+        parts, shown, incomplete = [(None, main)], set(), []
         # ponytail: every visible third-party frame is snapshotted each observation; cap them if ads make it slow.
         for fid, info in list(self.frames.items()):
-            if info["tab"] != self.active or (info["parent"] and info["parent"] not in shown):
+            if info["tab"] != self.active:
+                continue
+            if info["parent"] and info["parent"] not in shown:
+                if info["parent"] in incomplete:
+                    incomplete.append(fid)
                 continue
             if not self._frame_visible(fid):
                 continue
             try:
                 state = self.evaluate(READ_STATE, info["session"])
             except (StalePage, RuntimeError, TimeoutError):
+                incomplete.append(fid)
                 continue  # a frame mid-navigation is skipped; its controls return with the next observation
             if state:
                 shown.add(fid)
                 parts.append((fid, state))
-        return merge(parts)
+            else:
+                incomplete.append(fid)
+        page = merge(parts)
+        page["completeness"]["frames_incomplete"].extend(incomplete)
+        return page
 
     def _read_settled(self):
         for attempt in range(10):
@@ -610,6 +620,7 @@ class Browser:
         info = cdp("Target.getTargetInfo", targetId=self.active)["targetInfo"]
         return {
             "url": info["url"], "title": info["title"], "scroll": {}, "frames": {}, "omitted_actions": 0,
+            "completeness": {"text_truncated": False, "omitted_actions": 0, "frames_incomplete": []},
             "dialog": dialog, "text": f"Browser {dialog['type']} dialog: {dialog['message']}",
             "actions": [{"id": "accept_dialog", "kind": "accept_dialog", "node": None, "label": "OK"},
                         {"id": "dismiss_dialog", "kind": "dismiss_dialog", "node": None, "label": "Cancel"}],
@@ -645,6 +656,14 @@ class Browser:
         dialog = self.dialogs.get(self.session)
         if dialog or page.get("dialog"):
             return dialog is not None and dialog == page.get("dialog")
+        if action is not None and action.get("visual_ref"):
+            grid = getattr(self, "_visual_grid", None)
+            return (grid is not None and action["visual_ref"] == grid["screenshot_ref"]
+                    and action.get("observation_ref") == page.get("fingerprint")
+                    and grid["tab"] == self.active and grid["session"] == self.session
+                    and not page.get("completeness", {}).get("frames_incomplete")
+                    and page.get("frames", {}).get("main", {}).get("marker") == grid["marker"]
+                    and self.evaluate(MARKER) == grid["marker"])
         # Node actions compare their own target; anything else compares only its own document, so a ticking
         # third-party frame (chat widget, ad) never makes the rest of the page stale.
         try:
@@ -685,6 +704,8 @@ class Browser:
 
     def _point(self, action):
         """Top-level viewport centre of an observed element, re-read and hit-tested now."""
+        if action.get("visual_ref"):
+            return self._visual_point(action)
         frame = action.get("frame")
         point = self.evaluate(f"({LOCATE})({int(action['node'])})", self._session_for(frame))
         while point is not None and frame:
@@ -737,9 +758,64 @@ class Browser:
             # Cells stay in viewport coordinates, where clicks land; the capture's clip is in page coordinates.
             clip = {"x": region["x"] + sx, "y": region["y"] + sy, "width": region["w"], "height": region["h"],
                     "scale": scale}
-            return self.screenshot(masked=masked, clip=clip, hide=hide), cells
+            image = self.screenshot(masked=masked, clip=clip, hide=hide)
         finally:
             self.evaluate(f"({GRID})(null)")
+        self._visual_grid = {"screenshot_ref": uuid.uuid4().hex, "cells": cells,
+                             "marker": self.evaluate(MARKER), "tab": self.active, "session": self.session,
+                             "candidates": {}}
+        return image, cells
+
+    def visual_candidates(self, page: dict, annotations: list[dict]) -> list[dict]:
+        """Annotate supplied grid cells. Geometry and hit targets come only from the captured grid and live DOM."""
+        grid = getattr(self, "_visual_grid", None)
+        if (grid is None or grid["tab"] != self.active or grid["session"] != self.session or
+                page.get("frames", {}).get("main", {}).get("marker") != grid["marker"] or
+                self.evaluate(MARKER) != grid["marker"]):
+            raise StalePage("Screenshot no longer matches this observation. Observe again.")
+        if page.get("completeness", {}).get("frames_incomplete"):
+            raise StalePage("A frame was incomplete. Observe again before interpreting the screenshot.")
+        if not isinstance(annotations, list):
+            raise ValueError("Visual annotations must be a list of supplied cells.")
+        candidates = []
+        for annotation in annotations:
+            if not isinstance(annotation, dict) or set(annotation) != {"cell", "label", "text"}:
+                raise ValueError("Visual annotations may contain cell, label and text; no coordinates.")
+            cell = annotation["cell"]
+            if cell not in grid["cells"]:
+                raise ValueError("Unknown screenshot cell; no candidate created.")
+            if not all(isinstance(annotation[k], str) and len(annotation[k]) <= 160 for k in ("label", "text")):
+                raise ValueError("Visual labels and text must be short strings.")
+            rect = dict(grid["cells"][cell])
+            x, y = rules.centre(rect)
+            # The model supplies only a cell name. The executor captures the underlying DOM hit identity.
+            hit = self.evaluate(f"(() => {{ const e=document.elementFromPoint({x}, {y});"
+                                "if (!e) return null; const c=window.__jevFast;"
+                                "if (!c.ids.has(e)) c.ids.set(e, c.next++);"
+                                "const id=c.ids.get(e); c.nodes.set(id,e); return id; })()")
+            if hit is None:
+                continue
+            candidate = {"id": f"v{len(grid['candidates']) + 1}", "kind": "click", "node": None,
+                         "label": annotation["label"], "text": annotation["text"], "rect": rect,
+                         "visual_ref": grid["screenshot_ref"], "observation_ref": page.get("fingerprint"),
+                         "cell": cell}
+            grid["candidates"][candidate["id"]] = {"rect": rect, "hit": hit}
+            candidates.append(candidate)
+        return candidates
+
+    def _visual_point(self, action):
+        grid = getattr(self, "_visual_grid", None)
+        saved = grid and grid["candidates"].get(action.get("id"))
+        if (not saved or action.get("visual_ref") != grid["screenshot_ref"] or
+                grid["tab"] != self.active or grid["session"] != self.session or
+                action.get("rect") != saved["rect"] or self.evaluate(MARKER) != grid["marker"]):
+            raise StalePage("Visual target is stale. Observe again.")
+        x, y = rules.centre(saved["rect"])
+        hit = self.evaluate(f"(() => {{ const e=document.elementFromPoint({x}, {y});"
+                            "return e ? window.__jevFast?.ids.get(e) ?? null : null; })()")
+        if hit != saved["hit"]:
+            raise StalePage("Visual target is covered or changed. Observe again.")
+        return x, y
 
     def marked_screenshot(self, actions, masked=(), hide=()):
         """A viewport PNG with a number (1, 2, …) on each action, for the user to name what to click."""
@@ -842,7 +918,7 @@ class Browser:
                    nativeVirtualKeyCode=keycode, modifiers=modifiers)
 
     def _do_drag(self, action, drop=None, **_):
-        if not drop or (drop.get("node") is None and not drop.get("point")):
+        if not drop or (drop.get("node") is None and not drop.get("point") and not drop.get("visual_ref")):
             raise ValueError("DRAG needs an observed drop target or a point; nothing moved.")
         (sx, sy) = self._point(action)
         (tx, ty) = drop["point"] if drop.get("point") else self._point(drop)
@@ -1041,12 +1117,16 @@ def merge(parts):
     """One page state from the main document and its cross-origin frames. Element ids are page-wide."""
     main = parts[0][1]
     page = {"url": main["url"], "title": main["title"], "scroll": main["scroll"], "actions": [], "frames": {},
-            "omitted_actions": 0}
+            "omitted_actions": 0,
+            "completeness": {"text_truncated": False, "omitted_actions": 0, "frames_incomplete": []}}
     texts, count = [], 0
     for index, (frame, state) in enumerate(parts):
         host = urlparse(state["url"]).netloc
         page["frames"][frame or "main"] = {k: state[k] for k in ("url", "marker", "page_key", "guards")}
         page["omitted_actions"] += state["omitted_actions"]
+        page["completeness"]["omitted_actions"] += state["omitted_actions"]
+        page["completeness"]["text_truncated"] |= state.get("completeness", {}).get("text_truncated", False)
+        page["completeness"]["frames_incomplete"].extend(state.get("completeness", {}).get("frames_incomplete", []))
         texts.append(state["text"] if frame is None else f"[Frame {host}]\n{state['text']}")
         for action in state["actions"]:
             if frame is not None and action["kind"] == "wait":
@@ -1061,7 +1141,9 @@ def merge(parts):
             if frame is not None:
                 item["frame"] = frame
             page["actions"].append(item)
-    page["text"] = "\n".join(texts)[:8000]
+    full_text = "\n".join(texts)
+    page["completeness"]["text_truncated"] |= len(full_text) > 8000
+    page["text"] = full_text[:8000]
     return page
 
 

@@ -322,3 +322,14 @@ def test_fields_that_share_a_label_are_told_apart(browser_at):
                "placeholder=\"Dropoff location\">')")
     fills = [a["label"] for a in b.observe()["actions"] if a["kind"] == "fill"]
     assert fills == ["Search for a location (Pickup location)", "Search for a location (Dropoff location)"]
+
+
+def test_truncated_observation_reports_omissions(browser_at):
+    b = browser_at("/reliability.html?case=large")
+    page = b.observe()
+    assert page["completeness"]["omitted_actions"] > 0
+    assert page["completeness"]["text_truncated"] is True
+    codes = [a for a in page["actions"] if a["kind"] == "fill" and a["label"].startswith("Code")]
+    assert len(codes) == 2
+    assert {a["context"]["form"] for a in codes} == {"Login", "Payment"}
+    assert {a["context"]["placeholder"] for a in codes} == {"Login code", "Payment code"}
