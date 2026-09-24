@@ -2,6 +2,12 @@
 
 Date: 2026-09-23 · Status: approved in brainstorming, awaiting spec review
 
+Revision note (2026-09-24): this document describes the original baseline. The proposed
+[local agent reliability design](2026-09-24-local-agent-reliability-design.md) records
+the subsequently agreed direction and awaits written-spec review. Once approved, it
+supersedes conflicting rules here, especially card/CVV storage, outside-chat device
+actions, action-selection authority, question handling, and completion verification.
+
 ## 1. What we are building
 
 A chat assistant that completes real tasks on real websites for its user. The user states a goal ("order Diet Coke on Instamart", "book an Uber to the airport", "raise a dispute for this card charge"). A hidden Chrome performs the task. The assistant asks the user only for what it cannot know or must not decide alone: OTPs, choices between materially different options, missing personal data, and one explicit approval before any irreversible commitment. It then reports the outcome with evidence from the page.
