@@ -129,7 +129,8 @@ def _dialog(page):
     return _redact({k: dialog[k] for k in ("type", "message") if isinstance(dialog.get(k), str)})
 
 
-def _signature(state, page):
+def _signature(state, page, *, execution_sensitive=True):
+    # Receipts invalidate an assessment but ordinary click/scroll receipts are not semantic events.
     observation = _observation(state, page)
     public = {k: v for k, v in observation.items() if k not in {"id", "screenshot_ref"}}
     public["text"] = _TIMER.sub("timer", public["text"])
@@ -137,7 +138,7 @@ def _signature(state, page):
                  "constraints": state.constraints,
                  "facts": state.facts, "requirements": state.requirements, "questions": state.questions,
                  "auth": state.challenges, "proposal": state.proposal, "approval": state.approval,
-                 "executions": state.executions})
+                 "executions": state.executions if execution_sensitive else None})
 
 
 def events_for(state: TaskState, page: dict, *, event: str | None = None) -> tuple[str, ...]:
@@ -152,7 +153,7 @@ def events_for(state: TaskState, page: dict, *, event: str | None = None) -> tup
         return ("start",)
     if last[0] != state.revision:
         return ("user_amendment",)
-    return ("stage_change",) if last[1] != _signature(state, page) else ()
+    return ("stage_change",) if last[1] != _signature(state, page, execution_sensitive=False) else ()
 
 
 def _shape(value, keys, path):
@@ -377,7 +378,7 @@ def assess(state: TaskState, page: dict, event: str, *, client=model.text_json) 
             runtime["issued"] = {_key(cached): (state.revision, signature, event,
                                                 next(reversed(state.observations)))}
             runtime["dialog"] = _dialog(page)
-            runtime["last"] = (state.revision, signature)
+            runtime["last"] = (state.revision, _signature(state, page, execution_sensitive=False))
             return deepcopy(cached)
     payload = _redact({"task": _context(state), "event": event,
                        "untrusted_page": {**_observation(state, page), "dialog": _dialog(page)}, "schema": SCHEMA,
@@ -413,7 +414,7 @@ def assess(state: TaskState, page: dict, event: str, *, client=model.text_json) 
         runtime["issued"] = {_key(validated): (state.revision, signature, event,
                                                 next(reversed(state.observations)))}
         runtime["dialog"] = _dialog(page)
-        runtime["last"] = (state.revision, signature)
+        runtime["last"] = (state.revision, _signature(state, page, execution_sensitive=False))
         state.diagnostics.append({"kind": "coordinator_assessment", "event": event, "metadata": _redact(metadata)})
         return validated
     raise AssertionError("unreachable")
@@ -444,7 +445,8 @@ def apply_assessment(state: TaskState, assessment: dict) -> None:
         state.progress["assessment"] = deepcopy(output["progress"])
     if issued and event is not None:
         latest = next(reversed(state.observations.values()))
-        runtime["last"] = (state.revision, _signature(state, {**latest, "dialog": runtime.get("dialog")}))
+        runtime["last"] = (state.revision, _signature(
+            state, {**latest, "dialog": runtime.get("dialog")}, execution_sensitive=False))
 
 
 def interpret_message(text: str, tasks: list[dict], chat: list[dict], *, client=model.text_json) -> dict:

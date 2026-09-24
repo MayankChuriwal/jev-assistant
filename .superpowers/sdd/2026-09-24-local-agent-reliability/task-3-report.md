@@ -62,3 +62,18 @@ Exact regression evidence:
 - `node --check assistant/snapshot.js` and `git diff --check` — passed; full chained check command exited 0.
 
 No known failing checks after the review fixes. Legacy routing/visual rollout remains staged for Tasks 11–12.
+
+## Review follow-up 2: preserve the fast Jev loop
+
+The execution-ledger cache fix also changed the signature used for automatic semantic event detection. Reproduced the regression: an ordinary CLICK receipt on an otherwise unchanged page caused a second coordinator call.
+
+Separated signature sensitivity: automatic `events_for` comparisons and their saved `last` signature omit the execution ledger; cache keys and assessment issuance checks retain execution sensitivity. Thus an ordinary click/scroll receipt cannot independently invoke GPT, but a stale assessment cannot apply after execution changes. Proposal changes remain semantic events, and an explicit outcome event reassesses against the current execution ledger.
+
+- RED: `uv run pytest tests/test_coordinator.py -q` — **1 failed, 39 passed in 0.25s**. The regression expected one coordinator call but observed two after the ordinary receipt. A second regression verifies pending proposal changes and explicit outcome events still coordinate and invalidate the assessment cache.
+- GREEN: `uv run pytest tests/test_coordinator.py tests/test_jobs.py tests/test_model.py -q` — **90 passed in 0.21s**.
+- `uv run ruff check .` — passed.
+- `uv run pytest` — **391 passed, 91 deselected in 10.02s**.
+- `uv run pytest -m browser` — **91 passed, 391 deselected in 66.08s**.
+- `node --check assistant/snapshot.js` and `git diff --check` — passed; full chained command exited 0.
+
+No known failing checks after round 2.

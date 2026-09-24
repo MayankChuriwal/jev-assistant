@@ -347,3 +347,33 @@ def test_prompt_supplies_known_execution_ids_and_invalidates_on_execution_change
     s.executions["x1"]["status"] = "unknown"
     assess(s, page, "outcome", client=client)
     assert len(calls) == 2
+
+
+def test_ordinary_execution_keeps_fast_loop_but_invalidates_assessment():
+    s, page, _ = observed()
+    client, calls = scripted(assessment())
+    stale = assess(s, page, "start", client=client)
+    s.executions["click1"] = {"id": "click1", "operation": "CLICK", "status": "executed"}
+    observe_state(s, page)
+    for event in events_for(s, page):
+        assess(s, page, event, client=client)
+    assert events_for(s, page) == ()
+    assert len(calls) == 1
+    with pytest.raises(ValueError, match="issuance"):
+        apply_assessment(s, stale)
+    # An explicit outcome event must see fresh execution evidence rather than the old cache.
+    assess(s, page, "start", client=client)
+    assert len(calls) == 2
+
+
+def test_pending_commitment_and_outcome_still_trigger_coordination():
+    s, page, _ = observed()
+    client, calls = scripted(assessment())
+    assess(s, page, "outcome", client=client)
+    s.proposal = {"action": "Submit order", "status": "pending"}
+    assert events_for(s, page) == ("stage_change",)
+    assess(s, page, "outcome", client=client)
+    s.executions["commit1"] = {"id": "commit1", "status": "unknown"}
+    assert events_for(s, page, event="outcome") == ("outcome",)
+    assess(s, page, "outcome", client=client)
+    assert len(calls) == 3
