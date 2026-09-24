@@ -5,6 +5,7 @@ import json
 import math
 import re
 from copy import deepcopy
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
 
 from . import model
@@ -56,7 +57,34 @@ _TIMER = re.compile(r"\b(?:resend|retry|expires?|remaining)(?:\s+in)?\s+\d+\s*(?
 
 def _redact(value):
     secrets = SECRETS.get()
-    return secrets.redact(deepcopy(value)) if secrets else deepcopy(value)
+    if secrets is None:
+        return deepcopy(value)
+
+    def clean(item):
+        if isinstance(item, str):
+            # Apply registered patterns even to keys or strings resembling data URLs.
+            for raw in sorted(secrets.values, key=len, reverse=True):
+                pattern, placeholder = secrets.values[raw]
+                item = pattern.sub(lambda _match: placeholder, item)
+            return item
+        if type(item) in (int, float):
+            # JSON may turn an OTP into a number, dropping leading zeroes or using exponent notation.
+            for raw, (_, placeholder) in secrets.values.items():
+                try:
+                    if Decimal(str(item)) == Decimal(re.sub(r"[\s-]", "", raw)):
+                        return placeholder
+                except InvalidOperation:
+                    continue
+            text = str(item)
+            redacted = clean(text)
+            return redacted if redacted != text else item
+        if isinstance(item, dict):
+            return {clean(key): clean(child) for key, child in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [clean(child) for child in item]
+        return deepcopy(item)
+
+    return clean(value)
 
 
 def _key(value):
@@ -88,6 +116,7 @@ def _context(state):
     context["evidence"] = {k: e for k, e in context["evidence"].items()
                            if e["revision"] == state.revision and e["observation_id"] == latest}
     context["observation_ids"] = [latest] if latest else []
+    context["execution_ids"] = list(state.executions)
     # Operational diagnostics are not semantic task evidence and grow independently of the page.
     context.pop("diagnostics", None)
     return context
@@ -107,7 +136,8 @@ def _signature(state, page):
     return _key({"observation": public, "dialog": _dialog(page), "revision": state.revision,
                  "constraints": state.constraints,
                  "facts": state.facts, "requirements": state.requirements, "questions": state.questions,
-                 "auth": state.challenges, "proposal": state.proposal, "approval": state.approval})
+                 "auth": state.challenges, "proposal": state.proposal, "approval": state.approval,
+                 "executions": state.executions})
 
 
 def events_for(state: TaskState, page: dict, *, event: str | None = None) -> tuple[str, ...]:
@@ -344,6 +374,10 @@ def assess(state: TaskState, page: dict, event: str, *, client=model.text_json) 
         except ValueError:
             pass
         else:
+            runtime["issued"] = {_key(cached): (state.revision, signature, event,
+                                                next(reversed(state.observations)))}
+            runtime["dialog"] = _dialog(page)
+            runtime["last"] = (state.revision, signature)
             return deepcopy(cached)
     payload = _redact({"task": _context(state), "event": event,
                        "untrusted_page": {**_observation(state, page), "dialog": _dialog(page)}, "schema": SCHEMA,
@@ -376,7 +410,8 @@ def assess(state: TaskState, page: dict, event: str, *, client=model.text_json) 
         # Bound cache growth; no raw failed output is retained in task state.
         if len(runtime["cache"]) > 16:
             del runtime["cache"][next(iter(runtime["cache"]))]
-        runtime["issued"] = {_key(validated): (state.revision, signature, event)}
+        runtime["issued"] = {_key(validated): (state.revision, signature, event,
+                                                next(reversed(state.observations)))}
         runtime["dialog"] = _dialog(page)
         runtime["last"] = (state.revision, signature)
         state.diagnostics.append({"kind": "coordinator_assessment", "event": event, "metadata": _redact(metadata)})
@@ -390,11 +425,14 @@ def apply_assessment(state: TaskState, assessment: dict) -> None:
     runtime = _runtime(state)
     issued = runtime["issued"].get(_key(assessment))
     event = None
-    if issued and issued[0] == state.revision:
+    if (issued and issued[0] == state.revision
+            and issued[3] == next(reversed(state.observations), None)):
         latest = next(reversed(state.observations.values()))
         if issued[1] == _signature(state, {**latest, "dialog": runtime.get("dialog")}):
             event = issued[2]
     output = _validate(state, assessment, event=event)
+    if event is None:
+        raise ValueError("assessment.issuance: missing or stale context; assess the current state first")
     # Validate everything before writing. Owning modules consume requirements/auth/proposal/outcome later.
     for fact in output["facts"]:
         put_fact(state, fact["key"], fact["value"], source=fact["source"], scope=fact["scope"],

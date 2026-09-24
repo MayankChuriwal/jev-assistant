@@ -273,3 +273,77 @@ def test_prompt_excludes_stale_evidence_and_invalid_facts():
     assert "address" not in calls[0]["task"]["facts"]
     assert old not in calls[0]["task"]["evidence"]
     assert current in calls[0]["task"]["evidence"]
+
+
+@pytest.mark.parametrize("change", ["amendment", "observation", "identical_observation"])
+def test_objective_only_assessment_requires_current_issuance(change):
+    s, page, _ = observed()
+    client, _ = scripted(assessment(objective="Old objective"))
+    output = assess(s, page, "start", client=client)
+    if change == "amendment":
+        amend(s, "Use another provider", {"provider"})
+    else:
+        observe_state(s, {**page, "text": "Changed stage"} if change == "observation" else page)
+    before = public_context(s)
+    with pytest.raises(ValueError, match="issuance|context"):
+        apply_assessment(s, output)
+    assert public_context(s) == before
+
+
+def test_cached_assessment_is_reissued_for_current_observation():
+    s, page, _ = observed()
+    client, calls = scripted(assessment(objective="Current objective"))
+    assess(s, page, "start", client=client)
+    observe_state(s, page)
+    apply_assessment(s, assess(s, page, "start", client=client))
+    assert s.objective == "Current objective" and len(calls) == 1
+
+
+@pytest.mark.parametrize("raw,value", [("private-registered-secret", {"private-registered-secret": "x"}),
+                                        ("246810", {"answer": 246810}),
+                                        ("246810", {"answer": 246810.0})])
+def test_repair_and_metadata_redact_secret_keys_and_numeric_values(raw, value):
+    from assistant.profile import SECRETS, Secrets
+    s, page, _ = observed()
+    calls = []
+    def client(system, payload, **kwargs):
+        calls.append(deepcopy(payload))
+        return (value if len(calls) == 1 else assessment()), {"model": "fake", "detail": value}
+    token = SECRETS.set(Secrets([(raw, "[secret:test]")]))
+    try:
+        assess(s, page, "start", client=client)
+        assert len(calls) == 2
+        assert raw not in repr(calls)
+        assert raw not in repr(s.diagnostics)
+        assert raw not in repr(s._coordinator)
+    finally:
+        SECRETS.reset(token)
+
+
+def test_valid_fact_cache_redacts_numeric_secret_representation():
+    from assistant.profile import SECRETS, Secrets
+    s, page, oid = observed("Proof")
+    eid = cite(s, oid, "Proof")
+    fact = dict(key="detail", value={"answer": 246810}, source="page", scope="task", revision=0,
+                depends_on=[], evidence=[eid], valid=True)
+    client, _ = scripted(assessment(facts=[fact]))
+    token = SECRETS.set(Secrets([("246810", "[secret:test]")]))
+    try:
+        output = assess(s, page, "start", client=client)
+        apply_assessment(s, output)
+        assert "246810" not in repr(output)
+        assert "246810" not in repr(s._coordinator)
+        assert "246810" not in repr(s.facts)
+    finally:
+        SECRETS.reset(token)
+
+
+def test_prompt_supplies_known_execution_ids_and_invalidates_on_execution_change():
+    s, page, _ = observed()
+    s.executions["x1"] = {"id": "x1", "revision": 0, "status": "dispatched"}
+    client, calls = scripted(assessment())
+    assess(s, page, "outcome", client=client)
+    assert calls[0]["task"]["execution_ids"] == ["x1"]
+    s.executions["x1"]["status"] = "unknown"
+    assess(s, page, "outcome", client=client)
+    assert len(calls) == 2

@@ -43,3 +43,22 @@ Only facts, the semantic objective, permitted completion requirements, and descr
 - Root AGENTS.md references RTK.md, but no RTK.md exists in the worktree or repository. Parent confirmed proceeding with available AGENTS.md and approved design/plan.
 
 No known failing checks. No live-model reliability claim.
+
+## Review follow-up: issuance and structural secret redaction
+
+Both Important findings were reproduced and fixed:
+
+1. Every `apply_assessment` now requires an issued assessment for the current revision, semantic signature and exact observation ID, before any write. This includes objective-only outputs. A cached result is explicitly reissued for the current observation after validation, retaining reuse without accepting an old observation's authorization to write semantic state.
+2. Coordinator redaction now recursively sanitizes dictionary keys as well as values. Numeric values are compared with registered secret numeric representations using Decimal (including lost leading zeros); registered regex patterns also cover strings, including strings resembling data URLs. Repair payloads, safe metadata/diagnostics, validated outputs, cache and applied facts all use this boundary.
+3. Added code-owned `execution_ids` to coordinator context because documented auth/completion schemas already require those references. Execution state now participates in semantic cache invalidation. This is reference discoverability only: challenge/execution flow, revision and submission semantics remain the owning modules' checks.
+
+Exact regression evidence:
+
+- RED: `uv run pytest tests/test_coordinator.py -q` — **8 failed, 30 passed in 0.29s**. The failures were objective-only application after amendment, changed observation and identical re-observation (3); secret dictionary key, integer OTP and floating-point OTP in rejected repair/metadata (3); numeric secret retained in a valid fact cache (1); missing execution IDs in prompt (1). The cache reissuance compatibility test also ran and passed before the fix, then remained passing.
+- GREEN: `uv run pytest tests/test_coordinator.py tests/test_jobs.py tests/test_model.py -q` — **88 passed in 0.21s**.
+- `uv run ruff check .` — passed.
+- `uv run pytest` — **389 passed, 91 deselected in 9.98s**.
+- `uv run pytest -m browser` — **91 passed, 389 deselected in 66.11s**.
+- `node --check assistant/snapshot.js` and `git diff --check` — passed; full chained check command exited 0.
+
+No known failing checks after the review fixes. Legacy routing/visual rollout remains staged for Tasks 11–12.
