@@ -178,3 +178,132 @@ def test_observation_preserves_public_control_container_context():
             'raw_secret': 'must-not-retain'})]))
     assert s.observations[oid]['actions'][0]['context'] == {
         'form': 'Checkout', 'section': 'Review purchase', 'dialog': 'Complete purchase'}
+
+
+@pytest.mark.parametrize('operation', ['SCROLL_DOWN', 'LOOK', 'CLICK'])
+def test_unproductive_actions_cannot_avoid_stall_detection(operation):
+    from assistant.state import track_progress
+
+    s = TaskState('t1', 'Find a specific option')
+    results = [track_progress(s, operation=operation, semantic_state='same-options',
+                              change_evidence=(), now=float(i)) for i in range(3)]
+    assert results[-1] == 'recover'
+
+
+def test_wait_uses_elapsed_time_and_cancel_stops_waiting():
+    from assistant.state import track_progress
+
+    s = TaskState('t1', 'Wait for requested document')
+    for now in [0, 0, 0.01, 1, 29.9]:
+        assert track_progress(s, operation='WAIT', semantic_state='pending',
+                              change_evidence=(), now=now) == 'wait'
+    assert track_progress(s, operation='WAIT', semantic_state='pending',
+                          change_evidence=(), now=30) == 'recover'
+    assert s.progress.get('counts', {}) == {}
+    s.set_status('cancelled')
+    assert track_progress(s, operation='WAIT', semantic_state='pending',
+                          change_evidence=(), now=31) == 'blocked'
+    assert s.status == 'cancelled'
+
+
+def test_semantic_cycle_survives_question_rewording_and_wait():
+    from assistant.state import track_progress
+
+    s = TaskState('t1', 'Find a specific option')
+    for i, (op, semantic) in enumerate([('LOOK', 'a'), ('WAIT', 'a'), ('SCROLL_DOWN', 'b')]):
+        track_progress(s, operation=op, semantic_state=semantic, change_evidence=(), now=i)
+    s.questions['q'] = {'text': 'Rephrased question'}
+    assert track_progress(s, operation='LOOK', semantic_state='a', change_evidence=(), now=3) == 'recover'
+
+
+def test_progress_needs_registered_current_nonreplayed_semantic_evidence():
+    from assistant.state import record_progress_change, track_progress
+
+    s = TaskState('t1', 'Find requested option')
+    oid = observe_state(s, {'url': 'https://shop.test', 'text': 'Requested option available'})
+    eid = cite(s, oid, 'Requested option available')
+    with pytest.raises(ValueError, match='progress evidence'):
+        track_progress(s, operation='LOOK', semantic_state='a', change_evidence=(eid,), now=0)
+    record_progress_change(s, kind='requested_options', evidence_ids=(eid,))
+    assert track_progress(s, operation='LOOK', semantic_state='a', change_evidence=(eid,), now=0) == 'continue'
+    for now in range(1, 4):
+        result = track_progress(s, operation='LOOK', semantic_state='a', change_evidence=(eid,), now=now)
+    assert result == 'recover'
+    fresh = observe_state(s, {'url': 'https://shop.test', 'text': 'Requested option available'})
+    repeated = cite(s, fresh, 'Requested option available')
+    record_progress_change(s, kind='requested_options', evidence_ids=(repeated,))
+    assert track_progress(s, operation='LOOK', semantic_state='a', change_evidence=(repeated,), now=4) == 'recover'
+
+
+@pytest.mark.parametrize('text,kind', [('Resend in 30 seconds', 'page'), ('new image hash', 'visual-observation')])
+def test_countdown_and_screenshot_are_not_progress(text, kind):
+    from assistant.state import record_progress_change
+
+    s = TaskState('t1', 'Authenticate')
+    oid = observe_state(s, {'url': 'https://shop.test', 'text': text, 'screenshot': 'image'})
+    eid = cite(s, oid, text, kind=kind)
+    with pytest.raises(ValueError, match='progress evidence'):
+        record_progress_change(s, kind='relevant_content', evidence_ids=(eid,))
+
+
+def test_two_recovery_approaches_then_block_with_remaining_objective():
+    from assistant.state import begin_recovery
+
+    s = TaskState('t1', 'Find requested option')
+    oid = observe_state(s, {'url': 'https://shop.test', 'text': 'No results'})
+    eid = cite(s, oid, 'No results')
+    def attempt(approach, reason='No results'):
+        return begin_recovery(s, objective='Find requested option', semantic_state='empty',
+                              recovery={'objective': approach, 'reason': reason, 'evidence_ids': [eid]})
+    assert attempt('Inspect another region')
+    assert not attempt('  inspect ANOTHER region ', 'Different wording')
+    assert s.status == 'running'
+    assert attempt('Resolve search ambiguity')
+    assert not attempt('Revisit observed route')
+    assert s.status == 'blocked'
+    assert 'Find requested option' in s.progress['blocker']
+    assert 'click' not in s.progress['blocker'].lower()
+
+
+@pytest.mark.parametrize('kind,limit', [('actions', 150), ('jev', 300), ('coordinator', 60)])
+def test_budget_is_checked_before_extra_work_and_blocks(kind, limit):
+    from assistant.state import spend
+
+    s = TaskState('t1', 'Obtain receipt')
+    for _ in range(limit):
+        spend(s, kind)
+    with pytest.raises(ValueError, match=f'{kind} budget exhausted'):
+        spend(s, kind)
+    assert s.progress['counts'][kind] == limit
+    assert s.status == 'blocked'
+    assert 'Obtain receipt' in s.progress['blocker']
+
+
+def test_failed_second_recovery_blocks_on_next_stall_without_third_request():
+    from assistant.state import begin_recovery, track_progress
+
+    s = TaskState('t1', 'Find requested option')
+    oid = observe_state(s, {'url': 'https://shop.test', 'text': 'No results'})
+    eid = cite(s, oid, 'No results')
+    for approach in ['Inspect region', 'Resolve ambiguity']:
+        assert begin_recovery(s, objective=s.objective, semantic_state='empty',
+                              recovery={'objective': approach, 'reason': 'No results', 'evidence_ids': [eid]})
+    for now in range(3):
+        result = track_progress(s, operation='LOOK', semantic_state='empty', change_evidence=(), now=now)
+    assert result == 'blocked'
+    assert s.status == 'blocked'
+
+
+def test_stale_evidence_and_backwards_clock_cannot_reset_stall():
+    from assistant.state import record_progress_change, track_progress
+
+    s = TaskState('t1', 'Find result')
+    oid = observe_state(s, {'url': 'https://shop.test', 'text': 'Result available'})
+    eid = cite(s, oid, 'Result available')
+    record_progress_change(s, kind='relevant_content', evidence_ids=(eid,))
+    track_progress(s, operation='WAIT', semantic_state='pending', change_evidence=(), now=10)
+    with pytest.raises(ValueError, match='clock'):
+        track_progress(s, operation='WAIT', semantic_state='pending', change_evidence=(), now=9)
+    amend(s, 'Find another result', set())
+    with pytest.raises(ValueError, match='stale'):
+        track_progress(s, operation='LOOK', semantic_state='pending', change_evidence=(eid,), now=11)

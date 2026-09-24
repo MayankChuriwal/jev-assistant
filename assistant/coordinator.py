@@ -10,7 +10,7 @@ from decimal import Decimal, InvalidOperation
 from . import model
 from .profile import SECRETS
 from .questions import COORDINATE, INTERPRET_MESSAGE, VISUAL_ANNOTATIONS
-from .state import TaskState, public_context, put_fact
+from .state import TaskState, public_context, put_fact, spend
 
 ASSESSMENT_KEYS = {"objective", "facts", "requirements", "completion", "auth", "progress",
                    "proposal", "outcome", "notice", "recovery"}
@@ -409,10 +409,7 @@ def assess(state: TaskState, page: dict, event: str, *, client=model.text_json) 
                        "untrusted_page": {**_observation(state, page), "dialog": _dialog(page)}, "schema": SCHEMA,
                        "nullable": ["auth", "progress", "proposal", "outcome", "notice", "recovery"]})
     for attempt in range(2):
-        count = state.progress.get("coordinator_calls", 0)
-        if count >= 60:
-            raise ValueError("coordinator budget exhausted")
-        state.progress["coordinator_calls"] = count + 1
+        spend(state, "coordinator")
         try:
             output, metadata = client(COORDINATE, payload, max_tokens=4096)
         except model.TextJSONError as exc:

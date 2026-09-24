@@ -361,11 +361,11 @@ def field_cache_key(state: TaskState, helper_input: dict, challenge_id: str | No
     import hashlib
     import json
 
-    from .profile import SECRETS
-
-    registry = SECRETS.get()
-    payload = registry.redact(helper_input) if registry else helper_input
-    encoded = json.dumps([state.task_id, state.revision, challenge_id, payload],
+    # Hash without retaining the payload. Redaction before hashing could collapse
+    # different helper inputs to the same placeholder and permit stale reuse.
+    facts = {key: fact for key, fact in state.facts.items() if fact['valid']}
+    encoded = json.dumps([state.task_id, state.revision, challenge_id, helper_input,
+                          state.constraints, facts, state.challenges.get(challenge_id)],
                          sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()
 
@@ -575,3 +575,40 @@ def record_captcha_answer(state: TaskState, challenge_id: str, reply: str, *, re
     put_fact(state, key, answer, source='user', scope=challenge_id)
     state.facts[key].update(purpose='captcha', challenge_revision=revision, observation_id=oid)
     return deepcopy(state.facts[key])
+
+
+class FieldCache:
+    """Process-only resolved inputs. Consume before dispatch, even if uncertain.
+
+    A stale-before-dispatch rejection leaves the entry intact. Re-observation can
+    reuse it only with equivalent complete helper input and current task binding.
+    Store public values/opaque references here; raw secrets belong in SecretStore.
+    """
+
+    def __init__(self):
+        self._values = {}
+        self._consumed = set()
+
+    def __getstate__(self):
+        raise TypeError('field cache cannot be serialized')
+
+    def put(self, state, helper_input, challenge_id, value):
+        key = field_cache_key(state, helper_input, challenge_id)
+        if key in self._consumed:
+            raise ValueError('field input already dispatched; require fresh resolution context')
+        self._values[key] = deepcopy(value)
+
+    def get(self, state, helper_input, challenge_id):
+        if state.status in {'done', 'failed', 'cancelled', 'blocked'}:
+            return None
+        key = field_cache_key(state, helper_input, challenge_id)
+        return deepcopy(self._values.get(key))
+
+    def consume(self, state, helper_input, challenge_id):
+        key = field_cache_key(state, helper_input, challenge_id)
+        self._values.pop(key, None)
+        self._consumed.add(key)
+
+    def clear(self):
+        self._values.clear()
+        self._consumed.clear()

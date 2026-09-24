@@ -725,3 +725,64 @@ def test_pending_challenge_replacement_needs_a_new_observed_challenge():
     s.challenges['c2']['observation_id'] = new
     assert observe_auth(s, dict(auth_event(s, new), challenge_id='c2'))['status'] == 'challenge'
     assert s.challenges['c1']['status'] == 'expired'
+
+
+@pytest.mark.parametrize('change', ['form', 'constraints', 'provider', 'address', 'challenge'])
+def test_cached_field_value_invalidates_meaning_and_task_context(change):
+    from assistant.interaction import FieldCache
+    from assistant.state import put_fact
+
+    s = TaskState('t1', 'Fill delivery address')
+    cache = FieldCache()
+    payload = {'host': 'shop.test', 'label': 'Address', 'form': 'Delivery'}
+    cache.put(s, payload, None, '[profile:address]')
+    if change == 'form':
+        payload['form'] = 'Billing'
+    elif change == 'constraints':
+        s.constraints['region'] = 'new region'
+    elif change in {'provider', 'address'}:
+        put_fact(s, change, 'Changed', source='user')
+    challenge = 'new-challenge' if change == 'challenge' else None
+    assert cache.get(s, payload, challenge) is None
+
+
+def test_stale_before_dispatch_reuses_field_value_but_dispatch_consumes_it():
+    from assistant.interaction import FieldCache
+    from assistant.state import observe_state
+
+    s = TaskState('t1', 'Fill address')
+    cache = FieldCache()
+    payload = {'host': 'shop.test', 'label': 'Address', 'form': 'Delivery'}
+    cache.put(s, payload, None, '[profile:address]')
+    observe_state(s, {'url': 'https://shop.test', 'text': 'Delivery'})
+    assert cache.get(s, dict(payload), None) == '[profile:address]'
+    cache.consume(s, payload, None)
+    s.executions['e1'] = {'status': 'uncertain'}
+    assert cache.get(s, payload, None) is None
+    assert 'profile:address' not in str(s.progress)
+
+
+def test_consumed_cache_cannot_be_reinserted_or_reused_after_cancellation():
+    from assistant.interaction import FieldCache
+
+    s = TaskState('t1', 'Fill address')
+    cache = FieldCache()
+    payload = {'form': 'Delivery', 'label': 'Address'}
+    cache.put(s, payload, None, 'Home')
+    cache.consume(s, payload, None)
+    with pytest.raises(ValueError, match='already dispatched'):
+        cache.put(s, payload, None, 'Home')
+    cache.put(s, {'form': 'Billing'}, None, 'Office')
+    s.set_status('cancelled')
+    assert cache.get(s, {'form': 'Billing'}, None) is None
+
+
+def test_same_challenge_expiry_invalidates_cached_field_binding():
+    from assistant.interaction import FieldCache
+
+    s = TaskState('t1', 'Authenticate')
+    s.challenges['c1'] = {'id': 'c1', 'status': 'challenge', 'expires_at': 100}
+    cache = FieldCache()
+    cache.put(s, {'form': 'Login', 'label': 'Code'}, 'c1', '[secret:opaque]')
+    s.challenges['c1']['status'] = 'expired'
+    assert cache.get(s, {'form': 'Login', 'label': 'Code'}, 'c1') is None

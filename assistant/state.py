@@ -241,3 +241,166 @@ def public_context(state: TaskState) -> dict:
                   "approval": state.approval, "proposal": state.proposal,
                   "completion": state.completion, "delivered": state.delivered,
                   "diagnostics": state.diagnostics})
+
+
+BUDGETS = {'actions': 150, 'jev': 300, 'coordinator': 60}
+WAIT_SECONDS = 30.0
+PROGRESS_KINDS = frozenset({'accepted_input', 'auth_transition', 'requested_options',
+                            'relevant_content', 'confirmed_outcome'})
+
+
+def _block(state, reason, *, objective=None):
+    summary = f"{reason}. Remaining objective: {objective or state.objective}."
+    state.progress['blocker'] = summary
+    state.diagnostics.append({'kind': 'blocked', 'reason': summary})
+    if state.status not in _TERMINAL:
+        state.set_status('blocked')
+
+
+def spend(state: TaskState, kind: str) -> None:
+    """Reserve a request/action before dispatch, including failed schema repairs."""
+    if kind not in BUDGETS:
+        raise ValueError('unknown budget kind')
+    if state.status in _TERMINAL or state.status in {'blocked', 'paused', 'waiting_user'}:
+        raise ValueError('task is not available for work')
+    counts = state.progress.setdefault('counts', {})
+    count = counts.get(kind, 0)
+    # Preserve the Task 3 counter for callers staged before loop integration.
+    if kind == 'coordinator':
+        count = max(count, state.progress.get('coordinator_calls', 0))
+    if count >= BUDGETS[kind]:
+        _block(state, f'{kind} budget exhausted')
+        raise ValueError(f'{kind} budget exhausted')
+    counts[kind] = count + 1
+    if kind == 'coordinator':
+        state.progress['coordinator_calls'] = count + 1
+
+
+def _current_progress_evidence(state, evidence_ids):
+    latest = next(reversed(state.observations), None)
+    if not evidence_ids or any(not isinstance(eid, str) or eid not in state.evidence
+                               for eid in evidence_ids):
+        raise ValueError('progress evidence is missing or unknown')
+    records = [state.evidence[eid] for eid in evidence_ids]
+    if any(e['revision'] != state.revision or e['observation_id'] != latest for e in records):
+        raise ValueError('progress evidence is stale')
+    return records
+
+
+def record_progress_change(state: TaskState, *, kind: str, evidence_ids: tuple[str, ...]) -> None:
+    """Register an already validated semantic change, never just a new observation.
+
+    The loop calls this after acceptance/auth/outcome gates or a validated semantic
+    assessment. Citations prove provenance, not relevance; callers must establish
+    the stated change. Raw assessment summaries are deliberately not registered.
+    """
+    import re
+
+    if kind not in PROGRESS_KINDS:
+        raise ValueError('unknown progress change kind')
+    records = _current_progress_evidence(state, evidence_ids)
+    timer = re.compile(r'\b(?:resend|retry|expires?|remaining)(?:\s+in)?\s+\d+\s*(?:seconds?|secs?|s)\b', re.I)
+    if any(e['kind'] == 'visual-observation' or not timer.sub('', e['quote']).strip(' .,:;')
+           for e in records):
+        raise ValueError('progress evidence cannot be a timer or screenshot alone')
+    registered = state.progress.setdefault('changes', {})
+    for e in records:
+        registered[e['id']] = {'kind': kind, 'identity': [state.revision, kind, e['origin'],
+                                                        e['kind'], ' '.join(timer.sub('', e['quote']).split())]}
+
+
+def track_progress(state: TaskState, *, operation: str, semantic_state: str,
+                   change_evidence: tuple[str, ...], now: float) -> str:
+    """Return a scheduling decision; never sleep, call a model or mutate a browser.
+
+    ``now`` is monotonic time. While returning wait the loop must yield to inbound
+    events and cancellation, then observe read-only without requesting Jev again.
+    """
+    import math
+
+    if state.status in _TERMINAL or state.status in {'blocked', 'paused', 'waiting_user'}:
+        return 'blocked'
+    if (not isinstance(operation, str) or not operation or not isinstance(semantic_state, str)
+            or not semantic_state or type(now) not in (int, float) or not math.isfinite(now)):
+        raise ValueError('invalid progress input')
+    progress = state.progress
+    if now < progress.get('checked_at', now):
+        raise ValueError('progress clock moved backwards')
+    identities = []
+    if change_evidence:
+        _current_progress_evidence(state, change_evidence)
+        for eid in change_evidence:
+            change = progress.get('changes', {}).get(eid)
+            if change is None:
+                raise ValueError('progress evidence has no validated semantic change')
+            identities.append(change['identity'])
+    seen = progress.setdefault('seen_changes', [])
+    fresh = [identity for identity in identities if identity not in seen]
+    progress['checked_at'] = now
+    if fresh:
+        seen.extend(fresh)
+        progress.pop('active_recovery', None)
+        progress.update(last_meaningful_change=now, non_wait_actions=0, cycles=[], wait_since=None)
+        state.diagnostics.append({'kind': 'progress', 'evidence_ids': list(change_evidence), 'at': now})
+        return 'continue'
+    if operation == 'WAIT':
+        if progress.get('wait_since') is None:
+            progress['wait_since'] = now
+        result = 'recover' if now - progress['wait_since'] >= WAIT_SECONDS else 'wait'
+    else:
+        # WAIT cannot erase unproductive actions, and non-wait actions cannot
+        # extend an already-running wait deadline without meaningful evidence.
+        count = progress.get('non_wait_actions', 0) + 1
+        progress['non_wait_actions'] = count
+        cycles = progress.setdefault('cycles', [])
+        pair = [semantic_state, operation]
+        repeated = pair in cycles
+        cycles.append(pair)
+        del cycles[:-6]
+        result = 'recover' if count >= 3 or repeated else 'continue'
+    if result == 'recover':
+        active = progress.get('active_recovery')
+        if (active and active['semantic_state'] == semantic_state
+                and len(progress['recoveries'][active['key']]) >= 2):
+            _block(state, 'Recovery approaches exhausted', objective=active['objective'])
+            return 'blocked'
+        state.diagnostics.append({'kind': 'stalled', 'objective': state.objective,
+                                  'semantic_state': semantic_state, 'operation': operation})
+    return result
+
+
+def begin_recovery(state: TaskState, *, objective: str, semantic_state: str, recovery: dict) -> bool:
+    """Reserve a distinct semantic approach at a stalled objective/state.
+
+    Calling again means the prior attempt did not produce a meaningful change.
+    Reasons and question wording never create a new approach. This grants no
+    execution authority; Jev must still select the next operation and target.
+    """
+    import hashlib
+    import json
+
+    if state.status in _TERMINAL or state.status in {'blocked', 'paused', 'waiting_user'}:
+        return False
+    if (not isinstance(recovery, dict) or set(recovery) != {'objective', 'reason', 'evidence_ids'}
+            or any(not isinstance(v, str) or not v.strip()
+                   for v in (objective, semantic_state, recovery['objective'], recovery['reason']))):
+        raise ValueError('invalid semantic recovery')
+    _current_progress_evidence(state, recovery['evidence_ids'])
+    def normalize(text):
+        return ' '.join(text.casefold().split())
+    key = hashlib.sha256(json.dumps([normalize(objective), semantic_state]).encode()).hexdigest()
+    approaches = state.progress.setdefault('recoveries', {}).setdefault(key, [])
+    approach = normalize(recovery['objective'])
+    if approach in approaches:
+        state.diagnostics.append({'kind': 'recovery_duplicate', 'objective': objective})
+        return False
+    if len(approaches) >= 2:
+        _block(state, 'Recovery approaches exhausted', objective=objective)
+        return False
+    approaches.append(approach)
+    state.progress['active_recovery'] = {'key': key, 'objective': objective, 'semantic_state': semantic_state}
+    state.progress.update(non_wait_actions=0, cycles=[], wait_since=None)
+    state.diagnostics.append({'kind': 'recovery', 'objective': objective,
+                              'semantic_state': semantic_state, 'approach': approach,
+                              'evidence_ids': list(recovery['evidence_ids'])})
+    return True

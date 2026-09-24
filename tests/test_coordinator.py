@@ -420,3 +420,14 @@ def test_artifact_contract_rejects_missing_or_invalid_obligations(changes):
     client, _ = scripted(assessment(completion=[req]))
     with pytest.raises(ValueError):
         assess(s, page, 'start', client=client)
+
+
+def test_repair_spends_shared_coordinator_budget_before_network():
+    s, page, _ = observed()
+    s.progress['counts'] = {'coordinator': 59}
+    client, calls = scripted({})
+    with pytest.raises(ValueError, match='coordinator budget exhausted'):
+        assess(s, page, 'start', client=client)
+    assert len(calls) == 1
+    assert s.status == 'blocked'
+    assert s.progress['counts']['coordinator'] == 60
