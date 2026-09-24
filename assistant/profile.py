@@ -4,14 +4,12 @@ import contextvars
 import json
 import os
 import re
-import subprocess
 import threading
 from pathlib import Path
 
 HOME = Path(os.environ.get("JEV_HOME") or Path.home() / ".jev")
 HIDDEN = ("name", "phone", "email", "upi_id")  # reach models only as [profile:<key>]
 CARD_PARTS = ("number", "expiry", "name", "cvv")
-KEYCHAIN_TIMEOUT = 60  # seconds for the user to answer a Keychain unlock prompt
 SAVING = threading.Lock()  # parallel tasks share one profile
 
 
@@ -38,8 +36,19 @@ class Profile:
         return str(self.data[key])
 
     def vault_keys(self):
-        keys = [f"card.{c['id']}.{part}" for c in self.data["cards"] for part in CARD_PARTS]
-        return keys + [f"login.{host}" for host in self.data["logins"]]
+        return [f"login.{host}" for host in self.data["logins"]]
+
+    def legacy_card_keys(self) -> list[str]:
+        """Local metadata only; never infer deletion accounts from model/page text."""
+        return [f"card.{c['id']}.{part}" for c in self.data["cards"] for part in CARD_PARTS]
+
+    def legacy_card_cleanup(self) -> dict | None:
+        """Code-owned chat requirement. Core must bind the reply to these exact keys."""
+        keys = self.legacy_card_keys()
+        if not keys:
+            return None
+        return {"id": "legacy_card_cleanup", "kind": "confirm", "purpose": "legacy_card_cleanup",
+                "keys": keys, "text": "Delete the legacy card details saved in the local Jev vault?"}
 
     def summary(self):
         """Everything models may see about the user."""
@@ -47,7 +56,7 @@ class Profile:
             "addresses": [{k: a[k] for k in ("label", "text") if k in a} for a in self.data["addresses"]],
             "preferences": [p["text"] for p in self.data["preferences"]],
             "defaults": self.data["defaults"],
-            "cards": [{k: c[k] for k in ("id", "label", "last4")} for c in self.data["cards"]],
+            "cards": [],  # legacy local cards are not available payment methods
             "profile_keys": [k for k in HIDDEN if self.data.get(k)],
             "vault_keys": self.vault_keys(),
         }
@@ -100,48 +109,50 @@ class Profile:
         return pairs
 
 
-def quote(text):
-    """A double-quoted word for `security -i`, which splits its input like a shell."""
-    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
 class Vault:
-    """Card and login secrets in the macOS Keychain (service "jev"). Secrets travel on stdin, never in argv."""
+    """Authorized login passwords only; legacy cards require explicit cleanup."""
 
     SERVICE = "jev"
 
     def __init__(self, keychain=None):
-        self.keychain = str(keychain) if keychain else None
+        # Retain the old constructor signature but never open arbitrary keychains.
+        self.keychain = keychain
+
+    def _password(self, operation, key, value=None):
+        from .keychain import password
+        if self.keychain is not None:
+            raise RuntimeError("Keychain unavailable")
+        return password(operation, key, value)
+
+    @staticmethod
+    def _login(key):
+        if not isinstance(key, str) or not re.fullmatch(r"login\.[A-Za-z0-9.-]+(?::[0-9]+)?", key):
+            raise KeyError("password namespace unavailable")
 
     def get(self, key):
-        args = ["security", "find-generic-password", "-s", self.SERVICE, "-a", key, "-w"]
+        self._login(key)
         try:
-            result = subprocess.run(args + ([self.keychain] if self.keychain else []), capture_output=True,
-                                    text=True, timeout=KEYCHAIN_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            raise KeyError(key) from None  # a locked Keychain: the agent asks for the value in chat instead
-        if result.returncode:
-            raise KeyError(key)
-        return result.stdout.removesuffix("\n")
+            return self._password("get", key)
+        except RuntimeError:
+            raise KeyError("password unavailable") from None
 
     def set(self, key, value):
-        if not value or "\n" in value:
+        self._login(key)
+        if not isinstance(value, str) or not value or "\n" in value:
             raise ValueError("A secret must be one non-empty line.")
-        command = f"add-generic-password -U -s {self.SERVICE} -a {quote(key)} -w {quote(value)}"
-        if self.keychain:
-            command += " " + quote(self.keychain)
-        try:
-            subprocess.run(["security", "-i"], input=command + "\n", capture_output=True, text=True,
-                           timeout=KEYCHAIN_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"The Keychain did not answer (is it locked?); {key} was not stored.") from None
-        # `security -i` exits 0 even when a command fails: read the value back.
-        try:
-            stored = self.get(key)
-        except KeyError:
-            stored = None
-        if stored != value:
-            raise RuntimeError(f"The Keychain did not store {key}.")
+        self._password("set", key, value)
+
+    def delete_legacy_cards(self, keys: list[str], *, consent: bool) -> None:
+        if consent is not True:
+            raise ValueError("legacy cleanup requires explicit consent")
+        if not isinstance(keys, list) or any(not isinstance(key, str) or not re.fullmatch(
+                r"card\.[A-Za-z0-9_-]+\.(number|expiry|name|cvv)", key) for key in keys):
+            raise ValueError("invalid legacy card accounts")
+        for key in dict.fromkeys(keys):
+            try:
+                self._password("delete", key)
+            except KeyError:
+                pass  # already absent; never search or delete a broader namespace
 
 
 SECRETS = contextvars.ContextVar("jev_secrets", default=None)
@@ -152,6 +163,7 @@ class Secrets:
 
     def __init__(self, pairs=()):
         self.values = {}
+        self._owners = {}
         self.nodes = set()  # (frame, node) of fields that received a secret
         for value, placeholder in pairs:
             self.add(value, placeholder)
@@ -165,7 +177,25 @@ class Secrets:
             pattern = r"(?<!\d)" + r"[\s().-]*".join(digits) + r"(?!\d)"  # any spacing, brackets, dots, dashes
         else:
             pattern = r"(?<!\w)" + re.escape(value) + r"(?!\w)"
+        owners = self._owners.setdefault(value, [])
+        if placeholder not in owners:
+            owners.append(placeholder)
         self.values[value] = (re.compile(pattern, re.IGNORECASE), placeholder)
+
+    def remove(self, placeholder: str) -> None:
+        """After sanitizing all retained records, forget this placeholder's copies.
+
+        The task owner must sanitize model/error/history buffers before calling.
+        Other placeholders stay registered, including overlapping values.
+        """
+        for value, owners in list(self._owners.items()):
+            if placeholder in owners:
+                owners.remove(placeholder)
+            if owners:
+                self.values[value] = (self.values[value][0], owners[-1])
+            else:
+                del self.values[value]
+                del self._owners[value]
 
     def text(self, s):
         if s.startswith("data:image/"):

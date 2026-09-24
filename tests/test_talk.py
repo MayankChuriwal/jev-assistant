@@ -46,16 +46,17 @@ def test_profile_values_are_typed_but_logged_as_placeholders(tmp_path, monkeypat
 
 
 def test_vault_secrets_are_typed_masked_and_registered(tmp_path, monkeypatch):
-    a = agent_with(tmp_path)
-    calls = field(monkeypatch, ("secret", "card.hdfc.cvv"))
+    a = agent_with(tmp_path, vault=FakeVault({"login.shop.test": "123"}),
+                   profile={"logins": ["shop.test"]})
+    calls = field(monkeypatch, ("secret", "login.shop.test"))
     act(a, decision("e3", "TYPE_TEXT"))
-    assert typed(a) == "123" and a.state["history"][-1]["text"] == "[secret:card.hdfc.cvv]"
-    assert "card.hdfc.cvv" in calls[0]["allowed"] and (None, 8) in a.secrets.nodes
+    assert typed(a) == "123" and a.state["history"][-1]["text"] == "[secret:login.shop.test]"
+    assert "login.shop.test" in calls[0]["allowed"] and (None, 8) in a.secrets.nodes
     after = fake_page()
     next(x for x in after["actions"] if x["id"] == "e3")["value"] = "123"
     a.browser.observe.return_value = after
     assert next(x for x in a.observe()["actions"] if x["id"] == "e3")["value"] == "[secret]"
-    assert a.secrets.text("cvv 123") == "cvv [secret:card.hdfc.cvv]"
+    assert a.secrets.text("cvv 123") == "cvv [secret:login.shop.test]"
 
 
 def test_codes_are_asked_as_secrets_and_checked_before_typing(tmp_path, monkeypatch):

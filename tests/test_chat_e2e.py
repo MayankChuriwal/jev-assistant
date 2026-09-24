@@ -80,7 +80,7 @@ def test_two_goals_in_chat_run_in_parallel_without_leaks(chrome, site, tmp_path,
 
     def make_agent(url, goal, title, asker, notify):  # the real Agent, with a fake vault instead of the Keychain
         return loop.Agent(url, goal, title=title, asker=asker, notify=notify, profile=profile,
-                          vault=FakeVault({"card.hdfc.cvv": "123"}))
+                          vault=FakeVault())
 
     channel = WebChannel(tmp_path / "media")
     chat = conversation.Core(channel, profile=profile, make_agent=make_agent, poll=0.05)
@@ -109,6 +109,8 @@ def test_two_goals_in_chat_run_in_parallel_without_leaks(chrome, site, tmp_path,
     address = shown(lambda m: m["type"] == "interactive"
                     and "Deliver to which address?" in m["interactive"]["body"]["text"])
     user(**tap(address, "o1"))
+    assert shown(lambda m: m.get("x_secret") and "CVV" in m.get("text", {}).get("body", ""))
+    user(type="text", text={"body": "123"})
     confirm = shown(lambda m: any(i.endswith(":yes") for i in buttons(m)))
     user(**tap(confirm, "yes"))
     assert until(lambda: {t.status for t in chat.tasks.values()} == {"done"}, timeout=30), [
@@ -132,6 +134,6 @@ def test_two_goals_in_chat_run_in_parallel_without_leaks(chrome, site, tmp_path,
     written = until(lambda: sorted((HOME / "traces").glob("*[0-9]-diet-coke.json")), timeout=15)  # at close
     trace = written[-1].read_text()
     shop = jsonlib.loads(trace)
-    assert shop["status"] == "done" and shop["questions"] == 4 and shop["result"]["evidence"] == "Order placed #A1B2"
+    assert shop["status"] == "done" and shop["questions"] == 5 and shop["result"]["evidence"] == "Order placed #A1B2"
     for secret in ("98765", "Mayank", "482913", "111111"):
         assert secret not in trace, secret

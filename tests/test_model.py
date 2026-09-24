@@ -207,7 +207,7 @@ def test_target_questions_carry_state_and_the_full_rules(monkeypatch):
     assert model.choose(page, "Search with free cancellation", [])["choice"] == "e3"  # index 3 is node 2
 
 
-FIELD = {"goal": "Log in", "profile": {"profile_keys": ["phone"]}, "allowed": ["card.hdfc.cvv", "answer1"]}
+FIELD = {"goal": "Log in", "profile": {"profile_keys": ["phone"]}, "allowed": ["login.a.test", "answer1"]}
 
 
 def test_text_request_uses_only_parameters_openai_accepts(monkeypatch):
@@ -230,9 +230,8 @@ def test_missing_key_stops_before_guessing(monkeypatch):
 @pytest.mark.parametrize("content, expected", [
     ('{"text": "Zurich"}', ("text", "Zurich")),
     ('{"profile": "phone"}', ("profile", "phone")),
-    ('{"secret": "card.hdfc.cvv"}', ("secret", "card.hdfc.cvv")),
+    ('{"secret": "login.a.test"}', ("secret", "login.a.test")),
     ('{"ask": "Enter the OTP", "secret": true}', ("ask", "Enter the OTP", True, None)),
-    ('{"ask": "Card number?", "secret": true, "save_as": "card.number"}', ("ask", "Card number?", True, "card.number")),
 ])
 def test_field_values_take_one_of_four_forms(monkeypatch, content, expected):
     monkeypatch.setattr(model, "post_json", reply(content))
@@ -243,6 +242,7 @@ def test_field_values_take_one_of_four_forms(monkeypatch, content, expected):
     "Thinking: Zurich", '["Zurich"]', '{"text":null}', '{"text":"Zurich","extra":true}', '{"text":" "}',
     '{"profile": "upi_id"}', '{"secret": "card.icici.cvv"}', '{"ask": "OTP?"}', '{"ask": "OTP?", "secret": "yes"}',
     '{"ask": "OTP?", "secret": true, "save_as": "card.pin"}',
+    '{"ask": "Card number?", "secret": true, "save_as": "card.number"}',
 ])
 def test_invalid_field_values_type_nothing(monkeypatch, content):
     monkeypatch.setattr(model, "post_json", reply(content))

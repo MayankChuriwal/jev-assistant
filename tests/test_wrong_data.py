@@ -69,32 +69,29 @@ def test_rerendered_code_boxes_still_count_attempts(tmp_path, monkeypatch):
 
 
 def test_a_rejected_keychain_value_is_never_reused_and_its_replacement_waits_for_success(tmp_path, monkeypatch):
-    vault = FakeVault({"card.hdfc.cvv": "123"})
-    a = agent_with(tmp_path, vault=vault, replies=[{"text": "456"}])
-    replacement = ("ask", "Your saved CVV was rejected. Send it?", True, "card.cvv")
-    calls = field(monkeypatch, ("secret", "card.hdfc.cvv"), replacement)
+    vault = FakeVault({"login.shop.test": "123"})
+    a = agent_with(tmp_path, vault=vault, replies=[{"text": "456"}], profile={"logins": ["shop.test"]})
+    replacement = ("ask", "Your saved password was rejected. Send it?", True, None)
+    calls = field(monkeypatch, ("secret", "login.shop.test"), replacement)
     act(a, decision("e3", "TYPE_TEXT"))
     act(a, decision("e3", "TYPE_TEXT"))
     assert typed(a) == ["123", "456"]
-    assert "card.hdfc.cvv" in calls[0]["allowed"] and "card.hdfc.cvv" not in calls[1]["allowed"]
-    assert "One try left" in a.asked[0]["text"]  # a CVV field allows two values
-    assert a.state["pending_vault"] == {"card.hdfc.cvv": "456"} and vault.writes == []
-    act(a, decision("e3", "TYPE_TEXT"))
-    assert a.state["status"] == "blocked" and len(typed(a)) == 2
+    assert "login.shop.test" in calls[0]["allowed"] and "login.shop.test" not in calls[1]["allowed"]
+    assert a.state["pending_vault"] == {"login.shop.test": "456"} and vault.writes == []
     a.state["status"], a.state["commit"] = "ready", {"label": "Pay ₹79", "checks": 0}
     monkeypatch.setattr(loop.jobs, "outcome", lambda context, page, label: ("success", "Pay ₹79", META))
     a.check_commit()
-    assert vault.writes == [("card.hdfc.cvv", "456")]
+    assert vault.writes == [("login.shop.test", "456")]
 
 
 def test_a_failed_payment_never_writes_a_replacement(tmp_path, monkeypatch):
-    vault = FakeVault({"card.hdfc.cvv": "123"})
+    vault = FakeVault({"login.shop.test": "123"})
     a = agent_with(tmp_path, vault=vault)
-    a.state["pending_vault"] = {"card.hdfc.cvv": "456"}
+    a.state["pending_vault"] = {"login.shop.test": "456"}
     a.state["commit"] = {"label": "Pay ₹79", "checks": 0}
     monkeypatch.setattr(loop.jobs, "outcome", lambda context, page, label: ("failed", "Pay ₹79", META))
     a.check_commit()
-    assert vault.writes == [] and a.state["pending_vault"] == {"card.hdfc.cvv": "456"}
+    assert vault.writes == [] and a.state["pending_vault"] == {"login.shop.test": "456"}
 
 
 def test_values_the_model_wrote_are_not_attempts(tmp_path, monkeypatch):
@@ -130,17 +127,17 @@ def test_only_the_newest_replacement_reaches_the_keychain(tmp_path, monkeypatch)
     expiry = {"id": "e1", "kind": "fill", "label": "Expiry", "role": "textbox", "value": "", "node": 1}
     page = fake_page(actions=[expiry,
                               {"id": "wait", "kind": "wait", "label": "Wait", "node": None}])
-    vault = FakeVault({"card.hdfc.expiry": "12/28"})
+    vault = FakeVault({"login.shop.test": "12/28"})
     a = reacting(agent_with(tmp_path, page=page, vault=vault, replies=[{"text": "12/92"}, {"text": "12/29"}]))
-    again = ("ask", "That expiry was rejected. Send it again?", True, "card.expiry")
-    field(monkeypatch, ("secret", "card.hdfc.expiry"), again, again)
+    again = ("ask", "That password was rejected. Send it again?", True, None)
+    field(monkeypatch, ("secret", "login.shop.test"), again, again)
     for _ in range(3):
         act(a, decision("e1", "TYPE_TEXT"))
-    assert typed(a) == ["12/28", "12/92", "12/29"] and a.state["pending_vault"] == {"card.hdfc.expiry": "12/29"}
+    assert typed(a) == ["12/28", "12/92", "12/29"] and a.state["pending_vault"] == {"login.shop.test": "12/29"}
     a.state["status"], a.state["commit"] = "ready", {"label": "Pay ₹79", "checks": 0}
     monkeypatch.setattr(loop.jobs, "outcome", lambda context, page, label: ("success", "Pay ₹79", META))
     a.check_commit()
-    assert vault.writes == [("card.hdfc.expiry", "12/29")]
+    assert vault.writes == [("login.shop.test", "12/29")]
 
 
 WAIT_ONLY = [{"id": "wait", "kind": "wait", "label": "Wait", "node": None}]
@@ -167,7 +164,7 @@ def test_a_saved_value_keeps_counting_through_a_failure_page(tmp_path):
     page = a.state["page"]
     cvv = next(x for x in page["actions"] if x["id"] == "e3")
     where = ("shop.test", "CVV")
-    a.state["unused"][where] = ("123", "[secret:card.hdfc.cvv]", "vault", "card.hdfc.cvv")
+    a.state["unused"][where] = ("123", "[secret:login.shop.test]", "vault", "login.shop.test")
     a.after_typing(cvv, page)
     a.browser.observe.return_value = fake_page(text="Payment failed. Try again", url="https://shop.test/failed",
                                                actions=WAIT_ONLY)
@@ -175,7 +172,7 @@ def test_a_saved_value_keeps_counting_through_a_failure_page(tmp_path):
     assert a.state["typed"][where]["count"] == 1  # a Keychain value the site may have refused is never forgotten
     a.browser.observe.return_value = fake_page()  # back at checkout, the CVV field again
     a.observe()
-    assert a.previous(where)["rejected"] and "card.hdfc.cvv" not in a.allowed(where)
+    assert a.previous(where)["rejected"] and "login.shop.test" not in a.allowed(where)
 
 
 def test_a_code_the_site_took_is_never_offered_again(tmp_path):

@@ -2,12 +2,10 @@
 
 import json
 import stat
-import subprocess
 import threading
 
 import pytest
 
-from assistant import profile as profiles
 from assistant.profile import Profile, Vault
 
 
@@ -23,9 +21,9 @@ def profile(tmp_path):
 def test_models_see_addresses_and_labels_but_only_names_of_hidden_values(profile):
     summary = profile.summary()
     assert summary["addresses"] == [{"label": "Home", "text": "12 MG Road, Bengaluru"}]
-    assert summary["cards"] == [{"id": "hdfc", "label": "HDFC Visa", "last4": "1234"}]
+    assert summary["cards"] == []
     assert summary["profile_keys"] == ["name", "phone", "email"]
-    assert "card.hdfc.cvv" in summary["vault_keys"] and "login.www.swiggy.com" in summary["vault_keys"]
+    assert summary["vault_keys"] == ["login.www.swiggy.com"]
     assert "98765" not in json.dumps(summary) and "Mayank" not in json.dumps(summary)
 
 
@@ -60,54 +58,6 @@ def test_a_missing_file_is_an_empty_profile(tmp_path):
     assert p.summary()["profile_keys"] == [] and p.geolocation() is None and p.hidden_values() == []
 
 
-import sys  # noqa: E402
-
-mac = pytest.mark.skipif(sys.platform != "darwin", reason="macOS Keychain")
-
-
-@pytest.fixture
-def keychain(tmp_path):
-    path = tmp_path / "test.keychain-db"
-    subprocess.run(["security", "create-keychain", "-p", "test", str(path)], check=True)
-    subprocess.run(["security", "unlock-keychain", "-p", "test", str(path)], check=True)
-    yield path
-    subprocess.run(["security", "delete-keychain", str(path)], check=False)
-
-
-@mac
-def test_vault_round_trips_awkward_secrets_without_argv(keychain, monkeypatch):
-    seen = []
-    real = subprocess.run
-
-    def spy(args, **kwargs):
-        seen.append((list(args), kwargs.get("input")))
-        return real(args, **kwargs)
-
-    monkeypatch.setattr(subprocess, "run", spy)
-    vault = Vault(keychain)
-    vault.set("card.hdfc.cvv", "1 2\"3'\\")
-    assert vault.get("card.hdfc.cvv") == "1 2\"3'\\"
-    vault.set("card.hdfc.cvv", "456")
-    assert vault.get("card.hdfc.cvv") == "456"
-    assert not any("456" in " ".join(args) for args, _ in seen)  # secrets never reach process arguments
-
-
-@mac
-def test_vault_reports_missing_and_rejects_bad_values(keychain):
-    vault = Vault(keychain)
-    with pytest.raises(KeyError):
-        vault.get("card.none.cvv")
-    for bad in ("", "two\nlines"):
-        with pytest.raises(ValueError):
-            vault.set("card.hdfc.cvv", bad)
-
-
-@mac
-def test_vault_notices_a_store_that_did_not_happen(tmp_path):
-    with pytest.raises(RuntimeError, match="did not store"):
-        Vault(tmp_path / "missing.keychain-db").set("card.hdfc.cvv", "123")
-
-
 from assistant.profile import Secrets  # noqa: E402
 
 
@@ -135,21 +85,6 @@ def test_phone_numbers_are_hidden_in_local_formats(profile):
     s = Secrets(profile.hidden_values())
     for shown in ("(98765) 43210", "098765 43210", "+91-98765-43210", "98765.43210"):
         assert "98765" not in s.text(f"call {shown} now"), shown
-
-
-def test_a_locked_keychain_never_hangs_the_task(monkeypatch):
-    seen = []
-
-    def hangs(args, **options):
-        seen.append(options.get("timeout"))
-        raise subprocess.TimeoutExpired(args, options.get("timeout"))
-
-    monkeypatch.setattr(profiles.subprocess, "run", hangs)
-    with pytest.raises(KeyError):
-        Vault().get("card.hdfc.cvv")  # the agent then asks for the value in chat instead
-    with pytest.raises(RuntimeError, match="Keychain"):
-        Vault().set("card.hdfc.cvv", "123")
-    assert seen == [profiles.KEYCHAIN_TIMEOUT] * 2
 
 
 def test_parallel_saves_never_collide(tmp_path):
@@ -195,3 +130,57 @@ def test_hidden_profile_fields_cannot_be_exposed_as_plain_defaults(tmp_path):
     with pytest.raises(ValueError):
         profile.set_default("phone", "+91 9876543210", consent=True)
     assert not profile.data["defaults"]
+
+
+def test_vault_namespaces_and_explicit_legacy_cleanup(profile, monkeypatch):
+    from assistant import keychain
+    calls = []
+    monkeypatch.setattr(keychain, "password", lambda *args: calls.append(args) or "秘密")
+    vault = Vault()
+    assert vault.get("login.a.test") == "秘密"
+    vault.set("login.a.test", "秘密")
+    for op in (lambda: vault.get("card.hdfc.cvv"), lambda: vault.set("card.hdfc.cvv", "123")):
+        with pytest.raises(KeyError):
+            op()
+    keys = profile.legacy_card_keys()
+    with pytest.raises(ValueError):
+        vault.delete_legacy_cards(keys, consent=False)
+    with pytest.raises(ValueError):
+        vault.delete_legacy_cards([*keys, "login.a.test"], consent=True)
+    assert len(calls) == 2
+    vault.delete_legacy_cards(keys, consent=True)
+    assert calls[2:] == [("delete", key, None) for key in keys]
+
+
+def test_redaction_cleanup_preserves_other_records():
+    registry = Secrets([("4111111111111111", "[secret:card]"), ("123", "[secret:cvv]"),
+                        ("秘密pass", "[secret:password]"), ("654321", "[secret:otp]")])
+    record = registry.redact({"history": ["4111111111111111 123 秘密pass 654321"]})
+    registry.remove("[secret:card]")
+    assert "4111111111111111" not in str(record)
+    assert registry.text("123 秘密pass 654321") == "[secret:cvv] [secret:password] [secret:otp]"
+
+
+def test_vault_denial_becomes_missing_password(monkeypatch):
+    from assistant import keychain
+    def denied(*args):
+        raise RuntimeError("Keychain unavailable")
+    monkeypatch.setattr(keychain, "password", denied)
+    with pytest.raises(KeyError, match="unavailable"):
+        Vault().get("login.a.test")
+
+
+def test_legacy_cleanup_is_specific_local_confirmation(profile):
+    requirement = profile.legacy_card_cleanup()
+    assert requirement["id"] == requirement["purpose"] == "legacy_card_cleanup"
+    assert requirement["keys"] == profile.legacy_card_keys()
+    assert len(requirement["keys"]) == 4
+    assert profile.data["cards"]  # enumerating or declining does not delete metadata
+
+
+def test_removing_a_shared_value_keeps_older_placeholder_redaction():
+    registry = Secrets([("same秘密", "[secret:old]"), ("same秘密", "[secret:new]")])
+    registry.remove("[secret:new]")
+    assert registry.text("same秘密") == "[secret:old]"
+    registry.remove("[secret:old]")
+    assert registry.text("same秘密") == "same秘密"

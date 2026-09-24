@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 from assistant import agent as loop
 from assistant.browser import fingerprint
-from assistant.profile import Profile, Secrets
+from assistant.profile import Profile, Secrets, Vault
 
 
 def fake_page(text="Checkout\nDiet Coke 300 ml\nTotal ₹79\nPay ₹79", url="https://shop.test/checkout", actions=None):
@@ -33,11 +33,13 @@ class FakeVault:
         self.values, self.writes = dict(values or {}), []
 
     def get(self, key):
+        Vault._login(key)
         if key not in self.values:
             raise KeyError(key)
         return self.values[key]
 
     def set(self, key, value):
+        Vault._login(key)
         self.values[key] = value
         self.writes.append((key, value))
 
@@ -53,8 +55,8 @@ def agent_with(tmp_path, *, replies=(), page=None, vault=None, profile=None):
     a = loop.Agent.__new__(loop.Agent)
     a.profile = Profile(tmp_path / "profile.json")
     a.profile.data.update({"name": "Mayank Churiwal", "phone": "+91 98765 43210",
-                           "cards": [{"id": "hdfc", "label": "HDFC Visa", "last4": "1234"}], **(profile or {})})
-    a.vault = vault if vault is not None else FakeVault({"card.hdfc.cvv": "123"})
+                           "cards": [], **(profile or {})})
+    a.vault = vault if vault is not None else FakeVault()
     a.secrets = Secrets(a.profile.hidden_values())
     page = page or fake_page()
     a.browser = Mock(fresh=Mock(return_value=True), observe=Mock(return_value=page), act=Mock(return_value={}),

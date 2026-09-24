@@ -503,9 +503,10 @@ class Agent:
         if outcome == "success":
             s["memory"].append(f"Done: {commit['label']} ({evidence})")
             for key, value in s["pending_vault"].items():
-                self.vault.set(key, value)
+                if key.startswith("login."):
+                    self.vault.set(key, value)
             s["pending_vault"].clear()
-            self.offer_card_save()
+            s["card_parts"].clear()
         elif outcome == "failed":
             s["memory"].append(f"{commit['label']} failed: {evidence}. Trying again needs a new approval.")
             self.say(f"{commit['label']} didn't go through: {evidence}")

@@ -361,3 +361,74 @@ def test_dependency_order_change_preserves_answer_and_explicit_choice_tracks_dep
     assert s.questions.keys() == {"t1-q1", "t1-q2"}
     reopen(s, "pickup", "changed request", ())
     assert s.facts["ride"]["valid"] is False
+
+
+def test_temporary_secret_scope_expiry_and_consumption():
+    from assistant.interaction import SecretStore
+    now = [10]
+    store = SecretStore(clock=lambda: now[0])
+    scope = dict(task_id="t1", question_id="q1", challenge_id="c1", origin="https://a.test",
+                 purpose="login", field_role="otp")
+    ref = store.put("秘密123456", **scope, expires_at=9999)
+    assert store.resolve(ref, **scope) == "秘密123456"
+    for key in scope:
+        with pytest.raises(ValueError):
+            store.resolve(ref, **{**scope, key: "other"})
+    with pytest.raises(ValueError):
+        store.resolve(ref, task_id="t1")
+    assert "秘密" not in repr(store)
+    now[0] = 610
+    with pytest.raises(ValueError):
+        store.resolve(ref, **scope)
+    now[0] = 20
+    ref = store.put("123456", **scope, expires_at=100)
+    store.consume(ref)
+    with pytest.raises(ValueError):
+        store.resolve(ref, **scope)
+
+
+def test_secret_resend_and_task_purge():
+    from assistant.interaction import SecretStore
+    store = SecretStore(clock=lambda: 0)
+    scope = dict(task_id="t", question_id="q", challenge_id="c", origin="https://a.test",
+                 purpose="login", field_role="otp")
+    old = store.put("111111", **scope, expires_at=100)
+    new = store.put("222222", **{**scope, "challenge_id": "c2"}, expires_at=100)
+    with pytest.raises(ValueError):
+        store.resolve(old, **scope)
+    store.purge("other")
+    assert store.resolve(new, **{**scope, "challenge_id": "c2"}) == "222222"
+    store.purge("t")
+    with pytest.raises(ValueError):
+        store.resolve(new, **{**scope, "challenge_id": "c2"})
+
+
+def test_field_cache_covers_all_helper_inputs_revision_and_challenge():
+    from assistant.interaction import field_cache_key
+    s = TaskState("t", "Continue")
+    payload = {"goal": "buy", "field": {"label": "Code", "constraints": {"maxlength": 6}},
+               "previous": None, "page": {"text": "Login"}}
+    key = field_cache_key(s, payload, "c1")
+    assert key == field_cache_key(s, dict(reversed(list(payload.items()))), "c1")
+    assert key != field_cache_key(s, {**payload, "previous": "rejected"}, "c1")
+    assert key != field_cache_key(s, payload, "c2")
+    s.revision += 1
+    assert key != field_cache_key(s, payload, "c1")
+
+
+def test_secret_store_payment_expiry_and_serialization():
+    import pickle
+
+    from assistant.interaction import SecretStore
+    now = [0]
+    store = SecretStore(lambda: now[0])
+    scope = dict(task_id="t", question_id="q", challenge_id="c", origin="https://a.test",
+                 purpose="payment", field_role="cvv")
+    ref = store.put("123", **scope, expires_at=9999)
+    with pytest.raises(TypeError, match="cannot be serialized"):
+        pickle.dumps(store)
+    now[0] = 899
+    assert store.resolve(ref, **scope) == "123"
+    now[0] = 900
+    with pytest.raises(ValueError):
+        store.resolve(ref, **scope)

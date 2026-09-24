@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .profile import CARD_PARTS, SECRETS
+from .profile import SECRETS
 from .questions import (
     FIELD_VALUE,
     HEAD_PREMISE,
@@ -285,12 +285,9 @@ def field_context(context, action, page, history, profile, allowed, previous=Non
     }
 
 
-SAVE_AS = {f"card.{part}" for part in CARD_PARTS}
-
-
 def field_value(context):
     """What goes into a field: ("text", value), ("profile", key), ("secret", key),
-    or ("ask", question, secret, save_as)."""
+    or ("ask", question, secret, None); the last slot preserves legacy callers."""
     out, meta = text_json(FIELD_VALUE, context, max_tokens=1024)
     keys = set(out)
     if keys == {"text"} and isinstance(out["text"], str) and out["text"].strip() and len(out["text"]) <= 2000:
@@ -299,10 +296,9 @@ def field_value(context):
         return ("profile", out["profile"]), meta
     if keys == {"secret"} and out["secret"] in context.get("allowed", []):
         return ("secret", out["secret"]), meta
-    if (keys in ({"ask", "secret"}, {"ask", "secret", "save_as"}) and isinstance(out["ask"], str)
-            and out["ask"].strip() and isinstance(out["secret"], bool)
-            and out.get("save_as", "card.number") in SAVE_AS):
-        return ("ask", out["ask"].strip(), out["secret"], out.get("save_as")), meta
+    if (keys == {"ask", "secret"} and isinstance(out["ask"], str)
+            and out["ask"].strip() and isinstance(out["secret"], bool)):
+        return ("ask", out["ask"].strip(), out["secret"], None), meta
     raise ValueError("Text helper returned no valid field value; nothing typed.")
 
 

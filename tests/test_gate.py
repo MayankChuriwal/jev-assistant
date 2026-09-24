@@ -160,15 +160,15 @@ def test_a_stale_page_after_approval_keeps_the_approval(tmp_path, monkeypatch):
     assert len(a.asked) == 1 and a.state["approval"] is None
 
 
-def test_card_details_typed_during_the_task_can_be_saved_after_success(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}, {"option": "save"}])
+def test_card_details_are_never_offered_or_saved_after_success(tmp_path, monkeypatch):
+    a = agent_with(tmp_path, replies=[{"option": "yes"}])
     a.state["card_parts"] = {"card.number": "4111111111111111", "card.expiry": "12/29", "card.cvv": "123"}
+    a.state["pending_vault"] = {"card.old.cvv": "123"}
     outcomes(monkeypatch, ("success", "Pay ₹79"))
     approve(a, decision("e6", "CLICK"))
-    assert sorted(a.vault.writes) == [("card.card1111.cvv", "123"), ("card.card1111.expiry", "12/29"),
-                                      ("card.card1111.number", "4111111111111111")]
-    assert a.profile.data["cards"][-1] == {"id": "card1111", "label": "Card ••1111", "last4": "1111"}
-    assert a.state["card_parts"] == {}
+    assert a.vault.writes == [] and a.profile.data["cards"] == []
+    assert a.state["card_parts"] == {} and a.state["pending_vault"] == {}
+    assert len(a.asked) == 1
 
 
 def test_done_waits_for_a_payment_that_is_still_settling(tmp_path, monkeypatch):

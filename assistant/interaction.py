@@ -291,3 +291,80 @@ def chat_update(state: TaskState, notice: dict) -> dict | None:
     delivered.append(signature)
     text = f"I’ll help with: {state.goal}" if notice["kind"] == "start" else notice["text"]
     return {"kind": "info", "text": text}
+
+
+class SecretStore:
+    """Process-only scoped values. Consume on submission, including auto-submit typing.
+
+    The execution owner consumes before dispatch and records the opaque reference in
+    its execution ledger. An uncertain dispatch never restores a consumed value.
+    """
+
+    __slots__ = ("clock", "__entries")
+    SCOPE = frozenset({"task_id", "question_id", "challenge_id", "origin", "purpose", "field_role"})
+
+    def __init__(self, clock):
+        self.clock = clock
+        self.__entries = {}
+
+    def __getstate__(self):
+        raise TypeError("temporary secrets cannot be serialized")
+
+    def put(self, value: str, *, task_id: str, question_id: str, challenge_id: str,
+            origin: str, purpose: str, field_role: str, expires_at: float) -> str:
+        from secrets import token_urlsafe
+        from urllib.parse import urlsplit
+
+        scope = dict(task_id=task_id, question_id=question_id, challenge_id=challenge_id,
+                     origin=origin, purpose=purpose, field_role=field_role)
+        if any(not isinstance(v, str) or not v.strip() for v in scope.values()):
+            raise ValueError("invalid secret scope")
+        parsed = urlsplit(origin)
+        if (parsed.scheme not in {"https", "http"} or not parsed.hostname or parsed.username
+                or parsed.password or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+            raise ValueError("invalid secret origin")
+        if not isinstance(value, str) or not value:
+            raise ValueError("invalid secret value")
+        now = self.clock()
+        if type(expires_at) not in (int, float) or not math.isfinite(expires_at) or expires_at <= now:
+            raise ValueError("secret unavailable")
+        # Replacing a challenge invalidates every earlier code for the same purpose.
+        for ref, entry in list(self.__entries.items()):
+            if all(entry[k] == scope[k] for k in ("task_id", "origin", "purpose", "field_role")):
+                del self.__entries[ref]
+        cap = 900 if field_role in {"card_number", "card_expiry", "card_name", "cvv",
+                                            "number", "expiry", "card.number", "card.cvv", "card.expiry"} else 600
+        ref = f"[secret:{token_urlsafe(24)}]"
+        self.__entries[ref] = {**scope, "value": value, "expires_at": min(expires_at, now + cap)}
+        return ref
+
+    def resolve(self, ref: str, **scope) -> str:
+        entry = self.__entries.get(ref)
+        if entry is None or entry["expires_at"] <= self.clock():
+            self.__entries.pop(ref, None)
+            raise ValueError("secret unavailable")
+        if set(scope) != self.SCOPE or any(entry[key] != scope[key] for key in self.SCOPE):
+            raise ValueError("secret scope mismatch")
+        return entry["value"]
+
+    def consume(self, ref: str) -> None:
+        self.__entries.pop(ref, None)
+
+    def purge(self, task_id: str | None = None) -> None:
+        for ref, entry in list(self.__entries.items()):
+            if task_id is None or entry["task_id"] == task_id:
+                del self.__entries[ref]
+
+
+def field_cache_key(state: TaskState, helper_input: dict, challenge_id: str | None) -> str:
+    """Hash the complete already-sanitized helper payload, not a field heuristic."""
+    import hashlib
+    import json
+
+    from .profile import SECRETS
+
+    registry = SECRETS.get()
+    payload = registry.redact(helper_input) if registry else helper_input
+    encoded = json.dumps([state.task_id, state.revision, challenge_id, payload],
+                         sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()

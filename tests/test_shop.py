@@ -55,7 +55,7 @@ def text_model(system, payload):
         if label == "Phone number":
             return {"profile": "phone"}
         if label == "CVV":
-            return {"secret": "card.hdfc.cvv"}
+            return {"ask": "Enter the CVV for this payment.", "secret": True}
         return {"ask": "Enter the code sent to your phone.", "secret": True}
     if system == questions.COMPOSE:
         index = {e["label"].split(" —")[0]: e["index"] for e in payload["elements"] if e.get("role") == "radio"}
@@ -75,7 +75,7 @@ def text_model(system, payload):
     raise AssertionError(f"unexpected job: {system[:40]}")
 
 
-def test_login_otp_address_confirm_and_keychain_cvv_without_leaks(chrome, site, tmp_path, monkeypatch):
+def test_login_otp_address_confirm_and_temporary_cvv_without_leaks(chrome, site, tmp_path, monkeypatch):
     sent = []
 
     class Response:
@@ -98,7 +98,7 @@ def test_login_otp_address_confirm_and_keychain_cvv_without_leaks(chrome, site, 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setattr(model.CLIENT, "post", post)
-    codes = ["111111", "482913"]
+    codes = ["111111", "482913", "123"]
 
     def asker(message):
         if message["kind"] == "secret":
@@ -114,14 +114,14 @@ def test_login_otp_address_confirm_and_keychain_cvv_without_leaks(chrome, site, 
     profile.data.update(name="Mayank Churiwal", phone="+91 98765 43210",
                         cards=[{"id": "hdfc", "label": "HDFC Visa", "last4": "1234"}])
     with loop.Agent(site["a"] + "/shop.html", "Order a Diet Coke", asker=asker, notify=told.append, profile=profile,
-                    vault=FakeVault({"card.hdfc.cvv": "123"})) as agent:
+                    vault=FakeVault()) as agent:
         for state in agent.run():
             assert len(state["decisions"]) < 40
         log = agent.browser.evaluate("window.log")
     assert agent.state["status"] == "done", agent.state["messages"][-3:]
     assert log == ["otp:111111", "otp:482913", "pay:home:3"]
     assert [m["kind"] for m in agent.state["messages"] if m["from"] == "agent" and m["kind"] != "info"] == [
-        "secret", "secret", "choice", "confirm", "result"]
+        "secret", "secret", "choice", "secret", "confirm", "result"]
     assert told[-1]["evidence"] == "Order placed #A1B2"
     everything = jsonlib.dumps(sent, ensure_ascii=False)
     for secret in ("98765", "9876543210", "Mayank", "482913", "111111"):
