@@ -336,6 +336,11 @@ def bind_proposal_effect(state, proposal: dict, *, operation: str, choice: str, 
                                           'ACCEPT_DIALOG', 'LOOK'}
             or operation == 'PRESS_KEY' and key not in {'Enter', 'Space'}):
         raise ValueError('effect requires an observed submission control and operation')
+    context = action.get('context')
+    if (not isinstance(context, dict)
+            or not any(isinstance(context.get(k), str) and context[k].strip()
+                       for k in ('form', 'section', 'dialog'))):
+        raise ValueError('effect requires observed form, section or dialog context')
     control = {k: v for k, v in action.items() if k != 'id'}
     if sum({k: v for k, v in a.items() if k != 'id'} == control for a in observation['actions']) != 1:
         raise ValueError('effect control is ambiguous; observe distinguishing context')

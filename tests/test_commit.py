@@ -84,6 +84,8 @@ def test_expired_or_excluded_offer():
 def review_fixture():
     text = "Shop\nHome\nTomorrow\nVisa ••1234\nTea × 2 ₹100\nRain fee ₹10\nTotal ₹110"
     s, page, oid = observed(text)
+    page['actions'][5]['context'] = {'form': 'Checkout purchase'}
+    oid = observe_state(s, page)
     eid = cite(s, oid, text)
     p = dict(task_id=s.task_id, revision=s.revision, action="purchase", service="Shop", account="",
              destination="Home", items=["Tea × 2"], option="", timing="Tomorrow", payment="Visa ••1234",
@@ -665,7 +667,8 @@ def test_decision_cannot_bind_identical_content_from_another_origin():
 def test_purchase_approval_never_authorizes_delete_account(tmp_path, binding):
     from assistant.commit import Journal, approve, bind_decision, bind_proposal_effect, dispatch_once
     s, page, p, x = review_fixture()
-    page['actions'].append(dict(id='delete', kind='click', label='Delete account', role='button', node=20))
+    page['actions'].append(dict(id='delete', kind='click', label='Delete account', role='button', node=20,
+                                context={'section': 'Delete account settings'}))
     p = fresh_review(s, page, p, x)
     confirmation(s, p)
     approve(s, p, question_id='q1', response='yes')
@@ -764,3 +767,36 @@ def test_same_approved_effect_survives_a_cosmetic_target_id_change(tmp_path):
                       interrupted=lambda: False, proposal=p)
     assert r['status'] == 'executed' and calls == [1]
     assert r['effect_key'] == s.approval['effect_key']
+
+
+@pytest.mark.parametrize('container', ['form', 'section', 'dialog'])
+def test_same_confirm_control_in_changed_context_cannot_spend_purchase_approval(tmp_path, container):
+    from assistant.commit import Journal, approve, bind_decision, bind_proposal_effect, dispatch_once
+    s, page, p, x = review_fixture()
+    page['actions'][5].update(label='Confirm', context={container: 'Complete purchase'})
+    p = fresh_review(s, page, p, x)
+    confirmation(s, p)
+    approve(s, p, question_id='q1', response='yes')
+    page['actions'][5]['context'] = {container: 'Delete account permanently'}
+    p = fresh_review(s, page, p, x)
+    effect_id = bind_proposal_effect(s, p, operation='CLICK', choice='e6')
+    decision = bind_decision(s, dict(id='changed-context', operation='CLICK', choice='e6'), page,
+                             assessment='commitment', effect_id=effect_id)
+    s.progress['account_reservation_key'] = 'account'
+    calls = []
+    journal = Journal.create(tmp_path / 'journal', redact=lambda value: value)
+    with pytest.raises(ValueError):
+        dispatch_once(s, journal, decision, page, proposal=p, act=lambda: calls.append(1) or {},
+                      is_fresh=lambda: True, interrupted=lambda: False)
+    assert calls == [] and not s.approval['consumed']
+
+
+@pytest.mark.parametrize('context', [None, {}, {'form': '', 'section': '  '},
+                                   {'placeholder': 'Confirm', 'field_role': 'button'}])
+def test_consequential_effect_requires_observed_semantic_container(context):
+    from assistant.commit import bind_proposal_effect
+    s, page, p, x = review_fixture()
+    page['actions'][5].update(label='Confirm', context=context)
+    p = fresh_review(s, page, p, x)
+    with pytest.raises(ValueError, match='context'):
+        bind_proposal_effect(s, p, operation='CLICK', choice='e6')

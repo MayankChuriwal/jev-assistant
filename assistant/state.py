@@ -134,7 +134,7 @@ def observe_state(state: TaskState, page: dict) -> str:
     for action in page.get("actions", []):
         if not isinstance(action, dict) or not isinstance(action.get("id"), str):
             raise ValueError("action needs a code-owned ID")
-        actions.append({key: _safe(action[key]) for key in ("id", "kind", "label", "role", "constraints")
+        actions.append({key: _safe(action[key]) for key in ("id", "kind", "label", "role", "constraints", "context")
                         if key in action})
     text = page["text"]
     for action in page.get("actions", []):

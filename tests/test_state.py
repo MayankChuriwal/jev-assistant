@@ -168,3 +168,13 @@ def test_public_context_drops_browser_objects_and_secret_fields():
     assert "user:pass" not in s.observations[oid]["url"]
     assert "token=123" not in s.observations[oid]["url"]
     assert "count" in serialized
+
+
+def test_observation_preserves_public_control_container_context():
+    s = TaskState('context', 'Review purchase')
+    oid = observe_state(s, dict(url='https://shop.test', text='Confirm', actions=[
+        dict(id='confirm', kind='click', label='Confirm', context={
+            'form': 'Checkout', 'section': 'Review purchase', 'dialog': 'Complete purchase',
+            'raw_secret': 'must-not-retain'})]))
+    assert s.observations[oid]['actions'][0]['context'] == {
+        'form': 'Checkout', 'section': 'Review purchase', 'dialog': 'Complete purchase'}
