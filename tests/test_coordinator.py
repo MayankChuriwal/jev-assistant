@@ -398,3 +398,25 @@ def test_requirement_identity_is_unambiguous_before_owner_receives_it(field):
     client, _ = scripted(assessment(requirements=requirements))
     with pytest.raises(ValueError):
         assess(s, page, "start", client=client)
+
+
+@pytest.mark.parametrize('direction,delivery', [('upload', False), ('download', True)])
+def test_artifact_contract_retains_transfer_and_delivery(direction, delivery):
+    s, page, _ = observed()
+    req = dict(id='file', description='Requested file transfer', kind='artifact', material_keys=['document'],
+               evidence_ids=[], execution_id=None, artifact_id=None,
+               transfer_direction=direction, delivery_required=delivery)
+    client, _ = scripted(assessment(completion=[req]))
+    apply_assessment(s, assess(s, page, 'start', client=client))
+    assert s.completion == [req]
+
+
+@pytest.mark.parametrize('changes', [{}, {'transfer_direction': 'download', 'delivery_required': False},
+                                    {'transfer_direction': 'upload', 'delivery_required': 'false'}])
+def test_artifact_contract_rejects_missing_or_invalid_obligations(changes):
+    s, page, _ = observed()
+    req = dict(id='file', description='Requested document', kind='artifact', material_keys=['document'],
+               evidence_ids=[], execution_id=None, artifact_id=None, **changes)
+    client, _ = scripted(assessment(completion=[req]))
+    with pytest.raises(ValueError):
+        assess(s, page, 'start', client=client)

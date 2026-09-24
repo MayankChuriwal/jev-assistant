@@ -482,7 +482,7 @@ def test_commit_dispatch_consumes_once_and_restores_account_reservation(tmp_path
         dispatch_once(s, j, d2, page, act=act, is_fresh=lambda: True, interrupted=lambda: False)
     assert calls == [1]
     j.append(dict(execution_id='d1', phase='outcome', outcome='success', evidence_ids=['e-confirm']))
-    assert j.interrupted() == []
+    assert j.interrupted()[0]['account_key'] == 'site-account-opaque'
 
 
 def test_decision_target_must_be_observed_and_owned(tmp_path):
@@ -810,7 +810,7 @@ def test_consequential_effect_requires_observed_semantic_container(context):
         bind_proposal_effect(s, p, operation='CLICK', choice='e6')
 
 
-def completion_fixture(kind='action'):
+def completion_fixture(kind='action', terminal='success'):
     from assistant.state import TaskState, cite, observe_state, put_fact
     s = TaskState('proof', 'Arrange a blue parcel')
     before = observe_state(s, dict(url='https://example.test/', text='Review blue parcel'))
@@ -819,11 +819,16 @@ def completion_fixture(kind='action'):
         commitment=True, approval_id='approved', account_key='account',
         result={'correlation': 'REF-42'})
     s.progress['account_reservation_key'] = 'account'
-    after = observe_state(s, dict(url='https://example.test/result', text='REF-42 blue parcel accepted'))
-    eid = cite(s, after, 'REF-42 blue parcel accepted')
+    text = 'REF-42 blue parcel ' + ('accepted' if terminal == 'success' else 'declined')
+    after = observe_state(s, dict(url='https://example.test/result', text=text, events=[text]))
+    eid = cite(s, after, text, kind='browser-event')
+    from assistant.commit import record_terminal_receipt
+    record_terminal_receipt(s, 'x', status=terminal, evidence_ids=[eid])
     put_fact(s, 'parcel', 'blue parcel', source='user')
     s.completion = [dict(id='r', description='Requested parcel arranged', kind=kind,
         material_keys=['parcel'], evidence_ids=[eid], execution_id='x', artifact_id=None)]
+    if kind == 'artifact':
+        s.completion[0].update(transfer_direction='download', delivery_required=True)
     return s, eid
 
 
@@ -939,7 +944,7 @@ def test_completion_binding_does_not_rewrite_goal_contract():
 def test_failed_outcome_releases_but_unknown_retains(tmp_path):
     from assistant.commit import Journal, record_outcome
     for status in ('failed', 'unknown', 'pending_user'):
-        s, eid = completion_fixture()
+        s, eid = completion_fixture(terminal='failed' if status == 'failed' else 'success')
         result = record_outcome(s, 'x', dict(status=status, evidence_ids=[eid], artifact_id=None),
                                 now=1, journal=Journal.create(tmp_path, lambda v: v))
         assert result == status
@@ -976,3 +981,92 @@ def test_processing_observation_that_exceeds_deadline_cannot_complete(tmp_path):
         return dict(status='success', evidence_ids=[eid], artifact_id=None)
     assert await_outcome(s, 'x', journal=Journal.create(tmp_path, lambda v: v),
         observe=observe, clock=lambda: ticks[0], wait=lambda seconds: None) == 'unknown'
+
+
+@pytest.mark.parametrize('claim', ['success', 'failed'])
+@pytest.mark.parametrize('actual', ['processing', 'pending_user'])
+def test_terminal_claim_needs_independent_terminal_predicate(tmp_path, claim, actual):
+    from assistant.commit import Journal, record_outcome
+    from assistant.state import cite, observe_state
+    s, _ = completion_fixture()
+    text = 'REF-42 blue parcel ' + actual
+    oid = observe_state(s, dict(url='https://example.test/result', text=text))
+    eid = cite(s, oid, text)
+    s.completion[0]['evidence_ids'] = [eid]
+    assert record_outcome(s, 'x', dict(status=claim, evidence_ids=[eid], artifact_id=None),
+                          now=5, journal=Journal.create(tmp_path, lambda v: v)) == 'unknown'
+    assert s.progress['account_reservation_key'] == 'account'
+
+
+def test_read_only_comparison_retains_distinct_provider_findings():
+    from assistant.commit import completion_report
+    from assistant.state import TaskState, cite, observe_state, put_fact
+    s = TaskState('compare', 'Compare blue parcel prices at A and B')
+    put_fact(s, 'item', 'blue parcel', source='user')
+    for provider in ('a', 'b'):
+        text = 'blue parcel costs 10 at ' + provider
+        oid = observe_state(s, dict(url=f'https://{provider}.test/prices', text=text))
+        eid = cite(s, oid, text)
+        s.completion.append(dict(id=provider, description='Price at ' + provider, kind='page',
+            material_keys=['item'], evidence_ids=[eid], execution_id=None, artifact_id=None))
+    assert completion_report(s)['verified']
+    # A later observation of that same resource invalidates its earlier finding.
+    observe_state(s, dict(url='https://a.test/prices', text='blue parcel price unavailable'))
+    assert completion_report(s)['missing'] == ['a']
+
+
+def test_upload_receipt_cannot_satisfy_download_and_chat_delivery():
+    from assistant.commit import completion_report, record_artifact
+    s, eid = completion_fixture('artifact')
+    s.completion[0].update(artifact_id='file1', transfer_direction='download', delivery_required=True)
+    with pytest.raises(ValueError, match='direction'):
+        record_artifact(s, 'file1', requirement_id='r', evidence_ids=[eid], direction='upload',
+                        execution_id='x')
+    assert not completion_report(s)['verified']
+
+
+@pytest.mark.parametrize('status', ['success', 'failed'])
+def test_terminal_claim_cannot_borrow_opposite_receipt(tmp_path, status):
+    from assistant.commit import Journal, record_outcome
+    s, eid = completion_fixture(terminal='failed' if status == 'success' else 'success')
+    assert record_outcome(s, 'x', dict(status=status, evidence_ids=[eid], artifact_id=None),
+                          now=1, journal=Journal.create(tmp_path, lambda v: v)) == 'unknown'
+    assert s.progress['account_reservation_key'] == 'account'
+
+
+def test_page_quote_cannot_mint_a_terminal_receipt():
+    from assistant.commit import record_terminal_receipt
+    from assistant.state import cite
+    s, _ = completion_fixture()
+    eid = cite(s, next(reversed(s.observations)), 'REF-42 blue parcel accepted')
+    with pytest.raises(ValueError, match='terminal browser event'):
+        record_terminal_receipt(s, 'x', status='success', evidence_ids=[eid])
+
+
+def test_real_upload_satisfies_only_its_upload_contract():
+    from assistant.commit import bind_completion_evidence, completion_report, record_artifact
+    s, eid = completion_fixture('artifact')
+    s.completion[0].update(transfer_direction='upload', delivery_required=False)
+    record_artifact(s, 'file1', requirement_id='r', evidence_ids=[eid], direction='upload', execution_id='x')
+    bind_completion_evidence(s, 'r', evidence_ids=[eid], execution_id='x', artifact_id='file1')
+    assert completion_report(s)['verified']
+    assert s.completion[0]['transfer_direction'] == 'upload'
+    assert s.completion[0]['delivery_required'] is False
+
+
+def test_artifact_without_direction_contract_stays_incomplete():
+    from assistant.commit import completion_report, record_artifact
+    s, eid = completion_fixture('artifact')
+    s.completion[0].pop('transfer_direction')
+    with pytest.raises(ValueError, match='direction'):
+        record_artifact(s, 'file1', requirement_id='r', evidence_ids=[eid], direction='download', execution_id='x')
+    assert not completion_report(s)['verified']
+
+
+def test_restart_retains_reservation_for_legacy_unattested_terminal_claim(tmp_path):
+    from assistant.commit import Journal
+    j = Journal.create(tmp_path, lambda v: v)
+    j.append(dict(execution_id='x', task_id='t', revision=0, phase='executed', commitment=True,
+                  account_key='account'))
+    j.append(dict(execution_id='x', phase='outcome', outcome='success', evidence_ids=['quote']))
+    assert j.interrupted()[0]['account_key'] == 'account'

@@ -28,7 +28,8 @@ SCHEMA = {
                                    "evidence_ids": ["current evidence ID"]}], "reason": "string"}],
     "completion": [{"id": "string", "description": "string", "kind": "page|state|action|artifact",
                     "material_keys": ["fact key"], "evidence_ids": ["current evidence ID"],
-                    "execution_id": "known ID or null", "artifact_id": "known ID or null"}],
+                    "execution_id": "known ID or null", "artifact_id": "known ID or null",
+                    "transfer_direction": "download|upload|null", "delivery_required": "boolean"}],
     "auth": {"flow_id": "string", "challenge_id": "known ID or null",
              "status": "unknown|required|challenge|submitted|authenticated|rejected|expired|unsupported",
              "origin": "observed origin", "purpose": "string", "field_role": "string",
@@ -287,7 +288,21 @@ def _validate(state, output, *, event=None):
         raise ValueError("completion: already established")
     completion_ids = set()
     for req in output["completion"]:
-        _shape(req, SCHEMA["completion"][0], "completion")
+        if not isinstance(req, dict):
+            raise ValueError("completion: object required")
+        keys = set(SCHEMA["completion"][0])
+        # Non-artifact callers may omit inapplicable transfer fields.
+        if req.get("kind") != "artifact":
+            keys -= {k for k in ("transfer_direction", "delivery_required") if k not in req}
+        _shape(req, keys, "completion")
+        if req["kind"] == "artifact":
+            _enum(req["transfer_direction"], {"download", "upload"}, "completion.transfer_direction")
+            if type(req["delivery_required"]) is not bool:
+                raise ValueError("completion.delivery_required: boolean required")
+            if req["transfer_direction"] == "download" and not req["delivery_required"]:
+                raise ValueError("completion: downloads require chat delivery")
+        elif req.get("transfer_direction") is not None or req.get("delivery_required", False) is not False:
+            raise ValueError("completion: only artifacts have transfer obligations")
         _string(req["id"], "completion.id")
         if req["id"] in completion_ids:
             raise ValueError("completion.id: duplicate")

@@ -305,3 +305,11 @@ Retain these requirements thereafter. Do not treat DONE, account history, a revi
 or an arbitrary nonempty quote as completion. Distinguish pending_user (a challenge tied to the approved
 transaction), processing, success, failed, and unknown. An explicit failed result is not permission to
 retry. Do not report success without evidence identifying this task's actual requested result."""
+
+COORDINATE += """ Artifact completion requirements retain transfer_direction (download or upload) and
+an explicit delivery_required boolean. A download for the user requires chat delivery. An upload receipt
+cannot substitute for a requested download. Non-artifact requirements use null direction and false delivery.
+Terminal success and failure require an independently observed terminal result receipt; correlation and
+material text alone, pending authentication, processing, or submission acknowledgment do not establish it.
+A retained read-only finding may remain valid while observing another resource/provider; each finding
+retains its own observation scope and is invalidated by newer observations of that same resource."""

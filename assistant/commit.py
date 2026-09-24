@@ -491,8 +491,7 @@ class Journal:
         return [dict(row, status='unknown') for row in executions.values()
                 if row.get('phase') in {'dispatching', 'unknown'}
                 or row.get('commitment') and row.get('phase') != 'not_dispatched'
-                and not (row.get('phase') == 'outcome' and row.get('outcome') in {'success', 'failed'}
-                         and row.get('evidence_ids'))]
+                and not _durable_terminal(row)]
 
 
 def bind_decision(state, decision: dict, page: dict, *, assessment: str | None = None,
@@ -715,6 +714,10 @@ def record_artifact(state, artifact_id: str, *, requirement_id: str, evidence_id
     """
     requirement = next((r for r in state.completion if r['id'] == requirement_id), {})
     evidence = _proof(state, evidence_ids)
+    if (requirement.get('transfer_direction') != direction
+            or type(requirement.get('delivery_required')) is not bool
+            or direction == 'download' and not requirement['delivery_required']):
+        raise ValueError('artifact direction or delivery obligation does not match contract')
     if (not isinstance(artifact_id, str) or not artifact_id.strip()
             or direction not in {'upload', 'download'} or requirement.get('kind') != 'artifact'
             or not _material_matches(state, requirement, evidence)
@@ -747,9 +750,9 @@ def requirement_verified(state, requirement: dict) -> bool:
         return False
     kind = requirement.get('kind')
     if kind in {'page', 'state'}:
-        # Read-only findings need current observations; arbitrary prose without
-        # goal-linked material facts cannot prove a requirement.
-        return all(e['observation_id'] == next(reversed(state.observations)) for e in evidence)
+        # Each resource retains its own latest finding while other resources
+        # are inspected; provenance, revision and material facts remain required.
+        return all(_latest_in_scope(state, e) for e in evidence)
     execution = state.executions.get(requirement.get('execution_id'), {})
     if not _execution_proof(state, execution, evidence):
         return False
@@ -764,7 +767,9 @@ def requirement_verified(state, requirement: dict) -> bool:
                 and artifact.get('requirement_id') == requirement.get('id')
                 and artifact.get('execution_id') == requirement.get('execution_id')
                 and set(requirement['evidence_ids']).issubset(artifact.get('evidence_ids', []))
-                and (artifact.get('direction') == 'upload'
+                and artifact.get('direction') == requirement.get('transfer_direction')
+                and type(requirement.get('delivery_required')) is bool
+                and (not requirement['delivery_required']
                      or delivery.get('revision') == state.revision and bool(delivery.get('message_id'))))
     return False
 
@@ -809,6 +814,8 @@ def record_outcome(state, execution_id: str, outcome: dict, *, now: float, journ
                               for e in evidence))
         if status != 'unknown' and not correlated:
             status = 'unknown'
+        if status in {'success', 'failed'} and not _terminal_proof(state, execution_id, status, evidence):
+            status = 'unknown'
         if status == 'success':
             requirements = [r for r in state.completion if r.get('execution_id') == execution_id
                             and r.get('kind') in {'action', 'artifact'}]
@@ -820,7 +827,8 @@ def record_outcome(state, execution_id: str, outcome: dict, *, now: float, journ
                       evidence_ids=[e['id'] for e in evidence], evidence=evidence,
                       artifact_id=outcome['artifact_id'], task_id=state.task_id,
                       revision=state.revision, at=now, account_key=execution.get('account_key'),
-                      commitment=execution.get('commitment', False))
+                      commitment=execution.get('commitment', False),
+                      terminal_receipt=deepcopy(runtime.get('terminal_receipts', {}).get(execution_id)))
         try:
             journal.append(record)
         except Exception:
@@ -899,3 +907,57 @@ def bind_completion_evidence(state, requirement_id: str, *, evidence_ids: list[s
     if artifact_id is not None and artifact_id not in artifact_ids(state):
         raise ValueError('completion binding needs owned artifact')
     requirement.update(evidence_ids=list(evidence_ids), execution_id=execution_id, artifact_id=artifact_id)
+
+
+def _latest_in_scope(state, evidence):
+    observation = state.observations[evidence['observation_id']]
+    scope = (observation['origin'], observation['url'])
+    latest = next((o['id'] for o in reversed(state.observations.values())
+                   if o['revision'] == state.revision and (o['origin'], o['url']) == scope), None)
+    return evidence['observation_id'] == latest
+
+
+def record_terminal_receipt(state, execution_id: str, *, status: str, evidence_ids: list[str]) -> None:
+    """Adapter-only attestation of an independently observed terminal result.
+
+    Call only for a structured terminal browser/provider receipt, never with a
+    coordinator classification or status inferred from a quote. The adapter must
+    establish the predicate (confirmed external result or explicit failure) and
+    expose its public description as browser-event evidence. A correlation or a
+    dispatch acknowledgment by itself does not qualify. Unsupported receipts
+    remain unknown. This API is not exposed as a model tool.
+    """
+    evidence = _proof(state, evidence_ids)
+    if (status not in {'success', 'failed'} or not evidence
+            or not _execution_proof(state, state.executions.get(execution_id, {}), evidence)
+            or any(e['kind'] != 'browser-event' or not _latest_in_scope(state, e) for e in evidence)):
+        raise ValueError('terminal receipt requires a correlated terminal browser event')
+    _runtime(state).setdefault('terminal_receipts', {})[execution_id] = dict(
+        status=status, task_id=state.task_id, revision=state.revision, evidence_ids=list(evidence_ids),
+        observation_ids=list(dict.fromkeys(e['observation_id'] for e in evidence)))
+
+
+def _terminal_proof(state, execution_id, status, evidence):
+    receipt = _runtime(state).get('terminal_receipts', {}).get(execution_id, {})
+    if (receipt.get('status') != status or receipt.get('revision') != state.revision
+            or not evidence or not set(receipt.get('evidence_ids', [])).issubset(e['id'] for e in evidence)):
+        return False
+    return set(e['observation_id'] for e in evidence) == set(receipt.get('observation_ids', []))
+
+
+def _durable_terminal(record):
+    receipt = record.get('terminal_receipt')
+    if not isinstance(receipt, dict) or record.get('phase') != 'outcome':
+        return False
+    if (record.get('outcome') not in {'success', 'failed'}
+            or receipt.get('status') != record['outcome']
+            or receipt.get('task_id') != record.get('task_id')
+            or receipt.get('revision') != record.get('revision')
+            or not _evidence_ids(receipt.get('evidence_ids'))):
+        return False
+    evidence = {e.get('id'): e for e in record.get('evidence', []) if isinstance(e, dict)}
+    return all(eid in record.get('evidence_ids', []) and eid in evidence
+               and evidence[eid].get('kind') == 'browser-event'
+               and evidence[eid].get('revision') == receipt['revision']
+               and evidence[eid].get('observation_id') in receipt.get('observation_ids', [])
+               and bool(evidence[eid].get('quote')) for eid in receipt['evidence_ids'])
