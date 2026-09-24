@@ -70,7 +70,11 @@ class WebChannel:
             events = []
             for m in messages:
                 event = {"from": str(m["from"]), "id": str(m["id"]), "type": m["type"],
-                         "context": (m.get("context") or {}).get("id")}
+                         "context": (m.get("context") or {}).get("id"),
+                         "question_id": m.get("x_question_id"), "secret_reply": m.get("x_secret_reply", False)}
+                if (event["question_id"] is not None and not isinstance(event["question_id"], str)
+                        or type(event["secret_reply"]) is not bool):
+                    raise ValueError("invalid question metadata")
                 if m["type"] == "text":
                     event["text"] = str(m["text"]["body"])
                 elif m["type"] == "interactive":

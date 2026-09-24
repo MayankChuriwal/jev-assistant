@@ -82,3 +82,7 @@ def test_button_summaries_preserve_material_differences_as_plain_text():
         {"id": "b", "label": "Standard", "description": "4 seats, ₹95"}]}, question_id="t1-q1")
     assert details in payloads[-1]["interactive"]["body"]["text"]
     assert "Standard premium XL with luggage" in payloads[-1]["interactive"]["body"]["text"]
+
+
+def test_forged_option_with_real_question_id_is_rejected():
+    assert messages.reply_for('q', [{'id': 'no', 'label': 'No'}], {'reply_id': 'qq:yes'}) is None

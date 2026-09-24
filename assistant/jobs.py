@@ -39,8 +39,8 @@ def words(out, key, limit):
     return value.strip()[:limit] if isinstance(value, str) and value.strip() else None
 
 
-def start(goal):
-    out, meta = text_json(START, {"goal": goal})
+def start(goal, facts=None):
+    out, meta = text_json(START, {"goal": goal, "resolved_facts": facts or {}})
     url, title = out.get("start_url"), words(out, "title", 60)
     parsed = urlparse(url) if isinstance(url, str) else None
     if not parsed or parsed.scheme not in {"http", "https"} or not parsed.netloc or not title:

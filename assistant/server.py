@@ -354,6 +354,10 @@ class ChatServer(ThreadingHTTPServer):
         self.token = token or secrets.token_urlsafe(24)
         super().__init__(("127.0.0.1", port), ChatHandler)
 
+    def service_actions(self):
+        if hasattr(self.core, 'reap_idle'):
+            self.core.reap_idle()
+
 
 def serve(port=CHAT_PORT):
     from .channel_web import WebChannel
@@ -363,7 +367,9 @@ def serve(port=CHAT_PORT):
         return 1
     channel = WebChannel(home() / "media")
     try:
-        httpd = ChatServer(Core(channel), channel, port=port)
+        core = Core(channel)
+        core.recover_interrupted()
+        httpd = ChatServer(core, channel, port=port)
     except OSError as error:
         if error.errno != errno.EADDRINUSE:
             raise

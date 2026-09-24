@@ -57,7 +57,8 @@ def reply_for(question_id, options, event):
     """The agent reply an event gives this question, or None when it is a tap on some other question."""
     if event.get("reply_id"):
         prefix, _, option = event["reply_id"].partition(":")
-        return {"option": option} if prefix == f"q{question_id}" else None
+        return {"option": option} if prefix == f"q{question_id}" and any(
+            item["id"] == option for item in options) else None
     if event.get("media_id"):
         return {"media_id": event["media_id"]}
     text = event.get("text", "").strip()

@@ -159,3 +159,15 @@ def test_a_restarted_server_asks_for_a_reload(chat):
     chat.channel.set_typing(True)  # wakes the page's long poll; the next poll meets the new token
     assert until(lambda: js(chat, "document.getElementById('status').textContent") ==
                  "jev restarted: reload this page", timeout=5)
+
+
+def test_secret_submission_captures_question_and_clears_composer(chat):
+    chat.core.open = {'id': 'identity-A', 'secret': True}
+    chat.channel.send('local', {'type': 'text', 'text': {'body': 'Secret A'}})
+    assert until(lambda: js(chat, "document.getElementById('text').type") == 'password')
+    js(chat, "document.getElementById('text').value = '482913'; document.getElementById('composer').requestSubmit()")
+    assert until(lambda: chat.core.events)
+    event = chat.core.events[0]
+    assert event['question_id'] == 'identity-A' and event['secret_reply'] is True
+    assert js(chat, "document.getElementById('text').value") == ''
+    assert '482913' not in js(chat, 'document.body.innerText')

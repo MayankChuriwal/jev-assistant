@@ -262,3 +262,55 @@ def test_text_captcha_wait_preserves_applied_answer_for_verify(tmp_path):
     assert list(a.task.challenges.values())[-1]['status'] == 'answer_applied'
     act(a, decision('verify', 'CLICK'))
     assert [c.args[0] for c in a.browser.act.call_args_list] == ['TYPE_TEXT', 'WAIT', 'CLICK']
+
+
+def test_opaque_chat_upload_resolves_only_through_channel(tmp_path):
+    source = tmp_path / 'upload.txt'
+    source.write_text('attachment')
+    a = agent_with(tmp_path, replies=[{'upload_id': 'opaque-media'}])
+    a.resolve_upload = lambda identity: str(source) if identity == 'opaque-media' else None
+    action = {'id': 'file', 'kind': 'upload', 'label': 'Upload', 'node': 9}
+    inputs, _, _ = a.inputs('UPLOAD', action, {}, a.state['page'])
+    assert inputs == {'files': [str(source)]}
+    assert str(source) not in str(a.state['messages'])
+
+
+def test_account_reservation_blocks_mutation_after_redirect(tmp_path):
+    a = agent_with(tmp_path)
+    a.reserve_origin = lambda origin: False
+    act(a, decision('e4', 'CLICK'))
+    assert a.state['status'] == 'blocked'
+    assert 'account' in a.state['messages'][-1]['text']
+    a.browser.act.assert_not_called()
+
+
+def test_navigation_reserves_destination_before_dispatch(tmp_path, monkeypatch):
+    a = agent_with(tmp_path)
+    put_fact(a.task, 'provider_url', 'https://other.test/', source='user')
+    a.reserve_origin = lambda origin: False
+    monkeypatch.setattr(loop, 'url_value', lambda *args: ('https://other.test/', None))
+    with pytest.raises(loop.Halt, match='account'):
+        a.inputs('OPEN_URL', {}, {}, a.state['page'])
+    a.browser.act.assert_not_called()
+
+
+def test_password_save_requires_separate_explicit_consent(tmp_path):
+    a = agent_with(tmp_path)
+    a.task.challenges['pw'] = {'id': 'pw', 'purpose': 'login', 'field_role': 'password',
+                               'origin': 'https://shop.test'}
+    a.asker = lambda message: {'option': 'no'}
+    a.offer_password_save(a.task.challenges['pw'], 'private-password')
+    assert not a.vault.writes
+    a.asker = lambda message: {'option': 'yes'}
+    a.offer_password_save(a.task.challenges['pw'], 'private-password')
+    assert a.vault.writes == [('login.shop.test', 'private-password')]
+    assert a.profile.data['logins'] == ['shop.test']
+    assert 'private-password' not in str(a.state['messages'])
+
+
+def test_reconciliation_constraint_cannot_dispatch_input(tmp_path):
+    a = agent_with(tmp_path)
+    a.task.constraints['read_only_reconciliation'] = True
+    act(a, decision('e4', 'CLICK'))
+    assert a.state['status'] == 'blocked'
+    a.browser.act.assert_not_called()

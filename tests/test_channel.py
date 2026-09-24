@@ -25,7 +25,8 @@ def test_webhook_messages_flatten_to_events():
         {"from": "local", "id": "wamid.5", "type": "image", "image": {"id": "m2", "caption": "like this"}},
     )
     events = WebChannel.events(body)
-    assert events[0] == {"from": "local", "id": "wamid.1", "type": "text", "text": "Order Diet Coke", "context": None}
+    assert events[0] == {"from": "local", "id": "wamid.1", "type": "text", "text": "Order Diet Coke", "context": None,
+                         "question_id": None, "secret_reply": False}
     assert events[1]["reply_id"] == "q1:yes" and events[1]["context"] == "wamid.out3"
     assert events[2]["reply_id"] == "q2:o4" and events[2]["text"] == "Office"
     assert events[3]["media_id"] == "m1" and events[3]["filename"] == "bill.pdf"

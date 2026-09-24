@@ -405,7 +405,9 @@ class Agent:
         self.task.set_status('running')
         self.state.update(status='ready', decision=None)
         self.observe()
-        self.coordinate('stage_change')
+        pending = any(e.get('commitment') and e.get('outcome') not in {'success', 'failed'}
+                      and e.get('status') != 'not_dispatched' for e in self.task.executions.values())
+        self.coordinate('outcome' if pending else 'stage_change')
 
     def stop(self):
         self.task.set_status('cancelled')
@@ -554,6 +556,11 @@ class Agent:
 
     def perform(self, operation, action, decision, page):
         self._field_pending = None
+        if (self.task.constraints.get('read_only_reconciliation')
+                and operation not in {'LOOK', 'WAIT', 'COPY', 'SCROLL', 'OPEN_URL'}):
+            raise Halt('blocked', 'Read-only reconciliation cannot submit input or repeat the interrupted action.')
+        if hasattr(self, 'reserve_origin') and not self.reserve_origin(page['url']):
+            raise Halt('blocked', 'This account is reserved by another task with an unresolved outcome.')
         if operation == 'LOOK':
             return self.look(page, 'Observe missing controls')
         if any(not r.get('satisfied') for r in self.task.requirements.values() if r.get('kind') in interaction.KINDS):
@@ -699,6 +706,8 @@ class Agent:
             if urlparse(url).scheme not in {'http', 'https'} or not urlparse(url).hostname:
                 raise ValueError('Invalid navigation URL')
             self.validate_navigation(url, page)
+            if hasattr(self, 'reserve_origin') and not self.reserve_origin(url):
+                raise Halt('blocked', 'The destination account is reserved by another task.')
             return {'url': url}, helper, url
         if operation == 'PRESS_KEY':
             return {'key': decision['key']}, None, None
@@ -711,7 +720,10 @@ class Agent:
             paths = self.provide_file(action) if self.provide_file else None
             if paths is None:
                 reply = self.ask({'kind': 'file', 'text': 'Send the file to attach here.'})
-                paths = [reply['file']] if reply.get('file') else []
+                if reply.get('upload_id') and hasattr(self, 'resolve_upload'):
+                    paths = [self.resolve_upload(reply['upload_id'])]
+                else:
+                    paths = [reply['file']] if reply.get('file') else []
             if not paths or not all(Path(path).is_file() for path in paths):
                 raise Halt('blocked', 'No valid file arrived.')
             return {'files': paths}, None, None
@@ -806,6 +818,9 @@ class Agent:
         reply = self.ask({k: v for k, v in question.items() if k in {'id', 'kind', 'text', 'options', 'challenge_id'}})
         self.stop_if_interrupted()
         self.task.set_status('running')
+        if reply.get('expired'):
+            self.observe()
+            raise StalePage('The queued secret challenge expired; inspect its current state.')
         keys = [key for rid in question['requirement_ids'] for key in self.task.requirements[rid]['keys']
                 if not self.task.facts.get(key, {}).get('valid')
                 or self.task.facts[key]['value'] in (None, '')]
@@ -836,10 +851,32 @@ class Agent:
             ref = self.secret_store.put(raw, **self.secret_scope(challenge),
                                         expires_at=challenge.get('expires_at') or time.time() + 600)
             self.secrets.add(raw, ref)
+            if challenge.get('field_role') == 'password' and challenge.get('purpose') == 'login':
+                self.offer_password_save(challenge, raw)
             values = {keys[0]: ref}
         interaction.answer_requirements(self.task, question['id'], values, now=time.time())
         self.observe()
         self.coordinate('user_answer')
+
+    def offer_password_save(self, challenge, raw):
+        """Separate origin-bound consent; a login answer never implies vault consent."""
+        if challenge.get('purpose') != 'login' or challenge.get('field_role') != 'password':
+            return
+        host = urlparse(challenge['origin']).netloc
+        reply = self.ask({'kind': 'confirm', 'text': f'Save this password locally for {host}?',
+                          'options': [{'id': 'yes', 'label': 'Save password'},
+                                      {'id': 'no', 'label': 'Use once'}]})
+        self.stop_if_interrupted()
+        if reply.get('option') != 'yes':
+            return
+        try:
+            self.vault.set('login.' + host, raw)
+        except (KeyError, ValueError, RuntimeError):
+            self.say('Password storage is unavailable; using the temporary answer for this login.')
+            return
+        if host not in self.profile.data['logins']:
+            self.profile.data['logins'].append(host)
+            self.profile.save()
 
     def confirm(self, page, label, action=None, *, effect_id=None):
         proposal = self.task.proposal

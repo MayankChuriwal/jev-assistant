@@ -8,6 +8,7 @@ const input = document.getElementById('text');
 const file = document.getElementById('file');
 const status = document.getElementById('status');
 const MAX_UPLOAD = 20 * 1024 * 1024;
+let openQuestion = null;
 let after = 0;
 let sent = 0;
 let secretFor = null; // the open secret question, as the server reports it: what is typed is hidden
@@ -55,7 +56,7 @@ function choices(b, m) {
     button.addEventListener('click', () => {
       group.querySelectorAll('button').forEach(x => { x.disabled = true; });
       button.classList.add('picked');
-      send({type: 'interactive', context: {id: m.x_id},
+      send({type: 'interactive', context: {id: m.x_id}, x_question_id: String(m.x_question), x_secret_reply: false,
             interactive: {type: kind, [kind]: {id: option.id, title: option.title}}}, option.title);
     });
     group.append(button);
@@ -115,9 +116,11 @@ form.addEventListener('submit', event => {
   event.preventDefault();
   const text = input.value.trim();
   if (!text) return;
+  const submittedQuestion = openQuestion;
   const question = secretFor;
   input.value = '';
-  send({type: 'text', text: {body: text}}, question === null ? text : '••••').then(delivered => {
+  send({type: 'text', text: {body: text}, x_question_id: submittedQuestion ? String(submittedQuestion.id) : null,
+        x_secret_reply: submittedQuestion?.secret === true}, question === null ? text : '••••').then(delivered => {
     if (delivered && question !== null && secretFor === question) { // stay hidden until the answer is in
       answered = question;
       secretFor = null;
@@ -127,6 +130,7 @@ form.addEventListener('submit', event => {
 });
 
 file.addEventListener('change', async () => {
+  const submittedQuestion = openQuestion;
   const chosen = file.files[0];
   file.value = '';
   if (!chosen) return;
@@ -138,7 +142,8 @@ file.addEventListener('change', async () => {
     const {id} = await r.json();
     const type = chosen.type.startsWith('image/') ? 'image' : 'document';
     document.body.classList.remove('wants-file');
-    send({type, [type]: {id, filename: chosen.name, mime_type: chosen.type}}, '📎 ' + chosen.name);
+    send({type, x_question_id: submittedQuestion ? String(submittedQuestion.id) : null,
+          x_secret_reply: submittedQuestion?.secret === true, [type]: {id, filename: chosen.name, mime_type: chosen.type}}, '📎 ' + chosen.name);
   } catch {
     note(`${chosen.name} could not be sent.`);
   }
@@ -158,6 +163,7 @@ async function poll() {
         show(m);
         after = Math.max(after, m.x_seq);
       }
+      openQuestion = open;
       secretFor = open && open.secret && open.id !== answered ? open.id : null; // the server knows what is open
       mode();
       status.textContent = typing ? 'typing…' : 'online';

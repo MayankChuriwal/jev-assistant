@@ -131,8 +131,8 @@ MASK = r"""((ids, on, hide) => {
     e.dataset.jevMask = JSON.stringify([e.style.filter, e.style.webkitTextSecurity, e.style.opacity]);
     e.style.filter = 'blur(12px)';
     e.style.webkitTextSecurity = 'disc';
-    // Explicitly masked fields must not vary with their value or caret in a capture.
-    if (explicit.has(e)) e.style.opacity = '0';
+    // Every hidden field uses identical capture-only masking, registered or automatic.
+    if (explicit.has(e) || filled.includes(e)) e.style.opacity = '0';
   }
   return true;
 })"""
