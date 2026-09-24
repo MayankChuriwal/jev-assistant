@@ -618,6 +618,9 @@ def dispatch_once(state, journal: Journal, decision: dict, page: dict, *, act, i
             raise ValueError('commitment requires code-owned account reservation key')
         # Mark consumed even on a partially persisted intent; it must never be replayed.
         state.executions[eid] = {**record, 'status': 'pending'}
+        if commitment:
+            runtime.setdefault('dispatched_authorizations', {})[eid] = deepcopy(dict(
+                approval=state.approval, proposal=proposal, effect=effect))
         try:
             journal.append(record)
         except Exception:
@@ -1005,7 +1008,8 @@ def record_page_confirmation(state, execution_id: str, *, evidence_ids: list[str
     observations = list(state.observations)
     second_id = observations[-1] if observations else None
     before_id = execution.get('observation_id')
-    approval = state.approval or {}
+    historical = _runtime(state).get('dispatched_authorizations', {}).get(execution_id, {})
+    approval = historical.get('approval', {})
     if (execution.get('status') != 'executed' or not execution.get('commitment')
             or not execution.get('approval_id') or approval.get('id') != execution.get('approval_id')
             or approval.get('consumed') is not True or before_id not in observations
@@ -1021,8 +1025,9 @@ def record_page_confirmation(state, execution_id: str, *, evidence_ids: list[str
             or first['url'] != second['url'] or first.get('completeness') != second.get('completeness')
             or any(first.get('completeness', {}).values())):
         return False
-    proposal = state.proposal or {}
-    if not proposal or execution.get('proposal_key') != proposal_key(proposal):
+    proposal = historical.get('proposal', {})
+    if (historical.get('effect', {}).get('effect_key') != execution.get('effect_key')
+            or not proposal or execution.get('proposal_key') != proposal_key(proposal)):
         return False
     action = proposal.get('action', '')
     terminal = next((pattern for trigger, pattern in _TERMINAL_BY_ACTION if trigger.search(action)), None)

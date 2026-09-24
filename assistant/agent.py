@@ -177,15 +177,14 @@ class Agent:
 
     def stop_if_interrupted(self):
         """A cancel or a change from the user arrived while this step was decided: decide again with it."""
-        if (getattr(self, 'reserve_origin', None) is not None
-                and getattr(self, 'browser', None) is not None):
+        if getattr(getattr(self, 'browser', None), 'reserve_origin', None) is not None:
             self.browser.check_reservation()
         if self.interrupted and self.interrupted():
             self.state["status"] = "ready"
             raise StalePage("The user cancelled or changed the task. Choose again.")
 
     def hidden_details(self):
-        return [value for value, _ in self.profile.hidden_values()]
+        return list(self.secrets.values)
 
     def run(self):
         while self.state["status"] not in STOPPED:
@@ -275,6 +274,7 @@ class Agent:
             print(f"jev: trace not saved: {error}", file=sys.stderr)
         finally:
             self.browser.close()
+            self.secrets = Secrets(self.profile.hidden_values())
 
     def __enter__(self):
         return self
@@ -324,7 +324,8 @@ class Agent:
                 initial_messages = self.state['messages']
                 url, selected_title, _ = jobs.start(self.context())
                 title = title or selected_title
-            browser_options = {'geolocation': None}
+            self.provider_origin = self.url_origin(url)
+            browser_options = {'geolocation': None, 'navigation_allowed': self.navigation_allowed}
             if reserve_origin is not None:
                 browser_options['reserve_origin'] = reserve_origin
             self.browser = browser or Browser(url, **browser_options)
@@ -473,10 +474,12 @@ class Agent:
         self.coordinate('user_amendment')
 
     def resume(self):
+        self.task.approval = self.task.proposal = None
         self.task.set_status('running')
         self.state.update(status='ready', decision=None)
         if getattr(self.browser, 'reserve_origin', None) is not None:
             self.browser.reservation_blocked = False
+            self.browser.navigation_blocked = False
         self.observe()
         pending = any(e.get('commitment') and e.get('outcome') not in {'success', 'failed'}
                       and e.get('status') != 'not_dispatched' for e in self.task.executions.values())
@@ -493,7 +496,7 @@ class Agent:
         self.field_cache.clear()
         self.state['answers'].clear()
         self.state['unused'].clear()
-        self.secrets = Secrets(self.profile.hidden_values())
+        # Revocation stops resolution; masking survives until the owned tabs close.
 
     def discard_invalid_secrets(self):
         expired = {cid for cid, c in self.task.challenges.items()
@@ -510,7 +513,7 @@ class Agent:
                 ref = fact['value']
                 self.secret_store.consume(ref)
                 self.sanitize_retained()
-                self.secrets.remove(ref)
+                # The live page may still echo a revoked credential.
 
     def sanitize_retained(self):
         for key, value in list(self.state.items()):
@@ -1061,15 +1064,36 @@ class Agent:
                 challenge['status'] = 'expired'
         self.discard_invalid_secrets()
 
-    def validate_navigation(self, url, page):
-        destination, current = urlparse(url), urlparse(page['url'])
-        same_origin = (destination.scheme, destination.netloc) == (current.scheme, current.netloc)
+    @staticmethod
+    def url_origin(url):
+        parsed = urlparse(url)
+        return parsed.scheme + '://' + parsed.netloc
+
+    def navigation_allowed(self, url):
+        """Pure pre-fetch policy; page links and redirects confer no service consent."""
+        parsed = urlparse(url)
+        if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password:
+            return False
+        destination = self.url_origin(url)
+        baseline = getattr(self, 'provider_origin', None)
+        if baseline is None and getattr(self, 'state', None):
+            baseline = self.url_origin(self.state['page']['url'])
+        if destination == baseline:
+            return True
         explicit = any(f.get('valid') and f.get('source') == 'user'
-                       and f.get('value') == url for k, f in self.task.facts.items()
+                       and isinstance(f.get('value'), str)
+                       and self.url_origin(f['value']) == destination
+                       for k, f in self.task.facts.items()
                        if k in {'navigation_url', 'provider_url', 'alternative_url'})
-        # Model helpers cannot authorize an external provider, including a page's
-        # advertised competitor link. The user's destination fact authorizes it.
-        if same_origin or explicit:
+        if explicit:
+            return True
+        return any(flow.get('revision') == self.task.revision and not flow.get('blocked')
+                   and flow.get('status') in {'required', 'challenge', 'submitted'}
+                   and destination in flow.get('allowed_origins', [])
+                   for flow in self.task.progress.get('auth_flows', {}).values())
+
+    def validate_navigation(self, url, page):
+        if self.navigation_allowed(url):
             return
         interaction.require(self.task, dict(id='navigation-service', kind='text', purpose='task',
             keys=['navigation_url'], scope='task', depends_on=[], options=[],

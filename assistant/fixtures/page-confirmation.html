@@ -25,7 +25,7 @@ document.getElementById('place').onclick=()=>{
   const render=processing=>{
     result.replaceChildren();
     const heading=cancelling?(variant==='subscription-cancel'?'Subscription cancelled #CAN-4821':'Booking cancelled #CAN-4821'):
-      processing||variant==='processing'?'Order processing #ORD-4821':
+      processing||variant==='processing'||variant.startsWith('resume')?'Order processing #ORD-4821':
       variant==='unrelated'?'Message sent #MSG-4821':
       variant==='unsuccessful'?'Order placed #ORD-4821 unsuccessful':'Order placed #ORD-4821';
     const resultItem=cancelling?item:variant==='wrong-item'?'Black tea × 1':'Green tea × 1';

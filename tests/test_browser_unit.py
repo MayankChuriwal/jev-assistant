@@ -291,3 +291,17 @@ def test_freshness_digests_are_keyed_and_contain_no_raw_field_values(monkeypatch
     assert '482913' not in first
     monkeypatch.setattr(browser, '_GUARD_KEY', b'new-process-key')
     assert browser.guard_digest(raw) != first
+
+
+def test_unowned_parentless_target_stays_paused_without_blocking_tasks(monkeypatch):
+    owner = bare()
+    owner.reserve_origin = lambda _: True
+    owner.guard_targets, owner.guard_sessions = {}, set()
+    owner.reservation_blocked = False
+    calls = []
+    monkeypatch.setattr(browser, 'OWNERS', {'T': owner})
+    monkeypatch.setattr(browser, 'cdp', lambda method, **_: calls.append(method))
+    browser.on_browser_event({'method': 'Target.attachedToTarget', 'params': {
+        'sessionId': 'other-session', 'targetInfo': {'targetId': 'other', 'type': 'other', 'url': ''}}})
+    assert not owner.reservation_blocked
+    assert 'Runtime.runIfWaitingForDebugger' not in calls

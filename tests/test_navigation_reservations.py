@@ -69,6 +69,8 @@ def test_constructor_blocks_reserved_origin_before_http_access(reserved_site, de
 def test_later_redirect_or_fetch_is_blocked_before_reserved_account_request(reserved_site, kind):
     site = reserved_site
     agent = open_agent(site, site.a + '/')
+    from assistant.state import put_fact
+    put_fact(agent.task, 'alternative_url', site.b + '/', source='user')
     try:
         if kind == 'navigation':
             expression = f"location.href = '{site.a}/redirect'"
@@ -110,3 +112,56 @@ def test_nested_cross_origin_frame_cannot_fetch_reserved_account(reserved_site):
             agent.browser.observe()
     finally:
         agent.close()
+
+
+@pytest.mark.parametrize('kind', ['link', 'enter', 'redirect', 'javascript'])
+def test_provider_gate_prevents_actual_unapproved_destination(reserved_site, kind, monkeypatch):
+    site = reserved_site
+    site.core.reservations.clear()
+    agent = open_agent(site, site.a + '/')
+    try:
+        if kind in {'link', 'enter'}:
+            agent.browser.evaluate(f"document.querySelector('a').href='{site.b}/private';"
+                                   "document.querySelector('a').target='';")
+            page = agent.browser.observe()
+            action = find(page, 'Open redirect')
+            if kind == 'enter':
+                agent.browser.evaluate("document.querySelector('a').focus()")
+                agent.browser.act('PRESS_KEY', action, page, key='Enter')
+            else:
+                agent.browser.act('CLICK', action, page)
+        else:
+            url = site.a + '/redirect' if kind == 'redirect' else site.b + '/private'
+            agent.browser.evaluate(f"location.href='{url}'")
+        assert until(lambda: agent.browser.reservation_blocked or
+                     any(r[0].startswith('localhost:') for r in site.requests))
+        assert not [r for r in site.requests if r[0].startswith('localhost:')]
+        with pytest.raises(RuntimeError):
+            agent.browser.observe()
+        from unittest.mock import Mock
+        resolve = Mock(side_effect=AssertionError('No credential release on an unapproved destination'))
+        monkeypatch.setattr(type(agent.secret_store), 'resolve', resolve)
+        with pytest.raises(RuntimeError):
+            agent.predict()
+        resolve.assert_not_called()
+    finally:
+        agent.browser.close()
+
+
+@pytest.mark.parametrize('authorization', ['user', 'auth'])
+def test_authorized_provider_or_auth_origin_can_redirect(reserved_site, authorization):
+    from assistant.state import put_fact
+    site = reserved_site
+    site.core.reservations.clear()
+    agent = open_agent(site, site.a + '/')
+    try:
+        if authorization == 'user':
+            put_fact(agent.task, 'alternative_url', site.b + '/', source='user')
+        else:
+            agent.task.progress['auth_flows'] = {'login': dict(revision=agent.task.revision,
+                status='challenge', allowed_origins=[site.a, site.b], blocked=False)}
+        agent.browser.evaluate(f"location.href='{site.a}/redirect'")
+        assert until(lambda: any(r[0].startswith('localhost:') for r in site.requests))
+        assert not agent.browser.reservation_blocked
+    finally:
+        agent.browser.close()

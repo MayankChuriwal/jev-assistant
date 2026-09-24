@@ -1,6 +1,6 @@
 """Live-loop authority: facts cannot substitute a browser decision."""
 import pytest
-from fakes import agent_with, decision
+from fakes import agent_with, decision, fake_page
 
 from assistant import agent as loop
 from assistant.state import put_fact
@@ -50,12 +50,15 @@ def test_temporary_secret_is_scoped_and_requires_a_new_decision(tmp_path, monkey
     assert '482913' not in str(a.trace()) + str(a.task)
 
 
-def test_cancel_clears_temporary_redaction_values(tmp_path):
+def test_cancel_retains_masking_until_browser_closes(tmp_path):
     a = agent_with(tmp_path)
     a.secrets.add('482913', '[secret:test]')
     a.state['memory'].append('482913')
     a.stop()
-    assert '482913' not in str(a.state) + str(a.secrets.values)
+    assert '482913' not in str(a.state)
+    assert a.secrets.text('482913') == '[secret:test]'
+    a.close()
+    assert '482913' not in str(a.secrets.values)
 
 
 def test_no_ordinary_step_recoordinates_unchanged_page(tmp_path, monkeypatch):
@@ -120,7 +123,7 @@ def test_explicit_provider_start_preserves_task_and_disables_guessed_location(tm
     monkeypatch.setattr(loop.jobs, 'start', lambda goal: ('https://shop.test/', 'Shop task', {}))
     monkeypatch.setattr(loop, 'Browser', lambda url, **kw: made.append((url, kw)) or browser)
     a = loop.Agent(None, 'Find tea on Shop', profile=p, vault=FakeVault())
-    assert made == [('https://shop.test/', {'geolocation': None})]
+    assert made == [('https://shop.test/', {'geolocation': None, 'navigation_allowed': a.navigation_allowed})]
     assert a.task.constraints['provider'] == 'Shop'
 
 
@@ -139,7 +142,7 @@ def test_malformed_scoped_code_is_corrected_before_storage(tmp_path, monkeypatch
     assert a.browser.act.call_args.kwargs['text'] == '482913'
 
 
-def test_expired_secret_redaction_copy_is_removed_after_sanitizing(tmp_path):
+def test_expired_secret_remains_masked_while_page_can_echo_it(tmp_path):
     import time
     a = agent_with(tmp_path)
     ref = '[secret:expired]'
@@ -148,7 +151,10 @@ def test_expired_secret_redaction_copy_is_removed_after_sanitizing(tmp_path):
     put_fact(a.task, 'otp', ref, source='user', scope='expired')
     a.state['memory'].append('Typed 864209')
     a.discard_invalid_secrets()
-    assert '864209' not in str(a.secrets.values) + str(a.state['memory'])
+    assert '864209' not in str(a.state['memory'])
+    assert a.secrets.text('Echo 864209') == 'Echo ' + ref
+    assert '864209' in a.hidden_details()
+    assert '864209' not in str(a.clean(fake_page(text='Echo 864209'))) + str(a.trace())
     assert not a.task.facts['otp']['valid']
 
 
@@ -292,3 +298,52 @@ def test_masked_form_guards_remain_fresh_without_retaining_secret(browser_at):
     assert browser.fresh(clean, find(clean, 'Continue', 'click'))
     browser.evaluate("document.getElementById('phone').value = '1234567890'")
     assert not browser.fresh(clean, find(clean, 'Continue', 'click'))
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize('status,value', [('expired', '864209'), ('rejected', 'private-password')])
+def test_revoked_secret_echo_never_reaches_model_trace_or_unmasked_capture(
+        browser_at, tmp_path, monkeypatch, status, value):
+    import json
+    import time
+
+    from assistant import model
+    from assistant.profile import SECRETS
+
+    a = agent_with(tmp_path)
+    a.browser = browser_at('/shop.html')
+    a.state['browser'] = a.browser
+    a.browser.evaluate(f"document.body.innerHTML='<p id=echo>{value}</p>'")
+    scope = dict(task_id=a.task.task_id, question_id='q', challenge_id='c',
+                 origin='https://shop.test', purpose='login', field_role='otp')
+    ref = a.secret_store.put(value, **scope, expires_at=time.time() + 60)
+    a.secrets.add(value, ref)
+    a.task.challenges['c'] = dict(id='c', status=status, expires_at=None)
+    put_fact(a.task, 'secret:c', ref, source='user', scope='c')
+    a.discard_invalid_secrets()
+    with pytest.raises(ValueError, match='unavailable'):
+        a.secret_store.resolve(ref, **scope)
+    captures = []
+    call = a.browser.call
+    def capture(method, *args, **kwargs):
+        if method == 'Page.captureScreenshot':
+            captures.append(a.browser.evaluate("getComputedStyle(document.querySelector('#echo')).filter"))
+        return call(method, *args, **kwargs)
+    monkeypatch.setattr(a.browser, 'call', capture)
+    a.screenshots = True
+    a.observe()
+    assert captures and all(style == 'blur(12px)' for style in captures)
+    assert value not in json.dumps(a.trace())
+    sent = []
+    class Response:
+        status_code, is_error = 200, False
+        def json(self):
+            return {'choices': [{'message': {'content': '{"text":"ok"}'}}]}
+    monkeypatch.setattr(model.CLIENT, 'post', lambda url, json, headers: sent.append(json) or Response())
+    monkeypatch.setenv('OPENAI_API_KEY', 'test')
+    token = SECRETS.set(a.secrets)
+    try:
+        model.field_value({'goal': 'Echo ' + value, 'page': a.state['page']})
+    finally:
+        SECRETS.reset(token)
+    assert value not in json.dumps(sent)

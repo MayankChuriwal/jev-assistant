@@ -12,7 +12,8 @@ from assistant.profile import Profile
 pytestmark = pytest.mark.browser
 
 
-@pytest.mark.parametrize('variant,expected', [('success', 'done'), ('delayed', 'done'), ('old', 'blocked'),
+@pytest.mark.parametrize('variant,expected', [('success', 'done'), ('delayed', 'done'), ('resume', 'done'),
+                                              ('resume-unknown', 'blocked'), ('old', 'blocked'),
                                               ('processing', 'blocked'), ('wrong-amount', 'blocked'),
                                               ('old-total', 'blocked'), ('wrong-item', 'blocked'),
                                               ('unrelated', 'blocked'), ('pending-line', 'blocked'),
@@ -112,6 +113,16 @@ def test_page_confirmation_is_bound_to_current_order(chrome, site, tmp_path, mon
                     asker=answer, profile=Profile(tmp_path/'p.json')) as agent:
         agent.outcome_pause = 0.1
         list(agent.run())
+        if variant.startswith('resume'):
+            assert agent.state['status'] == 'blocked'
+            assert agent.task.progress.get('account_reservation_key') == site['a']
+            agent.task.approval = None
+            agent.task.proposal = None
+            if variant == 'resume':
+                agent.browser.evaluate("document.querySelector('#result p').textContent='Order placed #ORD-4821'")
+            agent.resume()
+            list(agent.run())
+            assert agent.task.approval is None
         log = agent.browser.evaluate('window.log')
     assert agent.state['status'] == expected, (variant, agent.state['messages'], agent.state['errors'])
     assert log == ['place'] and len(approvals) == 1

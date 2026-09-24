@@ -455,6 +455,8 @@ class Core:
                                              lambda m: self.send(m, task), task=task)
             else:
                 self.deliver_files(task)
+                # Dispatched authorization remains private in commit runtime for
+                # read-only reconciliation; these live records cannot dispatch again.
                 task.flow.approval = None
                 task.flow.proposal = None
                 task.agent.resume()

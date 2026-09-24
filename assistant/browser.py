@@ -291,6 +291,11 @@ def on_browser_event(event):
     method, params = event["method"], event.get("params", {})
     if method == 'Target.attachedToTarget':
         info, session = params['targetInfo'], params['sessionId']
+        # Browser UI/extension targets are not task web renderers. Auto-attach
+        # can report them after a new task opens; they must not poison its gate.
+        if info.get('type') in {'browser', 'browser_ui'} or info.get('url', '').startswith(
+                ('chrome://', 'chrome-extension://', 'devtools://')):
+            return
         parent = info.get('openerId') or info.get('parentFrameId')
         owner = OWNERS.get(parent) or next((o for o in list(OWNERS.values())
                 if parent in o.guard_targets or parent in o.frames), None)
@@ -309,13 +314,15 @@ def on_browser_event(event):
                 if owner:
                     break
         if owner is None and (parent or info.get('type') != 'page'):
-            # Ownership cannot be guessed. Leave the child paused and surface the
-            # blocker to guarded tasks rather than letting an unknown renderer fetch.
+            # Ownership cannot be guessed. Leave the child paused. Only a web
+            # parent implicates active tasks; unrelated parentless targets do not.
             for candidate in set(OWNERS.values()):
-                if candidate.reserve_origin is not None:
+                if parent and candidate.reserve_origin is not None:
                     candidate.reservation_blocked = True
             return
         if owner and owner.reserve_origin is not None:
+            if info.get('type') == 'page':
+                owner.guard_pages.add(info['targetId'])
             owner.guard_targets[info['targetId']] = session
             PUMP.register(session, owner._on_event)
             try:
@@ -387,15 +394,18 @@ def forget_sites(sites):
 class Browser:
     """One task's tabs in the agent Chrome. Every executed target resolves from an observed node."""
 
-    def __init__(self, url, *, downloads=None, geolocation=None, reserve_origin=None):
+    def __init__(self, url, *, downloads=None, geolocation=None, reserve_origin=None, navigation_allowed=None):
         with DAEMON:
             ensure_daemon()
             watch_popups()
-            if reserve_origin is not None:
+            if reserve_origin is not None or navigation_allowed is not None:
                 # Harness routes Target.* at browser scope. Its shared watcher owns
                 # paused-child dispatch; do not install a per-page auto-attach handler.
                 cdp('Target.setAutoAttach', autoAttach=True, waitForDebuggerOnStart=True, flatten=True)
-        self.reserve_origin = reserve_origin
+        self.reserve_origin = reserve_origin or (lambda url: True) if navigation_allowed else reserve_origin
+        self.navigation_allowed = navigation_allowed
+        self.guard_pages = set()
+        self.navigation_blocked = False
         self.reservation_blocked = False
         self.guard_targets, self.guard_sessions = {}, set()
         self.tabs, self.opener, self.frames, self.dialogs, self.titles = {}, {}, {}, {}, {}
@@ -510,7 +520,13 @@ class Browser:
         if method == 'Fetch.requestPaused':
             url = params.get('request', {}).get('url', '')
             try:
-                allowed = (not self.reservation_blocked and self.reserve_origin is not None
+                top_level = (params.get('resourceType') == 'Document'
+                             and params.get('frameId') in set(self.tabs) | self.guard_pages)
+                navigation_ok = (not top_level or self.navigation_allowed is None
+                                 or self.navigation_allowed(url))
+                if not navigation_ok:
+                    self.navigation_blocked = True
+                allowed = (navigation_ok and not self.reservation_blocked and self.reserve_origin is not None
                            and self.reserve_origin(url))
             except Exception:
                 allowed = False
@@ -552,6 +568,8 @@ class Browser:
         self.guard_sessions.add(session)
 
     def check_reservation(self):
+        if getattr(self, 'navigation_blocked', False):
+            raise ReservationBlocked('The destination service needs authorization; browser access was blocked.')
         if getattr(self, 'reservation_blocked', False):
             raise ReservationBlocked('The destination account is reserved; browser access was blocked.')
 
