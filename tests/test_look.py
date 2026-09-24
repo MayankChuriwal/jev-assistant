@@ -388,10 +388,10 @@ def test_canvas_repaint_invalidates_visual_candidate_without_dom_change(browser_
 def test_frame_repaint_invalidates_visual_candidate_without_main_dom_change(browser_at):
     from helpers import observe_until
 
-    b = browser_at("/pay.html")
+    b = browser_at("/reliability.html")
     page = observe_until(b, lambda p: any(a.get("frame") for a in p["actions"]))
     fid = next(a["frame"] for a in page["actions"] if a.get("frame"))
-    rect = b.evaluate("(() => {const r=document.querySelector('iframe').getBoundingClientRect();"
+    rect = b.evaluate("(() => {const r=document.getElementById('remote').getBoundingClientRect();"
                       "return {x:r.x,y:r.y,w:r.width,h:r.height}})()")
     b.grid_screenshot(region=rect, columns=1, rows=1)
     target = b.visual_candidates(page, [{"cell": "A1", "label": "Payment frame", "text": ""}])[0]
@@ -405,14 +405,31 @@ def test_frame_repaint_invalidates_visual_candidate_without_main_dom_change(brow
 def test_frame_semantics_invalidate_visual_candidate_even_when_pixels_match(browser_at):
     from helpers import observe_until
 
-    b = browser_at("/pay.html")
+    b = browser_at("/reliability.html")
     page = observe_until(b, lambda p: any(a.get("frame") for a in p["actions"]))
     fid = next(a["frame"] for a in page["actions"] if a.get("frame"))
-    rect = b.evaluate("(() => {const r=document.querySelector('iframe').getBoundingClientRect();"
+    rect = b.evaluate("(() => {const r=document.getElementById('remote').getBoundingClientRect();"
                       "return {x:r.x,y:r.y,w:r.width,h:r.height}})()")
     b.grid_screenshot(region=rect, columns=1, rows=1)
     target = b.visual_candidates(page, [{"cell": "A1", "label": "Payment frame", "text": ""}])[0]
     b.evaluate("document.querySelector('button').setAttribute('aria-label','Different action')",
                b.frames[fid]["session"])
     assert not b.fresh(page, target)
+    assert log(b) == []
+
+
+@pytest.mark.browser
+def test_frame_semantics_changed_before_first_annotation_are_rejected(browser_at):
+    from helpers import observe_until
+
+    b = browser_at("/reliability.html")
+    page = observe_until(b, lambda p: any(a.get("frame") for a in p["actions"]))
+    fid = next(a["frame"] for a in page["actions"] if a.get("frame"))
+    rect = b.evaluate("(() => {const r=document.getElementById('remote').getBoundingClientRect();"
+                      "return {x:r.x,y:r.y,w:r.width,h:r.height}})()")
+    b.grid_screenshot(region=rect, columns=1, rows=1)
+    b.evaluate("document.querySelector('button').setAttribute('aria-label','Different action')",
+               b.frames[fid]["session"])
+    with pytest.raises(StalePage, match="frame"):
+        b.visual_candidates(page, [{"cell": "A1", "label": "Payment frame", "text": ""}])
     assert log(b) == []

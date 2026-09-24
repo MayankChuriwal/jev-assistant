@@ -12,12 +12,13 @@
 <div id="countdown">Resend code in 0:29</div>
 <div id="controls"></div><div id="long"></div><iframe id="remote" title="Remote status"></iframe>
 <script>
+  window.log = [];
   const controls = document.getElementById('controls');
   if (location.search.includes('large')) {
     controls.innerHTML = Array.from({length: 260}, (_, i) => `<button type="button">${i}</button>`).join('');
     document.getElementById('long').textContent = 'visible long text '.repeat(450);
   }
-  document.getElementById('remote').src = location.href.replace('127.0.0.1', 'localhost').split('/reliability.html')[0] + '/widget-frame.html';
+  document.getElementById('remote').src = location.href.replace('127.0.0.1', 'localhost').split('/reliability.html')[0] + '/visual-frame.html';
   setInterval(() => {
     const el = document.getElementById('countdown');
     const n = Number(el.textContent.match(/\d+$/)[0]);

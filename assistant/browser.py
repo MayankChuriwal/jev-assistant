@@ -804,10 +804,13 @@ class Browser:
             raise StalePage("A frame was incomplete. Observe again before interpreting the screenshot.")
         if "frame_markers" not in grid:
             try:
-                grid["frame_markers"] = {fid: self.evaluate(MARKER, self._session_for(fid))
-                                         for fid in page["frames"] if fid != "main"}
+                observed = {fid: state["marker"] for fid, state in page["frames"].items() if fid != "main"}
+                current = {fid: self.evaluate(MARKER, self._session_for(fid)) for fid in observed}
             except (StalePage, RuntimeError, TimeoutError):
                 raise StalePage("A frame changed during screenshot interpretation. Observe again.") from None
+            if current != observed:
+                raise StalePage("A frame changed since this observation. Observe again.")
+            grid["frame_markers"] = observed
         elif not self._visual_frames_fresh(grid):
             raise StalePage("A frame changed since this screenshot. Observe again.")
         if not isinstance(annotations, list):
