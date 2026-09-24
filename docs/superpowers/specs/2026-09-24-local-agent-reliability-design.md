@@ -26,6 +26,9 @@ The user explicitly chose:
   banking-app approval, device authentication, or instructions to click on the site.
 - Text input for now. The assistant can send CAPTCHA images, choices, and documents
   through chat; speech recognition and voice messages are outside this milestone.
+- Informative, conversational updates explain useful findings, options, trade-offs,
+  and interruptions. Review the complete cart or booking breakdown before approval,
+  and offer evidence-backed savings suggestions without silently changing the request.
 - GPT-4.1 mini coordinates the task; Jev selects browser operations and targets;
   application code enforces execution, information handling, and approval rules.
 - Final confirmation before purchases, bookings, messages, form submissions,
@@ -130,10 +133,10 @@ A task maintains structured records rather than relying on the last few prose no
 | Task contract | Original request, user amendments, current revision, constraints, current objective, completion requirements |
 | Fact | Semantic key, public value or opaque secret reference, source, scope, revision, validity, evidence references when page-derived |
 | Requirement | Missing information or choice, purpose, dependencies, whether satisfied, and acceptable answer shape |
-| Question | Stable ID, task/revision, requirement or challenge ID, options and their observation references, display time, lifecycle |
+| Question | Stable ID, task/revision, requirement ID(s) or challenge ID, options and their observation references, display time, lifecycle |
 | Challenge | Origin, purpose, code-owned identity, expected format, associated fields, issuance/expiry/resend state, submission and rejection evidence |
 | Execution | Decision ID, observation ID, selected operation/target, dispatch state, result or uncertainty, subsequent evidence |
-| Proposal and approval | The exact external action, material details, source evidence, task revision, user response, and consumption state |
+| Proposal and approval | The exact external action, material details including observed monetary line items and total, source evidence, task revision, user response, and consumption state |
 | Progress | Last meaningful change, previously attempted recoveries, remaining budgets, blockers, and evidence still needed |
 
 Task status is one of `running`, `waiting_user`, `waiting_site`, `paused`, `blocked`,
@@ -222,7 +225,7 @@ Ask for information only after checking the goal, amendments, valid task facts, 
 and current website evidence. Questions name the actual missing detail. Never ask the
 user which page to open or how to operate the site.
 
-A question is identified by its underlying requirement, not its wording. Rephrasing
+A question is identified by its underlying requirement(s), not its wording. Rephrasing
 does not create a new question. An answered requirement is reopened only with a recorded
 reason: expiration, observed validation failure, changed request, invalid format, or
 genuine ambiguity. If Jev requests an already-satisfied fact, refresh its context and
@@ -248,6 +251,48 @@ evidence, not only its temporary element number. Revalidate after the user repli
 Basic profile details and website sessions retain existing reuse behavior; lasting
 preferences have an explicit remember action. Every fact retains its origin so a
 one-off answer cannot silently become a global preference.
+
+### Informative conversation and useful suggestions
+
+Use natural, informative chat messages that explain what matters to the user's goal.
+At the start, state the understood task and any applicable saved defaults being used.
+A saved address is not automatically a default address. When only previous-order
+history is available, offer its provider/address as a suggested choice and ask which
+to use. Closely related non-secret requirements can share one question, for example:
+"Use the same provider and delivery address as last time, or change either?" Record
+each answer separately; a partial answer leaves only the missing requirement open.
+Offer comparison with the Section 6 login notice when provider choice is unresolved.
+Do not make the user reconfirm explicit current instructions or saved defaults.
+
+Send useful updates at meaningful stages: starting work, finding options, encountering
+a relevant delay or login requirement, preparing the final review, and verifying the
+outcome. Include observed details and explain what happens next. Deduplicate updates
+for the same state; avoid a message for every click, repeated "working on it" messages,
+or speculative claims of progress. Reuse coordinator assessments and verified task
+facts for these messages rather than adding a separate model call per browser step.
+
+Options should include decision-relevant differences, such as brand/type, pack size,
+quantity, price, stock, and delivery estimate for groceries, or vehicle class, capacity,
+fare and pickup estimate for rides. Present a manageable selection and offer more when
+useful; distinguish a shortlist from an exhaustive search. Explain relevant trade-offs
+and ask one clear next question. Never substitute a different variant or increase
+quantity merely because it appears cheaper or more convenient.
+
+Proactively surface observed discounts, delivery thresholds, bundles, or other savings
+opportunities when relevant. Preserve the site's actual eligibility terms: threshold
+operator, qualifying subtotal, exclusions, membership/payment requirements, and validity
+when shown. Free delivery is not a free order and does not imply that every fee is zero.
+Compute eligibility using verified amounts and quantities in application code. A pair
+of items priced at 95 each totals 190 and does not meet a 199 threshold.
+
+For a proposed larger basket, explain both the fee reduction and the additional total
+spend using comparable, verified totals where available. Do not describe buying more
+as saving money overall when the final payable amount increases. If a total or benefit
+cannot be verified yet, describe it as a possible benefit to check, not a guaranteed
+discount. Ask before adding unrequested quantities/items, substituting products, opting
+into paid memberships, or changing payment choices. A request to evaluate an alternative
+basket permits reversible preparation and inspection; it does not approve its purchase.
+Recheck any selected benefit on the final cart/checkout page.
 
 ### Provider selection and comparison
 
@@ -390,6 +435,44 @@ method, and current total/currency where applicable. Include evidence references
 material page-derived details. Missing material details cause further observation or
 a specific question, not a fabricated summary.
 
+### Cart, fees, and final review
+
+Inspect the actual cart or booking review and relevant charge details before asking
+for final approval. A product listing price, promotional banner, or offer selection is
+not evidence of the final payable amount. Jev selects any operations needed to reveal
+collapsed fee details and reach the review page through the normal loop.
+
+Retain structured monetary lines with their displayed labels, signed amounts, currency,
+whether they are included in another amount, and supporting observation references.
+Keep item prices and quantities, subtotal, applied discounts, delivery/shipping, platform,
+handling/packing, small-order, surge, separately charged tax, tip, other charges, and
+rounding when present. This is an illustrative list, not a fixed fee schema: preserve
+unfamiliar charges too. Do not double-count tax already included in an item price or
+claim an absent/unread fee is zero. Show conditional or excluded later charges, such
+as an estimated toll, separately from the currently payable total.
+
+Application code checks monetary arithmetic in exact currency units against the
+site's displayed total. If the breakdown is incomplete or does not reconcile, inspect
+further and explain what is unresolved. Do not invent a balancing fee or present an
+unverified exact total for approval. A site that explicitly quotes an estimate can
+be summarized as an estimate with its observed variable-charge terms; the proposal
+and user approval must retain that uncertainty.
+
+Present a readable chat review containing the full basket or booking, provider,
+delivery address or route, timing/estimate, each observed charge and discount, final
+payable total, and selected payment method. Include all items already in the cart;
+surface unrelated items and ask how to handle them before proceeding. Do not silently
+remove them or include them in the requested purchase. Identify optional additions
+such as tips, donations or paid memberships; do not accept defaults as user consent.
+Use masked merchant-saved payment labels and never show secrets in this review.
+
+An offer-selection reply or agreement to add another pack is not purchase approval.
+After the chosen cart is ready, one clear confirmation of its full proposal authorizes
+the commitment. A previously approved proposal is revalidated using the same review
+requirements if the site changes a discount, charge, quantity, destination or method.
+
+### Approval binding and execution
+
 Show the proposal in chat. Record approval against task revision and a hash of its
 material details, not against the presence of an amount anywhere on the page. After
 the reply, read the page again and verify those details. An item price of ₹79 cannot
@@ -509,6 +592,15 @@ Required deterministic coverage:
 - Text and tile CAPTCHAs, numeric text answers, and challenge replacement during a reply.
 - Choices with similar labels and changed prices; selected options rebound from fresh
   observations without interpreting a shared word as consent.
+- Conversation updates grounded in current evidence and deduplicated across unchanged
+  observations; explicit defaults versus prior-order suggestions; combined provider/
+  address questions and partial replies without reopening answered requirements.
+- Promotion thresholds with strict/inclusive bounds, ineligible products, quantity
+  arithmetic, membership/payment conditions, and expired discounts. A larger basket
+  may reduce delivery fees while increasing total spend; never add it without a choice.
+- Cart breakdowns with unfamiliar fees, included taxes, discounts, rounding, missing
+  lines, changed charges, and estimated later charges; arithmetic must reconcile without
+  fabricated values. Existing unrelated cart items and optional extras require a choice.
 - Changed totals while the previous amount remains visible; changed recipients,
   quantities, addresses, payment methods and terms; cosmetic re-renders retaining a
   valid proposal; unknown dispatch results never retried.
