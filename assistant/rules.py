@@ -155,7 +155,7 @@ def address_extra(label):
     return bool(ADDRESS_EXTRA.search(label or ""))
 
 
-PRICE = re.compile(r"[₹$€£]\s?\d[\d,.]*|\bRs\.?\s?\d[\d,.]*", re.IGNORECASE)
+PRICE = re.compile(r"[₹$€£]\s?\d(?:[\d,]*\d)?(?:\.\d+)?|\bRs\.?\s?\d(?:[\d,]*\d)?(?:\.\d+)?", re.IGNORECASE)
 CHOICE_ROLES = ("option", "radio")
 ACTING = {"request", "book", "confirm", "pay", "place", "order", "buy", "purchase", "proceed", "continue", "choose",
           "select"}

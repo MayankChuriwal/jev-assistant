@@ -41,7 +41,7 @@ class MiniAgent(Agent):
     @staticmethod
     def extra_state():
         return {"plan": [], "chat": [], "feedback": [], "mini": [], "seen": None, "spend": 0.0,
-                "model_errors": 0, "ground_retry": False, "same_nudges": []}
+                "model_errors": 0, "ground_retry": False, "same_nudges": [], "refusals": {}}
 
     @staticmethod
     def new_state(browser, goal, title, page, record):
@@ -62,6 +62,7 @@ class MiniAgent(Agent):
             self.observe()
         except Retry as why:
             s["feedback"].append(str(why))
+            self.refused()
         except (ValueError, RuntimeError) as error:  # a model or network hiccup: feedback, never the end by itself
             s["errors"].append({"step": len(s["history"]), "error": str(error)})
             s["model_errors"] += 1
@@ -106,6 +107,42 @@ class MiniAgent(Agent):
             return self.talk_step(decision, page)
         return self.act_step(decision, page, entry)
 
+    def refused(self):
+        """The same step refused again and again: tell mini to stop at 3, ask the user at 6."""
+        s = self.state
+        act = s["mini"][-1]["action"] if s["mini"] else {}
+        key = (act.get("op"), act.get("target"))
+        count = s["refusals"][key] = s["refusals"].get(key, 0) + 1
+        if count == 3:
+            s["feedback"].append("This was refused 3 times: stop trying it. Pick a different element from the list, "
+                                 "scroll, go back, or ASK the user.")
+        if count >= 6:
+            s["refusals"][key] = 0
+            self.stuck()
+
+    def stuck(self):
+        s = self.state
+        goal = s["mini"][-1]["next_goal"] if s["mini"] else s["goal"]
+        title = s["page"]["title"] or rules.host(s["page"]["url"])
+        reply = self.ask({"kind": "text", "text": f"I'm stuck on {title}: {goal} What should I do?"})
+        s["chat"].append({"from": "user", "text": f"“{str(reply.get('text', '')).strip()}”"})
+
+    def moved(self, page):
+        """Whether the page's elements changed since mini saw it. Text that ticks (arrival times) doesn't count."""
+        if self.state["browser"].fresh(page):
+            return False
+        return views.lines(self.observe()) != views.lines(page)
+
+    def steady(self, page):
+        """Asking costs the user's time: right after a step, wait until steady_ms for the page to settle; new or
+        vanished elements mean mini decides again."""
+        last = self.state["history"][-1] if self.state["history"] else None
+        while last and self.elapsed() - last.get("executed_ms", 0) < self.steady_ms:
+            time.sleep(0.25)
+            if self.moved(page):
+                self.state["status"] = "ready"
+                raise StalePage("The page changed while I was about to ask. Choose again.")
+
     def check_caps(self):
         s = self.state
         if len(s["history"]) >= MAX_ACTIONS:
@@ -132,7 +169,8 @@ class MiniAgent(Agent):
 
     def talk_step(self, decision, page):
         s = self.state
-        act, message = decision["action"], decision["message"].strip()
+        act = decision["action"]
+        message = decision["message"].strip() or (act["text"].strip() if act["op"] != "DONE" else "")
         if act["op"] == "TELL":
             if not message:
                 raise Retry("TELL needs a message.")
@@ -147,7 +185,7 @@ class MiniAgent(Agent):
             return self.finish_step(decision, page)
         if not message:
             raise Retry("ASK needs the question in message.")
-        if not s["browser"].fresh(page):
+        if self.moved(page):
             raise StalePage("The page changed while mini decided. Choose again.")
         secret = rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
         options = [] if secret else [o.strip() for o in decision["options"] if o.strip()][:10]
@@ -191,6 +229,8 @@ class MiniAgent(Agent):
         if act["op"] in DIALOGS:
             operation, action = act["op"], self.control(page, act["op"])
             commit = self.commit_label(operation, action, act, page, {})
+            if commit and not act["commits"]:
+                raise Retry(f"“{commit}” would commit. If you mean it, set commits true with the summary in message.")
             if commit and not self.approved(decision, action, page, commit):
                 return None
             return self.run(page, operation, action, {}, None, decision, commit=commit)
@@ -202,6 +242,10 @@ class MiniAgent(Agent):
         operation, action, index = self.target(decision, page, entry)
         inputs, shown = self.inputs_for(operation, action, act, page)
         commit = self.commit_label(operation, action, act, page, inputs)
+        if commit and not act["commits"]:
+            raise Retry(f"“{commit}” would commit. If that is the step you mean, set commits true and put the "
+                        "summary in message (what, where, option, payment method, and the total as the page shows it); "
+                        "otherwise choose another element.")
         named = re.search(r"\[(\d+)\]", act["target"])
         if commit and named and index and named[1] != index:
             raise Retry(f"You named [{named[1]}], but the element matching “{act['target']}” is [{index}] "
@@ -225,6 +269,8 @@ class MiniAgent(Agent):
         act = decision["action"]
         operation = (("SCROLL_UP" if "up" in act["text"].lower() else "SCROLL_DOWN") if act["op"] == "SCROLL"
                      else BROWSER_OP[act["op"]])
+        if operation == "SELECT" and not action_space(page["actions"])[1].get("select_target"):
+            operation = "CLICK"  # list items and custom dropdown options are clicked
         action, confidence, near, index = jev.ground(page, operation, act["target"], decision["next_goal"],
                                                      s["goal"])
         entry["ground"] = {"choice": action and action["label"], "confidence": confidence}
@@ -290,7 +336,7 @@ class MiniAgent(Agent):
         missing = [x for x in amounts if not rules.amount_shown(x, page["text"])]
         if missing:
             raise Retry(f"The page doesn't show {', '.join(missing)}. Copy amounts exactly as the page shows them.")
-        if not s["browser"].fresh(page):
+        if self.moved(page):
             raise StalePage("The page changed while mini decided. Choose again.")
         self.steady(page)
         question = f"{summary}\n\nI'll press “{commit}”. Reply yes to go ahead, or tell me what to change."
@@ -368,6 +414,7 @@ class MiniAgent(Agent):
         typing = s.pop("typing", None)
         if typing:
             s["typed"][typing[0]] = typing[1]
+        s["refusals"] = {}  # an action ran: earlier refusals no longer count
         if commit:
             s["approval"] = None
             s["commit"] = {"label": commit, "checks": 0, "since": s["elapsed_ms"]}

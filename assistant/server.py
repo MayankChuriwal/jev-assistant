@@ -55,7 +55,8 @@ def chrome_command():
     return ["open", "-gj", "-na", "Google Chrome", "--args", f"--user-data-dir={home() / 'chrome'}",
             f"--remote-debugging-port={PORT}", "--no-first-run", "--no-default-browser-check",
             "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
-            "--disable-background-timer-throttling"]
+            "--disable-background-timer-throttling",
+            "--enable-features=StrictOriginIsolation"]  # payments.site.com inside m.site.com: its own, readable frame
 
 
 def devtools_ready(url=None):

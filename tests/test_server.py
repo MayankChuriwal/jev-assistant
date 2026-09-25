@@ -97,3 +97,9 @@ def test_a_second_jev_explains_the_port_is_taken(monkeypatch, capsys):
 def test_forget_needs_the_agent_chrome(monkeypatch, capsys):
     monkeypatch.setattr(server, "devtools_ready", lambda url=None: False)
     assert server.main(["forget", "swiggy.com"]) == 1 and "not running" in capsys.readouterr().err
+
+
+def test_the_agent_chrome_isolates_every_origin():
+    """Same-site frames from another origin (payments.site.com inside m.site.com) get their own process, so the
+    agent can read them like any other cross-origin frame."""
+    assert "--enable-features=StrictOriginIsolation" in server.chrome_command()

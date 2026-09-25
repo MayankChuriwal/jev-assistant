@@ -47,12 +47,14 @@ def test_a_commit_whose_named_number_jev_contradicts_is_sent_back(tmp_path, monk
 def test_questions_go_out_only_on_the_page_mini_decided_on(tmp_path, monkeypatch):
     a = rides(tmp_path, replies=[{"text": "x"}])
     a.browser.fresh.side_effect = [True, False]
+    a.browser.observe.return_value = fake_page(text=RIDES, url="https://m.uber.test/", actions=[GO, WAIT])
     script(monkeypatch, out("ASK", message="Where to?"))
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.asked == []
     b = rides(tmp_path, replies=[{"text": "yes"}])
     b.browser.fresh.side_effect = [True, False]
+    b.browser.observe.return_value = fake_page(text=RIDES, url="https://m.uber.test/", actions=[GO, WAIT])
     script(monkeypatch, out("CLICK", "Request Uber Go", commits=True, message="Uber Go · ₹887"))
     jev_fake(monkeypatch, approvals=["yes"])
     b.command("tick")
@@ -151,7 +153,7 @@ def test_browser_dialogs_can_be_accepted_or_dismissed(tmp_path, monkeypatch):
 
 def test_enter_in_a_field_whose_form_pays_needs_approval(tmp_path, monkeypatch):
     a = mini_with(tmp_path, page=fake_page(actions=[CVV, KEY_PAGE, WAIT]))
-    script(monkeypatch, out("KEY", key="Enter", message="Diet Coke 300 ml · ₹79"))
+    script(monkeypatch, out("KEY", key="Enter", commits=True, message="Diet Coke 300 ml · ₹79"))
     jev_fake(monkeypatch, approvals=["no"])
     a.command("tick")
     assert a.browser.act.call_count == 0 and a.asked and "“Pay ₹79”" in a.asked[0]["text"]

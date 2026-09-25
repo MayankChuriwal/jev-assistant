@@ -62,6 +62,8 @@ def test_a_question_waits_while_the_page_is_still_changing(tmp_path, monkeypatch
     a = agent(tmp_path, replies=[{"text": "x"}])
     a.steady_ms = 300
     a.browser.fresh.side_effect = [True, False, True, True, True]
+    a.browser.observe.return_value = fake_page(text="Enter the code", actions=[WAIT, {"id": "e9", "kind": "fill",
+                                               "label": "Code", "role": "textbox", "value": "", "node": 9}])
     a.state["history"].append({"operation": "CLICK", "action": "Continue", "executed_ms": a.elapsed(),
                                "url": "https://shop.test/"})
     script(monkeypatch, out("ASK", message="What's the code?"))
