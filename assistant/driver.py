@@ -271,6 +271,12 @@ class MiniAgent(Agent):
                      else BROWSER_OP[act["op"]])
         if operation == "SELECT" and not action_space(page["actions"])[1].get("select_target"):
             operation = "CLICK"  # list items and custom dropdown options are clicked
+        quoted = re.search(r'"([^"]{2,})"', act["target"])
+        if quoted:  # mini copied a label from the list: match it exactly, never let a guess stand in for it
+            found = self.labelled(page, operation, quoted[1])
+            if found:
+                entry["ground"] = {"choice": found[1]["label"], "confidence": 1.0, "exact": True}
+                return operation, found[1], found[0]
         action, confidence, near, index = jev.ground(page, operation, act["target"], decision["next_goal"],
                                                      s["goal"])
         entry["ground"] = {"choice": action and action["label"], "confidence": confidence}
@@ -289,6 +295,20 @@ class MiniAgent(Agent):
                 look = controls.get("LOOK", {"id": "look", "kind": "look", "node": None, "label": "Look"})
                 return "LOOK", {**look, **spot}, None
         raise Retry(f"There is no element for “{act['target']}” on this page. Scroll, wait, or try another way.")
+
+    def labelled(self, page, operation, label):
+        """(index, element) whose label is the one mini quoted; None when several match (Jev decides). A label on
+        the page that no element carries is covered by something (an open panel): mini hears that."""
+        _, heads, _ = action_space(page["actions"])
+        candidates = heads.get(jev.HEAD[operation], {})
+        same = [(i, a) for i, a in candidates.items() if a["label"][:100] == label[:100]]
+        near = same or [(i, a) for i, a in candidates.items() if label in a["label"]]
+        if len(near) == 1:
+            return near[0]
+        if not near and not any(label[:40] in a["label"] for a in page["actions"]):
+            raise Retry(f"No element you can act on is labelled “{label}” right now. If the page text shows it, "
+                        "something covers it (an open panel or pop-up): finish or close that first.")
+        return None
 
     def inputs_for(self, operation, action, act, page):
         if operation == "TYPE_TEXT":

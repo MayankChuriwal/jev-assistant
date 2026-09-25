@@ -66,3 +66,28 @@ def test_a_page_whose_text_ticks_still_gets_its_question(tmp_path, monkeypatch):
     jev_fake(monkeypatch)
     a.command("tick")
     assert [m["text"] for m in a.asked] == ["Which payment method: Cash or UPI?"]
+
+
+CASH = {"id": "e4", "kind": "click", "label": "Cash", "role": "button", "node": 4, "frame": "F1"}
+SAVE = {"id": "e6", "kind": "click", "label": "Save", "role": "button", "node": 6, "frame": "F1"}
+
+
+def test_a_quoted_label_is_matched_exactly_without_asking_jev(tmp_path, monkeypatch):
+    from assistant import driver
+
+    a = mini_with(tmp_path, page=fake_page(text="Payment Methods\nCash\nSave", actions=[CASH, SAVE, WAIT]))
+    script(monkeypatch, out("CLICK", 'button "Save"'))
+    jev_fake(monkeypatch)
+    monkeypatch.setattr(driver.jev, "ground", lambda *a: (_ for _ in ()).throw(AssertionError("Jev asked")))
+    a.command("tick")
+    assert a.browser.act.call_args.args[:2] == ("CLICK", SAVE)
+
+
+def test_a_quoted_label_that_is_not_clickable_is_sent_back_not_guessed(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Request Go Non AC\nPayment Methods\nCash\nSave",
+                                           actions=[CASH, SAVE, WAIT]))
+    script(monkeypatch, out("CLICK", 'button "Request Go Non AC"', commits=True, message="Go Non AC · Cash"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.browser.act.call_count == 0 and a.asked == []
+    assert "covers it" in a.state["feedback"][0]
