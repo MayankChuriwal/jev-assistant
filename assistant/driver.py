@@ -8,7 +8,7 @@ import time
 from urllib.parse import urlparse
 
 from . import jev, mind, rules, views
-from .agent import COMMIT_OPS, Agent, Halt
+from .agent import COMMIT_OPS, QUIET, Agent, Halt
 from .browser import ExecutionUncertain, StalePage
 from .model import action_space
 from .questions import MAX_ACTIONS, MAX_DECISIONS
@@ -37,7 +37,7 @@ class MiniAgent(Agent):
     @staticmethod
     def extra_state():
         return {"plan": [], "chat": [], "feedback": [], "mini": [], "seen": None, "spend": 0.0,
-                "model_errors": 0, "ground_retry": False}
+                "model_errors": 0, "ground_retry": False, "same_nudges": []}
 
     @staticmethod
     def new_state(browser, goal, title, page, record):
@@ -377,5 +377,39 @@ class MiniAgent(Agent):
                                   "risk doing it twice. Please check the site or its app before trying again.")
         return None
 
-    def track_loop(self, last):  # replaced in Task 8
+    NUDGES = {3: "This did nothing three times. Try something else: another element, scrolling, or another way.",
+              5: "Still stuck after five tries. Rewrite your plan (plan field) before the next action."}
+
+    def track_loop(self, last):
+        """The same action on the same page doing nothing: nudge mini at 3 and 5, ask the user at 8."""
+        s = self.state
+        if last["page_changed"] or last["operation"] in QUIET:
+            return None
+        key = (last["operation"], last["action"], urlparse(last["url"]).path)
+        same = sum(1 for h in s["history"][-20:] if not h.get("page_changed")
+                   and (h["operation"], h["action"], urlparse(h["url"]).path) == key)
+        if same in self.NUDGES:
+            s["feedback"].append(self.NUDGES[same])
+            s["same_nudges"].append(same)
+        if same >= 8:
+            goal = s["mini"][-1]["next_goal"] if s["mini"] else s["goal"]
+            title = s["page"]["title"] or rules.host(s["page"]["url"])
+            self.steady(s["page"])
+            reply = self.ask({"kind": "text", "text": f"I'm stuck on {title}: {goal} What should I do?"})
+            s["chat"].append({"from": "user", "text": f"“{str(reply.get('text', '')).strip()}”"})
+            for h in s["history"][-20:]:
+                h["page_changed"] = True  # the user's help starts a fresh count
         return None
+
+    def perform(self, operation, action, decision, page):
+        """The user's own picks (captcha squares): run exactly as asked, no model in between."""
+        return self.run(page, operation, action, {}, None, {"next_goal": "the user's pick"})
+
+    def trace(self):
+        data = super().trace()
+        data["driver"] = "mini"
+        data["plan"] = self.state["plan"]
+        data["mini"] = self.secrets.redact(self.state["mini"])
+        for step, h in zip(data["steps"], self.state["history"]):
+            step["check"], step["changed"] = h.get("check"), h.get("changed")
+        return data

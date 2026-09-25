@@ -1025,7 +1025,7 @@ class Agent:
 
     def close(self):
         try:
-            self.save_trace()
+            self.state["trace_path"] = str(self.save_trace())
         except OSError as error:  # a trace is a record: never a reason to leave the tabs open
             print(f"jev: trace not saved: {error}", file=sys.stderr)
         finally:

@@ -132,3 +132,23 @@ def test_an_unknown_placeholder_is_refused(tmp_path, monkeypatch):
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.browser.act.call_count == 0 and "isn't one of the user's answers" in a.state["feedback"][0]
+
+
+def test_repeating_a_useless_action_nudges_then_asks_the_user(tmp_path, monkeypatch):
+    a = ride(tmp_path, replies=[{"text": "scroll down a bit"}])
+    script(monkeypatch, *[out("CLICK", "Pickup location", next_goal="Open pickup")] * 8)
+    jev_fake(monkeypatch, checks=("failed",))
+    for _ in range(8):
+        a.command("tick")
+    assert a.state["same_nudges"] == [3, 5]
+    assert a.asked[-1]["text"].startswith("I'm stuck") and a.state["chat"][-1]["text"] == "“scroll down a bit”"
+
+
+def test_the_trace_keeps_minis_reasoning_and_jevs_checks(tmp_path, monkeypatch):
+    a = ride(tmp_path)
+    script(monkeypatch, out("CLICK", "Pickup location", next_goal="Open pickup", plan=["Set pickup", "Set drop"]))
+    jev_fake(monkeypatch, checks=("success",))
+    a.command("tick")
+    trace = a.trace()
+    assert trace["driver"] == "mini" and trace["plan"] == ["Set pickup", "Set drop"]
+    assert trace["mini"][0]["next_goal"] == "Open pickup" and trace["steps"][0]["check"] == "success"
