@@ -437,6 +437,49 @@ def _expand_preflight(state: TaskState, output: dict) -> dict:
             "recovery": None}
 
 
+def _discard_state_echoes(state: TaskState, output: dict, event: str) -> dict:
+    """Fill no-op fields and discard copies of code-owned state, without granting authority."""
+    if not isinstance(output, dict):
+        return output
+    output = deepcopy(output)
+    for field in ("facts", "requirements", "completion"):
+        output.setdefault(field, [])
+    for field in ("auth", "progress", "proposal", "outcome", "notice", "recovery"):
+        output.setdefault(field, None)
+    if isinstance(output.get("facts"), list):
+        kept = []
+        for fact in output["facts"]:
+            if (isinstance(fact, dict) and fact.get("source") in {"user", "profile"}
+                    and isinstance(fact.get("key"), str)):
+                existing = state.facts.get(fact.get("key"))
+                if (existing and existing.get("valid") and existing.get("source") == fact["source"]
+                        and existing.get("value") == fact.get("value")):
+                    continue
+            if isinstance(fact, dict) and fact.get("source") in {"page", "derived"}:
+                # Revision is an application-owned number. Current evidence remains mandatory.
+                fact["revision"] = state.revision
+            kept.append(fact)
+        output["facts"] = kept
+    if isinstance(output.get("requirements"), list):
+        output["requirements"] = [req for req in output["requirements"] if not (
+            isinstance(req, dict) and req.get("id") not in state.requirements
+            and isinstance(req.get("keys"), list) and bool(req["keys"])
+            and all(isinstance(key, str) and (fact := state.facts.get(key))
+                    and fact.get("valid") and fact.get("source") in {"user", "profile"}
+                    for key in req["keys"])
+        )]
+    if event not in {"start", "user_amendment"} and isinstance(output.get("completion"), list):
+        existing = {item["id"]: item for item in state.completion}
+        if output["completion"] and all(
+            isinstance(item, dict) and item.get("id") in existing
+            and all(item.get(key) == existing[item["id"]].get(key)
+                    for key in ("description", "kind", "material_keys"))
+            for item in output["completion"]
+        ):
+            output["completion"] = []
+    return output
+
+
 def assess(state: TaskState, page: dict, event: str, *, client=model.text_json) -> dict:
     if event not in EVENTS:
         raise ValueError("event: unsupported coordination event")
@@ -475,7 +518,8 @@ def assess(state: TaskState, page: dict, event: str, *, client=model.text_json) 
             state.diagnostics.append({"kind": "coordinator_transport", "reason": "model call failed"})
             raise
         try:
-            validated = _validate(state, _redact(_expand_preflight(state, output) if preflight else output),
+            prepared = _expand_preflight(state, output) if preflight else _discard_state_echoes(state, output, event)
+            validated = _validate(state, _redact(prepared),
                                   event=event)
         except (ValueError, TypeError, KeyError, AttributeError) as exc:
             # Only validator-generated paths are retained. Never retain arbitrary exception values.

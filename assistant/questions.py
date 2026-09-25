@@ -350,3 +350,16 @@ dispatched transaction. It must retain that transaction's proposal; it grants no
 Use observed role names (otp, password, cvv, card_number, card_expiry, card_name), and existing
 code-owned challenge and execution IDs. A request for the first login code may have no challenge yet.
 """
+
+COORDINATE += """
+This is a JSON update, not a copy of task state. Return only NEW page or derived facts with current
+evidence. Never repeat task.facts, especially user or profile facts. Never assign a new fact source user
+or profile; chat owns those facts. If event is not start or user_amendment, return completion: [] because
+existing completion requirements are already stored. At user_amendment, propose completion only if the
+goal changed. A new requirement must name a genuinely missing fact key. Never use keys of existing valid
+user/profile facts for a new choice; if a distinct site choice matters, give it a distinct key. Include
+every top-level field, even when empty. Use JSON null, not the string "null".
+The top-level response shape is:
+{"objective":"current semantic objective","facts":[],"requirements":[],"completion":[],
+"auth":null,"progress":null,"proposal":null,"outcome":null,"notice":null,"recovery":null}.
+"""
