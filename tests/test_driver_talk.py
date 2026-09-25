@@ -14,7 +14,8 @@ def test_options_are_a_numbered_plain_message_and_jev_reads_the_reply(tmp_path, 
     script(monkeypatch, out("ASK", message="Which ride?", options=["Uber Go · ₹887", "Premier · ₹1,219"]))
     jev_fake(monkeypatch, replies=["2"])
     a.command("tick")
-    assert a.asked[0] == {"from": "agent", "kind": "text", "text": "Which ride?\n1. Uber Go · ₹887\n2. Premier · ₹1,219"}
+    assert a.asked[0] == {"from": "agent", "kind": "text",
+                          "text": "Which ride?\n1. Uber Go · ₹887\n2. Premier · ₹1,219"}
     assert a.state["chat"][-1] == {"from": "user", "text": "“premier please” → option 2: Premier · ₹1,219"}
 
 

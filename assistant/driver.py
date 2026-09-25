@@ -238,8 +238,39 @@ class MiniAgent(Agent):
         label = rules.commit_label(operation, action, page, key, focused)
         return label or ((action.get("label") or "this step") if act["commits"] else None)
 
-    def approved(self, decision, action, page, commit):  # replaced in Task 7
-        raise Retry(f"“{commit}” commits; approval comes in Task 7.")
+    def approved(self, decision, action, page, commit):
+        """True when an earlier yes covers exactly this action. Otherwise ask with mini's summary; a clear yes
+        records the approval and reads the page again before anything runs."""
+        s = self.state
+        approval = s["approval"]
+        if approval and rules.approval_valid(approval, page, len(s["history"])) and self.matches(approval, action,
+                                                                                                  commit):
+            if not s["browser"].fresh(page, action):
+                raise StalePage("Page changed since the approval. Choose again.")
+            return True
+        if s["commit"]:
+            raise Retry("An earlier committed action is still being checked; WAIT for it first.")
+        summary = decision["message"].strip()
+        if not summary:
+            raise Retry(f"“{commit}” commits: put the summary in message (what, where, option, payment method, and "
+                        "the total exactly as the page shows it).")
+        amounts = rules.PRICE.findall(summary)
+        missing = [x for x in amounts if not rules.amount_shown(x, page["text"])]
+        if missing:
+            raise Retry(f"The page doesn't show {', '.join(missing)}. Copy amounts exactly as the page shows them.")
+        self.steady(page)
+        reply = self.ask({"kind": "text", "text": f"{summary}\n\nReply yes to go ahead, or tell me what to change.",
+                          "approval": True})
+        answer = str(reply.get("text", "")).strip()
+        s["chat"] += [{"from": "agent", "text": summary}, {"from": "user", "text": f"“{answer}”"}]
+        if answer and jev.approval(summary, answer) == "yes":
+            target = (action.get("frame"), action["node"]) if action.get("node") is not None else None
+            s["approval"] = {"action_label": commit, "amount": amounts[-1] if amounts else "",
+                             "host": rules.host(page["url"]), "step": len(s["history"]), "target": target}
+            if action.get("point"):
+                s["approval"]["look"] = {"point": action["point"]}
+            raise StalePage("Approved. Reading the page again before acting.")
+        raise Retry(f"The user did not approve: “{answer}”. Nothing was committed; do what they asked.")
 
     def value(self, action, text, page):
         """(what to type, what logs show). Placeholders become the user's values here, after every model call.
@@ -313,8 +344,38 @@ class MiniAgent(Agent):
         last["check"] = jev.check(after, decision["next_goal"], f"{operation} {label}", last["changed"])
         return self.track_loop(last)
 
-    def watch(self, decision):  # replaced in Task 7
-        self.state["commit"] = None
+    def watch(self, decision):
+        """After a commit: wait (no mini calls) while the site works; confirmed or failed goes back to mini."""
+        s = self.state
+        commit, unclear = s["commit"], 0
+        while True:
+            verdict = jev.check(s["page"], decision["next_goal"], commit["label"], "", after_commit=True)
+            if verdict == "processing":
+                if self.elapsed() - commit["since"] >= self.processing_ms:
+                    s["commit"] = None
+                    raise Halt("blocked", f"{commit['label']} went through, but after {self.processing_ms // 60000} "
+                                          "minutes the site still shows it in progress. I stopped watching; check the "
+                                          "site or its app for updates.")
+                if not commit.get("told"):
+                    commit["told"] = True
+                    self.say(f"{commit['label']}: the site is still working on it. I'll tell you as soon as it's "
+                             "confirmed.")
+            elif verdict == "unclear" and unclear == 0:
+                unclear += 1
+            else:
+                break
+            self.stop_if_interrupted()
+            time.sleep(self.outcome_pause)
+            self.observe()
+        s["commit"] = None
+        if verdict == "confirmed":
+            s["memory"].append(f"Done: {commit['label']}, confirmed by the site. Report every detail the page shows.")
+        elif verdict == "failed":
+            s["memory"].append(f"{commit['label']} failed; trying again needs a new approval.")
+        else:
+            raise Halt("blocked", f"I can't tell whether {commit['label']} went through, so I stopped rather than "
+                                  "risk doing it twice. Please check the site or its app before trying again.")
+        return None
 
     def track_loop(self, last):  # replaced in Task 8
         return None
