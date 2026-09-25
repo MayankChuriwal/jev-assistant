@@ -36,6 +36,8 @@ def test_a_step_is_asked_for_with_a_strict_schema(monkeypatch):
     assert schema["additionalProperties"] is False and set(schema["required"]) == set(schema["properties"])
     assert schema["properties"]["action"]["properties"]["op"]["enum"] == mind.OPS
     assert list(schema["properties"])[0] == "evaluation"  # reasoning comes before the action
+    assert fmt["json_schema"]["name"] == "browser_step"  # OpenAI allows only [a-zA-Z0-9_-] here
+    assert sent[0]["model"] == "gpt-4.1-mini"
 
 
 def test_a_cut_off_reply_is_an_error_not_a_step(monkeypatch):

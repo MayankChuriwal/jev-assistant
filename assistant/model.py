@@ -214,7 +214,7 @@ def choose(state, goal, history):
     )
     return decision
 
-def text_json(system, payload, *, max_tokens=512, images=(), schema=None, name="reply"):
+def text_json(system, payload, *, max_tokens=512, images=(), schema=None, schema_name="reply"):
     """One JSON object from the OpenAI-compatible text model, plus call metadata. With a schema the reply is
     held to it (strict json_schema); a reply cut off or refused is an error, never a partial step."""
     key = os.environ.get("OPENAI_API_KEY")
@@ -235,7 +235,8 @@ def text_json(system, payload, *, max_tokens=512, images=(), schema=None, name="
         {
             "model": name,
             "max_tokens": max_tokens,
-            "response_format": ({"type": "json_schema", "json_schema": {"name": name, "strict": True, "schema": schema}}
+            "response_format": ({"type": "json_schema",
+                                 "json_schema": {"name": schema_name, "strict": True, "schema": schema}}
                                 if schema else {"type": "json_object"}),
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         },

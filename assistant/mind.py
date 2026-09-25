@@ -78,4 +78,4 @@ Rules:
 def decide(payload, image=None):
     """(step, call metadata) for one page, with an optional masked screenshot of it."""
     return model.text_json(DRIVER, payload, max_tokens=900, images=[image] if image else (), schema=SCHEMA,
-                           name="browser_step")
+                           schema_name="browser_step")
