@@ -9,7 +9,8 @@ import tomllib
 from pathlib import Path
 
 FALLBACK = "Choose what best fits my goal."
-FINAL = re.compile(r"\b(submit|place order|pay|book|confirm|request|buy|purchase|send)\b", re.IGNORECASE)
+FINAL = re.compile(r"\b(submit|place|order|pay|book|confirm|request|buy|purchase|send|checkout|reserve)\b",
+                   re.IGNORECASE)
 ACTIVE = {"starting", "waiting", "running", "paused"}
 
 
@@ -38,6 +39,9 @@ def grade(spec, task, run, judge):
         reasons.append(f"ended {task.status}")
     if spec["end"] == "file" and not state.get("files"):
         reasons.append("no file arrived")
+    pressed = re.search(r"I'll press “([^”]*)”", task.bench["gate"] or "")
+    if pressed and not FINAL.search(pressed[1]):
+        reasons.append(f"the approval was for “{pressed[1]}”, not the final step")
     missing = [w for w in spec.get("require", []) if w.lower() not in final.lower()]
     if missing and spec["end"] != "file" and final:
         reasons.append("missing: " + ", ".join(missing))

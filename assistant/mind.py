@@ -44,7 +44,8 @@ Each step return:
   ACCEPT_DIALOG or DISMISS_DIALOG for a browser dialog (the page text starts with "Browser ... dialog");
   ASK message (+ options); TELL message; DONE message + text; STOP message.
   target names one element by its words on the page and may include its number, e.g. "[14] Where to? box".
-  commits is true when the action pays, orders, books, requests, submits, sends, cancels, or deletes.
+  commits is true only for the one control that finally pays, orders, books, requests, submits, sends, cancels, or
+  deletes, never for choosing an option on the way (payment method, ride type, size, address, slot).
 - message: words for the user (ASK, TELL, DONE, STOP, and every action with commits true), else "".
 - options: for ASK, the choices as short lines with their prices ("Uber Go · ₹887"), else [].
 
