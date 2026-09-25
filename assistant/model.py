@@ -214,8 +214,9 @@ def choose(state, goal, history):
     )
     return decision
 
-def text_json(system, payload, *, max_tokens=512, images=()):
-    """One JSON object from the OpenAI-compatible text model, plus call metadata."""
+def text_json(system, payload, *, max_tokens=512, images=(), schema=None, name="reply"):
+    """One JSON object from the OpenAI-compatible text model, plus call metadata. With a schema the reply is
+    held to it (strict json_schema); a reply cut off or refused is an error, never a partial step."""
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         raise ValueError("The text model needs OPENAI_API_KEY; nothing is guessed.")
@@ -234,10 +235,14 @@ def text_json(system, payload, *, max_tokens=512, images=()):
         {
             "model": name,
             "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"},
+            "response_format": ({"type": "json_schema", "json_schema": {"name": name, "strict": True, "schema": schema}}
+                                if schema else {"type": "json_object"}),
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         },
     )
+    choice = (result.get("choices") or [{}])[0]
+    if choice.get("finish_reason") == "length" or (choice.get("message") or {}).get("refusal"):
+        raise ValueError("The text model's reply was cut off or refused; nothing executed.")
     try:
         output = json.loads(result["choices"][0]["message"]["content"])
     except (ValueError, KeyError, TypeError, IndexError):
