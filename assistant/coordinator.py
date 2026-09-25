@@ -7,9 +7,9 @@ import re
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 
-from . import model
+from . import model, rules
 from .profile import SECRETS
-from .questions import COORDINATE, INTERPRET_MESSAGE, VISUAL_ANNOTATIONS
+from .questions import COORDINATE, INTERPRET_MESSAGE, PREFLIGHT, VISUAL_ANNOTATIONS
 from .state import TaskState, public_context, put_fact, spend
 
 ASSESSMENT_KEYS = {"objective", "facts", "requirements", "completion", "auth", "progress",
@@ -391,6 +391,48 @@ def _validate_proposal(state, value):
             raise ValueError("proposal.breakdown: " + "; ".join(result["reasons"]))
 
 
+def _expand_preflight(state: TaskState, output: dict) -> dict:
+    """Turn the small chat-only response into the regular validated assessment."""
+    _shape(output, {"requirements", "completion"}, "preflight")
+    _list(output["requirements"], "preflight.requirements")
+    _list(output["completion"], "preflight.completion")
+    if not output["completion"]:
+        raise ValueError("preflight.completion: empty")
+    requirements = []
+    for item in output["requirements"]:
+        _shape(item, {"id", "key", "reason"}, "preflight.requirement")
+        for field in ("id", "key", "reason"):
+            _string(item[field], "preflight.requirement." + field)
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", item["key"]):
+            raise ValueError("preflight.requirement.key: expected semantic snake_case key")
+        requirements.append({"id": item["id"], "kind": "text", "purpose": "task",
+                             "keys": [item["key"]], "scope": "task", "depends_on": [],
+                             "options": [], "reason": item["reason"]})
+    completion = []
+    for item in output["completion"]:
+        _shape(item, {"id", "description", "kind", "material_keys", "transfer_direction"},
+               "preflight.completion")
+        for field in ("id", "description"):
+            _string(item[field], "preflight.completion." + field)
+        _enum(item["kind"], {"page", "state", "action", "artifact"}, "preflight.completion.kind")
+        if (item["kind"] in {"page", "state"} and rules.commerce_goal(state.goal)
+                and re.search(r"\b(booked|ordered|purchased|paid|reserved)\b", item["description"], re.I)):
+            raise ValueError("preflight.completion.kind: an external result needs action proof")
+        _strings(item["material_keys"], "preflight.completion.material_keys")
+        direction = item["transfer_direction"]
+        if item["kind"] == "artifact":
+            _enum(direction, {"download", "upload"}, "preflight.completion.transfer_direction")
+        elif direction is not None:
+            raise ValueError("preflight.completion.transfer_direction: only artifacts transfer")
+        completion.append({"id": item["id"], "description": item["description"], "kind": item["kind"],
+                           "material_keys": item["material_keys"], "evidence_ids": [], "execution_id": None,
+                           "artifact_id": None, "transfer_direction": direction,
+                           "delivery_required": direction == "download"})
+    return {"objective": state.goal, "facts": [], "requirements": requirements, "completion": completion,
+            "auth": None, "progress": None, "proposal": None, "outcome": None, "notice": None,
+            "recovery": None}
+
+
 def assess(state: TaskState, page: dict, event: str, *, client=model.text_json) -> dict:
     if event not in EVENTS:
         raise ValueError("event: unsupported coordination event")
@@ -409,20 +451,28 @@ def assess(state: TaskState, page: dict, event: str, *, client=model.text_json) 
             runtime["dialog"] = _dialog(page)
             runtime["last"] = (state.revision, _signature(state, page, execution_sensitive=False))
             return deepcopy(cached)
-    payload = _redact({"task": _context(state), "event": event,
-                       "untrusted_page": {**_observation(state, page), "dialog": _dialog(page)}, "schema": SCHEMA,
-                       "nullable": ["auth", "progress", "proposal", "outcome", "notice", "recovery"]})
+    preflight = event == "start" and page.get("url") == "https://chat.invalid/"
+    if preflight:
+        context = _context(state)
+        payload = _redact({"goal": state.goal, "facts": context["facts"],
+                           "constraints": state.constraints})
+    else:
+        payload = _redact({"task": _context(state), "event": event,
+                           "untrusted_page": {**_observation(state, page), "dialog": _dialog(page)}, "schema": SCHEMA,
+                           "nullable": ["auth", "progress", "proposal", "outcome", "notice", "recovery"]})
     for attempt in range(2):
         spend(state, "coordinator")
         try:
-            output, metadata = client(COORDINATE, payload, max_tokens=4096)
+            output, metadata = client(PREFLIGHT if preflight else COORDINATE, payload,
+                                      max_tokens=1536 if preflight else 4096)
         except model.TextJSONError as exc:
             output, metadata = None, exc.metadata
         except Exception:
             state.diagnostics.append({"kind": "coordinator_transport", "reason": "model call failed"})
             raise
         try:
-            validated = _validate(state, _redact(output), event=event)
+            validated = _validate(state, _redact(_expand_preflight(state, output) if preflight else output),
+                                  event=event)
         except (ValueError, TypeError, KeyError, AttributeError) as exc:
             # Only validator-generated paths are retained. Never retain arbitrary exception values.
             reason = str(exc) if isinstance(exc, ValueError) else "assessment: invalid nested type"

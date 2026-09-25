@@ -62,11 +62,19 @@ def test_two_goals_in_chat_run_in_parallel_without_leaks(chrome, site, tmp_path,
             return dict(provider=None, compare=False, provider_quote='', compare_quote='')
         if system == questions.INTERPRET_MESSAGE:
             return dict(intent='NEW_TASK', task_id=None, ambiguous=False, reply='')
+        if system == questions.PREFLIGHT:
+            if 'PDF' in payload['goal']:
+                return {'requirements': [], 'completion': [dict(
+                    id='pdf', description='Deliver second page PDF', kind='artifact',
+                    material_keys=['document'], transfer_direction='download')]}
+            return {'requirements': [], 'completion': [dict(
+                id='result', description='Order Diet Coke', kind='action',
+                material_keys=['product'], transfer_direction=None)]}
         if system == questions.COORDINATE and 'PDF' in payload['task']['goal']:
             task = payload['task']
             out = assessment()
             ids = current_evidence(task)
-            if payload['event'] == 'start':
+            if payload['event'] == 'start' and not task['completion']:
                 out['completion'] = [dict(id='pdf', description='Deliver second page PDF', kind='artifact',
                     material_keys=['document'], evidence_ids=[], execution_id=None, artifact_id=None,
                     transfer_direction='download', delivery_required=True)]

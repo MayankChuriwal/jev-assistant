@@ -3,8 +3,9 @@ from copy import deepcopy
 import pytest
 from reliability_fakes import observed
 
+from assistant import interaction
 from assistant.coordinator import annotate_visual, apply_assessment, assess, events_for, interpret_message
-from assistant.state import amend, cite, observe_state, public_context, put_fact
+from assistant.state import TaskState, amend, cite, observe_state, public_context, put_fact
 
 
 def assessment(**changes):
@@ -22,6 +23,62 @@ def scripted(*responses):
             raise result
         return deepcopy(result), {"model": "fake", "usage": {"total_tokens": 10}}
     return client, calls
+
+
+def test_chat_preflight_uses_compact_contract_and_keeps_user_facts():
+    state = TaskState("t1", "Book an Uber")
+    page = {"url": "https://chat.invalid/", "text": "", "actions": []}
+    observe_state(state, page)
+    put_fact(state, "provider", "Uber", source="user")
+    client, calls = scripted({
+        "requirements": [{"id": "pickup", "key": "pickup", "reason": "Pickup is needed"},
+                         {"id": "destination", "key": "destination", "reason": "Destination is needed"}],
+        "completion": [{"id": "booked", "description": "An Uber ride is booked",
+                        "kind": "action", "material_keys": ["provider", "pickup"],
+                        "transfer_direction": None}],
+    })
+    result = assess(state, page, "start", client=client)
+    apply_assessment(state, result)
+    assert result["facts"] == [] and result["requirements"][0]["keys"] == ["pickup"]
+    assert state.facts["provider"]["value"] == "Uber"
+    assert state.completion[0]["id"] == "booked"
+    assert "schema" not in calls[0]
+    for requirement in result["requirements"]:
+        interaction.require(state, requirement)
+    [question] = state.questions.values()
+    assert "pickup" in question["text"] and "destination" in question["text"]
+
+
+def test_chat_preflight_repairs_empty_fact_key_before_applying():
+    state = TaskState("t1", "Book an Uber")
+    page = {"url": "https://chat.invalid/", "text": "", "actions": []}
+    observe_state(state, page)
+    complete = [{"id": "booked", "description": "An Uber ride is booked", "kind": "action",
+                 "material_keys": [], "transfer_direction": None}]
+    client, calls = scripted(
+        {"requirements": [{"id": "pickup", "key": "", "reason": "Pickup needed"}],
+         "completion": complete},
+        {"requirements": [{"id": "pickup", "key": "pickup", "reason": "Pickup needed"}],
+         "completion": complete},
+    )
+    result = assess(state, page, "start", client=client)
+    assert result["requirements"][0]["keys"] == ["pickup"]
+    assert len(calls) == 2 and "validation_error" in calls[1]
+
+
+def test_chat_preflight_booking_cannot_be_page_only_proof():
+    state = TaskState("t1", "Book an Uber")
+    page = {"url": "https://chat.invalid/", "text": "", "actions": []}
+    observe_state(state, page)
+    completed = {"id": "booked", "description": "Ride booked", "material_keys": [],
+                 "transfer_direction": None}
+    client, calls = scripted(
+        {"requirements": [], "completion": [{**completed, "kind": "page"}]},
+        {"requirements": [], "completion": [{**completed, "kind": "action"}]},
+    )
+    result = assess(state, page, "start", client=client)
+    assert result["completion"][0]["kind"] == "action"
+    assert "action proof" in calls[1]["validation_error"]
 
 
 def test_coordinator_cannot_emit_a_browser_operation_or_approval():

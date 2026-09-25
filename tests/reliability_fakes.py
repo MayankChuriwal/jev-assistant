@@ -158,7 +158,7 @@ def shop_coordinate(payload):
     page = payload['untrusted_page']
     text = page['text']
     out = assessment()
-    if payload['event'] == 'start':
+    if payload['event'] == 'start' and not task['completion']:
         out['completion'] = [dict(id='result', description='Order Diet Coke', kind='action',
             material_keys=['product'], evidence_ids=[], execution_id=None, artifact_id=None)]
     if 'Diet Coke' in text:
