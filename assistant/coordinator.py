@@ -53,6 +53,10 @@ SCHEMA = {
 }
 # Only explicit timer wording is ignored; prices, quantities and other numbers remain significant.
 _TIMER = re.compile(r"\b(?:resend|retry|expires?|remaining)(?:\s+in)?\s+\d+\s*(?:seconds?|secs?|s)\b", re.I)
+_DIRECT_REQUEST = re.compile(
+    r"^\s*(?:(?:can|could|would|will)\s+you\s+|i\s+(?:want|need)\s+you\s+to\s+)?"
+    r"(?:please\s+)?(?:book|order|buy|purchase|reserve|schedule|arrange|request|send|submit|"
+    r"cancel|delete|change|pay|download|upload|fill|complete|find|search|compare)\b", re.I)
 
 
 def _redact(value):
@@ -526,6 +530,8 @@ def apply_assessment(state: TaskState, assessment: dict) -> None:
 
 
 def interpret_message(text: str, tasks: list[dict], chat: list[dict], *, client=model.text_json) -> dict:
+    if not tasks and _DIRECT_REQUEST.match(text):
+        return {"intent": "NEW_TASK", "task_id": None, "ambiguous": False, "reply": ""}
     output, _ = client(INTERPRET_MESSAGE, _redact({"message": text, "tasks": tasks, "chat": chat[-6:]}),
                        max_tokens=1024)
     _shape(output, {"intent", "task_id", "ambiguous", "reply"}, "message")

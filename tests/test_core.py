@@ -134,6 +134,15 @@ def test_a_goal_starts_a_task_whose_questions_arrive_as_buttons(world):
     assert until(lambda: world.core.tasks["t1"].status == "done")
 
 
+def test_direct_booking_request_reaches_task_without_conversational_fallback(world):
+    from assistant import coordinator
+
+    world.core.classify = coordinator.interpret_message
+    text(world, "Book an Uber")
+    assert until(lambda: "Book an Uber" in world.agents)
+    assert all("can't book" not in body.lower() for body in bodies(world))
+
+
 def test_secret_answers_never_reach_the_classifier(world):
     world.hosts.update({"Book a cab": "uber.test", "Log in to Swiggy": "swiggy.test"})
     world.scripts["Book a cab"] = [ask(ADDRESS)]

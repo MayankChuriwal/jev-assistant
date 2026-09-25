@@ -198,6 +198,23 @@ def test_unknown_message_task_clarifies_and_chat_has_reply():
     assert out["ambiguous"] and out["task_id"] is None
 
 
+@pytest.mark.parametrize("message", ["Book an Uber", "book an uber", "Please book me a cab",
+                                            "Can you order Diet Coke?"])
+def test_explicit_action_request_starts_task_without_model_refusal(message):
+    def refusing_client(*_args, **_kwargs):
+        raise AssertionError("A direct task request must not reach the chat fallback")
+
+    assert interpret_message(message, [], [], client=refusing_client) == {
+        "intent": "NEW_TASK", "task_id": None, "ambiguous": False, "reply": ""}
+
+
+def test_how_to_question_stays_conversational():
+    client, calls = scripted(dict(intent="OTHER", task_id=None, ambiguous=False,
+                                  reply="Here are the steps."))
+    assert interpret_message("How do I book an Uber?", [], [], client=client)["intent"] == "OTHER"
+    assert len(calls) == 1
+
+
 def test_visual_annotations_only_supplied_cells_and_no_captcha():
     s, page, _ = observed()
     good = {"cell": "A1", "label": "Map", "text": ""}

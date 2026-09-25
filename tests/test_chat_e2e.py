@@ -179,7 +179,7 @@ def test_two_goals_in_chat_run_in_parallel_without_leaks(chrome, site, tmp_path,
 
     classified = [jsonlib.loads(b["messages"][1]["content"])["message"] for b in sent
                   if b.get("messages", [{}])[0].get("content") == questions.INTERPRET_MESSAGE]
-    assert classified == ["Order a Diet Coke", "Also save the second page on the other site as a PDF"]
+    assert classified == ["Also save the second page on the other site as a PDF"]
     everything = jsonlib.dumps(sent, ensure_ascii=False)
     for secret in ("98765", "9876543210", "Mayank", "482913", "111111"):
         assert secret not in everything, secret
