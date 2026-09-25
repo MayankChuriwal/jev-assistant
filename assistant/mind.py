@@ -69,8 +69,10 @@ Rules:
   them. Never click its images or checkbox yourself.
 - At payment, ASK which of the payment methods on the page to use. If the site needs approval in a UPI app, TELL
   the amount and ASK the user to reply "done" once they approved it.
-- Before any action with commits true, message must summarise it: what, where (route or address), which option,
-  payment method, and the total exactly as the page shows it. The user approves in chat before it runs.
+- Never ask the user to confirm or approve anything yourself. When every choice is made, do the final action (the
+  control that books, orders, pays, or submits) with commits true, and put the summary in message: what, where
+  (route or address), which option, payment method, and the total exactly as the page shows it. The system shows
+  the user that summary and asks once; the action runs only after their yes.
 - After a committed action the system watches the result. Then report every detail the page shows that the user
   needs: order or booking number, driver name, car, number plate, PIN to share, arrival time, amount.
 - DONE only when the page shows the goal achieved; text is a short quote copied exactly from the page.

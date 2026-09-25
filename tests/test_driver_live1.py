@@ -91,3 +91,32 @@ def test_a_quoted_label_that_is_not_clickable_is_sent_back_not_guessed(tmp_path,
     a.command("tick")
     assert a.browser.act.call_count == 0 and a.asked == []
     assert "covers it" in a.state["feedback"][0]
+
+
+def test_mini_never_asks_for_its_own_confirmation(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Uber Go AC ₹784.85\nRequest Uber Go AC", actions=[GO, WAIT]))
+    script(monkeypatch, out("ASK", message="Please confirm booking details: Uber Go AC, Cash. Confirm?",
+                            options=["yes", "no"]),
+           out("TELL", message="Do you want to confirm the booking?"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    a.command("tick")
+    assert a.asked == [] and a.told == []
+    assert "commits true" in a.state["feedback"][0]
+
+
+def test_a_question_sent_as_tell_is_asked(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, replies=[{"text": "Terminal 1"}], page=fake_page(text="Where to?", actions=[WAIT]))
+    script(monkeypatch, out("TELL", message="Which terminal should I drop you at?"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert [m["text"] for m in a.asked] == ["Which terminal should I drop you at?"]
+
+
+def test_a_browser_timeout_is_a_hiccup_not_the_end(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Rides", actions=[WAIT]))
+    a.browser.fresh.side_effect = TimeoutError("Page.getFrameTree timed out after 5s waiting for the daemon")
+    script(monkeypatch, out("WAIT"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.state["status"] == "ready" and "timed out" in a.state["feedback"][-1]

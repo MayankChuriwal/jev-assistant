@@ -22,6 +22,9 @@ CODE_WORDS = re.compile(r"\b(code|otp|pin|passcode|password|cvv)\b", re.IGNORECA
 YES = re.compile(r"\b(yes|yeah|yep|yup|ok|okay|sure|go ahead|book it|confirm|do it|proceed|haan)\b", re.IGNORECASE)
 NOT_YES = re.compile(r"\?|\b(no|not|don'?t|wait|but|instead|cheaper|change|stop|cancel|hold)\b", re.IGNORECASE)
 DIALOGS = {"ACCEPT_DIALOG", "DISMISS_DIALOG"}
+CONFIRM = re.compile(r"\b(confirm|proceed|go ahead|book (it|this|the)|place (it|the order)|"
+                     r"should i (book|order|pay|request|place)|shall i)\b", re.IGNORECASE)
+YES_NO = {"yes", "no", "y", "n", "confirm", "cancel", "ok"}
 
 
 class Retry(Exception):
@@ -63,7 +66,7 @@ class MiniAgent(Agent):
         except Retry as why:
             s["feedback"].append(str(why))
             self.refused()
-        except (ValueError, RuntimeError) as error:  # a model or network hiccup: feedback, never the end by itself
+        except (ValueError, RuntimeError, TimeoutError) as error:  # a hiccup: feedback, never the end by itself
             s["errors"].append({"step": len(s["history"]), "error": str(error)})
             s["model_errors"] += 1
             if s["model_errors"] >= 5:
@@ -171,24 +174,30 @@ class MiniAgent(Agent):
         s = self.state
         act = decision["action"]
         message = decision["message"].strip() or (act["text"].strip() if act["op"] != "DONE" else "")
-        if act["op"] == "TELL":
+        op = "ASK" if act["op"] == "TELL" and message.endswith("?") else act["op"]  # a question waits for its answer
+        options = [o.strip() for o in decision["options"] if o.strip()][:10]
+        if op == "ASK" and CONFIRM.search(message) and all(o.lower().rstrip(".") in YES_NO for o in options):
+            raise Retry("Don't ask the user to confirm. When everything is chosen, do the final action (the control "
+                        "that books, orders, or pays) with commits true and the summary in message: the system asks "
+                        "the user once. If something is still undecided, ASK with the choices listed.")
+        if op == "TELL":
             if not message:
                 raise Retry("TELL needs a message.")
             self.say(message)
             s["chat"].append({"from": "agent", "text": message})
             return None
-        if act["op"] in {"ASK", "STOP"} and rules.captcha_challenge(page):
+        if op in {"ASK", "STOP"} and rules.captcha_challenge(page):
             return self.relay_captcha(page)  # only the user solves a captcha
-        if act["op"] == "STOP":
+        if op == "STOP":
             raise Halt("blocked", message or "I stopped: I can't find a way to finish this on the site.")
-        if act["op"] == "DONE":
+        if op == "DONE":
             return self.finish_step(decision, page)
         if not message:
             raise Retry("ASK needs the question in message.")
         if self.moved(page):
             raise StalePage("The page changed while mini decided. Choose again.")
         secret = rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
-        options = [] if secret else [o.strip() for o in decision["options"] if o.strip()][:10]
+        options = [] if secret else options
         text = message + "".join(f"\n{n}. {o}" for n, o in enumerate(options, 1))
         self.steady(page)  # a page still switching screens gets read again first
         reply = self.ask({"kind": "secret" if secret else "text", "text": text})
