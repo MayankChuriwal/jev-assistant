@@ -155,9 +155,10 @@ def terminal_notify(message, *, write=print):
 
 
 def run(goal, url=None):
-    from .agent import STOPPED, Agent
+    from .agent import STOPPED
+    from .driver import agent_class
 
-    agent = Agent(url, goal, asker=terminal_asker, notify=terminal_notify)
+    agent = agent_class()(url, goal, asker=terminal_asker, notify=terminal_notify)
     shown = problems = 0
     try:
         while agent.state["status"] not in STOPPED:

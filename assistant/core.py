@@ -9,7 +9,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from . import jobs, messages, model
-from .agent import STOPPED, Agent
+from .agent import STOPPED
+from .driver import agent_class
 from .profile import SECRETS, Profile, Secrets
 
 MAX_RUNNING = 3
@@ -68,7 +69,7 @@ class Core:
         self.secrets = Secrets(self.profile.hidden_values())  # classification never sees the profile's values
 
     def agent_for(self, url, goal, title, asker, notify):
-        return Agent(url, goal, title=title, asker=asker, notify=notify, profile=self.profile)
+        return agent_class()(url, goal, title=title, asker=asker, notify=notify, profile=self.profile)
 
     def hidden(self, call, *args):
         """A model call with the user's profile values redacted."""
@@ -317,7 +318,10 @@ class Core:
 
     def run(self, task):
         try:
-            url, task.title, _ = self.hidden(self.start, task.goal)
+            url, task.title, info = self.hidden(self.start, task.goal)
+            service = self.default_service(task, info or {})
+            if service:
+                url, task.title, _ = self.hidden(self.start, f"{task.goal} (on {service})")
             task.host = site(url)
             if not self.acquire(task):
                 return self.say(f"Cancelled {task.title} before it started.")
@@ -359,6 +363,28 @@ class Core:
             with self.slots:
                 self.slots.notify_all()
             self.update_typing()
+
+    def default_service(self, task, info):
+        """The app for a goal that names none: the saved default for its kind, or ask once and save it."""
+        kind, services = (info.get("kind") or "").strip(), info.get("services") or []
+        if info.get("service_named", True) or not kind or not services:
+            return None
+        prefix = f"default app for {kind.lower()}:"
+        saved = next((p["text"] for p in self.profile.data["preferences"] if p["text"].lower().startswith(prefix)),
+                     None)
+        if saved:
+            service = saved.split(":", 1)[1].strip()
+            self.say(f"Using {service} for {kind}, as you chose before.", task)
+            return service
+        listed = ", ".join(services[:-1]) + f" or {services[-1]}" if len(services) > 1 else services[0]
+        reply = self.ask(task, {"kind": "text", "text": f"Which app should I use for {kind}: {listed}?"})
+        text = str(reply.get("text", "")).strip()
+        if reply.get("cancel") or not text:
+            return None
+        service = next((s for s in services if s.lower() in text.lower() or text.lower() in s.lower()), text)
+        self.profile.remember(f"Default app for {kind}: {service}", task.goal)
+        self.say(f"Saved: I'll use {service} for {kind} from now on.", task)
+        return service
 
     def apply_updates(self, task):
         while task.updates:

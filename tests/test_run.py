@@ -46,7 +46,8 @@ def fake_agent(monkeypatch, command, **state):
     agent = Mock(state={"status": "ready", "commit": None, "history": [], "elapsed_ms": 0, **state})
     agent.command = Mock(side_effect=command)
     made = []
-    monkeypatch.setattr("assistant.agent.Agent", lambda url, goal, **kw: made.append((url, goal, kw)) or agent)
+    monkeypatch.setattr("assistant.driver.agent_class",
+                        lambda: lambda url, goal, **kw: made.append((url, goal, kw)) or agent)
     return agent, made
 
 

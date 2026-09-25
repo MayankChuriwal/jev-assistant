@@ -44,7 +44,9 @@ def start(goal):
     parsed = urlparse(url) if isinstance(url, str) else None
     if not parsed or parsed.scheme not in {"http", "https"} or not parsed.netloc or not title:
         raise invalid("start")
-    return url, title, meta
+    services = [str(s).strip()[:40] for s in out.get("services") or [] if str(s).strip()][:4]
+    return url, title, {**meta, "kind": str(out.get("kind") or "")[:30].strip(),
+                        "service_named": out.get("service_named") is not False, "services": services}
 
 
 def choices(out, elements, what):
