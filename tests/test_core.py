@@ -590,3 +590,11 @@ def test_shutting_down_cancels_running_tasks_so_their_traces_are_written(world):
     until(lambda: world.core.open is not None)
     world.core.shutdown(timeout=5)
     assert task.status == "cancelled" and world.agents["order a coke"].closed
+
+
+def test_a_cancelled_bench_task_gets_cancel_not_a_scripted_answer(tmp_path):
+    c = conversation.Core(WebChannel(tmp_path / "media"), profile=Profile(tmp_path / "p.json"),
+                          make_agent=lambda *a: None, start=lambda goal: ("https://x.test/", "x", {}), poll=0.01)
+    task = conversation.Task("t9", "Order a coke")
+    task.script, task.cancelled = {"answers": [], "fallback": "ok"}, True
+    assert c.ask(task, {"kind": "text", "text": "Which size?"}) == {"cancel": True}

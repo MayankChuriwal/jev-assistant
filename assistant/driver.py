@@ -181,6 +181,8 @@ class MiniAgent(Agent):
             raise Retry("Don't ask the user to confirm. When everything is chosen, do the final action (the control "
                         "that books, orders, or pays) with commits true and the summary in message: the system asks "
                         "the user once. If something is still undecided, ASK with the choices listed.")
+        if op == "ASK":
+            self.not_asked_before(message)
         if op == "TELL":
             if not message:
                 raise Retry("TELL needs a message.")
@@ -214,6 +216,17 @@ class MiniAgent(Agent):
             line += f" → option {pick}: {options[int(pick) - 1]}" if pick != "other" else " → none of the options"
         s["chat"].append({"from": "user", "text": line})
         return None
+
+    def not_asked_before(self, message):
+        """A question the user already answered is never asked again: mini gets the answer back instead."""
+        chat, words = self.state["chat"], set(re.findall(r"[a-z0-9]+", message.lower()))
+        for asked, reply in zip(chat, chat[1:]):
+            if asked["from"] != "agent" or reply["from"] != "user":
+                continue
+            before = set(re.findall(r"[a-z0-9]+", asked["text"].split("\n")[0].lower()))
+            if words and len(words & before) / len(words | before) >= 0.8:
+                raise Retry(f"You asked this already and the user answered {reply['text']}. Use that answer; if the "
+                            "page doesn't offer it, ASK a more specific question naming what the page shows.")
 
     def finish_step(self, decision, page):
         s = self.state

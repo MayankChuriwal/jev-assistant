@@ -419,7 +419,7 @@ class Core:
     def ask(self, task, message):
         """The agent's asker: queue the question and wait for its answer, pausing and finally cancelling."""
         if task.script is not None and message["kind"] not in {"secret", "image", "file"}:
-            return self.scripted(task, message)  # codes and captchas still come to the user's chat
+            return {"cancel": True} if task.cancelled else self.scripted(task, message)  # codes still go to chat
         question = Question(next(self.question_ids), task, message, self.clock())
         with self.lock:
             if task.cancelled:  # cancelled while this step was deciding: never show its question

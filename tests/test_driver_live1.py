@@ -134,3 +134,13 @@ def test_the_payment_method_is_always_the_users_choice(tmp_path, monkeypatch):
                         {"from": "user", "text": "“Cash”"}]
     a.command("tick")
     assert a.asked and a.asked[0]["approval"] is True
+
+
+def test_a_question_already_answered_is_not_asked_again(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Checkout", actions=[WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Please provide your delivery address for this order."},
+                        {"from": "user", "text": "“The first saved address”"}]
+    script(monkeypatch, out("ASK", message="Please provide your delivery address for this order."))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and "The first saved address" in a.state["feedback"][0]
