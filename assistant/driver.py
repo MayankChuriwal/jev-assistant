@@ -117,6 +117,54 @@ class MiniAgent(Agent):
             "feedback": s["feedback"], "page": seen,
         }
 
+    # ---- talking
+
+    def talk_step(self, decision, page):
+        s = self.state
+        act, message = decision["action"], decision["message"].strip()
+        if act["op"] == "TELL":
+            if not message:
+                raise Retry("TELL needs a message.")
+            self.say(message)
+            s["chat"].append({"from": "agent", "text": message})
+            return None
+        if act["op"] == "STOP":
+            raise Halt("blocked", message or "I stopped: I can't find a way to finish this on the site.")
+        if act["op"] == "DONE":
+            return self.finish_step(decision, page)
+        if not message:
+            raise Retry("ASK needs the question in message.")
+        options = [o.strip() for o in decision["options"] if o.strip()][:10]
+        text = message + "".join(f"\n{n}. {o}" for n, o in enumerate(options, 1))
+        self.steady(page)  # a page still switching screens gets read again first
+        secret = not options and rules.asks_for_secret(message)
+        reply = self.ask({"kind": "secret" if secret else "text", "text": text})
+        answer = str(reply.get("text", "")).strip()
+        s["chat"].append({"from": "agent", "text": text})
+        if secret:
+            name = self.keep_secret(answer)
+            s["chat"].append({"from": "user", "text": f"[secret:{name}] (hidden answer; type it as this placeholder)"})
+            return None
+        line = f"“{answer}”"
+        if options and answer:
+            pick = jev.read_reply(message, options, answer)
+            line += f" → option {pick}: {options[int(pick) - 1]}" if pick != "other" else " → none of the options"
+        s["chat"].append({"from": "user", "text": line})
+        return None
+
+    def finish_step(self, decision, page):
+        s = self.state
+        if s["commit"]:
+            raise Retry("A committed action is still being checked; WAIT first.")
+        quote = decision["action"]["text"].strip()
+        if not quote or not rules.verbatim(quote, page["text"]):
+            raise Retry("DONE needs text: a short quote copied exactly from the page that proves the goal is done.")
+        if jev.achieved(page, s["goal"], decision["message"]) != "yes":
+            raise Retry("The page doesn't show the goal done yet. Keep going, or TELL the user what's missing.")
+        self.say(decision["message"].strip() or "Done.", kind="result", evidence=quote)
+        s["status"] = "done"
+        return None
+
     # ---- browser steps
 
     def act_step(self, decision, page, entry):
