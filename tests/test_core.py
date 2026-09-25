@@ -563,3 +563,22 @@ def test_a_task_that_finished_is_never_reported_stopped(world):
     gate.set()
     assert until(lambda: world.core.tasks["t1"].status == "done")
     assert not any(b.startswith("Stopped") for b in bodies(world))
+
+
+def test_a_bench_task_answers_from_its_script_and_says_no_at_approval(tmp_path):
+    channel = WebChannel(tmp_path / "media")
+    asked = []
+
+    def make_agent(url, goal, title, asker, notify):
+        asked.append(asker({"kind": "text", "text": "Where to?"}))
+        asked.append(asker({"kind": "text", "text": "Uber Go ₹887. Book it?", "approval": True}))
+        return SimpleNamespace(state={"status": "cancelled", "memory": [], "files": [], "history": [],
+                                      "messages": []}, command=lambda n: None, settle=lambda: None,
+                               close=lambda: None)
+
+    c = conversation.Core(channel, profile=Profile(tmp_path / "p.json"), make_agent=make_agent,
+                          start=lambda goal: ("https://m.uber.com/", "Uber", {}), poll=0.01)
+    task = c.new_task("Book an Uber", script={"answers": [["where to", "Terminal 1"]], "fallback": "ok"})
+    until(lambda: len(asked) == 2)
+    assert asked == [{"text": "Terminal 1"}, {"cancel": True}]
+    assert task.bench["gate"] == "Uber Go ₹887. Book it?"

@@ -43,8 +43,10 @@ def test_env_file_never_overrides_the_environment(monkeypatch, tmp_path):
 def test_no_command_serves_the_chat(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     calls = []
-    monkeypatch.setattr(server, "serve", lambda: calls.append("serve") or 0)
-    assert server.main([]) == 0 and calls == ["serve"]
+    monkeypatch.setattr(server, "serve", lambda bench=None: calls.append(bench) or 0)
+    assert server.main([]) == 0 and calls == [None]
+    assert server.main(["--bench", "--only", "uber", "--repeat", "1"]) == 0
+    assert calls[-1] == ("bench/tasks.toml", "uber", 1)
 
 
 @pytest.mark.browser

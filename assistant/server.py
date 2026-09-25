@@ -12,6 +12,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -356,7 +357,7 @@ class ChatServer(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", port), ChatHandler)
 
 
-def serve(port=CHAT_PORT):
+def serve(port=CHAT_PORT, bench=None):
     from .channel_web import WebChannel
     from .core import Core
 
@@ -364,7 +365,8 @@ def serve(port=CHAT_PORT):
         return 1
     channel = WebChannel(home() / "media")
     try:
-        httpd = ChatServer(Core(channel), channel, port=port)
+        core = Core(channel)
+        httpd = ChatServer(core, channel, port=port)
     except OSError as error:
         if error.errno != errno.EADDRINUSE:
             raise
@@ -372,6 +374,14 @@ def serve(port=CHAT_PORT):
               "then run jev again.", file=sys.stderr)
         return 1
     print(f"Chat: http://127.0.0.1:{httpd.server_port}/  (Ctrl+C stops)", flush=True)
+    if bench:
+        from . import bench as live
+
+        path, only, repeat = bench
+        tasks = [t for t in live.load(path) if not only or t["id"] in only.split(",")]
+        out = home() / "bench" / time.strftime("%Y%m%d-%H%M%S")
+        threading.Thread(target=lambda: print(f"Bench report: {live.run(core, tasks, repeat, out)}", flush=True),
+                         daemon=True).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -398,6 +408,9 @@ def main(argv=None):
     forget_parser.add_argument("sites", nargs="+")
     traces_parser = commands.add_parser("traces", help="list the latest task traces")
     traces_parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--bench", nargs="?", const="bench/tasks.toml", help="run the live bench file")
+    parser.add_argument("--only", help="bench task ids, comma separated")
+    parser.add_argument("--repeat", type=int, default=2)
     args = parser.parse_args(argv)
     if args.command == "chrome":
         return chrome()
@@ -411,4 +424,4 @@ def main(argv=None):
         return profile_command(args)
     if args.command == "forget":
         return forget(args.sites)
-    return serve()
+    return serve(bench=args.bench and (args.bench, args.only, args.repeat))

@@ -40,6 +40,7 @@ class Task:
         self.id, self.goal, self.title, self.host = tid, goal, goal[:60], None
         self.status, self.agent, self.updates = "starting", None, []
         self.cancelled, self.sent_files, self.problems = False, 0, 0
+        self.script, self.bench = None, {"gate": None, "asked": []}  # a bench run: scripted replies
 
     def view(self, question=None):
         history = self.agent.state["history"] if self.agent else []
@@ -278,8 +279,9 @@ class Core:
 
     # ---- tasks
 
-    def new_task(self, goal):
+    def new_task(self, goal, script=None):
         task = Task(f"t{next(self.task_ids)}", goal)
+        task.script = script
         self.tasks[task.id] = task
         threading.Thread(target=self.run, args=(task,), name=f"jev-{task.id}", daemon=True).start()
         return task
@@ -406,6 +408,8 @@ class Core:
 
     def ask(self, task, message):
         """The agent's asker: queue the question and wait for its answer, pausing and finally cancelling."""
+        if task.script is not None and message["kind"] not in {"secret", "image", "file"}:
+            return self.scripted(task, message)  # codes and captchas still come to the user's chat
         question = Question(next(self.question_ids), task, message, self.clock())
         with self.lock:
             if task.cancelled:  # cancelled while this step was deciding: never show its question
@@ -431,6 +435,21 @@ class Core:
         task.status = "running"
         self.update_typing()
         return question.reply
+
+    def scripted(self, task, message):
+        """A bench task's reply: NO at the final approval (the run ends there), else the script's answer."""
+        from . import bench
+
+        text = message["text"]
+        if message.get("approval"):
+            task.bench["gate"] = text
+            self.say(f"(bench) Final approval reached; answering no:\n{text}", task)
+            task.cancelled = True
+            return {"cancel": True}
+        answer = bench.reply(task.script, text)
+        task.bench["asked"].append({"question": text, "answer": answer})
+        self.say(f"(bench) {text}\n→ {answer}", task)
+        return {"text": answer}
 
     def deliver_files(self, task):
         files = task.agent.state["files"]
