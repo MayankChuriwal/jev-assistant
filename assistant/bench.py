@@ -101,3 +101,43 @@ def run(core, tasks, repeat, out_dir, timeout=1200, judge=None):
             results.append(grade(spec, task, n, judge))
             report(results, out_dir)
     return report(results, out_dir)
+
+
+def save_case(trace_path, step, expectation, cases_dir):
+    """Keep one decision of a trace (the page and context mini saw) with what it should have done."""
+    trace = json.loads(Path(trace_path).read_text())
+    payload = trace["decisions"][int(step) - 1]["seen"]
+    out = Path(cases_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"{Path(trace_path).stem}-{step}.json"
+    path.write_text(json.dumps({"payload": payload, "expect": expectation}, indent=2, ensure_ascii=False))
+    return path
+
+
+def words(text):
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def expected(expect, action):
+    """Whether an action meets comma-separated expectations: op=ASK, target~where to, not target~pickup."""
+    for part in (p.strip() for p in expect.split(",")):
+        if part.startswith("op=") and action["op"] != part[3:].split()[0]:
+            return False
+        if "target~" in part:
+            hit = words(part.split("target~", 1)[1]) <= words(action["target"])
+            if part.startswith("not ") == hit:
+                return False
+    return True
+
+
+def replay(cases_dir, decide=None):
+    """Run mini on every saved case, without a browser."""
+    from . import mind
+
+    decide = decide or mind.decide
+    results = []
+    for path in sorted(Path(cases_dir).glob("*.json")):
+        case = json.loads(path.read_text())
+        step, _ = decide(case["payload"])
+        results.append({"case": path.name, "ok": expected(case["expect"], step["action"]), "got": step["action"]})
+    return results

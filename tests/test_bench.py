@@ -1,5 +1,6 @@
 """The bench: scripted replies, NO at the final approval, grading, and the report. No models, no Chrome."""
 
+import json
 from types import SimpleNamespace
 
 from assistant import bench
@@ -50,3 +51,21 @@ def test_a_run_that_passed_before_and_fails_now_is_marked(tmp_path):
     page = bench.report([bench.grade(SPEC, run_of(status="blocked"), 1, judge=lambda *a: "pass")],
                         tmp_path / "b").read_text()
     assert "REGRESSED" in page
+
+
+def test_a_trace_step_becomes_a_replay_case(tmp_path):
+    trace = tmp_path / "t.json"
+    trace.write_text(json.dumps({"decisions": [{"seen": {"goal": "Book a cab", "page": {"elements": []}}}]}))
+    case = bench.save_case(trace, 1, "op=ASK", tmp_path / "cases")
+    ask = {"action": {"op": "ASK", "target": "", "text": "", "key": "", "commits": False}}
+    click = {"action": {"op": "CLICK", "target": "[3] Where to? box", "text": "", "key": "", "commits": False}}
+    assert bench.replay(tmp_path / "cases", decide=lambda payload: (ask, {}))[0]["ok"] is True
+    assert bench.replay(tmp_path / "cases", decide=lambda payload: (click, {}))[0]["ok"] is False
+    assert json.loads(case.read_text())["payload"]["goal"] == "Book a cab"
+
+
+def test_replay_expectations_on_targets():
+    typed = {"op": "TYPE", "target": "[5] Where to? destination box", "text": "", "key": "", "commits": False}
+    assert bench.expected("op=TYPE, target~where to", typed) is True
+    assert bench.expected("not target~pickup", typed) is True
+    assert bench.expected("not target~destination", typed) is False

@@ -408,6 +408,11 @@ def main(argv=None):
     forget_parser.add_argument("sites", nargs="+")
     traces_parser = commands.add_parser("traces", help="list the latest task traces")
     traces_parser.add_argument("--limit", type=int, default=10)
+    save_parser = commands.add_parser("bench-save", help="keep a trace step as a replay case")
+    save_parser.add_argument("trace")
+    save_parser.add_argument("step", type=int)
+    save_parser.add_argument("expect", help='e.g. "op=ASK" or "op=TYPE, target~where to"')
+    commands.add_parser("replay", help="run mini on every saved replay case")
     parser.add_argument("--bench", nargs="?", const="bench/tasks.toml", help="run the live bench file")
     parser.add_argument("--only", help="bench task ids, comma separated")
     parser.add_argument("--repeat", type=int, default=2)
@@ -424,4 +429,16 @@ def main(argv=None):
         return profile_command(args)
     if args.command == "forget":
         return forget(args.sites)
+    if args.command == "bench-save":
+        from . import bench as live
+
+        print(live.save_case(args.trace, args.step, args.expect, home() / "bench" / "cases"))
+        return 0
+    if args.command == "replay":
+        from . import bench as live
+
+        results = live.replay(home() / "bench" / "cases")
+        for r in results:
+            print(("ok   " if r["ok"] else "FAIL ") + r["case"] + ("" if r["ok"] else f"  got {r['got']}"))
+        return 0 if all(r["ok"] for r in results) else 1
     return serve(bench=args.bench and (args.bench, args.only, args.repeat))
