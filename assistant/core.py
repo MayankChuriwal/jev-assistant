@@ -300,6 +300,16 @@ class Core:
             self.say(f"Stopping {task.title} after its current step.")
         self.slots.notify_all()
 
+    def shutdown(self, timeout=15.0):
+        """Before jev exits: cancel every running task and wait (bounded) for each to close and write its trace."""
+        with self.lock:
+            running = [t for t in self.tasks.values() if t.status in ACTIVE]
+            for task in running:
+                self.cancel(task)
+        deadline = time.monotonic() + timeout
+        while any(t.status in ACTIVE for t in running) and time.monotonic() < deadline:
+            time.sleep(0.1)
+
     def acquire(self, task):
         """Wait for a slot: at most MAX_RUNNING tasks, and never two on the same site."""
         with self.slots:

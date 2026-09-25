@@ -9,6 +9,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import subprocess
 import sys
 import tempfile
@@ -383,11 +384,13 @@ def serve(port=CHAT_PORT, bench=None):
         out = home() / "bench" / time.strftime("%Y%m%d-%H%M%S")
         threading.Thread(target=lambda: print(f"Bench report: {live.run(core, tasks, repeat, out)}", flush=True),
                          daemon=True).start()
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))  # stop like Ctrl+C
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        core.shutdown()  # running tasks are cancelled and write their traces
         httpd.server_close()
     return 0
 

@@ -582,3 +582,11 @@ def test_a_bench_task_answers_from_its_script_and_says_no_at_approval(tmp_path):
     until(lambda: len(asked) == 2)
     assert asked == [{"text": "Terminal 1"}, {"cancel": True}]
     assert task.bench["gate"] == "Uber Go ₹887. Book it?"
+
+
+def test_shutting_down_cancels_running_tasks_so_their_traces_are_written(world):
+    world.scripts["order a coke"] = [ask({"kind": "text", "text": "Which size?"})]
+    task = world.core.new_task("order a coke")
+    until(lambda: world.core.open is not None)
+    world.core.shutdown(timeout=5)
+    assert task.status == "cancelled" and world.agents["order a coke"].closed
