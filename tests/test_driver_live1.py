@@ -120,3 +120,17 @@ def test_a_browser_timeout_is_a_hiccup_not_the_end(tmp_path, monkeypatch):
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.state["status"] == "ready" and "timed out" in a.state["feedback"][-1]
+
+
+def test_the_payment_method_is_always_the_users_choice(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, replies=[{"text": "yes"}],
+                  page=fake_page(text="Uber Go AC ₹785.93\nCash\nRequest Uber Go AC", actions=[GO, WAIT]))
+    script(monkeypatch, out("CLICK", "Request Uber Go AC", commits=True, message="Uber Go AC ₹785.93 to Terminal 1"),
+           out("CLICK", "Request Uber Go AC", commits=True, message="Uber Go AC ₹785.93 to Terminal 1, Cash"))
+    jev_fake(monkeypatch, approvals=["yes"])
+    a.command("tick")
+    assert a.asked == [] and "payment method" in a.state["feedback"][0]
+    a.state["chat"] += [{"from": "agent", "text": "Which payment method: Cash or UPI?"},
+                        {"from": "user", "text": "“Cash”"}]
+    a.command("tick")
+    assert a.asked and a.asked[0]["approval"] is True

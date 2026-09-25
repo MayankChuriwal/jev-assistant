@@ -25,6 +25,7 @@ DIALOGS = {"ACCEPT_DIALOG", "DISMISS_DIALOG"}
 CONFIRM = re.compile(r"\b(confirm|proceed|go ahead|book (it|this|the)|place (it|the order)|"
                      r"should i (book|order|pay|request|place)|shall i)\b", re.IGNORECASE)
 YES_NO = {"yes", "no", "y", "n", "confirm", "cancel", "ok"}
+PAYMENT = re.compile(r"\b(cash|upi|card|wallet|net ?banking|pay later|cod|cash on delivery)\b", re.IGNORECASE)
 
 
 class Retry(Exception):
@@ -361,6 +362,10 @@ class MiniAgent(Agent):
         if not summary:
             raise Retry(f"“{commit}” commits: put the summary in message (what, where, option, payment method, and "
                         "the total exactly as the page shows it).")
+        asked = any(c["from"] == "agent" and re.search(r"\bpay", c["text"], re.IGNORECASE) for c in s["chat"])
+        if PAYMENT.search(page["text"]) and not asked:  # the user always picks how to pay
+            raise Retry("Ask the user which payment method to use first: list the payment methods the page shows "
+                        "(open the payment selector if needed), then do the final action with their choice.")
         amounts = rules.PRICE.findall(summary)
         missing = [x for x in amounts if not rules.amount_shown(x, page["text"])]
         if missing:

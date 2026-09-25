@@ -8,8 +8,11 @@ SUMMARY = "Uber Go · Sunnyside Elm → Airport T1 · Cash · ₹887"
 
 
 def rides(tmp_path, replies=()):
-    return mini_with(tmp_path, replies=replies, page=fake_page(text="Uber Go ₹887\nCash\nRequest Uber Go",
-                                                               url="https://m.uber.test/", actions=[REQUEST, WAIT]))
+    a = mini_with(tmp_path, replies=replies, page=fake_page(text="Uber Go ₹887\nCash\nRequest Uber Go",
+                                                            url="https://m.uber.test/", actions=[REQUEST, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which payment method: Cash or UPI?"},
+                        {"from": "user", "text": "“Cash”"}]  # payment was already the user's pick
+    return a
 
 
 def test_a_commit_asks_with_mini_summary_and_a_yes_reads_the_page_again(tmp_path, monkeypatch):
