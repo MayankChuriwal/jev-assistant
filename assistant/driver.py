@@ -8,7 +8,7 @@ import time
 from urllib.parse import urlparse
 
 from . import jev, mind, rules, views
-from .agent import COMMIT_OPS, QUIET, Agent, Halt
+from .agent import COMMIT_OPS, Agent, Halt
 from .browser import ExecutionUncertain, StalePage
 from .model import action_space
 from .questions import MAX_ACTIONS, MAX_DECISIONS
@@ -193,8 +193,42 @@ class MiniAgent(Agent):
     def approved(self, decision, action, page, commit):  # replaced in Task 7
         raise Retry(f"“{commit}” commits; approval comes in Task 7.")
 
-    def value(self, action, text, page):  # replaced in Task 5
-        return text, text
+    def value(self, action, text, page):
+        """(what to type, what logs show). Placeholders become the user's values here, after every model call.
+        A code, password, or CVV field takes only the user's hidden answer, once, within the attempt limit."""
+        s = self.state
+        if not text:
+            raise Retry("TYPE needs the text to type.")
+        if rules.secret_field(action):
+            found = re.fullmatch(r"\s*\[secret:(answer\d+)\]\s*", text)
+            if not found or found[1] not in s["answers"]:
+                raise Retry(f"“{action['label']}” takes a code or password: ASK the user for it, then TYPE the "
+                            "placeholder of their answer ([secret:answerN]). Never type anything else there.")
+            where = (rules.host(page["url"]), action["label"])
+            typed = s["typed"].get(where) or {}
+            if typed.get("key") == found[1]:
+                raise Retry(f"That code ({text}) was already typed into “{action['label']}”. If the site rejected "
+                            "it, ASK the user for a new one.")
+            count = typed.get("count", 0)
+            if count >= rules.attempt_limit(found[1]):
+                raise Halt("blocked", f"The site rejected {count} codes for “{action['label']}”, so I stopped before "
+                                      "your account gets locked.")
+            s["typed"][where] = {"source": "user", "key": found[1], "count": count + 1, "url": page["url"],
+                                 "origin": None}
+            return s["answers"][found[1]], f"[secret:{found[1]}]"
+
+        def real(match):
+            kind, key = match[1], match[2]
+            if kind == "profile":
+                try:
+                    return self.profile.value(key)
+                except KeyError:
+                    raise Retry(f"The profile has no {key}; ASK the user.") from None
+            if key in s["answers"]:
+                return s["answers"][key]
+            raise Retry(f"[secret:{key}] isn't one of the user's answers.")
+
+        return PLACEHOLDER.sub(real, text), text
 
     def run(self, page, operation, action, inputs, shown, decision, commit=None):
         """Execute one operation, record it, read the page again, and have Jev check what it did."""

@@ -80,3 +80,55 @@ def test_wait_back_and_open_url_need_no_grounding(tmp_path, monkeypatch):
     a.command("tick")
     a.command("tick")
     assert acted(a) == [("WAIT", "wait")] and "full http" in a.state["feedback"][0]
+
+
+OTP = {"id": "e3", "kind": "fill", "label": "Enter the 4-digit code", "role": "textbox", "value": "", "node": 3,
+       "group": [3, 4, 5, 6]}
+PHONE = {"id": "e4", "kind": "fill", "label": "Mobile number", "role": "textbox", "value": "", "node": 7,
+         "constraints": {"type": "tel"}}
+
+
+def login(tmp_path):
+    return mini_with(tmp_path, page=fake_page(text="Log in", url="https://ride.test/login",
+                                              actions=[PHONE, OTP, WAIT]))
+
+
+def test_profile_placeholders_are_typed_as_values_and_logged_as_placeholders(tmp_path, monkeypatch):
+    a = login(tmp_path)
+    script(monkeypatch, out("TYPE", "Mobile number", text="[profile:phone]"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.browser.act.call_args.kwargs["text"] == "+91 98765 43210"
+    assert a.state["history"][-1]["text"] == "[profile:phone]"
+
+
+def test_a_code_field_takes_only_the_users_hidden_answer(tmp_path, monkeypatch):
+    a = login(tmp_path)
+    script(monkeypatch, out("TYPE", "4-digit code", text="1234"), out("TYPE", "4-digit code", text="[secret:answer1]"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.browser.act.call_count == 0 and "ASK the user" in a.state["feedback"][0]
+    a.keep_secret("4821")
+    a.command("tick")
+    assert a.browser.act.call_args.kwargs["text"] == "4821" and a.state["history"][-1]["text"] == "[secret:answer1]"
+    assert (None, 3) in a.secrets.nodes  # the boxes are masked in every later read
+
+
+def test_the_same_code_is_never_typed_twice_and_three_rejections_stop(tmp_path, monkeypatch):
+    a = login(tmp_path)
+    for code in ("1111", "2222", "3333", "4444"):
+        a.keep_secret(code)
+    script(monkeypatch, *[out("TYPE", "4-digit code", text=f"[secret:answer{n}]") for n in (1, 1, 2, 3, 4)])
+    jev_fake(monkeypatch)
+    for _ in range(5):
+        a.command("tick")
+    assert [c.kwargs["text"] for c in a.browser.act.call_args_list] == ["1111", "2222", "3333"]
+    assert a.state["status"] == "blocked" and "rejected 3 codes" in a.told[-1]["text"]
+
+
+def test_an_unknown_placeholder_is_refused(tmp_path, monkeypatch):
+    a = login(tmp_path)
+    script(monkeypatch, out("TYPE", "Mobile number", text="[secret:answer9]"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.browser.act.call_count == 0 and "isn't one of the user's answers" in a.state["feedback"][0]
