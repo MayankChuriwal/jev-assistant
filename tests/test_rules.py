@@ -5,6 +5,13 @@ import pytest
 from assistant import rules
 
 
+def test_provider_comparison_requires_an_affirmative_request():
+    assert rules.wants_comparison("Compare the available providers")
+    assert rules.wants_comparison("Show me both providers")
+    assert not rules.wants_comparison("Uber")
+    assert not rules.wants_comparison("Don't compare providers; use Uber")
+
+
 @pytest.mark.parametrize("label", ["Pay ₹79", "Place order", "Confirm booking", "Request UberGo", "Cancel order",
                                    "Submit complaint", "Delete account", "Buy now", "Pay later"])
 def test_commit_clicks_are_recognised(label):

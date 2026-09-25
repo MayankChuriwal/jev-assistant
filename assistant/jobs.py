@@ -266,20 +266,25 @@ def effect_assessment(state, page, action, operation, key=None, *, client=None):
 
 def start_intent(goal):
     """Extract explicit provider/comparison instructions before any navigation."""
-    out, _ = text_json(
-        'Extract only explicit user intent. Return exactly this JSON object: {"provider": string|null, '
-        '"compare": boolean, "provider_quote": string, "compare_quote": string}. '
-        'Provider is a provider the user explicitly named, with its exact supporting quote. '
-        'Comparison is true only if explicitly requested, with its exact quote. Do not choose a provider.',
-        {'goal': goal})
-    if (not isinstance(out, dict) or set(out) != {'provider', 'compare', 'provider_quote', 'compare_quote'}
-            or type(out['compare']) is not bool
-            or out['provider'] is not None and (not isinstance(out['provider'], str) or not out['provider'])
-            or any(not isinstance(out[k], str) for k in ('provider_quote', 'compare_quote'))
-            or out['provider'] is not None and (not out['provider_quote'] or out['provider_quote'] not in goal)
-            or out['compare'] and (not out['compare_quote'] or out['compare_quote'] not in goal)):
-        raise invalid('start intent')
-    return {k: out[k] for k in ('provider', 'compare')}
+    system = ('Extract only explicit user intent. Return exactly this JSON object: {"provider": string|null, '
+              '"compare": boolean, "provider_quote": string, "compare_quote": string}. '
+              'Provider is a provider the user explicitly named, with its exact supporting quote. '
+              'Comparison is true only if explicitly requested, with its exact quote. Do not choose a provider.')
+    payload = {'goal': goal}
+    for _ in range(2):
+        out, _meta = text_json(system, payload)
+        valid = (isinstance(out, dict) and set(out) == {'provider', 'compare', 'provider_quote', 'compare_quote'}
+                 and type(out['compare']) is bool
+                 and (out['provider'] is None or isinstance(out['provider'], str) and bool(out['provider']))
+                 and all(isinstance(out[k], str) for k in ('provider_quote', 'compare_quote')))
+        if valid:
+            valid = ((out['provider'] is None or bool(out['provider_quote']) and out['provider_quote'] in goal)
+                     and (not out['compare'] or bool(out['compare_quote']) and out['compare_quote'] in goal))
+        if valid:
+            return {k: out[k] for k in ('provider', 'compare')}
+        payload = {'goal': goal, 'validation_error': 'Quotes must be exact substrings of the goal, not JSON.'}
+    # An invalid extraction grants no provider preference. The chat asks the user instead.
+    return {'provider': None, 'compare': False}
 
 
 def answer_facts(text, keys):

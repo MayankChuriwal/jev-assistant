@@ -191,6 +191,14 @@ class Core:
                 return self.tapped(event)
             if secret and text.lower() in STOP_WORDS:
                 return self.cancel(question.task)
+            if question and not secret and qid == str(question.id):
+                if text == "/new" or text.startswith("/new "):
+                    goal = text.removeprefix("/new").strip()
+                    return self.new_task(goal) if goal else self.say("Type /new followed by the new task.")
+                if text.lower() in STOP_WORDS:
+                    return self.cancel(question.task)
+                if question.message["kind"] == "text" and text and not event.get("media_id"):
+                    return self.answer(question, event)
             takes_file = question is not None and question.message["kind"] in {"file", "image", "text"}
             if question and (secret or (event.get("media_id") and takes_file)
                              or self.numbered(question, text)):
@@ -632,11 +640,9 @@ class Core:
             keys = [key for rid in q["requirement_ids"] for key in task.flow.requirements[rid]["keys"]
                     if not task.flow.facts.get(key, {}).get("valid")]
             values = self.hidden(self.answer_facts, reply.get("text", ""), keys)
-            if values.get('provider'):
-                choice = self.hidden(self.start_intent, reply.get('text', ''))
-                if choice.get('compare'):
-                    task.flow.constraints['compare'] = True
-                    values['provider'] = 'compare'
+            if values.get('provider') and rules.wants_comparison(reply.get('text', '')):
+                task.flow.constraints['compare'] = True
+                values['provider'] = 'compare'
             for key in list(values):
                 if key in {'location', 'address', 'pickup', 'delivery_address'} and isinstance(values[key], str):
                     if rules.means_current_location(values[key]):

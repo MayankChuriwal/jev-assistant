@@ -91,11 +91,13 @@ def world(tmp_path):
     return w
 
 
-def text(w, body):
+def text(w, body, *, bind=False):
     w.n += 1
+    question = w.core.open
+    secret = bool(question and question.message["kind"] == "secret")
     w.core.receive({"from": "local", "id": f"wamid.in{w.n}", "type": "text", "text": body, "context": None,
-                    "question_id": str(w.core.open.id) if w.core.open else None,
-                    "secret_reply": bool(w.core.open and w.core.open.message["kind"] == "secret")})
+                    "question_id": str(question.id) if question and (bind or secret) else None,
+                    "secret_reply": secret})
 
 
 def tap(w, reply_id):
@@ -141,6 +143,32 @@ def test_direct_booking_request_reaches_task_without_conversational_fallback(wor
     text(world, "Book an Uber")
     assert until(lambda: "Book an Uber" in world.agents)
     assert all("can't book" not in body.lower() for body in bodies(world))
+
+
+def test_text_bound_to_open_question_is_answer_not_new_task(world):
+    task = conversation.Task("t1", "Book a cab")
+    task.status = "running"
+    question = conversation.Question(1, task, {"kind": "text", "text": "Which provider?", "options": []}, 0)
+    world.core.tasks[task.id] = task
+    world.core.open, world.core.queue = question, [question]
+    world.core.classify = lambda *_: pytest.fail("bound answer must not be classified")
+    world.core.receive({"from": "local", "id": "answer", "type": "text", "text": "Uber",
+                        "question_id": "1", "secret_reply": False})
+    assert question.reply == {"text": "Uber"} and question.answered.is_set()
+    assert list(world.core.tasks) == ["t1"]
+
+
+def test_new_command_starts_a_second_task_while_question_is_open(world):
+    task = conversation.Task("t1", "Book a cab")
+    task.status = "running"
+    question = conversation.Question(1, task, {"kind": "text", "text": "Which provider?", "options": []}, 0)
+    world.core.tasks[task.id] = task
+    world.core.open, world.core.queue = question, [question]
+    world.core.classify = lambda *_: pytest.fail("explicit new task must not be classified")
+    world.core.receive({"from": "local", "id": "new", "type": "text", "text": "/new Order Diet Coke",
+                        "question_id": "1", "secret_reply": False})
+    assert until(lambda: "Order Diet Coke" in world.agents)
+    assert question.reply is None and world.core.open is question
 
 
 def test_secret_answers_never_reach_the_classifier(world):
@@ -906,6 +934,24 @@ def test_explicit_provider_satisfies_coordinator_requirement_without_reasking(wo
     world.core.ask = lambda *_: pytest.fail('explicit provider must not be requested again')
     facts = world.core.prepare(task)
     assert facts['provider'] == 'Shop'
+
+
+def test_provider_answer_does_not_reparse_a_single_word_as_a_new_goal(world, monkeypatch):
+    from assistant import coordinator
+
+    def intent(text):
+        assert text == 'Book a cab'
+        return {'provider': None, 'compare': False}
+
+    world.core.start_intent = intent
+    world.core.assess_start = lambda *_: {'requirements': [
+        {'id': 'provider', 'kind': 'text', 'purpose': 'task', 'keys': ['provider'],
+         'scope': 'task', 'depends_on': [], 'options': [], 'reason': 'provider needed'}]}
+    monkeypatch.setattr(coordinator, 'apply_assessment', lambda *_: None)
+    world.core.ask = lambda *_: {'text': 'Uber'}
+    world.core.answer_facts = lambda text, keys: {'provider': text}
+    facts = world.core.prepare(conversation.Task('t', 'Book a cab'))
+    assert facts['provider'] == 'Uber' and facts['compare'] is False
 
 
 def test_preflight_rejects_inferred_current_location(world, monkeypatch):

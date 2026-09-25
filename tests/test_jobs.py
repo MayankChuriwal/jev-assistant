@@ -31,6 +31,13 @@ def test_start_needs_an_http_url_and_a_title(monkeypatch):
             jobs.start("Order Diet Coke")
 
 
+def test_start_intent_malformed_quote_falls_back_to_user_choice(monkeypatch):
+    post = reply(monkeypatch, {"provider": "Uber", "compare": False,
+                               "provider_quote": '"goal": "Uber"', "compare_quote": ""})
+    assert jobs.start_intent("Uber") == {"provider": None, "compare": False}
+    assert post.call_count == 2
+
+
 def test_choice_questions_bind_options_to_observed_elements(monkeypatch):
     reply(monkeypatch, {"kind": "choice", "text": "Deliver where?", "options": [
         {"label": "Home – Indiranagar Bengaluru", "description": "12 MG Road", "element": "1"},

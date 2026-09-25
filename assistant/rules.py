@@ -23,6 +23,9 @@ ADDRESS_EXTRA = re.compile(r"\b(current location|add (a )?new address)\b", re.IG
 CURRENT_PLACE = re.compile(r"^\s*(please )?(use )?((my |the )?(current|present) (location|place|address)|here|"
                            r"where i am|my location)\s*(please)?\s*\.?\s*$", re.IGNORECASE)
 COMMERCE = re.compile(r"\b(book|order|buy|purchase|pay|reserve)\b", re.IGNORECASE)
+COMPARE_REQUEST = re.compile(r"\bcompar(?:e|ison|ing)\b|\b(?:all|both)\s+(?:providers|services|options)\b",
+                             re.IGNORECASE)
+NEGATED_COMPARE = re.compile(r"\b(?:don't|do not|not|no)\s+compar(?:e|ison|ing)\b", re.IGNORECASE)
 TO_USER = re.compile(r"^\s*(please|kindly|do you|would you|could you|can you|shall i|should i|are you)\b",
                      re.IGNORECASE)
 DIRECTION = re.compile(r"^\s*(do you want|would you like|should i|shall i|do you have|can you confirm|"
@@ -191,6 +194,11 @@ def means_current_location(text):
 def commerce_goal(goal):
     """Whether the goal is finished only by a booking, an order, or a payment going through."""
     return bool(COMMERCE.search(goal or ""))
+
+
+def wants_comparison(text):
+    """An explicit provider-comparison answer; no model is needed to reread a provider name."""
+    return bool(COMPARE_REQUEST.search(text or "")) and not bool(NEGATED_COMPARE.search(text or ""))
 
 
 def attempt_limit(key):

@@ -88,7 +88,8 @@ function show(m) {
 
 function mode() {
   input.type = secretFor === null ? 'text' : 'password';
-  input.placeholder = secretFor === null ? 'Message' : 'Hidden answer, never sent to any model (or type cancel)';
+  input.placeholder = secretFor !== null ? 'Hidden answer, never sent to any model (or type cancel)' :
+    openQuestion ? 'Answer here, or type /new followed by another task' : 'Message';
 }
 
 async function send(message, shown) {
