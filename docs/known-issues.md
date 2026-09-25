@@ -97,6 +97,12 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | L7-01 | Uber: when stuck, help sent a half-cut screenshot and told the user to act on the site ("You can do so by typing your destination in the destination input field"). | `agent.py` `unblock`, `questions.py` | fixed (live run 7): help sends no screenshots and never asks the user to click or type on the site; choices the page shows come as buttons in chat, and the agent clicks the one picked. A captcha still comes as a picture, since only the user can solve it |
 | L7-02 | Uber: the agent picked Uber Go AC itself; Go Non AC and Premier AC were never offered. | `agent.py`, `rules.py` | fixed (live run 7): two or more priced options (ride types, sizes, plans) become a choice with prices, unless the goal or an answer names one; a commit that names one ("Request Uber Go AC") asks first too |
 | L7-03 | After "Request Uber Go AC" the site showed "Finding drivers nearby"; after 10 checks the agent stopped with "check your bank or account" and never reported the driver. | `agent.py` `check_commit`, `questions.py` | fixed (live run 7): a commit the site is still working on is watched for up to 5 minutes, and the user is told once; the result reports the driver, car, number plate, and PIN when the page shows them; the "can't tell" message no longer mentions a bank |
-| L7-04 | Uber: for a "current location" pickup, the agent opened the pickup box 4 times without finding the site's detect-location option, then asked the user to pick a suggestion. | Jev, `snapshot.js` | open |
-| L7-05 | Option names keep icon text ("Uber Go AC Person"). | `snapshot.js` labels | open |
+| L7-04 | Uber: for a "current location" pickup, the agent opened the pickup box 4 times without finding the site's detect-location option, then asked the user to pick a suggestion. | Jev, `snapshot.js` | re-test on the bench (Plan 5: mini decides, loop nudges) |
+| L7-05 | Option names keep icon text ("Uber Go AC Person"). | `snapshot.js` labels | re-test on the bench (Plan 5: options are mini's own words) |
 
+
+## Plan 5 — mini + Jev agent
+
+| ID | Issue | Where | Status |
+|---|---|---|---|
+| P5-01 | The bench audits commits only; that no secret reaches a model rests on the single redacting outbound path (`model.post_json`). | `bench.py` | open (by design) |

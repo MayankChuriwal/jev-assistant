@@ -1,5 +1,7 @@
 # Live smoke set
 
+Most of this is automated now: `uv run jev --bench` runs the tasks in `bench/tasks.toml` up to the final approval and answers no (see the README). The runs below are the real completions, done with you in the chat.
+
 v1 is done when each run below completes for real, on real sites, with your own accounts (spec §16). Runs 1–5 can spend money or send something to an organisation. Nothing is paid, booked, or submitted without your "Yes" on a summary card, so answer "No" whenever you only want to see how far a run gets.
 
 ## Before the first run

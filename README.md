@@ -1,8 +1,14 @@
 # Jev Assistant
 
-A chat assistant that completes real web tasks. TypeSafe's Jev chooses every browser operation; GPT-4.1 mini writes text only when needed. The core comes from [jev-ultrafast](https://github.com/browser-use/jev-ultrafast).
+A chat assistant that completes real web tasks in its own Chrome. Each step, GPT-4.1 mini decides what to do and
+writes every word the user reads (`assistant/mind.py`); TypeSafe's Jev picks the exact element mini described,
+checks what each step did, and reads the user's replies (`assistant/jev.py`); code keeps the safety rails: nothing
+is paid or booked without a yes in chat, and codes, passwords, and profile details never reach a model
+(`assistant/driver.py`). The browser layer comes from [jev-ultrafast](https://github.com/browser-use/jev-ultrafast).
 
-Design: `docs/superpowers/specs/2026-09-23-jev-assistant-design.md`
+Design: `docs/superpowers/specs/2026-09-26-mini-jev-agent-design.md` (loop) and
+`docs/superpowers/specs/2026-09-23-jev-assistant-design.md` (browser, chat, profile). `JEV_DRIVER=legacy` runs the
+earlier loop, where Jev chose every operation.
 
 ## Setup
 
@@ -16,8 +22,10 @@ Design: `docs/superpowers/specs/2026-09-23-jev-assistant-design.md`
                               # open http://127.0.0.1:8766/
 
 Type a goal, such as "Order a Diet Coke on Instamart". The agent works in its own hidden Chrome and asks only for
-what it needs, one question at a time: buttons and lists for choices, a hidden field for OTPs and CVVs, and a
-summary card before anything is paid for or booked. Up to three tasks run at once (one per site). Messages sent
+what it needs, one question at a time, in plain messages: choices come as a numbered list with prices and you
+reply in your own words; OTPs and CVVs go in a hidden field; a summary comes before anything is paid for or booked,
+and only a clear yes goes ahead. A goal that names no app is asked once per kind of task ("Which app should I use
+for groceries?") and remembered. Up to three tasks run at once (one per site). Messages sent
 mid-task count as answers, changes, new tasks, cancellations, or status questions. Files the agent saves, such as
 receipts or PDFs, arrive in chat as documents. When a control can't be named from the page (a canvas, a map,
 an image-only button), the agent finds it on a masked screenshot.
@@ -32,6 +40,19 @@ media ids. A WhatsApp channel can therefore replace `assistant/channel_web.py` w
 Every task writes a redacted trace to `~/.jev/traces/` when it ends; `uv run jev traces` lists the latest ones with
 their outcome, question count, and quoted evidence. The live smoke set that defines v1 as done is in
 `docs/smoke.md`. Known issues and their status are in `docs/known-issues.md`.
+
+## The live bench
+
+    uv run jev --bench                           # all 12 tasks in bench/tasks.toml, twice
+    uv run jev --bench --only uber,instamart --repeat 1
+
+The bench runs scripted goals on real sites through the chat: questions get the answers in `bench/tasks.toml`,
+sign-in codes and captchas come to your chat page (keep http://127.0.0.1:8766/ open), and every final approval is
+answered **no**, so nothing is bought or booked. The report lands in `~/.jev/bench/<run>/report.html`, with runs that
+passed before and fail now marked. A bad step in any trace can be kept as a replay case and re-run without a browser:
+
+    uv run jev bench-save ~/.jev/traces/<trace>.json 7 "op=ASK"
+    uv run jev replay
 
 ## One task in the terminal
 
