@@ -4,7 +4,7 @@ describe its element in words, and write every word the user reads. One strict-J
 from . import model
 
 OPS = ["CLICK", "TYPE", "SELECT", "KEY", "SCROLL", "HOVER", "UPLOAD", "WAIT", "BACK", "OPEN_URL",
-       "ASK", "TELL", "DONE", "STOP"]
+       "ACCEPT_DIALOG", "DISMISS_DIALOG", "ASK", "TELL", "DONE", "STOP"]
 KEYS = ["", "Enter", "Tab", "Escape", "ArrowDown", "ArrowUp", "Backspace"]
 TEXT = {"type": "string"}
 SCHEMA = {
@@ -41,6 +41,7 @@ Each step return:
   CLICK or HOVER target; TYPE target + text; SELECT target (the option to pick); KEY key (+ target, or "" for the
   focused element); SCROLL text "up" or "down" (+ target for a panel, or "" for the page); UPLOAD target;
   WAIT (the page is loading or the site is working); BACK; OPEN_URL text = full http(s) address;
+  ACCEPT_DIALOG or DISMISS_DIALOG for a browser dialog (the page text starts with "Browser ... dialog");
   ASK message (+ options); TELL message; DONE message + text; STOP message.
   target names one element by its words on the page and may include its number, e.g. "[14] Where to? box".
   commits is true when the action pays, orders, books, requests, submits, sends, cancels, or deletes.
@@ -62,6 +63,8 @@ Rules:
 - Place and search boxes: TYPE the user's words, then CLICK the matching suggestion (new ones are marked *). Do not
   press Enter while suggestions show. For "current location" use the site's own detect-location option.
 - Close pop-ups and banners that block the page; decline optional cookies.
+- A captcha (pick images, type characters, "I'm not a robot"): ASK the user to solve it; the system shows it to
+  them. Never click its images or checkbox yourself.
 - At payment, ASK which of the payment methods on the page to use. If the site needs approval in a UPI app, TELL
   the amount and ASK the user to reply "done" once they approved it.
 - Before any action with commits true, message must summarise it: what, where (route or address), which option,

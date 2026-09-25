@@ -18,6 +18,10 @@ BROWSER_OP = {"CLICK": "CLICK", "TYPE": "TYPE_TEXT", "SELECT": "SELECT", "KEY": 
               "UPLOAD": "UPLOAD"}
 PRICES = (0.40e-6, 1.60e-6)  # GPT-4.1 mini, dollars per input and output token
 PLACEHOLDER = re.compile(r"\[(profile|secret):([\w.]+)\]")
+CODE_WORDS = re.compile(r"\b(code|otp|pin|passcode|password|cvv)\b", re.IGNORECASE)
+YES = re.compile(r"\b(yes|yeah|yep|yup|ok|okay|sure|go ahead|book it|confirm|do it|proceed|haan)\b", re.IGNORECASE)
+NOT_YES = re.compile(r"\?|\b(no|not|don'?t|wait|but|instead|cheaper|change|stop|cancel|hold)\b", re.IGNORECASE)
+DIALOGS = {"ACCEPT_DIALOG", "DISMISS_DIALOG"}
 
 
 class Retry(Exception):
@@ -49,6 +53,7 @@ class MiniAgent(Agent):
         s = self.state
         if s["started_at"] is None:
             s["started_at"] = time.perf_counter()
+        before = len(s["history"])
         try:
             self.step()
             s["model_errors"] = 0
@@ -61,21 +66,27 @@ class MiniAgent(Agent):
             s["errors"].append({"step": len(s["history"]), "error": str(error)})
             s["model_errors"] += 1
             if s["model_errors"] >= 5:
-                raise Halt("failed", f"The models stopped answering, so I stopped: {error}") from error
-            s["feedback"].append(f"The last step failed ({error}); nothing was done. Decide again.")
+                pending = (f" {s['commit']['label']} may already have gone through; check it before trying again."
+                           if s["commit"] else "")
+                raise Halt("failed", f"The models stopped answering, so I stopped: {error}.{pending}") from error
+            if len(s["history"]) > before:  # the action itself ran; only reading its result failed
+                s["feedback"].append(f"The last action already ran, but checking its result failed ({error}). "
+                                     "Look at the page before repeating it.")
+            else:
+                s["feedback"].append(f"The last step failed ({error}); nothing was done. Decide again.")
         s["elapsed_ms"] = self.elapsed()
         return self.snapshot()
 
     def step(self):
         s = self.state
         self.check_caps()
+        s.pop("typing", None)  # a code counts as an attempt only once it is typed
         page = s["page"] if s["browser"].fresh(s["page"]) else self.observe()
-        if rules.captcha_challenge(page):
-            return self.relay_captcha(page)
         seen = views.view(page, s["seen"])
         payload = self.payload(seen)
         started = self.elapsed()
-        image = s["browser"].screenshot(masked=self.secrets.nodes) if self.mind_screenshot else None
+        image = (s["browser"].screenshot(masked=self.secrets.nodes, hide=self.hidden_details())
+                 if self.mind_screenshot else None)
         decision, meta = mind.decide(payload, image)
         usage = meta.get("usage") or {}
         s["spend"] += usage.get("prompt_tokens", 0) * PRICES[0] + usage.get("completion_tokens", 0) * PRICES[1]
@@ -128,16 +139,20 @@ class MiniAgent(Agent):
             self.say(message)
             s["chat"].append({"from": "agent", "text": message})
             return None
+        if act["op"] in {"ASK", "STOP"} and rules.captcha_challenge(page):
+            return self.relay_captcha(page)  # only the user solves a captcha
         if act["op"] == "STOP":
             raise Halt("blocked", message or "I stopped: I can't find a way to finish this on the site.")
         if act["op"] == "DONE":
             return self.finish_step(decision, page)
         if not message:
             raise Retry("ASK needs the question in message.")
-        options = [o.strip() for o in decision["options"] if o.strip()][:10]
+        if not s["browser"].fresh(page):
+            raise StalePage("The page changed while mini decided. Choose again.")
+        secret = rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
+        options = [] if secret else [o.strip() for o in decision["options"] if o.strip()][:10]
         text = message + "".join(f"\n{n}. {o}" for n, o in enumerate(options, 1))
         self.steady(page)  # a page still switching screens gets read again first
-        secret = not options and rules.asks_for_secret(message)
         reply = self.ask({"kind": "secret" if secret else "text", "text": text})
         answer = str(reply.get("text", "")).strip()
         s["chat"].append({"from": "agent", "text": text})
@@ -173,14 +188,24 @@ class MiniAgent(Agent):
             return self.run(page, "WAIT", self.control(page, "WAIT"), {}, None, decision)
         if act["op"] == "BACK":
             return self.run(page, "GO_BACK", self.control(page, "GO_BACK"), {}, None, decision)
+        if act["op"] in DIALOGS:
+            operation, action = act["op"], self.control(page, act["op"])
+            commit = self.commit_label(operation, action, act, page, {})
+            if commit and not self.approved(decision, action, page, commit):
+                return None
+            return self.run(page, operation, action, {}, None, decision, commit=commit)
         if act["op"] == "OPEN_URL":
             url = act["text"].strip()
             if urlparse(url).scheme not in {"http", "https"} or not urlparse(url).netloc:
                 raise Retry("OPEN_URL needs a full http(s) address in text.")
             return self.run(page, "OPEN_URL", self.control(page, "OPEN_URL"), {"url": url}, url, decision)
-        operation, action = self.target(decision, page, entry)
+        operation, action, index = self.target(decision, page, entry)
         inputs, shown = self.inputs_for(operation, action, act, page)
         commit = self.commit_label(operation, action, act, page, inputs)
+        named = re.search(r"\[(\d+)\]", act["target"])
+        if commit and named and index and named[1] != index:
+            raise Retry(f"You named [{named[1]}], but the element matching “{act['target']}” is [{index}] "
+                        f"“{action.get('label', '')}”. Say which one you mean; nothing was pressed.")
         if commit and not self.approved(decision, action, page, commit):
             return None
         return self.run(page, operation, action, inputs, shown, decision, commit=commit)
@@ -191,6 +216,8 @@ class MiniAgent(Agent):
             return controls[operation]
         if operation == "GO_BACK":
             raise Retry("There is no earlier page to go back to.")
+        if operation in DIALOGS:
+            raise Retry("No browser dialog is open.")
         return {"id": operation.lower(), "kind": operation.lower(), "node": None, "label": operation.title()}
 
     def target(self, decision, page, entry):
@@ -198,11 +225,12 @@ class MiniAgent(Agent):
         act = decision["action"]
         operation = (("SCROLL_UP" if "up" in act["text"].lower() else "SCROLL_DOWN") if act["op"] == "SCROLL"
                      else BROWSER_OP[act["op"]])
-        action, confidence, near, _ = jev.ground(page, operation, act["target"], decision["next_goal"], s["goal"])
+        action, confidence, near, index = jev.ground(page, operation, act["target"], decision["next_goal"],
+                                                     s["goal"])
         entry["ground"] = {"choice": action and action["label"], "confidence": confidence}
         if action is not None and confidence >= self.ground_min:
             s["ground_retry"] = False
-            return operation, action
+            return operation, action, index
         if not s["ground_retry"] and act["target"].strip():
             s["ground_retry"] = True
             raise Retry(f"I couldn't tell which element is “{act['target']}”. Closest: {'; '.join(near) or 'none'}. "
@@ -213,7 +241,7 @@ class MiniAgent(Agent):
             if spot:
                 _, _, controls = action_space(page["actions"])
                 look = controls.get("LOOK", {"id": "look", "kind": "look", "node": None, "label": "Look"})
-                return "LOOK", {**look, **spot}
+                return "LOOK", {**look, **spot}, None
         raise Retry(f"There is no element for “{act['target']}” on this page. Scroll, wait, or try another way.")
 
     def inputs_for(self, operation, action, act, page):
@@ -236,6 +264,10 @@ class MiniAgent(Agent):
         s = self.state
         focused = s["browser"].focused_label() if operation == "PRESS_KEY" and action.get("node") is None else ""
         label = rules.commit_label(operation, action, page, key, focused)
+        if not label and operation == "PRESS_KEY" and key == "Enter" and action.get("node") is None:
+            forms = [a for a in page["actions"] if a.get("submit") and rules.COMMIT.search(a["submit"])]
+            field = next((a for a in forms if a["label"] == focused), forms[0] if forms else None)
+            label = field["submit"] if field else None  # Enter submits the focused field's form
         return label or ((action.get("label") or "this step") if act["commits"] else None)
 
     def approved(self, decision, action, page, commit):
@@ -258,12 +290,15 @@ class MiniAgent(Agent):
         missing = [x for x in amounts if not rules.amount_shown(x, page["text"])]
         if missing:
             raise Retry(f"The page doesn't show {', '.join(missing)}. Copy amounts exactly as the page shows them.")
+        if not s["browser"].fresh(page):
+            raise StalePage("The page changed while mini decided. Choose again.")
         self.steady(page)
-        reply = self.ask({"kind": "text", "text": f"{summary}\n\nReply yes to go ahead, or tell me what to change.",
-                          "approval": True})
+        question = f"{summary}\n\nI'll press “{commit}”. Reply yes to go ahead, or tell me what to change."
+        reply = self.ask({"kind": "text", "text": question, "approval": True})
         answer = str(reply.get("text", "")).strip()
-        s["chat"] += [{"from": "agent", "text": summary}, {"from": "user", "text": f"“{answer}”"}]
-        if answer and jev.approval(summary, answer) == "yes":
+        s["chat"] += [{"from": "agent", "text": question}, {"from": "user", "text": f"“{answer}”"}]
+        clear = bool(YES.search(answer)) and not NOT_YES.search(answer)  # a model's yes alone never commits
+        if clear and jev.approval(summary, answer) == "yes":
             target = (action.get("frame"), action["node"]) if action.get("node") is not None else None
             s["approval"] = {"action_label": commit, "amount": amounts[-1] if amounts else "",
                              "host": rules.host(page["url"]), "step": len(s["history"]), "target": target}
@@ -292,9 +327,13 @@ class MiniAgent(Agent):
             if count >= rules.attempt_limit(found[1]):
                 raise Halt("blocked", f"The site rejected {count} codes for “{action['label']}”, so I stopped before "
                                       "your account gets locked.")
-            s["typed"][where] = {"source": "user", "key": found[1], "count": count + 1, "url": page["url"],
-                                 "origin": None}
-            return s["answers"][found[1]], f"[secret:{found[1]}]"
+            code = rules.clean(s["answers"][found[1]], action)
+            problem = rules.format_error(code, action)
+            if problem:
+                raise Retry(f"The user's answer doesn't fit “{action['label']}”: {problem} ASK them again.")
+            s["typing"] = (where, {"source": "user", "key": found[1], "count": count + 1, "url": page["url"],
+                                   "origin": None})
+            return code, f"[secret:{found[1]}]"
 
         def real(match):
             kind, key = match[1], match[2]
@@ -326,6 +365,9 @@ class MiniAgent(Agent):
                                   "repeating it. Please check before trying again.") from error
         s["elapsed_ms"] = self.elapsed()
         s["history"].append({**entry, "executed_ms": s["elapsed_ms"], "elapsed_ms": s["elapsed_ms"]})
+        typing = s.pop("typing", None)
+        if typing:
+            s["typed"][typing[0]] = typing[1]
         if commit:
             s["approval"] = None
             s["commit"] = {"label": commit, "checks": 0, "since": s["elapsed_ms"]}
@@ -402,7 +444,11 @@ class MiniAgent(Agent):
         return None
 
     def perform(self, operation, action, decision, page):
-        """The user's own picks (captcha squares): run exactly as asked, no model in between."""
+        """The user's own picks (captcha squares): run exactly as asked, no model in between, never a commit."""
+        if rules.commit_label(operation, action, page):
+            label = action.get("label")
+            self.state["feedback"].append(f"The user's pick “{label}” would commit, so it wasn't pressed.")
+            return None
         return self.run(page, operation, action, {}, None, {"next_goal": "the user's pick"})
 
     def trace(self):

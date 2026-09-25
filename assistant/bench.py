@@ -9,6 +9,7 @@ import tomllib
 from pathlib import Path
 
 FALLBACK = "Choose what best fits my goal."
+FINAL = re.compile(r"\b(submit|place order|pay|book|confirm|request|buy|purchase|send)\b", re.IGNORECASE)
 ACTIVE = {"starting", "waiting", "running", "paused"}
 
 
@@ -40,10 +41,14 @@ def grade(spec, task, run, judge):
     missing = [w for w in spec.get("require", []) if w.lower() not in final.lower()]
     if missing and spec["end"] != "file" and final:
         reasons.append("missing: " + ", ".join(missing))
+    warnings = [f"possible commit without approval: {h['action']}" for h in state.get("history", [])
+                if not h.get("committed") and h.get("operation") in {"CLICK", "PRESS_KEY", "LOOK"}
+                and FINAL.search(str(h.get("action") or ""))]  # read each one in the trace
     verdict = "fail" if reasons else judge(spec["goal"], spec["rule"], final)
     if verdict == "fail" and not reasons:
         reasons.append("the judge says the result doesn't meet the rule")
     return {"id": spec["id"], "run": run, "status": task.status, "verdict": verdict, "reasons": reasons,
+            "warnings": warnings,
             "final": final[:400], "steps": len(state.get("history", [])),
             "questions": len(task.bench["asked"]), "seconds": round(state.get("elapsed_ms", 0) / 1000),
             "spend": round(state.get("spend", 0.0), 3), "trace": state.get("trace_path", "")}
@@ -70,7 +75,7 @@ def report(results, out_dir):
     rows = "".join(
         f"<tr class='{r['verdict']}'><td>{html.escape(r['id'])}</td><td>{r['run']}</td>"
         f"<td>{r['verdict']}{' — REGRESSED' if r['regressed'] else ''}</td>"
-        f"<td>{html.escape(r['status'])}</td><td>{html.escape('; '.join(r['reasons']))}</td>"
+        f"<td>{html.escape(r['status'])}</td><td>{html.escape('; '.join(r['reasons'] + r.get('warnings', [])))}</td>"
         f"<td>{html.escape(r['final'])}</td><td>{r['steps']}</td><td>{r['questions']}</td><td>{r['seconds']}</td>"
         f"<td>${r['spend']}</td><td>{html.escape(r['trace'])}</td></tr>" for r in results)
     page = (f"<!doctype html><meta charset='utf-8'><title>Jev bench</title><style>body{{font:14px system-ui;"
