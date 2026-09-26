@@ -359,6 +359,17 @@ def test_a_look_that_hovers_moves_the_pointer_without_clicking(browser_at):
     b.act("LOOK", look, page, point=[x, y], hover=True)
     assert b.evaluate("[__over > 0, __clicks]") == [True, 0]
 
+
+def test_a_styled_radio_is_offered_through_its_visible_label(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<label><input type=radio name=sort id=asc "
+               "style=\"display:none\">Price: Low to High</label>'); 1")
+    page = b.observe()
+    option = next(a for a in page["actions"] if a["kind"] == "click" and a["label"] == "Price: Low to High")
+    assert option["role"] == "radio"
+    b.act("CLICK", option, page)
+    assert b.evaluate("asc.checked") is True
+
 def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
     from assistant.browser import forget_sites
 

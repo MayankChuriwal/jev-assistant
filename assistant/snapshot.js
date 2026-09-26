@@ -226,10 +226,14 @@
       const draggable = e.getAttribute('draggable') === 'true';
       const dirs = scrollDirs(e);
       if (!isSemantic && !clickable && !draggable && !dirs.length) continue;
-      if (!rendered(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
-      const rect = box(e, dx, dy);
+      // A styled radio or checkbox hides its input and shows its label: the label is what a user clicks.
+      const proxy = e.tagName === 'INPUT' && ['radio', 'checkbox'].includes(e.type) && !rendered(e) ?
+        [...(e.labels || [])].find(rendered) : null;
+      const at = proxy || e;
+      if (!rendered(at) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
+      const rect = box(at, dx, dy);
       if (!inView(rect) || (clickable && rect.w * rect.h > innerWidth * innerHeight / 2)) continue;
-      const node = identity(e);
+      const node = identity(at);
       if (!cache.locate(node)) continue;  // covered (banner, overlay) or clipped: a click could not reach it
       if (draggable) actions.push({node, kind: 'drag', role: 'draggable', label: label(e) || 'Draggable item', rect});
       if (dirs.length && rect.w >= 60 && rect.h >= 24) {  // short carousels and chip rows are ~30px tall
