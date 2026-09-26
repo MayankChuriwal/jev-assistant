@@ -9,7 +9,8 @@ require = ["Terminal 1", "₹"]
 rule = "The approval summary is an Uber ride to Kempegowda Airport Terminal 1 with a ride type and its fare."
 answers = [["pick ?up|from where|where are you", "My current location"],
            ["drop|destination|where to|going", "Kempegowda International Airport Terminal 1"],
-           ["which (ride|option)|ride type|type of ride|ride variant|select a ride|ride option", "The cheapest one"],
+           ["which (ride|option|one)|ride type|type of ride|ride variant|select a ride|ride option",
+            "The cheapest one"],
            ["pay|payment", "Cash"]]
 
 [[task]]
@@ -20,7 +21,8 @@ require = ["Terminal 1", "₹"]
 rule = "The approval summary is an Ola ride to Kempegowda Airport Terminal 1 with a cab type and its fare."
 answers = [["pick ?up|from where|where are you", "My current location"],
            ["drop|destination|where to|going", "Kempegowda International Airport Terminal 1"],
-           ["which (cab|ride|option)|cab type|type of (cab|ride)|variant|select a (cab|ride)", "The cheapest one"],
+           ["which (cab|ride|option|one)|cab type|ride type|type of (cab|ride)|variant|select a (cab|ride)",
+            "The cheapest one"],
            ["pay|payment", "Cash"]]
 
 [[task]]

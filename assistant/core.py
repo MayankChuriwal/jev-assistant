@@ -16,6 +16,7 @@ from .profile import SECRETS, Profile, Secrets
 MAX_RUNNING = 3
 PAUSE_AFTER = 15 * 60
 CANCEL_AFTER = 24 * 3600
+BENCH_CODE_WAIT = 5 * 60  # a bench run skips a site whose sign-in code doesn't come
 MAX_DOWNLOAD = 100 * 1024 * 1024
 FIRST = {"secret", "confirm"}  # asked before anything older
 STOP_WORDS = {"cancel", "stop", "/cancel"}  # stop a task even at a hidden prompt, without any model
@@ -435,6 +436,16 @@ class Core:
         paused = False
         while not question.answered.wait(self.poll):
             waited = self.clock() - question.asked_at
+            if task.script is not None and waited >= BENCH_CODE_WAIT:
+                task.bench["stopped"] = "needs sign-in: no code came within 5 minutes"
+                with self.lock:
+                    if question in self.queue:
+                        self.queue.remove(question)
+                    if self.open is question:
+                        self.open = None
+                        self.show_next()
+                task.cancelled = True
+                return {"cancel": True}
             if waited >= CANCEL_AFTER:
                 with self.lock:
                     if question in self.queue:

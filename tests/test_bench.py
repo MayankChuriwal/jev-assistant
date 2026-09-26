@@ -7,17 +7,17 @@ from assistant import bench
 
 SPEC = {"id": "uber", "goal": "Book an Uber to Terminal 1", "end": "gate", "require": ["Terminal 1", "₹"],
         "rule": "An Uber to Terminal 1", "answers": [["drop|where to", "Terminal 1"], ["ride", "The cheapest"]],
-        "fallback": "Choose what best fits my goal."}
+        "fallback": "You choose whatever fits my goal best."}
 
 
 def test_tasks_load_and_replies_follow_the_script(tmp_path):
     path = tmp_path / "tasks.toml"
     path.write_text('[[task]]\nid = "x"\ngoal = "g"\nend = "result"\nrule = "r"\n')
     assert bench.load(path) == [{"id": "x", "goal": "g", "end": "result", "rule": "r", "require": [], "answers": [],
-                                 "fallback": "Choose what best fits my goal."}]
+                                 "fallback": "You choose whatever fits my goal best."}]
     assert bench.reply(SPEC, "Where to?") == "Terminal 1"
     assert bench.reply(SPEC, "Which ride do you want?") == "The cheapest"
-    assert bench.reply(SPEC, "Anything else?") == "Choose what best fits my goal."
+    assert bench.reply(SPEC, "Anything else?") == "You choose whatever fits my goal best."
 
 
 def run_of(status="cancelled", gate=None, history=(), messages=(), files=()):

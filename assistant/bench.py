@@ -8,7 +8,7 @@ import time
 import tomllib
 from pathlib import Path
 
-FALLBACK = "Choose what best fits my goal."
+FALLBACK = "You choose whatever fits my goal best."
 FINAL = re.compile(r"\b(submit|place|order|pay|book|confirm|request|buy|purchase|send|checkout|reserve)\b",
                    re.IGNORECASE)
 ACTIVE = {"starting", "waiting", "running", "paused"}

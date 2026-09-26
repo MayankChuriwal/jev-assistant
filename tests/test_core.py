@@ -610,3 +610,12 @@ def test_a_bench_task_never_asks_for_card_details(tmp_path):
                                                                 "for your HDFC Bank Card."})), daemon=True).start()
     until(lambda: replies or c.open is not None)
     assert replies == [{"cancel": True}] and task.cancelled and "card details" in task.bench["stopped"]
+
+
+def test_a_bench_task_moves_on_when_no_sign_in_code_comes(world):
+    world.scripts["Order a coke"] = [ask({"kind": "secret", "text": "Please send the 4-digit OTP."})]
+    task = world.core.new_task("Order a coke", script={"answers": [], "fallback": "ok"})
+    until(lambda: world.core.open is not None)
+    world.clock.now += conversation.BENCH_CODE_WAIT + 1
+    until(lambda: task.status not in conversation.ACTIVE)
+    assert task.bench["stopped"] == "needs sign-in: no code came within 5 minutes"
