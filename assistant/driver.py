@@ -49,7 +49,7 @@ class MiniAgent(Agent):
     @staticmethod
     def extra_state():
         return {"plan": [], "chat": [], "feedback": [], "mini": [], "seen": None, "spend": 0.0,
-                "model_errors": 0, "ground_retry": False, "same_nudges": [], "refusals": {}}
+                "model_errors": 0, "ground_retry": False, "same_nudges": [], "refusals": {}, "recent": []}
 
     @staticmethod
     def new_state(browser, goal, title, page, record):
@@ -99,6 +99,8 @@ class MiniAgent(Agent):
         self.check_caps()
         s.pop("typing", None)  # a code counts as an attempt only once it is typed
         page = s["page"] if s["browser"].fresh(s["page"]) else self.observe()
+        if not s["recent"] or s["recent"][-1] != page["text"]:
+            s["recent"] = (s["recent"] + [page["text"]])[-10:]  # evidence may come from a page seen a moment ago
         seen = views.view(page, s["seen"])
         payload = self.payload(seen)
         started = self.elapsed()
@@ -280,13 +282,13 @@ class MiniAgent(Agent):
                 raise Retry(f"You asked this already and the user answered {reply['text']}. Use that answer; if the "
                             "page doesn't offer it, ASK a more specific question naming what the page shows.")
 
-    def evidence(self, quote, report, text):
-        """A quote from the page proving the report: mini's own when it is on the page, else the page line that shares
-        the most prices and numbers with the report."""
-        if quote and rules.verbatim(quote, text):
+    def evidence(self, quote, report, texts):
+        """A quote proving the report, from the current page or one seen just before: mini's own when it is there,
+        else the line that shares the most prices and numbers with the report."""
+        if quote and any(rules.verbatim(quote, text) for text in texts):
             return quote
         wanted = set(rules.PRICE.findall(report)) | set(re.findall(r"\d[\d:,.]*\d|\d", report))
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        lines = [line.strip() for text in texts for line in text.splitlines() if line.strip()]
         scored = sorted(((sum(w in line for w in wanted), line) for line in lines), key=lambda x: -x[0])
         if scored and scored[0][0] and len(scored[0][1]) <= 200:
             return scored[0][1]
@@ -298,7 +300,8 @@ class MiniAgent(Agent):
         s = self.state
         if s["commit"]:
             raise Retry("A committed action is still being checked; WAIT first.")
-        quote = self.evidence(decision["action"]["text"].strip(), decision["message"], page["text"])
+        texts = [page["text"], *reversed(s["recent"])]
+        quote = self.evidence(decision["action"]["text"].strip(), decision["message"], texts)
         report = decision["message"].strip() or "Done."
         if jev.achieved(page, s["goal"], report) != "yes":
             s["done_refusals"] = s.get("done_refusals", 0) + 1

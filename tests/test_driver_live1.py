@@ -317,3 +317,15 @@ def test_back_on_a_new_tab_with_no_history_closes_it(tmp_path, monkeypatch):
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.browser.act.call_args.args[:2] == ("CLOSE_TAB", tabs[1])
+
+
+def test_evidence_seen_on_an_earlier_page_counts(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Nike Air Max\nNike Air Max 90 Rs. 3398\nNike Air Max 270 Rs. 5999",
+                                           url="https://shop.test/search", actions=[WAIT]))
+    product = fake_page(text="Nike Air Max 90 LV8\nRs. 12995", url="https://shop.test/p/1", actions=[WAIT])
+    script(monkeypatch, out("WAIT"), out("DONE", message="The cheapest Nike Air Max is Rs. 3398.", text="cheapest"))
+    jev_fake(monkeypatch)
+    a.command("tick")  # the search results are read before the step
+    a.state["page"] = a.browser.observe.return_value = product
+    a.command("tick")
+    assert a.state["status"] == "done" and a.told[-1]["evidence"] == "Nike Air Max 90 Rs. 3398"
