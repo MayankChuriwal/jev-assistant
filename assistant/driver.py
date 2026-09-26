@@ -601,7 +601,11 @@ class MiniAgent(Agent):
         if self.moved(page):
             raise StalePage("The page changed while mini decided. Choose again.")
         self.steady(page)
-        question = f"{summary}\n\nI'll press “{commit}”. Reply yes to go ahead, or tell me what to change."
+        parts = urlparse(page["url"])
+        section = parts.path.strip("/").split("/")[0]
+        site = parts.netloc.removeprefix("www.") + (f"/{section}" if section.isalpha() and
+                                                    section not in {"checkout", "cart", "payments", "payment"} else "")
+        question = f"{summary}\n\nI'll press “{commit}” on {site}. Reply yes to go ahead, or tell me what to change."
         reply = self.ask({"kind": "text", "text": question, "approval": True})
         answer = str(reply.get("text", "")).strip()
         s["chat"] += [{"from": "agent", "text": question}, {"from": "user", "text": f"“{answer}”"}]

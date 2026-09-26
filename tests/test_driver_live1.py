@@ -663,3 +663,15 @@ def test_an_order_that_does_not_match_the_goal_is_fixed_before_the_approval(tmp_
     jev_fake(monkeypatch, matches="no")
     a.command("tick")
     assert a.asked == [] and "doesn't match" in a.state["feedback"][0]
+
+
+def test_the_approval_names_the_site_it_happens_on(tmp_path, monkeypatch):
+    pay = {"id": "e23", "kind": "click", "label": "Place order", "role": "button", "node": 23}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text="Diet Coke 330 ml\nTo pay ₹121\nPlace order",
+                                 url="https://www.swiggy.com/instamart/checkout", actions=[pay, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which payment method?"}, {"from": "user", "text": "“Cash”"}]
+    script(monkeypatch, out("CLICK", "Place order", commits=True, message="1 Diet Coke 330 ml · home · Cash · ₹121"))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    assert "I'll press “Place order” on swiggy.com/instamart." in a.asked[0]["text"]
