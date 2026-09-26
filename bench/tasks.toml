@@ -111,5 +111,6 @@ end = "gate"
 require = ["Margherita", "₹"]
 rule = "The approval summary is one Margherita pizza from Domino's on Swiggy with an address and total."
 answers = [["pay|payment|card", "Cash on delivery if it's offered; otherwise UPI"],
-           ["address|deliver to|where should|location", "The first saved address"],
+           ["address|deliver to|where should|delivery location|location for", "The first saved address"],
+           ["restaurant|order from", "You choose whatever fits my goal best."],
            ["size|crust|which", "Regular, classic hand tossed"]]
