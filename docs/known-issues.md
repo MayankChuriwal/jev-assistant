@@ -120,6 +120,6 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | P5-13 | `ground_retry` is one flag shared by unrelated steps. | `driver.py` | open |
 | P5-14 | The agent Chrome's location request times out (`ERR 3`) when macOS Location Services is off for Google Chrome; sites then guess from the IP and show another city (Ranchi, Raipur). | macOS setting | open: needs the user to allow Chrome; the agent now changes the location or asks where to deliver (this task only) |
 | P5-15 | The bench warns "possible commit" for any click whose label has "order", e.g. "Change sort order". | `bench.py` `FINAL` | open (warning only) |
-| P5-16 | A question reworded each time slips past `not_asked_before` (word overlap 0.7): Zepto asked for the delivery area eight times after the same scripted answer. | `driver.py` | open |
+| P5-16 | A question reworded each time slips past `not_asked_before` (word overlap 0.7): Zepto asked for the delivery area eight times after the same scripted answer. | `driver.py` | fixed (Plan 5 Task 14): two identical replies stop the asking |
 | P5-17 | The Swiggy restaurant bench task depends on the restaurant being open (Domino's was closed in the morning). | `bench/tasks.toml` | won't fix: live site; mini asks, and "you choose" picks another |
 | P5-18 | An update held back one step (so a repeated answer goes out once) is dropped if the task is cancelled in that step. | `driver.py` `release` | open (ruling) |
