@@ -211,6 +211,14 @@
     return c;
   };
   const taken = new Set();
+  const sized = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+  const wrapper = e => {
+    for (let a = e.parentElement, n = 0; a && n < 3; a = a.parentElement, n++) {
+      const r = a.getBoundingClientRect();
+      if (rendered(a) && sized(a)) return r.width * r.height <= 120 * 120 ? a : null;  // control-sized, not a row
+    }
+    return null;
+  };
   const within = e => { for (let p = e.parentElement; p; p = p.parentElement) if (taken.has(p)) return true; return false; };
 
   for (const {root, dx, dy} of roots) {
@@ -226,9 +234,10 @@
       const draggable = e.getAttribute('draggable') === 'true';
       const dirs = scrollDirs(e);
       if (!isSemantic && !clickable && !draggable && !dirs.length) continue;
-      // A styled radio or checkbox hides its input and shows its label: the label is what a user clicks.
+      // A styled radio or checkbox hides its input and shows its label, or a small wrapper holding the drawn circle
+      // (Swiggy's size options): that is what a user clicks.
       const proxy = e.tagName === 'INPUT' && ['radio', 'checkbox'].includes(e.type) && !rendered(e) ?
-        [...(e.labels || [])].find(rendered) : null;
+        [...(e.labels || [])].find(l => rendered(l) && sized(l)) || wrapper(e) : null;
       const at = proxy || e;
       if (!rendered(at) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
       const rect = box(at, dx, dy);

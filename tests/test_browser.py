@@ -370,6 +370,18 @@ def test_a_styled_radio_is_offered_through_its_visible_label(browser_at):
     b.act("CLICK", option, page)
     assert b.evaluate("asc.checked") is True
 
+
+def test_a_styled_radio_with_an_empty_label_is_offered_through_its_wrapper(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div onclick=\"med.checked = true\" "
+               "style=\"position:relative;width:16px;height:19px\"><input type=radio id=med aria-label=\"Medium "
+               "(serves 2), Cost: 687 rupees\" style=\"position:absolute;opacity:0;width:0;height:0\"><span "
+               "style=\"display:inline-block;width:16px;height:19px\"></span><label for=med></label></div>'); 1")
+    page = b.observe()
+    option = next(a for a in page["actions"] if a["kind"] == "click" and a["label"].startswith("Medium (serves 2)"))
+    b.act("CLICK", option, page)
+    assert option["role"] == "radio" and b.evaluate("med.checked") is True
+
 def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
     from assistant.browser import forget_sites
 
