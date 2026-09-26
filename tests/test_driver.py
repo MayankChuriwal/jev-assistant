@@ -175,3 +175,12 @@ def test_mini_knows_todays_date(tmp_path, monkeypatch):
     jev_fake(monkeypatch)
     a.command("tick")
     assert seen[0]["today"] == time.strftime("%A, %d %B %Y")
+
+
+def test_being_stuck_never_shows_mini_s_note_about_the_user(tmp_path, monkeypatch):
+    a = ride(tmp_path, replies=[{"text": "Indiranagar"}])
+    script(monkeypatch, *[out("CLICK", "Pickup location", next_goal="Ask user for their delivery area")] * 8)
+    jev_fake(monkeypatch, checks=("failed",))
+    for _ in range(8):
+        a.command("tick")
+    assert a.asked and "Ask user" not in a.asked[-1]["text"] and a.state["goal"] in a.asked[-1]["text"]
