@@ -2,6 +2,7 @@
 result, and reads the user's replies; code keeps the safety rails. Reuses the base agent's browser, redaction,
 asking, captcha relay, LOOK, and traces."""
 
+import html
 import os
 import re
 import time
@@ -25,6 +26,7 @@ DIALOGS = {"ACCEPT_DIALOG", "DISMISS_DIALOG"}
 CONFIRM = re.compile(r"\b(confirm|book (it|this|the)|place (it|the order)|should i (book|order|pay|request|place)|"
                      r"shall i|do you want (me )?to (book|order|place|pay|request|proceed))\b", re.IGNORECASE)
 YES_NO = {"yes", "no", "y", "n", "confirm", "cancel", "ok"}
+PAGE_TALK = re.compile(r"\b(element|click|tap|scroll)\b|\[\d+\]", re.IGNORECASE)
 PAYMENT = re.compile(r"\b(cash|upi|card|wallet|net ?banking|pay later|cod|cash on delivery)\b", re.IGNORECASE)
 
 
@@ -174,9 +176,13 @@ class MiniAgent(Agent):
     def talk_step(self, decision, page):
         s = self.state
         act = decision["action"]
-        message = decision["message"].strip() or (act["text"].strip() if act["op"] != "DONE" else "")
+        message = html.unescape(decision["message"].strip() or (act["text"].strip() if act["op"] != "DONE" else ""))
         op = "ASK" if act["op"] == "TELL" and message.endswith("?") else act["op"]  # a question waits for its answer
-        options = [o.strip() for o in decision["options"] if o.strip()][:10]
+        options = [html.unescape(o.strip()) for o in decision["options"] if o.strip()][:10]
+        if op == "ASK" and PAGE_TALK.search(message):
+            raise Retry("The user can't see the page: never ask them about elements, clicks, or scrolling. Decide "
+                        "yourself (read the element list, scroll, go back), or ASK for information about what they "
+                        "want.")
         secret = rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
         if op == "ASK" and secret and rules.CARD_DETAIL.search(message) and not self.payment_asked(page):
             raise Retry("Ask the user which payment method to use first: list the payment methods the page shows. "
@@ -274,6 +280,10 @@ class MiniAgent(Agent):
         operation, action, index = self.target(decision, page, entry)
         inputs, shown = self.inputs_for(operation, action, act, page)
         commit = self.commit_label(operation, action, act, page, inputs)
+        if commit and act["commits"] and operation == "CLICK" and not rules.COMMIT.search(commit):
+            verdict, sure = jev.final(page, commit, decision["next_goal"])  # only mini calls it final: check
+            if verdict == "step" and sure >= 0.8:
+                commit = None  # a step on the way (choosing or saving a selection): nothing is bought yet
         if commit and not act["commits"]:
             raise Retry(f"“{commit}” would commit. If that is the step you mean, set commits true and put the "
                         "summary in message (what, where, option, payment method, and the total as the page shows it); "
@@ -381,7 +391,7 @@ class MiniAgent(Agent):
             return True
         if s["commit"]:
             raise Retry("An earlier committed action is still being checked; WAIT for it first.")
-        summary = decision["message"].strip()
+        summary = html.unescape(decision["message"].strip())
         if not summary:
             raise Retry(f"“{commit}” commits: put the summary in message (what, where, option, payment method, and "
                         "the total exactly as the page shows it).")

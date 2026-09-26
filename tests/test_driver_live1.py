@@ -185,3 +185,38 @@ def test_a_question_that_says_proceed_is_not_a_confirmation(tmp_path, monkeypatc
     jev_fake(monkeypatch)
     a.command("tick")
     assert len(a.asked) == 1
+
+
+def test_a_step_only_mini_calls_final_is_checked_by_jev(tmp_path, monkeypatch):
+    save = {"id": "e6", "kind": "click", "label": "Save", "role": "button", "node": 6}
+    panel = "Payment Methods\nCash\nSave"
+    a = mini_with(tmp_path, replies=[{"text": "yes"}], page=fake_page(text=panel, actions=[save, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which payment method?"}, {"from": "user", "text": "“Cash”"}]
+    script(monkeypatch, out("CLICK", "Save", commits=True, message="Uber Go AC · Cash · ₹819"))
+    jev_fake(monkeypatch, final=("step", 0.9))
+    a.command("tick")
+    assert a.asked == [] and a.browser.act.call_args.args[1]["id"] == "e6"  # a step on the way: no approval
+    b = mini_with(tmp_path, replies=[{"text": "no"}], page=fake_page(text=panel, actions=[save, WAIT]))
+    b.state["chat"] += [{"from": "agent", "text": "Which payment method?"}, {"from": "user", "text": "“Cash”"}]
+    script(monkeypatch, out("CLICK", "Save", commits=True, message="Uber Go AC · Cash"))
+    jev_fake(monkeypatch, final=("step", 0.6))
+    b.command("tick")
+    assert b.asked and b.browser.act.call_count == 0  # not sure it's only a step: the user approves
+
+
+def test_questions_about_page_elements_are_refused(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Pickup", actions=[WAIT]))
+    script(monkeypatch, out("ASK", message="I couldn't find the current location option. Please describe the exact "
+                                           "words or element number."))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and "can't see the page" in a.state["feedback"][0]
+
+
+def test_html_entities_never_reach_the_user(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, replies=[{"text": "Wallets"}], page=fake_page(text="Pay", actions=[WAIT]))
+    script(monkeypatch, out("ASK", message="Which payment method?",
+                            options=["Wallets (PhonePe, Amazon Pay &amp; more)"]))
+    jev_fake(monkeypatch, replies=["1"])
+    a.command("tick")
+    assert "&amp;" not in a.asked[0]["text"] and "Amazon Pay & more" in a.asked[0]["text"]

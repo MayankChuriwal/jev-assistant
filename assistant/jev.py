@@ -68,6 +68,16 @@ def achieved(page, goal, report):
                {"goal": goal, "rules": f"The agent reports: {report}. Judge only from the page."})["choice"]
 
 
+def final(page, label, step_goal):
+    """("final" | "step", probability): whether pressing `label` completes an order, booking, payment, or
+    submission, or is only a step on the way (choosing or saving a selection, opening a panel)."""
+    options = {"final": "Pressing it completes the order, booking, payment, or submission right away.",
+               "step": "It is a step on the way (choosing or saving a selection, opening a panel); nothing is ordered "
+                       "or paid yet."}
+    answer = ask(page, "final", options, {"goal": step_goal, "rules": f"The control: “{label}”. Judge from the page."})
+    return answer["choice"], answer["probabilities"][answer["choice"]]
+
+
 def conversation(question, reply):
     return {"url": "", "title": "chat", "text": f"Question: {question}\nReply: {reply}"}
 
