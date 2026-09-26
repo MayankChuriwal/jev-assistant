@@ -68,6 +68,8 @@ Rules:
   Never use Google, Apple, or Facebook sign-in buttons.
 - Place and search boxes: TYPE the user's words, then CLICK the matching suggestion (new ones are marked *). Do not
   press Enter while suggestions show. For "current location" use the site's own detect-location option.
+- Travel searches are one-way for one traveller unless the user mentions a return or more people; set that before
+  reading prices, and resolve relative dates ("next Friday", "tomorrow") from today's date.
 - Close pop-ups and banners that block the page; decline optional cookies.
 - A captcha (pick images, type characters, "I'm not a robot"): ASK the user to solve it; the system shows it to
   them. Never click its images or checkbox yourself.
