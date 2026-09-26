@@ -84,7 +84,15 @@ class MiniAgent(Agent):
             else:
                 s["feedback"].append(f"The last step failed ({error}); nothing was done. Decide again.")
         s["elapsed_ms"] = self.elapsed()
+        self.checkpoint()
         return self.snapshot()
+
+    def checkpoint(self):
+        """Write the trace after every step, to the same file, so a stop at any moment keeps it."""
+        try:
+            self.save_trace()
+        except OSError:
+            pass
 
     def step(self):
         s = self.state

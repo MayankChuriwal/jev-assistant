@@ -1017,10 +1017,16 @@ class Agent:
     def save_trace(self):
         """Write the trace to ~/.jev/traces/<time>-<title>.json, readable only by the user."""
         self.trace_dir.mkdir(parents=True, exist_ok=True)
-        slug = re.sub(r"[^a-z0-9]+", "-", self.state["title"].lower()).strip("-")[:40] or "task"
-        path = unique(self.trace_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{slug}.json")
-        path.write_text(json.dumps(self.trace(), indent=2, ensure_ascii=False, default=str))
-        path.chmod(0o600)
+        path = self.state.get("trace_path")
+        if not path:
+            slug = re.sub(r"[^a-z0-9]+", "-", self.state["title"].lower()).strip("-")[:40] or "task"
+            path = unique(self.trace_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{slug}.json")
+            self.state["trace_path"] = str(path)
+        path = Path(path)
+        temporary = path.with_suffix(".tmp")
+        temporary.touch(mode=0o600)
+        temporary.write_text(json.dumps(self.trace(), indent=2, ensure_ascii=False, default=str))
+        temporary.replace(path)  # a stop mid-write never leaves an empty or half-written trace
         return path
 
     def close(self):

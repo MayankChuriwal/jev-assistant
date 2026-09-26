@@ -152,3 +152,16 @@ def test_the_trace_keeps_minis_reasoning_and_jevs_checks(tmp_path, monkeypatch):
     trace = a.trace()
     assert trace["driver"] == "mini" and trace["plan"] == ["Set pickup", "Set drop"]
     assert trace["mini"][0]["next_goal"] == "Open pickup" and trace["steps"][0]["check"] == "success"
+
+
+def test_the_trace_is_saved_after_every_step(tmp_path, monkeypatch):
+    import json
+
+    a = ride(tmp_path)
+    a.trace_dir = tmp_path / "traces"
+    script(monkeypatch, out("CLICK", "Pickup location"), out("WAIT"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    first = a.state["trace_path"]
+    a.command("tick")
+    assert a.state["trace_path"] == first and len(json.loads(open(first).read())["steps"]) == 2
