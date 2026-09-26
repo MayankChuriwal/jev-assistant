@@ -446,7 +446,8 @@ class MiniAgent(Agent):
             s["done_refusals"] = s.get("done_refusals", 0) + 1
             if s["done_refusals"] < 3 or any(h.get("committed") for h in s["history"]) or \
                     rules.COMMERCE.search(s["goal"]):  # an order or booking needs the site's own confirmation
-                raise Retry("The page doesn't show the goal done yet. Keep going, or TELL the user what's missing.")
+                raise Retry("The page doesn't show the goal done yet. Keep going until it does; the answer goes in "
+                            "DONE, never in a TELL.")
             report += " (I couldn't fully confirm this on the page, so please double-check it.)"
         held = set(re.findall(r"[a-z0-9]+", s.get("held", "").lower()))
         said = set(re.findall(r"[a-z0-9]+", report.lower()))

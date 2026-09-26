@@ -205,3 +205,12 @@ def test_a_round_trip_price_is_not_the_answer_to_a_one_way_question(tmp_path, mo
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.state["status"] != "done" and "one-way" in a.state["feedback"][0]
+
+
+def test_a_refused_done_never_invites_telling_the_answer(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Air India 10:00 PM ₹8,200", actions=[WAIT]))
+    a.state["goal"] = "Find the cheapest flight from Bengaluru to Delhi next Friday"
+    script(monkeypatch, out("DONE", message="Air India at 10:00 PM for ₹8,200.", text="Air India 10:00 PM ₹8,200"))
+    jev_fake(monkeypatch, achieved="no")
+    a.command("tick")
+    assert "TELL" not in a.state["feedback"][0].split("never")[0]
