@@ -417,3 +417,29 @@ def test_option_names_with_icon_words_still_count_as_listed_and_chosen(tmp_path,
     jev_fake(monkeypatch, approvals=["no"])
     a.command("tick")
     assert a.asked, a.state["feedback"]
+
+
+def test_the_bill_is_opened_before_leaving_the_cart(tmp_path, monkeypatch):
+    bill = {"id": "e1", "kind": "click", "label": "VIEW DETAILED BILL", "role": "button", "node": 1}
+    pay = {"id": "e2", "kind": "click", "label": "Make payment, tap to go to payment (shows “Proceed to Pay”)",
+           "name": "Make payment, tap to go to payment", "shown": "Proceed to Pay", "role": "button", "node": 2}
+    a = mini_with(tmp_path, page=fake_page(text="Diet Coke ₹50\nCart total is 121.0 Rupees\nVIEW DETAILED BILL\n"
+                                                "Proceed to Pay", actions=[bill, pay, WAIT]))
+    script(monkeypatch, out("CLICK", "Proceed to Pay"), out("CLICK", "Proceed to Pay"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.browser.act.call_count == 0 and "VIEW DETAILED BILL" in a.state["feedback"][0]
+    a.command("tick")
+    assert a.browser.act.call_args.args[1]["id"] == "e2"  # asked once, never blocks
+
+
+def test_an_approval_part_inside_another_part_is_dropped(tmp_path, monkeypatch):
+    pay = {"id": "e3", "kind": "click", "label": "Place order", "role": "button", "node": 3}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text="To pay ₹121\nPlace order", actions=[pay, WAIT]))
+    a.state["chat"] += PAID
+    script(monkeypatch, out("CLICK", "Place order", commits=True,
+                            message="Diet Coke · Pay on Delivery (cash on delivery) · Pay on Delivery · ₹121"))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    assert a.asked[0]["text"].count("Pay on Delivery") == 1

@@ -50,6 +50,8 @@ FEE = re.compile(r"^[^\n₹]{0,20}?((?:small cart|delivery|handling|platform|pac
                  r"rain|service)\s+(?:fee|charges?)[^\n₹]{0,10}₹\s?[\d,]+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
 SAVE = re.compile(r"^([^\n]{0,60}(?:free delivery|to save|no (?:small cart|delivery|handling) fee|waive)[^\n]{0,60})$",
                   re.IGNORECASE | re.MULTILINE)
+BILL = re.compile(r"\b((view|see|show) (detailed )?bill|bill details|price details|order summary)\b", re.IGNORECASE)
+CHECKOUT = re.compile(r"\b(proceed to (pay|checkout|buy)|checkout|make payment|go to payment)\b", re.IGNORECASE)
 ABOUT_USER = re.compile(r"\b(the|ask|tell|inform) user\b", re.IGNORECASE)  # a note to itself
 PAYMENT_FILLER = {"the", "a", "an", "if", "it", "its", "s", "offered", "otherwise", "on", "with", "my", "use",
                   "pay", "payment", "method", "please", "and", "or", "to", "for", "me", "i", "by", "option"}
@@ -541,6 +543,14 @@ class MiniAgent(Agent):
                         "otherwise choose another element.")
         if not commit and operation in {"CLICK", "SELECT", "LOOK"}:
             self.chosen_payment(action)
+        if operation == "CLICK" and CHECKOUT.search(own_words(action)) and not FEE.search(page["text"]) and \
+                not self.state.get("bill_opened"):
+            bill = next((a for a in page["actions"] if a.get("kind") == "click" and BILL.search(a.get("label", ""))),
+                        None)
+            if bill:
+                self.state["bill_opened"] = True  # once: the user's approval should show every fee
+                raise Retry(f"Open “{bill['label']}” first so the fees are known (tell the user any fee they could "
+                            "avoid), then continue to payment.")
         named = re.search(r"\[(\d+)\]", act["target"])
         if commit and named and index and named[1] != index:
             raise Retry(f"You named [{named[1]}], but the element matching “{act['target']}” is [{index}] "
@@ -664,7 +674,8 @@ class MiniAgent(Agent):
             raise Retry("An earlier committed action is still being checked; WAIT for it first.")
         summary = re.sub(r"^(ordered|booked|placed|paid|requested)\s+", "", plain(decision["message"].strip()),
                          flags=re.IGNORECASE)  # nothing has happened until the user says yes
-        summary = " · ".join(dict.fromkeys(p.strip() for p in summary.split("·") if p.strip()))  # each part once
+        parts = list(dict.fromkeys(p.strip() for p in summary.split("·") if p.strip()))
+        summary = " · ".join(p for p in parts if not any(p.lower() in q.lower() and p != q for q in parts))  # once
         if "·" not in summary or (rules.PRICE.search(page["text"]) and not rules.PRICE.search(summary)):
             summary = self.summary(page)  # left out, a sentence instead of the details, or missing the page's total
         if not summary:
