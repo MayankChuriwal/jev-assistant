@@ -132,9 +132,25 @@ class MiniAgent(Agent):
             s["memory"].append(decision["memory"].strip())
         if [p for p in decision["plan"] if p.strip()]:
             s["plan"] = [p.strip() for p in decision["plan"] if p.strip()][:10]
+        if decision["action"]["op"] != "DONE":
+            self.release()
         if decision["action"]["op"] in TALKING:
             return self.talk_step(decision, page)
         return self.act_step(decision, page, entry)
+
+    # An update waits one step: when mini's very next move is DONE with the same answer, only the answer goes out.
+    def say(self, text, kind="info", **extra):
+        self.release()
+        super().say(text, kind, **extra)
+
+    def ask(self, message):
+        self.release()
+        return super().ask(message)
+
+    def release(self):
+        held = self.state.pop("held", None)
+        if held:
+            super().say(held)
 
     def refused(self):
         """The same step refused again and again: tell mini to stop at 3, ask the user at 6."""
@@ -233,7 +249,7 @@ class MiniAgent(Agent):
             if s.get("told_at") == len(s["history"]):
                 raise Retry("You just told the user something. Do an action next, or finish with DONE: the answer the "
                             "user asked for goes in DONE's message, never in another TELL.")
-            self.say(message)
+            s["held"] = message
             s["chat"].append({"from": "agent", "text": message})
             s["told_at"] = len(s["history"])
             return None
@@ -341,6 +357,10 @@ class MiniAgent(Agent):
             if s["done_refusals"] < 3 or any(h.get("committed") for h in s["history"]):
                 raise Retry("The page doesn't show the goal done yet. Keep going, or TELL the user what's missing.")
             report += " (I couldn't fully confirm this on the page, so please double-check it.)"
+        held = set(re.findall(r"[a-z0-9]+", s.get("held", "").lower()))
+        said = set(re.findall(r"[a-z0-9]+", report.lower()))
+        if held and said and len(held & said) / min(len(held), len(said)) >= 0.6:
+            s.pop("held")  # the answer, told a step early
         self.say(report, kind="result", evidence=quote)
         s["status"] = "done"
         return None

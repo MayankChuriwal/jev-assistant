@@ -464,3 +464,24 @@ def test_a_step_that_seems_to_do_nothing_is_looked_at_again(tmp_path, monkeypatc
     jev_fake(monkeypatch)
     a.command("tick")
     assert "Bengaluru, Karnataka" in a.state["history"][-1]["changed"]
+
+
+def test_an_answer_told_just_before_done_is_sent_once(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Air India 2:00 PM ₹8,257", actions=[WAIT]))
+    script(monkeypatch, out("TELL", message="The cheapest flight is Air India at 2:00 PM for ₹8,252."),
+           out("DONE", message="The cheapest flight is Air India at 2:00 PM. The price is ₹8,257.",
+               text="Air India 2:00 PM ₹8,257"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    a.command("tick")
+    assert [m["kind"] for m in a.told] == ["result"] and "₹8,257" in a.told[0]["text"]
+
+
+def test_an_update_goes_out_before_the_next_step(tmp_path, monkeypatch):
+    go = {"id": "e1", "kind": "click", "label": "See prices", "role": "button", "node": 1}
+    a = mini_with(tmp_path, page=fake_page(text="Flights", actions=[go, WAIT]))
+    script(monkeypatch, out("TELL", message="Searching flights for Friday."), out("CLICK", "See prices"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    a.command("tick")
+    assert [m["text"] for m in a.told] == ["Searching flights for Friday."] and a.browser.act.called
