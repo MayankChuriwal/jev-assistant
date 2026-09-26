@@ -49,6 +49,7 @@ KEYS = {  # name: (key, code, keyCode, text, modifiers)
 
 GUARD = "(node => { const c = window.__jevFast; return c ? [c.pageKey(), c.guard(c.nodes.get(node))] : null; })"
 LOCATE = "(node => window.__jevFast?.locate(node) ?? null)"
+SPOT = "((node, words) => window.__jevFast?.spot(node, words) ?? null)"
 # Runs on the <iframe> element in its owner document: map a point inside the frame to the owner's viewport.
 HIT_OWNER = r"""function (x, y) {
   const r = this.getBoundingClientRect();
@@ -686,7 +687,11 @@ class Browser:
     def _point(self, action):
         """Top-level viewport centre of an observed element, re-read and hit-tested now."""
         frame = action.get("frame")
-        point = self.evaluate(f"({LOCATE})({int(action['node'])})", self._session_for(frame))
+        point = None
+        if action.get("within"):  # the quoted words inside the element, else its centre
+            point = self.evaluate(f"({SPOT})({int(action['node'])}, {json.dumps(action['within'])})",
+                                  self._session_for(frame))
+        point = point or self.evaluate(f"({LOCATE})({int(action['node'])})", self._session_for(frame))
         while point is not None and frame:
             info = self.frames.get(frame)
             if info is None:

@@ -382,6 +382,17 @@ def test_a_styled_radio_with_an_empty_label_is_offered_through_its_wrapper(brows
     b.act("CLICK", option, page)
     assert option["role"] == "radio" and b.evaluate("med.checked") is True
 
+
+def test_a_click_within_a_container_lands_on_the_quoted_words(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div onclick=\"window.__hit = 1\" "
+               "style=\"display:flex;cursor:pointer;width:400px\"><span style=\"width:300px\">Add a delivery "
+               "address</span><div onclick=\"window.__hit = 2; event.stopPropagation()\">Add New</div></div>'); 1")
+    page = b.observe()
+    box = next(a for a in page["actions"] if a["kind"] == "click" and "Add New" in a["label"])
+    b.act("CLICK", {**box, "within": "Add New"}, page)
+    assert b.evaluate("window.__hit") == 2
+
 def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
     from assistant.browser import forget_sites
 

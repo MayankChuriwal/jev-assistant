@@ -116,6 +116,18 @@
     }
     return e && e.tagName !== 'BODY' && e.tagName !== 'HTML' ? label(e) : '';
   };
+  // The words mini quoted inside a clickable container ("Add New" in an address card): the smallest element showing
+  // exactly them, hit-tested. Null when none does.
+  cache.spot = (id, words) => {
+    const e = cache.nodes.get(id), want = words.replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!e?.isConnected) return null;
+    const own = [e, ...e.querySelectorAll('*')].filter(d => rendered(d) && sized(d) &&
+      (d.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase() === want);
+    const d = own[own.length - 1];
+    if (!d) return null;
+    const r = d.getBoundingClientRect();
+    return cache.climb(d, r.x + r.width / 2, r.y + r.height / 2);
+  };
   cache.locate = id => {
     const e = cache.nodes.get(id);
     if (!e?.isConnected || !rendered(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) return null;

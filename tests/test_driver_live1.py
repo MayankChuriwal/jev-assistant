@@ -595,3 +595,13 @@ def test_a_choice_left_to_mini_is_not_asked_again_later(tmp_path, monkeypatch):
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.asked == [] and "left this choice to you" in a.state["feedback"][0]
+
+
+def test_quoted_words_inside_a_container_are_clicked_there(tmp_path, monkeypatch):
+    card = {"id": "e19", "kind": "click", "role": "clickable", "node": 19,
+            "label": "Add a delivery address You seem to be in the new location + Add new Address Add New"}
+    a = mini_with(tmp_path, page=fake_page(text="Add a delivery address\nAdd New", actions=[card, WAIT]))
+    script(monkeypatch, out("CLICK", "Add New"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.browser.act.call_args.args[1]["within"] == "Add New"

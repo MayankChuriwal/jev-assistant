@@ -483,13 +483,13 @@ class MiniAgent(Agent):
             found = self.labelled(page, operation, quoted[1])
             if found:
                 entry["ground"] = {"choice": found[1]["label"], "confidence": 1.0, "exact": True}
-                return operation, found[1], found[0]
+                return operation, self.within(operation, found[1], quoted[1]), found[0]
         action, confidence, near, index = jev.ground(page, operation, act["target"], decision["next_goal"],
                                                      s["goal"])
         entry["ground"] = {"choice": action and action["label"], "confidence": confidence}
         if action is not None and confidence >= self.ground_min:
             s["ground_retry"] = False
-            return operation, action, index
+            return operation, self.within(operation, action, re.sub(r"^\[\d+\]\s*", "", target).strip()), index
         if not s["ground_retry"] and act["target"].strip():
             s["ground_retry"] = True
             raise Retry(f"I couldn't tell which element is “{act['target']}”. Closest: {'; '.join(near) or 'none'}. "
@@ -502,6 +502,14 @@ class MiniAgent(Agent):
                 look = controls.get("LOOK", {"id": "look", "kind": "look", "node": None, "label": "Look"})
                 return "LOOK", {**look, **spot, "hover": operation == "HOVER"}, None
         raise Retry(f"There is no element for “{act['target']}” on this page. Scroll, wait, or try another way.")
+
+    @staticmethod
+    def within(operation, action, words):
+        """A click on words that are only part of an element's name (“Add New” in an address card) lands on them."""
+        label, want = (action.get("label") or "").lower(), words.lower()
+        if operation == "CLICK" and len(want) >= 2 and want in label and want != label:
+            return {**action, "within": words}
+        return action
 
     def labelled(self, page, operation, label):
         """(index, element) whose label is the one mini quoted; None when several match (Jev decides). A label on
