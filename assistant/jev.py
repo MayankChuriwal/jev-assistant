@@ -63,8 +63,9 @@ def check(page, step_goal, done, changed, after_commit=False):
 
 
 def achieved(page, goal, report):
-    return ask(page, "achieved", {"yes": "The page shows the goal achieved.",
-                                  "no": "The goal is not achieved on this page yet."},
+    return ask(page, "achieved", {"yes": "The page shows what the goal asks for: the outcome done, or the "
+                                         "information it asks to find.",
+                                  "no": "The page doesn't show that yet."},
                {"goal": goal, "rules": f"The agent reports: {report}. Judge only from the page."})["choice"]
 
 

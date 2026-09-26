@@ -239,3 +239,24 @@ def test_a_reworded_repeat_of_an_answered_question_is_caught(tmp_path, monkeypat
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.asked == []
+
+
+def test_the_same_message_is_never_sent_twice(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Flights", actions=[WAIT]))
+    script(monkeypatch, out("TELL", message="Cheapest: Air India 10:00 PM ₹8,200."),
+           out("TELL", message="Cheapest: Air India 10:00 PM ₹8,200."))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    a.command("tick")
+    assert [m["text"] for m in a.told] == ["Cheapest: Air India 10:00 PM ₹8,200."]
+    assert "already told" in a.state["feedback"][0]
+
+
+def test_a_report_quoted_from_the_page_finishes_after_two_refusals_with_a_caution(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Air India 10:00 PM ₹8,200", actions=[WAIT]))
+    report = out("DONE", message="Cheapest: Air India 10:00 PM ₹8,200.", text="Air India 10:00 PM ₹8,200")
+    script(monkeypatch, report, report, report)
+    jev_fake(monkeypatch, achieved="no")
+    for _ in range(3):
+        a.command("tick")
+    assert a.state["status"] == "done" and "couldn't fully confirm" in a.told[-1]["text"]

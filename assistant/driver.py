@@ -199,6 +199,8 @@ class MiniAgent(Agent):
         if op == "TELL":
             if not message:
                 raise Retry("TELL needs a message.")
+            if any(c["from"] == "agent" and c["text"] == message for c in s["chat"]):
+                raise Retry("You already told the user this. Carry on with the task, or finish with DONE.")
             self.say(message)
             s["chat"].append({"from": "agent", "text": message})
             return None
@@ -258,9 +260,13 @@ class MiniAgent(Agent):
         quote = decision["action"]["text"].strip()
         if not quote or not rules.verbatim(quote, page["text"]):
             raise Retry("DONE needs text: a short quote copied exactly from the page that proves the goal is done.")
-        if jev.achieved(page, s["goal"], decision["message"]) != "yes":
-            raise Retry("The page doesn't show the goal done yet. Keep going, or TELL the user what's missing.")
-        self.say(decision["message"].strip() or "Done.", kind="result", evidence=quote)
+        report = decision["message"].strip() or "Done."
+        if jev.achieved(page, s["goal"], report) != "yes":
+            s["done_refusals"] = s.get("done_refusals", 0) + 1
+            if s["done_refusals"] < 3 or any(h.get("committed") for h in s["history"]):
+                raise Retry("The page doesn't show the goal done yet. Keep going, or TELL the user what's missing.")
+            report += " (I couldn't fully confirm this on the page, so please double-check it.)"
+        self.say(report, kind="result", evidence=quote)
         s["status"] = "done"
         return None
 
