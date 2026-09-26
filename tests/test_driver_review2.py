@@ -186,3 +186,12 @@ def test_an_error_word_in_a_long_page_is_not_an_error_page():
     long = "Welcome to Swiggy\nCall 1800-404-1234 for help\n" + "Restaurants near you\n" * 200
     assert not rules.error_page({"title": "Swiggy", "text": long})
     assert rules.error_page({"title": "404: This page could not be found.", "text": "Go to Home"})
+
+
+def test_a_refused_confirmation_names_the_final_control_to_press(tmp_path, monkeypatch):
+    go = {"id": "e1", "kind": "click", "label": "Request Uber Go AC", "role": "button", "node": 1}
+    a = mini_with(tmp_path, page=fake_page(text="Uber Go AC ₹790\nRequest Uber Go AC", actions=[go, WAIT]))
+    script(monkeypatch, out("ASK", message="Please confirm your booking details.", options=["Yes", "No"]))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert "“Request Uber Go AC”" in a.state["feedback"][0]

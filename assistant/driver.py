@@ -270,9 +270,11 @@ class MiniAgent(Agent):
             self.chosen_payment({"label": message})  # only for the card the user picked
         if op == "ASK" and not secret and CONFIRM.search(message) and not OPEN_Q.match(message) and all(
                 re.split(r"[\s,.!]+", o.lower())[0] in YES_NO for o in options):
-            raise Retry("Don't ask the user to confirm. When everything is chosen, do the final action (the control "
-                        "that books, orders, or pays) with commits true and the summary in message: the system asks "
-                        "the user once. If something is still undecided, ASK with the choices listed.")
+            final = next((a["label"] for a in page["actions"] if rules.commit_label("CLICK", a, page)), None)
+            where = f" (here: CLICK “{final}”)" if final else ""
+            raise Retry(f"Don't ask the user to confirm. When everything is chosen, do the final action{where} with "
+                        "commits true and the summary in message: the system asks the user once. If something is "
+                        "still undecided, ASK with the choices listed.")
         held = [k for k, pattern in PROFILE_ASKS.items() if self.profile.data.get(k) and pattern.search(message)]
         if op == "ASK" and not secret and held:
             raise Retry(f"The user's profile has it: TYPE [profile:{held[0]}] into the field instead of asking.")
