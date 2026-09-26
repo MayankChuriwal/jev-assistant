@@ -241,6 +241,8 @@ class MiniAgent(Agent):
         if op == "ASK" and secret and rules.CARD_DETAIL.search(message) and not self.payment_asked(page):
             raise Retry("Ask the user which payment method to use first: list the payment methods the page shows. "
                         "Card details come only after they choose a card.")
+        if op == "ASK" and secret and rules.CARD_DETAIL.search(message):
+            self.chosen_payment({"label": message})  # only for the card the user picked
         if op == "ASK" and not secret and CONFIRM.search(message) and all(
                 re.split(r"[\s,.!]+", o.lower())[0] in YES_NO for o in options):
             raise Retry("Don't ask the user to confirm. When everything is chosen, do the final action (the control "

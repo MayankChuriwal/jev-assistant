@@ -613,3 +613,17 @@ def test_options_mini_numbered_itself_are_numbered_once(tmp_path, monkeypatch):
     jev_fake(monkeypatch, replies=["2"])
     a.command("tick")
     assert a.asked[0]["text"].endswith("\n1. Work\n2. Home")
+
+
+def test_card_details_are_asked_only_for_a_card_the_user_chose(tmp_path, monkeypatch):
+    cvv = {"id": "e20", "kind": "fill", "label": "CVV", "role": "textbox", "value": "", "node": 20,
+           "constraints": {"type": "password"}}
+    a = mini_with(tmp_path, page=fake_page(text="Preferred Payment\nHDFC Bank Card 2479\nCVV\nPay 583",
+                                           actions=[cvv, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which payment method would you like to use?\n1. HDFC Bank Card"},
+                        {"from": "user", "text": "“Cash on delivery if it's offered; otherwise UPI” → none of the "
+                                                 "options"}]
+    script(monkeypatch, out("ASK", message="Please provide the CVV for your HDFC Bank Card ending in 2479."))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and "chose" in a.state["feedback"][0]
