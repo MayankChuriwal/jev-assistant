@@ -68,6 +68,9 @@ Rules:
   Never use Google, Apple, or Facebook sign-in buttons.
 - Place and search boxes: TYPE the user's words, then CLICK the matching suggestion (new ones are marked *). Do not
   press Enter while suggestions show. For "current location" use the site's own detect-location option.
+- Delivery location: if the site shows a place the user didn't give or says it doesn't deliver there, change the
+  location first (its location or address control, then detect current location). If detection fails, ASK the user
+  where to deliver; use their answer for this task only.
 - Travel searches are one-way for one traveller unless the user mentions a return or more people; set that before
   reading prices, and resolve relative dates ("next Friday", "tomorrow") from today's date.
 - Close pop-ups and banners that block the page; decline optional cookies.

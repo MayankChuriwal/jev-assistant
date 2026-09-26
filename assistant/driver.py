@@ -29,6 +29,8 @@ YES_NO = {"yes", "no", "y", "n", "confirm", "cancel", "ok"}
 DELEGATE = re.compile(r"\b(you (choose|decide|pick)|whatever|any( one)?|up to you|your (choice|call)|"
                       r"doesn'?t matter)\b", re.IGNORECASE)
 PAGE_TALK = re.compile(r"\b(element|click|tap|scroll|swipe|drag)\b|\[\d+\]", re.IGNORECASE)
+UNSERVED = re.compile(r"\bnot (available|serviceable|delivering)\b|coming soon|(doesn't|does not|don't|do not) "
+                      r"deliver|unserviceable|out of (the )?(delivery|service) area", re.IGNORECASE)
 ABOUT_USER = re.compile(r"\b(the|ask|tell|inform) user\b", re.IGNORECASE)  # a note to itself
 PAYMENT = re.compile(r"\b(cash|upi|card|wallet|net ?banking|pay later|cod|cash on delivery)\b", re.IGNORECASE)
 
@@ -236,6 +238,11 @@ class MiniAgent(Agent):
             return None
         if op in {"ASK", "STOP"} and rules.captcha_challenge(page):
             return self.relay_captcha(page)  # only the user solves a captcha
+        if op == "STOP" and UNSERVED.search(message) and not s.get("location_retry"):
+            s["location_retry"] = True  # once: the site may only be showing some other place
+            raise Retry("Before stopping, set the delivery location: open the site's location or address control and "
+                        "use its detect-current-location option, or ASK the user which area to deliver to. Stop only "
+                        "if the site doesn't serve the user's own location.")
         if op == "STOP":
             raise Halt("blocked", message or "I stopped: I can't find a way to finish this on the site.")
         if op == "DONE":

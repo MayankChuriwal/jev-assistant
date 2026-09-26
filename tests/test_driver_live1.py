@@ -431,3 +431,16 @@ def test_a_summary_that_lists_no_details_is_rewritten(tmp_path, monkeypatch):
     jev_fake(monkeypatch, approvals=["no"])
     a.command("tick")
     assert "Medium" in a.asked[0]["text"]
+
+
+def test_stopping_because_the_site_does_not_serve_the_shown_location_is_sent_back_once(tmp_path, monkeypatch):
+    place = {"id": "e11", "kind": "click", "label": "Other", "role": "button", "node": 11}
+    a = mini_with(tmp_path, page=fake_page(text="Other - Ranchi Bypass, Jharkhand\nSit Tight! We're Coming Soon!",
+                                           actions=[place, WAIT]))
+    script(monkeypatch, out("STOP", message="Zepto service not available now; cannot order here."),
+           out("STOP", message="Zepto service not available now; cannot order here."))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.state["status"] != "blocked" and "delivery location" in a.state["feedback"][0]
+    a.command("tick")
+    assert a.state["status"] == "blocked"
