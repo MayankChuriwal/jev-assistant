@@ -527,7 +527,9 @@ class MiniAgent(Agent):
                 return None, others[0]
         if len(near) == 1:
             return near[0]
-        if not near and label[:40] in page["text"]:
+        covered = self.state.setdefault("covered_told", [])
+        if not near and label[:40] in page["text"] and label not in covered:
+            covered.append(label)  # once: mini may have misnamed it (“My Cart” for “Go to Cart”); then Jev grounds it
             raise Retry(f"No element you can act on is labelled “{label}” right now. If the page text shows it, "
                         "something covers it (an open panel or pop-up): finish or close that first.")
         return None

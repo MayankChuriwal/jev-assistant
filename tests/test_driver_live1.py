@@ -636,3 +636,18 @@ def test_is_that_correct_with_yes_or_no_is_an_own_confirmation(tmp_path, monkeyp
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.asked == [] and "commits true" in a.state["feedback"][0]
+
+
+def test_a_quoted_label_said_to_be_covered_goes_to_jev_the_second_time(tmp_path, monkeypatch):
+    cart = {"id": "e21", "kind": "click", "label": "Cart item quantity is 1. double tap to go to cart",
+            "role": "button", "node": 21}
+    a = mini_with(tmp_path, page=fake_page(text="My Cart\n1 Item\nGo to Cart", actions=[cart, WAIT]))
+    script(monkeypatch, out("CLICK", 'button "My Cart"'), out("CLICK", 'button "My Cart"'))
+    jev_fake(monkeypatch)
+    from assistant import driver
+
+    monkeypatch.setattr(driver.jev, "ground", lambda *a: (cart, 0.9, [cart["label"]], "1"))
+    a.command("tick")
+    assert a.browser.act.call_count == 0 and "covers it" in a.state["feedback"][0]
+    a.command("tick")
+    assert a.browser.act.call_args.args[1]["id"] == "e21"
