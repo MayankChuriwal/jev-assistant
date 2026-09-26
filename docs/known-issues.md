@@ -106,3 +106,20 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | ID | Issue | Where | Status |
 |---|---|---|---|
 | P5-01 | The bench audits commits only; that no secret reaches a model rests on the single redacting outbound path (`model.post_json`). | `bench.py` | open (by design) |
+| P5-02 | HOVER falls back to LOOK, which clicks. | `driver.py` | open |
+| P5-03 | Approvals for a spot found by LOOK rarely match again after the re-read, so the user may be asked twice. | `driver.py` `approved` | open |
+| P5-04 | The $0.50 spend cap counts mini's calls (decide, summarize), not LOOK or Jev. | `driver.py` | open |
+| P5-05 | Refused steps (guessed code, DONE without a quote, grounding misses) don't count toward the repeat-action nudges. | `driver.py` | partly fixed (Plan 5 Task 14): refusals escalate on their own: a nudge at 3, the user is asked at 6 |
+| P5-06 | talk_step loses the user's answer if Jev's `read_reply` raises. | `driver.py` `talk_step` | open |
+| P5-07 | `default_service` saves any free-text reply as the default app. | `core.py` | open |
+| P5-08 | The bench graded before `close()` set the trace path and before late downloads were collected. | `bench.py` | partly fixed (Plan 5 Task 14): the trace path is set at the first checkpoint; late downloads still aren't collected |
+| P5-09 | The old refusal of DONE on shopping goals without a confirmed commit was dropped; Jev's `achieved` check and the page quote remain. | `driver.py` | open (by design) |
+| P5-10 | An approval needs no amount; any item price on the page passes as the total. | `driver.py` `approved` | open |
+| P5-11 | The model-error counter isn't reset after steps ending in Retry or StalePage. | `driver.py` `tick` | open |
+| P5-12 | A KeyError inside `jev.ask` (missing key or answers) escapes `tick` into core's generic handler. | `jev.py` | open |
+| P5-13 | `ground_retry` is one flag shared by unrelated steps. | `driver.py` | open |
+| P5-14 | The agent Chrome's location request times out (`ERR 3`) when macOS Location Services is off for Google Chrome; sites then guess from the IP and show another city (Ranchi, Raipur). | macOS setting | open: needs the user to allow Chrome; the agent now changes the location or asks where to deliver (this task only) |
+| P5-15 | The bench warns "possible commit" for any click whose label has "order", e.g. "Change sort order". | `bench.py` `FINAL` | open (warning only) |
+| P5-16 | A question reworded each time slips past `not_asked_before` (word overlap 0.7): Zepto asked for the delivery area eight times after the same scripted answer. | `driver.py` | open |
+| P5-17 | The Swiggy restaurant bench task depends on the restaurant being open (Domino's was closed in the morning). | `bench/tasks.toml` | won't fix: live site; mini asks, and "you choose" picks another |
+| P5-18 | An update held back one step (so a repeated answer goes out once) is dropped if the task is cancelled in that step. | `driver.py` `release` | open (ruling) |
