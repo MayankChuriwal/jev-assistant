@@ -227,7 +227,9 @@
   const wrapper = e => {
     for (let a = e.parentElement, n = 0; a && n < 3; a = a.parentElement, n++) {
       const r = a.getBoundingClientRect();
-      if (rendered(a) && sized(a)) return r.width * r.height <= 120 * 120 ? a : null;  // control-sized, not a row
+      if (rendered(a) && sized(a))  // control-sized, holding this one choice only (not a row of them)
+        return r.width * r.height <= 120 * 120 && a.querySelectorAll('input[type=radio],input[type=checkbox]').length === 1
+          ? a : null;
     }
     return null;
   };
@@ -248,7 +250,8 @@
       if (!isSemantic && !clickable && !draggable && !dirs.length) continue;
       // A styled radio or checkbox hides its input and shows its label, or a small wrapper holding the drawn circle
       // (Swiggy's size options): that is what a user clicks.
-      const proxy = e.tagName === 'INPUT' && ['radio', 'checkbox'].includes(e.type) && !rendered(e) ?
+      const proxy = e.tagName === 'INPUT' && ['radio', 'checkbox'].includes(e.type) &&
+        !(rendered(e) && sized(e) && inView(box(e, dx, dy))) ?
         [...(e.labels || [])].find(l => rendered(l) && sized(l)) || wrapper(e) : null;
       const at = proxy || e;
       if (!rendered(at) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
@@ -267,10 +270,14 @@
       taken.add(e);
       const own = label(e), near = own ? '' : context(e);
       // A hidden name ("Make payment, tap to go to payment") keeps the words the button shows ("Proceed to Pay").
-      const shown = e.matches('[aria-label],[aria-labelledby]') ? (e.innerText || '').replace(/\s+/g, ' ').trim() : '';
-      const named = shown && shown.length <= 40 && !own.toLowerCase().includes(shown.toLowerCase()) ?
-        `${own} (shows “${shown}”)` : own;
-      const base = states(e, {node, role: rname, label: named || (near ? `${rname} in “${near}”` : rname), rect});
+      // Never for a field: its words are what was typed into it (a code, a card number).
+      const typing = e.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.tagName) ||
+        ['textbox', 'searchbox', 'spinbutton', 'combobox'].includes(rname);
+      const words = !typing && e.matches('[aria-label],[aria-labelledby]') ?
+        (e.innerText || '').replace(/\s+/g, ' ').trim() : '';
+      const shown = words && words.length <= 40 && !own.toLowerCase().includes(words.toLowerCase()) ? words : '';
+      const base = states(e, {node, role: rname, label: shown ? `${own} (shows “${shown}”)` :
+        own || (near ? `${rname} in “${near}”` : rname), name: own, rect, ...(shown ? {shown} : {})});
       if (e.tagName === 'SELECT') {
         const current = [...e.selectedOptions].map(o => o.label).join(', ');
         for (const o of e.options) if (!o.selected && !o.disabled && !o.closest('optgroup[disabled]'))

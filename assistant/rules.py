@@ -40,8 +40,8 @@ def host(url):
 
 def commit_label(operation, action, page, key=None, focused=""):
     """The words that make this action a commit, or None. `focused` names the control a page-level key reaches."""
-    if operation in {"CLICK", "DOUBLE_CLICK"}:
-        label = action.get("label", "")
+    if operation in {"CLICK", "DOUBLE_CLICK"}:  # its own name: context added to tell controls apart isn't what it does
+        label = action.get("name", action.get("label", ""))
     elif operation == "LOOK":  # found by sight: its name, the words on it, and whether clicking it commits
         label = action.get("label", "")
         if action.get("commits") or COMMIT.search(action.get("text") or ""):
@@ -53,7 +53,8 @@ def commit_label(operation, action, page, key=None, focused=""):
         label = page.get("text", "")
     else:
         return None
-    if re.search(r"\bproceed to (buy|checkout|pay)\b", label or "", re.IGNORECASE):
+    rest = re.sub(r"\bproceed to (buy|checkout|pay)\b", "", label or "", flags=re.IGNORECASE)
+    if operation in {"CLICK", "DOUBLE_CLICK"} and rest != (label or "") and not COMMIT.search(rest):
         return None  # these open the checkout page; the order is placed later
     return label if COMMIT.search(label or "") else None
 
@@ -257,5 +258,6 @@ ERROR_PAGE = re.compile(r"\b404\b|\bnot found\b|could not be found|page you(’|
 
 
 def error_page(page):
-    """A "not found" or "something went wrong" page, judged by its title and opening text."""
-    return bool(ERROR_PAGE.search(page.get("title") or "") or ERROR_PAGE.search(page["text"][:600]))
+    """A "not found" or "something went wrong" page: by its title, or a short page that opens with it."""
+    return bool(ERROR_PAGE.search(page.get("title") or "") or
+                (len(page["text"]) < 1500 and ERROR_PAGE.search(page["text"][:300])))

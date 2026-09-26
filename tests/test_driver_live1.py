@@ -255,6 +255,7 @@ def test_the_same_message_is_never_sent_twice(tmp_path, monkeypatch):
 
 def test_a_report_quoted_from_the_page_finishes_after_two_refusals_with_a_caution(tmp_path, monkeypatch):
     a = mini_with(tmp_path, page=fake_page(text="Air India 10:00 PM ₹8,200", actions=[WAIT]))
+    a.state["goal"] = "Find the cheapest flight from Bengaluru to Delhi next Friday"
     report = out("DONE", message="Cheapest: Air India 10:00 PM ₹8,200.", text="Air India 10:00 PM ₹8,200")
     script(monkeypatch, report, report, report)
     jev_fake(monkeypatch, achieved="no")

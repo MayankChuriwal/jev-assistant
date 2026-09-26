@@ -27,16 +27,22 @@ CONFIRM = re.compile(r"\b(confirm|book (it|this|the)|place (it|the order)|should
                      r"shall i|do you want (me )?to (book|order|place|pay|request|proceed)|"
                      r"is (that|this|everything) (correct|right|ok|okay))\b", re.IGNORECASE)
 YES_NO = {"yes", "no", "y", "n", "confirm", "cancel", "ok"}
-DELEGATE = re.compile(r"\b(you (choose|decide|pick)|whatever|any( one)?|up to you|your (choice|call)|"
-                      r"doesn'?t matter)\b", re.IGNORECASE)
+DELEGATE = re.compile(r"\b(you (choose|decide|pick)|whatever (you|fits|works|is)|any (one|of them|is fine|will do)|"
+                      r"up to you|your (choice|call)|doesn'?t matter)\b", re.IGNORECASE)
 PAGE_TALK = re.compile(r"\b(element|click|tap|scroll|swipe|drag)\b|\[\d+\]", re.IGNORECASE)
 UNSERVED = re.compile(r"\bnot (available|serviceable|delivering)\b|coming soon|(doesn't|does not|don't|do not) "
                       r"deliver|unserviceable|out of (the )?(delivery|service) area", re.IGNORECASE)
-PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone)( number)?\b", re.IGNORECASE),
-                "email": re.compile(r"\be-?mail\b", re.IGNORECASE),
+PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGNORECASE),
+                "email": re.compile(r"\b(your e-?mail|e-?mail (address|id))\b", re.IGNORECASE),
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
 TOTAL = re.compile(r"\b(total|to pay|payable|amount due)\b", re.IGNORECASE)
-PLACE = re.compile(r"\b(address|location|area|city|locality|pick ?up|drop|deliver(y)? to)\b", re.IGNORECASE)
+PAYABLE = re.compile(r"\b(to pay|grand total|order total|bill total|amount payable|total payable|net payable|"
+                     r"amount due)\b", re.IGNORECASE)
+OPEN_Q = re.compile(r"\s*(where|which|what|when|how|who)\b", re.IGNORECASE)  # asks for something, not a yes
+NOT_TOTAL = re.compile(r"\b(item total|sub ?total|saving|saved|discount|off)\b", re.IGNORECASE)
+PLACE = re.compile(r"\b(address|deliver(y)? (to|location|address)|where (should|do you want|to deliver|are you)|"
+                   r"pick ?-?up (location|point|address|from)|drop(-| )?off|drop location)\b", re.IGNORECASE)
+PAYMENT_Q = re.compile(r"\b(payment|pay (with|using|by|via)|how .{0,30}\bpay)\b", re.IGNORECASE)
 QUESTION_FILLER = {"would", "you", "like", "to", "a", "an", "the", "is", "which", "do", "want", "or", "and", "of",
                    "for", "your", "i", "me", "s", "it", "this", "that", "please", "can", "should", "we"}
 ABOUT_USER = re.compile(r"\b(the|ask|tell|inform) user\b", re.IGNORECASE)  # a note to itself
@@ -50,6 +56,11 @@ def plain(text):
     while (unescaped := html.unescape(text)) != text:
         text = unescaped
     return text
+
+
+def own_words(action):
+    """A control's own name and the words it shows, without the context added to tell it apart from others."""
+    return " ".join(filter(None, [action.get("name", action.get("label") or ""), action.get("shown")]))
 
 
 class Retry(Exception):
@@ -180,8 +191,16 @@ class MiniAgent(Agent):
         goal = s["mini"][-1]["next_goal"] if s["mini"] else s["goal"]
         goal = s["goal"] if ABOUT_USER.search(goal) else goal  # mini's step goals can be notes to itself
         title = s["page"]["title"] or rules.host(s["page"]["url"])
-        reply = self.ask({"kind": "text", "text": f"I'm stuck on {title}: {goal} What should I do?"})
-        s["chat"].append({"from": "user", "text": f"“{str(reply.get('text', '')).strip()}”"})
+        question = f"I'm stuck on {title}: {goal} What should I do?"
+        coded = bool(rules.code_field(s["page"]))  # the reply may be the code itself: keep it out of every log
+        reply = self.ask({"kind": "secret" if coded else "text", "text": question})
+        answer = str(reply.get("text", "")).strip()
+        s["chat"].append({"from": "agent", "text": question})
+        if coded:
+            name = self.keep_secret(answer)
+            s["chat"].append({"from": "user", "text": f"[secret:{name}] (hidden answer; type it as this placeholder)"})
+        else:
+            s["chat"].append({"from": "user", "text": f"“{answer}”"})
 
     def moved(self, page):
         """Whether the page's elements changed since mini saw it. Text that ticks (arrival times) doesn't count."""
@@ -231,6 +250,8 @@ class MiniAgent(Agent):
         message = plain(decision["message"].strip() or fallback)
         op = "ASK" if act["op"] == "TELL" and message.endswith("?") else act["op"]  # a question waits for its answer
         options = [re.sub(r"^\d{1,2}[.)]\s+", "", plain(o.strip())) for o in decision["options"] if o.strip()][:10]
+        if op in {"ASK", "STOP"} and rules.captcha_challenge(page):
+            return self.relay_captcha(page)  # only the user solves a captcha
         if op in {"ASK", "TELL"} and PAGE_TALK.search(message):
             raise Retry("The user can't see the page: never ask them about elements, clicks, or scrolling. Decide "
                         "yourself (read the element list, scroll, go back), or ASK for information about what they "
@@ -238,13 +259,16 @@ class MiniAgent(Agent):
         if op in {"ASK", "TELL"} and ABOUT_USER.search(message):
             raise Retry("Your message goes to the user exactly as written: speak to them as \"you\". Keep notes to "
                         "yourself in evaluation.")
+        if op == "ASK" and re.search(r"\bupi pin\b", message, re.IGNORECASE):
+            raise Retry("A UPI PIN is entered only in the user's UPI app, never on a web page or in chat: TELL them to "
+                        "approve the payment request in their UPI app, then WAIT.")
         secret = rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
         if op == "ASK" and secret and rules.CARD_DETAIL.search(message) and not self.payment_asked(page):
             raise Retry("Ask the user which payment method to use first: list the payment methods the page shows. "
                         "Card details come only after they choose a card.")
         if op == "ASK" and secret and rules.CARD_DETAIL.search(message):
             self.chosen_payment({"label": message})  # only for the card the user picked
-        if op == "ASK" and not secret and CONFIRM.search(message) and all(
+        if op == "ASK" and not secret and CONFIRM.search(message) and not OPEN_Q.match(message) and all(
                 re.split(r"[\s,.!]+", o.lower())[0] in YES_NO for o in options):
             raise Retry("Don't ask the user to confirm. When everything is chosen, do the final action (the control "
                         "that books, orders, or pays) with commits true and the summary in message: the system asks "
@@ -255,7 +279,7 @@ class MiniAgent(Agent):
         if op == "ASK" and s.get("delegated_at") == len(s["history"]):
             raise Retry("The user just left this choice to you: pick the option that best fits the goal, TELL them "
                         "which one, and act on it.")
-        if op == "ASK":
+        if op == "ASK" and not secret:  # a rejected code needs a new one
             self.not_asked_before(message)
         if op == "TELL":
             if not message:
@@ -270,8 +294,6 @@ class MiniAgent(Agent):
             s["chat"].append({"from": "agent", "text": message})
             s["told_at"] = len(s["history"])
             return None
-        if op in {"ASK", "STOP"} and rules.captcha_challenge(page):
-            return self.relay_captcha(page)  # only the user solves a captcha
         if op == "STOP" and UNSERVED.search(message) and not s.get("location_retry"):
             s["location_retry"] = True  # once: the site may only be showing some other place
             raise Retry("Before stopping, set the delivery location: open the site's location or address control and "
@@ -301,8 +323,9 @@ class MiniAgent(Agent):
             if pick != "other":
                 line += f" → option {pick}: {options[int(pick) - 1]}"
             elif DELEGATE.search(answer) and PLACE.search(message):
-                line += " → a delivery or pickup place is never chosen for them: use a saved address or the site's "\
-                        "detect-location option; if neither works, STOP and say you need their address"
+                line += " → a delivery or pickup place is never chosen for them: use the site's detect-location "\
+                        "option, or ASK which saved address (use it only if exactly one exists); if neither works, "\
+                        "STOP and say you need their address"
             elif DELEGATE.search(answer):
                 s["delegated_at"] = len(s["history"])
                 line += " → the user leaves this choice to you: pick the option that best fits the goal, TELL them "\
@@ -331,25 +354,33 @@ class MiniAgent(Agent):
             elif a.get("role") in {"radio", "checkbox"} and a.get("checked") in (True, "true"):
                 parts.append(a["label"])
         lines = page["text"].splitlines()
-        totals = [(rules.PRICE.findall(line) or rules.PRICE.findall(" ".join(lines[i + 1:i + 2])))[-1:]
-                  for i, line in enumerate(lines) if TOTAL.search(line)]  # the price on a total's line, or the next
-        totals = [t[0] for t in totals if t]
-        if totals:
-            parts.append(f"Total: {totals[-1]}")  # never just the last price: that can be another option's
+        for kind in (PAYABLE, TOTAL):  # "To pay" first; a plain "total" only when nothing says what is payable
+            totals = [(rules.PRICE.findall(line) or rules.PRICE.findall(" ".join(lines[i + 1:i + 2])))[-1:]
+                      for i, line in enumerate(lines) if kind.search(line) and not NOT_TOTAL.search(line)]
+            totals = [t[0] for t in totals if t]
+            if totals:
+                parts.append(f"Total: {totals[-1]}")  # never just the last price: that can be another option's
+                break
         return " · ".join(dict.fromkeys(parts))
 
+    def payment_answer(self):
+        """The user's latest answer to a question about how to pay (approvals don't count), or None."""
+        chat = self.state["chat"]
+        return next((r["text"] for q, r in reversed(list(zip(chat, chat[1:]))) if q["from"] == "agent"
+                     and r["from"] == "user" and PAYMENT_Q.search(q["text"]) and "I'll press" not in q["text"]), None)
+
     def payment_asked(self, page):
-        """False while the page offers payment methods and the user hasn't been asked which one to use."""
-        asked = any(c["from"] == "agent" and re.search(r"\bpay", c["text"], re.IGNORECASE) for c in self.state["chat"])
-        return asked or not PAYMENT.search(page["text"])
+        """False while the page offers payment methods and the user hasn't answered which one to use."""
+        offered = PAYMENT.search(" ".join([page["text"], *self.state["recent"][-3:],
+                                           *(a.get("label") or "" for a in page["actions"])]))
+        return self.payment_answer() is not None or not offered
 
     def chosen_payment(self, action):
         """A payment method mini picks must be the one the user named in their latest answer about paying."""
-        label, chat = action.get("label") or "", self.state["chat"]
+        label = own_words(action)
         if not PAYMENT.search(label):
             return
-        answer = next((r["text"] for q, r in reversed(list(zip(chat, chat[1:]))) if q["from"] == "agent"
-                       and r["from"] == "user" and re.search(r"\bpay", q["text"], re.IGNORECASE)), None)
+        answer = self.payment_answer()
         if answer is None or "leaves this choice to you" in answer:
             return
         said = answer.replace(" → none of the options", "")
@@ -372,8 +403,9 @@ class MiniAgent(Agent):
         content = set(re.findall(r"[a-z0-9]+", message.lower())) - QUESTION_FILLER
         for asked, reply in pairs:
             before = set(re.findall(r"[a-z0-9]+", asked.split("\n")[0].lower())) - QUESTION_FILLER
-            if "leaves this choice to you" in reply and content and before and \
-                    len(content & before) / min(len(content), len(before)) >= 0.5:
+            if "leaves this choice to you" in reply and len(content & before) >= 2 and \
+                    len(content & before) / min(len(content), len(before)) >= 0.5 and \
+                    not PAYMENT_Q.search(message) and not PLACE.search(message):
                 raise Retry(f"The user left this choice to you earlier (“{asked.splitlines()[0]}”): pick the option "
                             "that best fits the goal, TELL them which, and act on it.")
         if len(pairs) >= 2 and pairs[-1][1] == pairs[-2][1] and not DELEGATE.search(pairs[-1][1]) and not re.fullmatch(
@@ -406,7 +438,8 @@ class MiniAgent(Agent):
         report = decision["message"].strip() or "Done."
         if jev.achieved(page, s["goal"], report) != "yes":
             s["done_refusals"] = s.get("done_refusals", 0) + 1
-            if s["done_refusals"] < 3 or any(h.get("committed") for h in s["history"]):
+            if s["done_refusals"] < 3 or any(h.get("committed") for h in s["history"]) or \
+                    rules.COMMERCE.search(s["goal"]):  # an order or booking needs the site's own confirmation
                 raise Retry("The page doesn't show the goal done yet. Keep going, or TELL the user what's missing.")
             report += " (I couldn't fully confirm this on the page, so please double-check it.)"
         held = set(re.findall(r"[a-z0-9]+", s.get("held", "").lower()))
@@ -511,8 +544,8 @@ class MiniAgent(Agent):
     @staticmethod
     def within(operation, action, words):
         """A click on words that are only part of an element's name (“Add New” in an address card) lands on them."""
-        label, want = (action.get("label") or "").lower(), words.lower()
-        if operation == "CLICK" and len(want) >= 2 and want in label and want != label:
+        label, want = own_words(action).lower(), words.lower()
+        if operation == "CLICK" and len(want) >= 2 and want in label and want != (action.get("label") or "").lower():
             return {**action, "within": words}
         return action
 
@@ -522,7 +555,7 @@ class MiniAgent(Agent):
         _, heads, _ = action_space(page["actions"])
         candidates = heads.get(jev.HEAD[operation], {})
         same = [(i, a) for i, a in candidates.items() if a["label"][:100] == label[:100]]
-        near = same or [(i, a) for i, a in candidates.items() if label in a["label"]]
+        near = same or [(i, a) for i, a in candidates.items() if label in own_words(a)]
         if not near and operation == "CLICK":  # a text field or other element clicked to open or focus it
             others = [a for a in page["actions"] if a.get("node") is not None and a["label"][:100] == label[:100]]
             if len({(a.get("frame"), a["node"]) for a in others}) == 1:
@@ -540,7 +573,7 @@ class MiniAgent(Agent):
         if operation == "TYPE_TEXT":
             if re.search(r"\bcurrent location\b", act["text"], re.IGNORECASE):
                 raise Retry("Don't type “current location”: click the site's own detect option (“Locate me”, “Use "
-                            "current location”, “Detect”), or pick a saved address.")
+                            "current location”, “Detect”), or ASK the user which saved address to use.")
             value, shown = self.value(action, act["text"], page)
             return {"text": value}, shown
         if operation == "PRESS_KEY":
@@ -554,7 +587,8 @@ class MiniAgent(Agent):
     def commit_label(self, operation, action, act, page, inputs):
         """The words the approval names when this action commits, or None."""
         key = inputs.get("key")
-        if operation not in COMMIT_OPS or (operation == "PRESS_KEY" and key not in {"Enter", "Space"}):
+        if operation not in COMMIT_OPS or (operation == "PRESS_KEY" and key not in {"Enter", "Space"}) or \
+                action.get("hover"):
             return None
         s = self.state
         focused = s["browser"].focused_label() if operation == "PRESS_KEY" and action.get("node") is None else ""

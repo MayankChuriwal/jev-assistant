@@ -393,6 +393,45 @@ def test_a_click_within_a_container_lands_on_the_quoted_words(browser_at):
     b.act("CLICK", {**box, "within": "Add New"}, page)
     assert b.evaluate("window.__hit") == 2
 
+
+def test_a_control_keeps_its_own_name_apart_from_added_context(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<button aria-label=\"Place order\">Proceed to Pay "
+               "120</button><div><p>Buy 1 Get 1 Margherita</p><button>ADD</button></div><div><p>Farmhouse</p>"
+               "<button>ADD</button></div>'); 1")
+    actions = b.observe()["actions"]
+    place = next(a for a in actions if a["label"].startswith("Place order"))
+    adds = [a for a in actions if a["label"].startswith("ADD (")]
+    assert place["name"] == "Place order" and place["shown"] == "Proceed to Pay 120"
+    assert [a["name"] for a in adds] == ["ADD", "ADD"]
+
+
+def test_an_editable_field_never_shows_its_content_in_its_label(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div role=textbox contenteditable=true "
+               "aria-label=\"Enter OTP\">482913</div>'); 1")
+    labels = [a["label"] for a in b.observe()["actions"] if "Enter OTP" in a["label"]]
+    assert labels and not any("482913" in label for label in labels)
+
+
+def test_a_radio_moved_off_screen_is_offered_through_its_label(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<label style=\"cursor:pointer\"><input type=radio "
+               "id=far style=\"position:absolute;left:-9999px\">Large (serves 4)</label>'); 1")
+    page = b.observe()
+    option = next(a for a in page["actions"] if a["label"] == "Large (serves 4)")
+    b.act("CLICK", option, page)
+    assert b.evaluate("far.checked") is True
+
+
+def test_sibling_hidden_radios_are_not_offered_through_one_shared_wrapper(browser_at):
+    b = browser_at("/next.html")
+    radio = "<input type=radio name=diet id={0} aria-label=\"{1}\" style=\"opacity:0;width:0;height:0\">"
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div style=\"width:60px;height:20px\">"
+               + radio.format("veg", "Veg") + radio.format("nonveg", "Non veg") + "</div>'); 1")
+    nodes = [a["node"] for a in b.observe()["actions"] if a["label"] in ("Veg", "Non veg")]
+    assert len(nodes) == len(set(nodes))
+
 def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
     from assistant.browser import forget_sites
 
