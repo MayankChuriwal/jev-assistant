@@ -408,3 +408,11 @@ def test_after_the_user_leaves_a_choice_to_mini_it_does_not_ask_again(tmp_path, 
     a.command("tick")
     a.command("tick")
     assert len(a.asked) == 1 and "left this choice to you" in a.state["feedback"][0]
+
+
+def test_a_note_about_the_user_is_not_sent_to_them(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Domino's Pizza is closed", actions=[WAIT]))
+    script(monkeypatch, out("TELL", message="Domino's Pizza is closed. Ask user for next preference."))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.told == [] and "speak to them" in a.state["feedback"][0]

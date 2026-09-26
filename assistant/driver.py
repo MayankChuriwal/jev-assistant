@@ -29,6 +29,7 @@ YES_NO = {"yes", "no", "y", "n", "confirm", "cancel", "ok"}
 DELEGATE = re.compile(r"\b(you (choose|decide|pick)|whatever|any( one)?|up to you|your (choice|call)|"
                       r"doesn'?t matter)\b", re.IGNORECASE)
 PAGE_TALK = re.compile(r"\b(element|click|tap|scroll|swipe|drag)\b|\[\d+\]", re.IGNORECASE)
+ABOUT_USER = re.compile(r"\b(the|ask|tell|inform) user\b", re.IGNORECASE)  # a note to itself
 PAYMENT = re.compile(r"\b(cash|upi|card|wallet|net ?banking|pay later|cod|cash on delivery)\b", re.IGNORECASE)
 
 
@@ -204,6 +205,9 @@ class MiniAgent(Agent):
             raise Retry("The user can't see the page: never ask them about elements, clicks, or scrolling. Decide "
                         "yourself (read the element list, scroll, go back), or ASK for information about what they "
                         "want.")
+        if op in {"ASK", "TELL"} and ABOUT_USER.search(message):
+            raise Retry("Your message goes to the user exactly as written: speak to them as \"you\". Keep notes to "
+                        "yourself in evaluation.")
         secret = rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
         if op == "ASK" and secret and rules.CARD_DETAIL.search(message) and not self.payment_asked(page):
             raise Retry("Ask the user which payment method to use first: list the payment methods the page shows. "
