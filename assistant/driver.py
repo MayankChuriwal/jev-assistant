@@ -213,6 +213,9 @@ class MiniAgent(Agent):
             raise Retry("Don't ask the user to confirm. When everything is chosen, do the final action (the control "
                         "that books, orders, or pays) with commits true and the summary in message: the system asks "
                         "the user once. If something is still undecided, ASK with the choices listed.")
+        if op == "ASK" and s.get("delegated_at") == len(s["history"]):
+            raise Retry("The user just left this choice to you: pick the option that best fits the goal, TELL them "
+                        "which one, and act on it.")
         if op == "ASK":
             self.not_asked_before(message)
         if op == "TELL":
@@ -253,6 +256,7 @@ class MiniAgent(Agent):
             if pick != "other":
                 line += f" → option {pick}: {options[int(pick) - 1]}"
             elif DELEGATE.search(answer):
+                s["delegated_at"] = len(s["history"])
                 line += " → the user leaves this choice to you: pick the option that best fits the goal, TELL them "\
                         "which, and carry on"
             else:

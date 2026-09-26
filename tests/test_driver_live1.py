@@ -397,3 +397,14 @@ def test_telling_the_user_to_act_on_the_page_is_refused(tmp_path, monkeypatch):
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.told == [] and "can't see the page" in a.state["feedback"][0]
+
+
+def test_after_the_user_leaves_a_choice_to_mini_it_does_not_ask_again(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, replies=[{"text": "You choose whatever fits my goal best."}],
+                  page=fake_page(text="Domino's is closed", actions=[WAIT]))
+    script(monkeypatch, out("ASK", message="Order from another restaurant?", options=["La Pino'z", "Pizza House"]),
+           out("ASK", message="Which restaurant would you like instead?", options=["La Pino'z", "Pizza House"]))
+    jev_fake(monkeypatch, replies=["other"])
+    a.command("tick")
+    a.command("tick")
+    assert len(a.asked) == 1 and "left this choice to you" in a.state["feedback"][0]
