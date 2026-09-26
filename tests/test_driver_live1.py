@@ -517,3 +517,14 @@ def test_the_summary_facts_give_a_total_only_where_the_page_labels_one(tmp_path)
     a = mini_with(tmp_path, page=rides_page)
     assert "₹1,200.02" not in a.page_summary(rides_page)
     assert "Total: ₹79" in a.page_summary(cart)
+
+
+def test_an_answer_told_twice_then_done_is_sent_once(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Air India 2:00 PM ₹8,257", actions=[WAIT]))
+    answer = "The cheapest flight is Air India at 2:00 PM for ₹8,257."
+    script(monkeypatch, out("TELL", message=answer), out("TELL", message=answer),
+           out("DONE", message=answer, text="Air India 2:00 PM ₹8,257"))
+    jev_fake(monkeypatch)
+    for _ in range(3):
+        a.command("tick")
+    assert [m["kind"] for m in a.told] == ["result"]

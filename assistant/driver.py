@@ -136,7 +136,7 @@ class MiniAgent(Agent):
             s["memory"].append(decision["memory"].strip())
         if [p for p in decision["plan"] if p.strip()]:
             s["plan"] = [p.strip() for p in decision["plan"] if p.strip()][:10]
-        if decision["action"]["op"] != "DONE":
+        if decision["action"]["op"] not in {"DONE", "TELL"}:  # a TELL releases only once it is accepted
             self.release()
         if decision["action"]["op"] in TALKING:
             return self.talk_step(decision, page)
@@ -257,6 +257,7 @@ class MiniAgent(Agent):
             if s.get("told_at") == len(s["history"]):
                 raise Retry("You just told the user something. Do an action next, or finish with DONE: the answer the "
                             "user asked for goes in DONE's message, never in another TELL.")
+            self.release()
             s["held"] = message
             s["chat"].append({"from": "agent", "text": message})
             s["told_at"] = len(s["history"])
