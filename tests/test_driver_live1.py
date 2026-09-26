@@ -444,3 +444,23 @@ def test_stopping_because_the_site_does_not_serve_the_shown_location_is_sent_bac
     assert a.state["status"] != "blocked" and "delivery location" in a.state["feedback"][0]
     a.command("tick")
     assert a.state["status"] == "blocked"
+
+
+def test_a_step_that_seems_to_do_nothing_is_looked_at_again(tmp_path, monkeypatch):
+    opener = {"id": "e12", "kind": "click", "label": "Open Where from?", "role": "combobox", "node": 12}
+    before = fake_page(text="Where from?", actions=[opener, WAIT])
+    later = fake_page(text="Where from?\nBengaluru, Karnataka", actions=[opener, WAIT])
+    a = mini_with(tmp_path, page=before)
+    looks = []
+
+    def observe(screenshot=False):
+        if not a.browser.act.called:
+            return before
+        looks.append(1)
+        return before if len(looks) == 1 else later  # the dropdown renders a moment after the click
+
+    a.browser.observe.side_effect = observe
+    script(monkeypatch, out("CLICK", "Open Where from?"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert "Bengaluru, Karnataka" in a.state["history"][-1]["changed"]

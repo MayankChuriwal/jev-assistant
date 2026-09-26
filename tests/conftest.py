@@ -49,6 +49,9 @@ def no_settling_wait(monkeypatch):
 
     monkeypatch.setattr(agent.Agent, "steady_ms", 0)
     monkeypatch.setattr(agent.Agent, "outcome_pause", 0)
+    from assistant import driver
+
+    monkeypatch.setattr(driver.MiniAgent, "quiet_wait", 0)
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 

@@ -51,6 +51,7 @@ def agent_class():
 
 
 class MiniAgent(Agent):
+    quiet_wait = 1.5  # seconds to keep looking when a step seems to have changed nothing
     ground_min = 0.4
     max_minutes = 30
     max_spend = 0.50
@@ -586,6 +587,11 @@ class MiniAgent(Agent):
             for node in action.get("group") or [action.get("node")]:
                 self.secrets.nodes.add((action.get("frame"), node))
         after = self.observe()
+        for _ in range(3):  # a dropdown or dialog can render a moment after the click: look again before "nothing"
+            if operation == "WAIT" or views.change(page, after) != "nothing changed":
+                break
+            time.sleep(self.quiet_wait / 3)
+            after = self.observe()
         last = s["history"][-1]
         last.update(page_changed=after["fingerprint"] != page["fingerprint"], url=after["url"],
                     changed=views.change(page, after))
