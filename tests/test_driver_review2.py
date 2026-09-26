@@ -325,3 +325,13 @@ def test_an_approval_never_repeats_a_part(tmp_path, monkeypatch):
     jev_fake(monkeypatch, approvals=["no"])
     a.command("tick")
     assert a.asked[0]["text"].count("HDFC Bank Card") == 1
+
+
+def test_after_three_code_requests_the_task_stops_instead_of_sending_more_codes(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, replies=[{"text": "111111"}, {"text": "222222"}, {"text": "333333"}],
+                  page=fake_page(text="OTP Verification\nEnter the code", actions=[OTP, WAIT]))
+    script(monkeypatch, *[out("ASK", message=f"Please enter the OTP sent to your phone ({n}).") for n in range(4)])
+    jev_fake(monkeypatch)
+    for _ in range(4):
+        a.command("tick")
+    assert len(a.asked) == 3 and a.state["status"] == "blocked" and "codes" in a.told[-1]["text"]

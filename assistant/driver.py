@@ -269,6 +269,12 @@ class MiniAgent(Agent):
                         "Card details come only after they choose a card.")
         if op == "ASK" and secret and rules.CARD_DETAIL.search(message):
             self.chosen_payment({"label": message})  # only for the card the user picked
+        if op == "ASK" and secret and not rules.CARD_DETAIL.search(message) and CODE_WORDS.search(message):
+            if s.get("code_asks", 0) >= 3:  # each ask usually follows a new code sent to the user's phone
+                raise Halt("blocked", f"Signing in to {rules.host(page['url'])} isn't working after 3 codes, so I "
+                                      "stopped rather than send you more. Please sign in once in the agent's Chrome "
+                                      "window, then ask me again.")
+            s["code_asks"] = s.get("code_asks", 0) + 1
         if op == "ASK" and not secret and CONFIRM.search(message) and not OPEN_Q.match(message) and all(
                 re.split(r"[\s,.!]+", o.lower())[0] in YES_NO for o in options):
             final = next((a["label"] for a in page["actions"] if rules.commit_label("CLICK", a, page)), None)
