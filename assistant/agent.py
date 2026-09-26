@@ -77,6 +77,10 @@ class Agent:
             self.browser = browser or Browser(url, geolocation=self.profile.geolocation())
             try:
                 page = self.clean(self.browser.observe(screenshot=False))
+                home = urlparse(url)._replace(path="/", params="", query="", fragment="").geturl()
+                if url != home and rules.error_page(page):  # a guessed deep link: start from the home page
+                    self.browser.navigate(home)
+                    page = self.clean(self.browser.observe(screenshot=False))
             except Exception:
                 self.browser.close()
                 raise

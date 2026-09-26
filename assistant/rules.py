@@ -250,3 +250,12 @@ def grid(region, columns, rows):
 
 def centre(cell):
     return cell["x"] + cell["w"] / 2, cell["y"] + cell["h"] / 2
+
+
+ERROR_PAGE = re.compile(r"\b404\b|\bnot found\b|could not be found|page you(’|')?re looking for|\buh-oh\b|"
+                        r"something went wrong|should not have happened", re.IGNORECASE)
+
+
+def error_page(page):
+    """A "not found" or "something went wrong" page, judged by its title and opening text."""
+    return bool(ERROR_PAGE.search(page.get("title") or "") or ERROR_PAGE.search(page["text"][:600]))

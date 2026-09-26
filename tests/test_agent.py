@@ -131,3 +131,17 @@ def test_going_in_circles_asks_the_user_for_help(tmp_path, monkeypatch):
         act(a, decision("e5", "CLICK"))
     assert a.asked[-1]["text"] == "I keep going in circles. What should I do?"
     assert a.state["memory"][-2] == "I've done “Office” 4 times recently without getting closer."
+
+
+def test_a_start_link_that_lands_on_an_error_page_falls_back_to_the_home_page(tmp_path):
+    from fakes import FakeVault, fake_page
+
+    from assistant.profile import Profile
+
+    missing = fake_page(text="404: This page could not be found.\nGo to Home", url="https://www.zepto.com/groceries/x")
+    home = fake_page(text="Zepto\nSearch for products", url="https://www.zepto.com/")
+    browser = Mock(observe=Mock(side_effect=[missing, home]))
+    a = loop.Agent("https://www.zepto.com/groceries/x", "Order milk on Zepto", browser=browser,
+                   profile=Profile(tmp_path / "profile.json"), vault=FakeVault({}), title="Zepto · milk")
+    browser.navigate.assert_called_once_with("https://www.zepto.com/")
+    assert a.state["page"]["url"] == "https://www.zepto.com/"
