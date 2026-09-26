@@ -364,7 +364,7 @@ def test_an_empty_summary_is_written_by_a_focused_summary_call(tmp_path, monkeyp
     script(monkeypatch, out("CLICK", "Place Order", commits=True, message=""))
     jev_fake(monkeypatch, approvals=["no"])
     a.command("tick")
-    assert a.asked[0]["text"].startswith("1 × Diet Coke 300 ml · Home · Pay on Delivery · ₹121")
+    assert a.asked[0]["text"].startswith("1 × Diet Coke 300 ml\n• Home\n• Pay on Delivery\n• ₹121")
     assert seen and seen[0]["page"]["text"].startswith("Diet Coke")
 
 

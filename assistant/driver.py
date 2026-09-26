@@ -46,6 +46,10 @@ PAYMENT_Q = re.compile(r"\b(payment|pay (with|using|by|via)|how .{0,30}\bpay)\b"
 QUESTION_FILLER = {"would", "you", "like", "to", "a", "an", "the", "is", "which", "do", "want", "or", "and", "of",
                    "for", "your", "i", "me", "s", "it", "this", "that", "please", "can", "should", "we"}
 DELIVERING = re.compile(r"\b(?:delivering to|deliver to|delivery address)\s*:?\s*([^\n]{8,160})", re.IGNORECASE)
+FEE = re.compile(r"^[^\n₹]{0,20}?((?:small cart|delivery|handling|platform|packaging|convenience|surge|late night|"
+                 r"rain|service)\s+(?:fee|charges?)[^\n₹]{0,10}₹\s?[\d,]+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
+SAVE = re.compile(r"^([^\n]{0,60}(?:free delivery|to save|no (?:small cart|delivery|handling) fee|waive)[^\n]{0,60})$",
+                  re.IGNORECASE | re.MULTILINE)
 ABOUT_USER = re.compile(r"\b(the|ask|tell|inform) user\b", re.IGNORECASE)  # a note to itself
 PAYMENT_FILLER = {"the", "a", "an", "if", "it", "its", "s", "offered", "otherwise", "on", "with", "my", "use",
                   "pay", "payment", "method", "please", "and", "or", "to", "for", "me", "i", "by", "option"}
@@ -680,9 +684,18 @@ class MiniAgent(Agent):
             raise Retry(f"The order doesn't match what the user asked for ({s['goal']}): keep the product and brand "
                         "they named. If the cart holds other items, buy only this one with the product page's Buy "
                         "Now, or ASK the user before removing anything they added; then do the final step again.")
+        seen = [page["text"], *reversed(s["recent"][-5:])]  # the bill is often a page back
+        fees = list(dict.fromkeys(f.strip() for t in seen for f in FEE.findall(t)))
+        if fees and not all(f.split("₹")[0].strip().lower() in summary.lower() for f in fees):
+            summary += " · Fees: " + ", ".join(fees)
+        save = next((m.strip() for t in seen for m in SAVE.findall(t)), None)
+        if save:
+            summary += f" · Tip: {save}"  # the site's own way to drop a fee
         if self.moved(page):
             raise StalePage("The page changed while mini decided. Choose again.")
         self.steady(page)
+        head, *rest = [p.strip() for p in summary.split(" · ")]
+        summary = "\n".join([head, *(f"• {p}" for p in rest)])  # one fact per line
         parts = urlparse(page["url"])
         section = parts.path.strip("/").split("/")[0]
         site = parts.netloc.removeprefix("www.") + (f"/{section}" if section.isalpha() and

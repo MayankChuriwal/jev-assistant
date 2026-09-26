@@ -377,3 +377,18 @@ def test_a_delivery_address_is_asked_before_the_approval(tmp_path, monkeypatch):
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.asked == [] and "where to deliver" in a.state["feedback"][0]
+
+
+def test_an_approval_lists_the_fees_and_the_sites_own_way_to_save(tmp_path, monkeypatch):
+    pay = {"id": "e5", "kind": "click", "label": "Place order", "role": "button", "node": 5}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text="To pay ₹121\nPlace order", actions=[pay, WAIT]))
+    a.state["chat"] += PAID
+    a.state["recent"] = ["Bill details\nItem total ₹50\nSmall cart fee ₹30\nDelivery fee ₹25\nHandling fee ₹16\n"
+                         "Add items worth ₹149 more to get free delivery\nTo pay ₹121"]
+    script(monkeypatch, out("CLICK", "Place order", commits=True, message="1 Diet Coke 330 ml · Cash · ₹121"))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    text = a.asked[0]["text"]
+    assert "Small cart fee ₹30" in text and "Delivery fee ₹25" in text and "Handling fee ₹16" in text
+    assert "Add items worth ₹149 more to get free delivery" in text and "\n" in text.split("I'll press")[0].strip()

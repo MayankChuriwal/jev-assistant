@@ -21,7 +21,8 @@ def test_a_commit_asks_with_mini_summary_and_a_yes_reads_the_page_again(tmp_path
            out("CLICK", "Request Uber Go", commits=True, message=SUMMARY))
     jev_fake(monkeypatch, approvals=["yes"], checks=("confirmed",))
     a.command("tick")
-    assert a.browser.act.call_count == 0 and a.asked[0]["approval"] is True and SUMMARY in a.asked[0]["text"]
+    shown = SUMMARY.replace(" · ", "\n• ", 1).replace(" · ", "\n• ")  # one fact per line
+    assert a.browser.act.call_count == 0 and a.asked[0]["approval"] is True and shown in a.asked[0]["text"]
     assert a.state["approval"]["amount"] == "₹887"
     a.command("tick")
     assert a.browser.act.call_count == 1 and a.state["history"][-1]["committed"] is True
