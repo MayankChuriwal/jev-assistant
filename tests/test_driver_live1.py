@@ -675,3 +675,22 @@ def test_the_approval_names_the_site_it_happens_on(tmp_path, monkeypatch):
     jev_fake(monkeypatch, approvals=["no"])
     a.command("tick")
     assert "I'll press “Place order” on swiggy.com/instamart." in a.asked[0]["text"]
+
+
+def test_a_commit_mini_keeps_calling_a_step_goes_to_the_approval_on_the_third_try(tmp_path, monkeypatch):
+    from assistant import driver
+
+    cod = {"id": "e24", "kind": "click", "label": "Pay on Delivery. Pay in cash or pay online.", "role": "button",
+           "node": 24}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text="Diet Coke 330 ml\nTo pay ₹121\nPay on Delivery", actions=[cod, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which payment method?"},
+                        {"from": "user", "text": "“Pay on Delivery”"}]
+    monkeypatch.setattr(driver.mind, "summarize", lambda payload: (
+        {"what": "1 Diet Coke 330 ml", "where": "home", "option": "", "payment": "Pay on Delivery", "total": "₹121"},
+        {}))
+    script(monkeypatch, *[out("CLICK", "Pay on Delivery. Pay in cash or pay online.")] * 3)
+    jev_fake(monkeypatch, approvals=["no"])
+    for _ in range(3):
+        a.command("tick")
+    assert a.browser.act.call_count == 0 and "I'll press “Pay on Delivery" in a.asked[0]["text"]

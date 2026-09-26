@@ -449,7 +449,9 @@ class MiniAgent(Agent):
             verdict, sure = jev.final(page, commit, decision["next_goal"])  # only mini calls it final: check
             if verdict == "step" and sure >= 0.8:
                 commit = None  # a step on the way (choosing or saving a selection): nothing is bought yet
-        if commit and not act["commits"]:
+        unflagged = self.state.setdefault("unflagged", {})
+        if commit and not act["commits"] and unflagged.get(commit, 0) < 2:
+            unflagged[commit] = unflagged.get(commit, 0) + 1  # the third time the user decides, through the approval
             raise Retry(f"“{commit}” would commit. If that is the step you mean, set commits true and put the "
                         "summary in message (what, where, option, payment method, and the total as the page shows it); "
                         "otherwise choose another element.")
