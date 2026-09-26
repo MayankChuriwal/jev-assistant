@@ -789,10 +789,13 @@ class Browser:
         x, y = self._point(action)
         self.input("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
 
-    def _do_look(self, action, point=None, **_):
+    def _do_look(self, action, point=None, hover=False, **_):
         if not point:
             raise ValueError("LOOK needs a point found on the screen; nothing clicked.")
-        self._mouse(*point)
+        if hover:  # a menu that opens on hover: move there, press nothing
+            self.input("Input.dispatchMouseEvent", type="mouseMoved", x=point[0], y=point[1])
+        else:
+            self._mouse(*point)
 
     def _do_type_text(self, action, text=None, **_):
         if not isinstance(text, str) or not text:

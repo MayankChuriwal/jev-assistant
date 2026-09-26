@@ -347,6 +347,18 @@ def test_a_button_named_apart_from_its_visible_words_carries_both(browser_at):
     labels = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click"]
     assert any("Make payment" in label and "Proceed to Pay" in label for label in labels)
 
+
+def test_a_look_that_hovers_moves_the_pointer_without_clicking(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', "
+               "'<div id=sort style=\"width:200px;height:40px\">Sort by</div>'); window.__clicks = 0; "
+               "window.__over = 0; sort.onclick = () => __clicks++; sort.onmouseover = () => __over++; 1")
+    page = b.observe()
+    look = next(a for a in page["actions"] if a["kind"] == "look")
+    x, y = b.evaluate("(() => { const r = sort.getBoundingClientRect(); return [r.x + 20, r.y + 20]; })()")
+    b.act("LOOK", look, page, point=[x, y], hover=True)
+    assert b.evaluate("[__over > 0, __clicks]") == [True, 0]
+
 def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
     from assistant.browser import forget_sites
 

@@ -184,3 +184,14 @@ def test_being_stuck_never_shows_mini_s_note_about_the_user(tmp_path, monkeypatc
     for _ in range(8):
         a.command("tick")
     assert a.asked and "Ask user" not in a.asked[-1]["text"] and a.state["goal"] in a.asked[-1]["text"]
+
+
+def test_a_hover_jev_cannot_find_is_looked_for_and_only_hovers(tmp_path, monkeypatch):
+    a = ride(tmp_path)
+    script(monkeypatch, out("HOVER", "Sort by"), out("HOVER", "Sort by : Recommended"))
+    jev_fake(monkeypatch)
+    monkeypatch.setattr(a, "look", lambda page, purpose: {"point": [10, 20], "label": "Sort by", "text": "",
+                                                          "commits": False})
+    a.command("tick")
+    a.command("tick")
+    assert a.browser.act.call_args.args[0] == "LOOK" and a.browser.act.call_args.kwargs.get("hover") is True

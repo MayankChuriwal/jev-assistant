@@ -468,7 +468,7 @@ class MiniAgent(Agent):
             if spot:
                 _, _, controls = action_space(page["actions"])
                 look = controls.get("LOOK", {"id": "look", "kind": "look", "node": None, "label": "Look"})
-                return "LOOK", {**look, **spot}, None
+                return "LOOK", {**look, **spot, "hover": operation == "HOVER"}, None
         raise Retry(f"There is no element for “{act['target']}” on this page. Scroll, wait, or try another way.")
 
     def labelled(self, page, operation, label):
@@ -496,7 +496,7 @@ class MiniAgent(Agent):
         if operation == "PRESS_KEY":
             return {"key": act["key"] or "Enter"}, None
         if operation == "LOOK":
-            return {"point": action["point"]}, action.get("label")
+            return {"point": action["point"], **({"hover": True} if action.get("hover") else {})}, action.get("label")
         if operation == "UPLOAD":
             return Agent.inputs(self, "UPLOAD", action, {}, page)[0], None
         return {}, None
