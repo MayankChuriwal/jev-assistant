@@ -507,3 +507,13 @@ def test_a_detail_the_profile_holds_is_typed_not_asked(tmp_path, monkeypatch):
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.asked == [] and "[profile:phone]" in a.state["feedback"][0]
+
+
+def test_the_summary_facts_give_a_total_only_where_the_page_labels_one(tmp_path):
+    rides_page = fake_page(text="Uber Go AC ₹792.28-₹932.09\nGo Non AC ₹777.46-₹914.66\n"
+                                "Premier AC ₹1,020.02-₹1,200.02\nCash\nRequest Go Non AC", actions=[WAIT])
+    cart = fake_page(text="Diet Coke 300 ml ₹40\nItem total ₹40\nDelivery fee ₹30\nTo pay\n₹79\nPlace order",
+                     actions=[WAIT])
+    a = mini_with(tmp_path, page=rides_page)
+    assert "₹1,200.02" not in a.page_summary(rides_page)
+    assert "Total: ₹79" in a.page_summary(cart)

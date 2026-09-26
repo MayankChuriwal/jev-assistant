@@ -34,6 +34,7 @@ UNSERVED = re.compile(r"\bnot (available|serviceable|delivering)\b|coming soon|(
 PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone)( number)?\b", re.IGNORECASE),
                 "email": re.compile(r"\be-?mail\b", re.IGNORECASE),
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
+TOTAL = re.compile(r"\b(total|to pay|payable|amount due)\b", re.IGNORECASE)
 ABOUT_USER = re.compile(r"\b(the|ask|tell|inform) user\b", re.IGNORECASE)  # a note to itself
 PAYMENT = re.compile(r"\b(cash|upi|card|wallet|net ?banking|pay later|cod|cash on delivery)\b", re.IGNORECASE)
 
@@ -317,9 +318,12 @@ class MiniAgent(Agent):
                 parts.append(f"{a['label'].rstrip(':')}: {a['value']}")
             elif a.get("role") in {"radio", "checkbox"} and a.get("checked") in (True, "true"):
                 parts.append(a["label"])
-        amounts = rules.PRICE.findall(page["text"])
-        if amounts:
-            parts.append(f"Total: {amounts[-1]}")
+        lines = page["text"].splitlines()
+        totals = [(rules.PRICE.findall(line) or rules.PRICE.findall(" ".join(lines[i + 1:i + 2])))[-1:]
+                  for i, line in enumerate(lines) if TOTAL.search(line)]  # the price on a total's line, or the next
+        totals = [t[0] for t in totals if t]
+        if totals:
+            parts.append(f"Total: {totals[-1]}")  # never just the last price: that can be another option's
         return " · ".join(dict.fromkeys(parts))
 
     def payment_asked(self, page):
