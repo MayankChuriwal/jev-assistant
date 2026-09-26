@@ -265,3 +265,16 @@ def test_an_approval_without_the_address_gets_the_sites_own_address_line(tmp_pat
     jev_fake(monkeypatch, approvals=["no"])
     a.command("tick")
     assert "Delivering to: home 1601, AECS Layout, Bengaluru" in a.asked[0]["text"]
+
+
+def test_other_items_in_the_cart_are_never_removed_without_asking(tmp_path, monkeypatch):
+    pay = {"id": "e1", "kind": "click", "label": "Proceed to Buy", "role": "button", "node": 1}
+    place = {"id": "e2", "kind": "click", "label": "Place your order", "role": "button", "node": 2}
+    a = mini_with(tmp_path, page=fake_page(text="Cart\nboAt Airdopes 141 ₹999\nboAt Airdopes 141 ANC ₹1,499\n"
+                                                "Order total ₹2,498\nPlace your order", actions=[pay, place, WAIT]))
+    a.state["chat"] += PAID
+    script(monkeypatch, out("CLICK", "Place your order", commits=True,
+                            message="boAt Airdopes 141 · home · Cash · ₹2,498"))
+    jev_fake(monkeypatch, matches="no")
+    a.command("tick")
+    assert "Buy Now" in a.state["feedback"][0] and "ASK" in a.state["feedback"][0]

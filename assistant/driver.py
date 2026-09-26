@@ -647,7 +647,8 @@ class MiniAgent(Agent):
         if s.get("mismatches", 0) < 2 and jev.matches(page, s["goal"], chat, summary) == "no":
             s["mismatches"] = s.get("mismatches", 0) + 1  # twice at most: the user still sees the summary
             raise Retry(f"The order doesn't match what the user asked for ({s['goal']}): keep the product and brand "
-                        "they named, remove anything else from the cart, then do the final step again.")
+                        "they named. If the cart holds other items, buy only this one with the product page's Buy "
+                        "Now, or ASK the user before removing anything they added; then do the final step again.")
         if self.moved(page):
             raise StalePage("The page changed while mini decided. Choose again.")
         self.steady(page)
