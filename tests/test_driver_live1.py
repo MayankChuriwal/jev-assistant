@@ -291,3 +291,29 @@ def test_done_finds_its_own_evidence_when_mini_paraphrases(tmp_path, monkeypatch
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.state["status"] == "done" and a.told[-1]["evidence"] == "₹16,976 round trip"
+
+
+def test_an_empty_summary_is_written_from_the_form_itself(tmp_path, monkeypatch):
+    form = [{"id": "e1", "kind": "fill", "label": "Customer name:", "role": "textbox", "value": "Test User", "node": 1},
+            {"id": "e2", "kind": "click", "label": "Medium", "role": "radio", "checked": True, "node": 2},
+            {"id": "e3", "kind": "click", "label": "Small", "role": "radio", "checked": False, "node": 3},
+            {"id": "e4", "kind": "click", "label": "Bacon", "role": "checkbox", "checked": True, "node": 4},
+            {"id": "e5", "kind": "fill", "label": "CVV", "role": "textbox", "value": "[secret]", "node": 5},
+            {"id": "e6", "kind": "click", "label": "Submit order", "role": "button", "node": 6}]
+    a = mini_with(tmp_path, replies=[{"text": "no"}], page=fake_page(text="Pizza order", actions=[*form, WAIT]))
+    script(monkeypatch, out("CLICK", "Submit order", commits=True, message=""))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    text = a.asked[0]["text"]
+    assert "Customer name: Test User" in text and "Medium" in text and "Bacon" in text
+    assert "Small" not in text and "secret" not in text and "“Submit order”" in text
+
+
+def test_back_on_a_new_tab_with_no_history_closes_it(tmp_path, monkeypatch):
+    tabs = [{"id": "tab1", "kind": "tab", "node": None, "tab": "T1", "current": False, "label": "Tab: Search results"},
+            {"id": "tab2", "kind": "tab", "node": None, "tab": "T2", "current": True, "label": "Tab: Nike Air Max 90"}]
+    a = mini_with(tmp_path, page=fake_page(text="Nike Air Max 90", actions=[*tabs, WAIT]))
+    script(monkeypatch, out("BACK"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.browser.act.call_args.args[:2] == ("CLOSE_TAB", tabs[1])

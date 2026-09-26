@@ -77,3 +77,9 @@ def test_an_approval_for_a_control_that_is_not_the_final_step_fails():
     assert graded["verdict"] == "fail" and "the approval was for “Cash”, not the final step" in graded["reasons"]
     final = gate.replace("“Cash”", "“Request Go Non AC”")
     assert bench.grade(SPEC, run_of(gate=final), 1, judge=lambda *a: "pass")["verdict"] == "pass"
+
+
+def test_rupees_written_as_rs_count_as_the_rupee_sign():
+    spec = {**SPEC, "end": "result", "require": ["₹"]}
+    task = run_of(status="done", messages=[{"kind": "result", "text": "The cheapest is Rs. 3398."}])
+    assert bench.grade(spec, task, 1, judge=lambda *a: "pass")["verdict"] == "pass"

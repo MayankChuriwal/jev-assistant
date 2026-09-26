@@ -251,6 +251,19 @@ class MiniAgent(Agent):
         s["chat"].append({"from": "user", "text": line})
         return None
 
+    def page_summary(self, page):
+        """What the page holds when mini wrote no summary: filled fields and checked options, and the last total."""
+        parts = []
+        for a in page["actions"]:
+            if a.get("kind") == "fill" and a.get("value") and not str(a["value"]).startswith("["):
+                parts.append(f"{a['label'].rstrip(':')}: {a['value']}")
+            elif a.get("role") in {"radio", "checkbox"} and a.get("checked") in (True, "true"):
+                parts.append(a["label"])
+        amounts = rules.PRICE.findall(page["text"])
+        if amounts:
+            parts.append(f"Total: {amounts[-1]}")
+        return " · ".join(dict.fromkeys(parts))
+
     def payment_asked(self, page):
         """False while the page offers payment methods and the user hasn't been asked which one to use."""
         asked = any(c["from"] == "agent" and re.search(r"\bpay", c["text"], re.IGNORECASE) for c in self.state["chat"])
@@ -303,6 +316,10 @@ class MiniAgent(Agent):
         if act["op"] == "WAIT":
             return self.run(page, "WAIT", self.control(page, "WAIT"), {}, None, decision)
         if act["op"] == "BACK":
+            _, heads, controls = action_space(page["actions"])
+            current = next((a for a in heads.get("tab_target", {}).values() if a.get("current")), None)
+            if "GO_BACK" not in controls and current and len(heads["tab_target"]) > 1:
+                return self.run(page, "CLOSE_TAB", current, {}, None, decision)  # a new tab: back is its opener
             return self.run(page, "GO_BACK", self.control(page, "GO_BACK"), {}, None, decision)
         if act["op"] in DIALOGS:
             operation, action = act["op"], self.control(page, act["op"])
@@ -435,7 +452,7 @@ class MiniAgent(Agent):
             return True
         if s["commit"]:
             raise Retry("An earlier committed action is still being checked; WAIT for it first.")
-        summary = html.unescape(decision["message"].strip())
+        summary = html.unescape(decision["message"].strip()) or self.page_summary(page)
         if not summary:
             raise Retry(f"“{commit}” commits: put the summary in message (what, where, option, payment method, and "
                         "the total exactly as the page shows it).")

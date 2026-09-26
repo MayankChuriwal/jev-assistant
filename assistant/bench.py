@@ -44,7 +44,8 @@ def grade(spec, task, run, judge):
     pressed = re.search(r"I'll press “([^”]*)”", task.bench["gate"] or "")
     if pressed and not FINAL.search(pressed[1]):
         reasons.append(f"the approval was for “{pressed[1]}”, not the final step")
-    missing = [w for w in spec.get("require", []) if w.lower() not in final.lower()]
+    said = re.sub(r"\bRs\.?\s?(?=\d)", "₹", final, flags=re.IGNORECASE)  # "Rs. 3398" is a rupee amount
+    missing = [w for w in spec.get("require", []) if w.lower() not in said.lower()]
     if missing and spec["end"] != "file" and final:
         reasons.append("missing: " + ", ".join(missing))
     warnings = [f"possible commit without approval: {h['action']}" for h in state.get("history", [])
