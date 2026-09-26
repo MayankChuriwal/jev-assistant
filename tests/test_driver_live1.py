@@ -531,3 +531,18 @@ def test_an_answer_told_twice_then_done_is_sent_once(tmp_path, monkeypatch):
     for _ in range(3):
         a.command("tick")
     assert [m["kind"] for m in a.told] == ["result"]
+
+
+def test_a_payment_option_must_be_the_one_the_user_chose(tmp_path, monkeypatch):
+    card = {"id": "e13", "kind": "click", "label": "HDFC Bank Card (1 of 3)", "role": "button", "node": 13}
+    upi = {"id": "e14", "kind": "click", "label": "UPI", "role": "button", "node": 14}
+    a = mini_with(tmp_path, page=fake_page(text="Payment Options\nHDFC Bank Card\nUPI", actions=[card, upi, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which payment method would you like to use?\n1. HDFC Bank Card"},
+                        {"from": "user", "text": "“Cash on delivery if it's offered; otherwise UPI” → none of the "
+                                                 "options"}]
+    script(monkeypatch, out("CLICK", "HDFC Bank Card (1 of 3)"), out("CLICK", "UPI"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.browser.act.call_count == 0 and "chose" in a.state["feedback"][0]
+    a.command("tick")
+    assert a.browser.act.call_args.args[1]["id"] == "e14"

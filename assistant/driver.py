@@ -36,6 +36,8 @@ PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone)( number)?\b", re.IGNORECA
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
 TOTAL = re.compile(r"\b(total|to pay|payable|amount due)\b", re.IGNORECASE)
 ABOUT_USER = re.compile(r"\b(the|ask|tell|inform) user\b", re.IGNORECASE)  # a note to itself
+PAYMENT_FILLER = {"the", "a", "an", "if", "it", "its", "s", "offered", "otherwise", "on", "with", "my", "use",
+                  "pay", "payment", "method", "please", "and", "or", "to", "for", "me", "i", "by", "option"}
 PAYMENT = re.compile(r"\b(cash|upi|card|wallet|net ?banking|pay later|cod|cash on delivery)\b", re.IGNORECASE)
 
 
@@ -332,6 +334,21 @@ class MiniAgent(Agent):
         asked = any(c["from"] == "agent" and re.search(r"\bpay", c["text"], re.IGNORECASE) for c in self.state["chat"])
         return asked or not PAYMENT.search(page["text"])
 
+    def chosen_payment(self, action):
+        """A payment method mini picks must be the one the user named in their latest answer about paying."""
+        label, chat = action.get("label") or "", self.state["chat"]
+        if not PAYMENT.search(label):
+            return
+        answer = next((r["text"] for q, r in reversed(list(zip(chat, chat[1:]))) if q["from"] == "agent"
+                       and r["from"] == "user" and re.search(r"\bpay", q["text"], re.IGNORECASE)), None)
+        if answer is None or "leaves this choice to you" in answer:
+            return
+        said = answer.replace(" → none of the options", "")
+        want = set(re.findall(r"[a-z0-9]+", said.lower())) - PAYMENT_FILLER
+        if want and not want & set(re.findall(r"[a-z0-9]+", label.lower())):
+            raise Retry(f"The user chose {said} for payment, not “{label}”. Pick what they chose (scroll to see every "
+                        "method); if the site doesn't offer it, ASK again listing every method the page shows.")
+
     def not_asked_before(self, message):
         """A question the user already answered is never asked again: mini gets the answer back instead."""
         chat, words = self.state["chat"], set(re.findall(r"[a-z0-9]+", message.lower()))
@@ -420,6 +437,8 @@ class MiniAgent(Agent):
             raise Retry(f"“{commit}” would commit. If that is the step you mean, set commits true and put the "
                         "summary in message (what, where, option, payment method, and the total as the page shows it); "
                         "otherwise choose another element.")
+        if not commit and operation in {"CLICK", "SELECT", "LOOK"}:
+            self.chosen_payment(action)
         named = re.search(r"\[(\d+)\]", act["target"])
         if commit and named and index and named[1] != index:
             raise Retry(f"You named [{named[1]}], but the element matching “{act['target']}” is [{index}] "
