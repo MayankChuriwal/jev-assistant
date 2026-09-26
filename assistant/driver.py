@@ -31,6 +31,9 @@ DELEGATE = re.compile(r"\b(you (choose|decide|pick)|whatever|any( one)?|up to yo
 PAGE_TALK = re.compile(r"\b(element|click|tap|scroll|swipe|drag)\b|\[\d+\]", re.IGNORECASE)
 UNSERVED = re.compile(r"\bnot (available|serviceable|delivering)\b|coming soon|(doesn't|does not|don't|do not) "
                       r"deliver|unserviceable|out of (the )?(delivery|service) area", re.IGNORECASE)
+PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone)( number)?\b", re.IGNORECASE),
+                "email": re.compile(r"\be-?mail\b", re.IGNORECASE),
+                "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
 ABOUT_USER = re.compile(r"\b(the|ask|tell|inform) user\b", re.IGNORECASE)  # a note to itself
 PAYMENT = re.compile(r"\b(cash|upi|card|wallet|net ?banking|pay later|cod|cash on delivery)\b", re.IGNORECASE)
 
@@ -237,6 +240,9 @@ class MiniAgent(Agent):
             raise Retry("Don't ask the user to confirm. When everything is chosen, do the final action (the control "
                         "that books, orders, or pays) with commits true and the summary in message: the system asks "
                         "the user once. If something is still undecided, ASK with the choices listed.")
+        held = [k for k, pattern in PROFILE_ASKS.items() if self.profile.data.get(k) and pattern.search(message)]
+        if op == "ASK" and not secret and held:
+            raise Retry(f"The user's profile has it: TYPE [profile:{held[0]}] into the field instead of asking.")
         if op == "ASK" and s.get("delegated_at") == len(s["history"]):
             raise Retry("The user just left this choice to you: pick the option that best fits the goal, TELL them "
                         "which one, and act on it.")

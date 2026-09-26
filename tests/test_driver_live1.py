@@ -499,3 +499,11 @@ def test_the_same_reply_twice_to_one_question_means_stop_asking(tmp_path, monkey
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.asked == [] and "same answer twice" in a.state["feedback"][0]
+
+
+def test_a_detail_the_profile_holds_is_typed_not_asked(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Login\nEnter your mobile number", actions=[WAIT]))
+    script(monkeypatch, out("ASK", message="Please provide your mobile number to log in."))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and "[profile:phone]" in a.state["feedback"][0]
