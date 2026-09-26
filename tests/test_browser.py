@@ -304,6 +304,14 @@ def test_a_new_code_replaces_the_digits_a_rejected_one_left_in_the_boxes(browser
     b.act("TYPE_TEXT", next(a for a in page["actions"] if a.get("group")), page, text="4821")
     assert b.evaluate("[...document.querySelectorAll('input[maxlength=\"1\"]')].map(i => i.value).join('')") == "4821"
 
+
+def test_a_control_with_no_name_is_labelled_by_the_text_around_it(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div><span>Margherita Pizza ₹170</span>"
+               "<div style=\"width:40px;height:20px\" onclick=\"1\"></div></div>')")
+    labels = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click"]
+    assert any(label.startswith("clickable in “Margherita Pizza ₹170") for label in labels)
+
 def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
     from assistant.browser import forget_sites
 
