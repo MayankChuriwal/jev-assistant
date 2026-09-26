@@ -577,7 +577,8 @@ class MiniAgent(Agent):
             return True
         if s["commit"]:
             raise Retry("An earlier committed action is still being checked; WAIT for it first.")
-        summary = plain(decision["message"].strip())
+        summary = re.sub(r"^(ordered|booked|placed|paid|requested)\s+", "", plain(decision["message"].strip()),
+                         flags=re.IGNORECASE)  # nothing has happened until the user says yes
         if "·" not in summary or (rules.PRICE.search(page["text"]) and not rules.PRICE.search(summary)):
             summary = self.summary(page)  # left out, a sentence instead of the details, or missing the page's total
         if not summary:

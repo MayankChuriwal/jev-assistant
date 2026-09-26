@@ -694,3 +694,15 @@ def test_a_commit_mini_keeps_calling_a_step_goes_to_the_approval_on_the_third_tr
     for _ in range(3):
         a.command("tick")
     assert a.browser.act.call_count == 0 and "I'll press “Pay on Delivery" in a.asked[0]["text"]
+
+
+def test_an_approval_never_says_it_already_happened(tmp_path, monkeypatch):
+    pay = {"id": "e25", "kind": "click", "label": "Place order", "role": "button", "node": 25}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text="Diet Coke 330 ml\nTo pay ₹121\nPlace order", actions=[pay, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which payment method?"}, {"from": "user", "text": "“Cash”"}]
+    script(monkeypatch, out("CLICK", "Place order", commits=True,
+                            message="Ordered 1 Diet Coke 330 ml · home · Cash · ₹121"))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    assert a.asked[0]["text"].startswith("1 Diet Coke 330 ml")
