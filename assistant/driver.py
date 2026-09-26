@@ -289,6 +289,9 @@ class MiniAgent(Agent):
                 raise Retry("TELL needs a message.")
             if any(c["from"] == "agent" and c["text"] == message for c in s["chat"]):
                 raise Retry("You already told the user this. Carry on with the task, or finish with DONE.")
+            if rules.PRICE.search(message) and not rules.COMMERCE.search(s["goal"]):
+                raise Retry("A price here is the answer, not an update: check it (one way, the right date), then give "
+                            "it once in DONE. TELL is only for progress without the answer.")
             if s.get("told_at") == len(s["history"]):
                 raise Retry("You just told the user something. Do an action next, or finish with DONE: the answer the "
                             "user asked for goes in DONE's message, never in another TELL.")

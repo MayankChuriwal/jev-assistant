@@ -278,3 +278,14 @@ def test_other_items_in_the_cart_are_never_removed_without_asking(tmp_path, monk
     jev_fake(monkeypatch, matches="no")
     a.command("tick")
     assert "Buy Now" in a.state["feedback"][0] and "ASK" in a.state["feedback"][0]
+
+
+def test_a_price_is_never_sent_as_an_update_for_a_question_goal(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Akasa Air 5:20 PM ₹16,228", actions=[WAIT]))
+    a.state["goal"] = "Find the cheapest flight from Bengaluru to Delhi next Friday"
+    script(monkeypatch, out("TELL", message="The cheapest flight is Akasa Air at 5:20 PM for ₹16,228."), out("WAIT"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert "DONE" in a.state["feedback"][0]
+    a.command("tick")
+    assert a.told == []
