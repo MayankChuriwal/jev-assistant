@@ -392,3 +392,28 @@ def test_an_approval_lists_the_fees_and_the_sites_own_way_to_save(tmp_path, monk
     text = a.asked[0]["text"]
     assert "Small cart fee ₹30" in text and "Delivery fee ₹25" in text and "Handling fee ₹16" in text
     assert "Add items worth ₹149 more to get free delivery" in text and "\n" in text.split("I'll press")[0].strip()
+
+
+def test_a_question_repeated_with_its_list_inlined_is_still_a_repeat(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text=RIDE_PAGE, actions=[GO_AC, PREMIER_AC, REQUEST, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which ride do you prefer?\n1. Uber Go AC ₹811\n2. Premier AC ₹839"},
+                        {"from": "user", "text": "“The cheapest one” → none of the options"}]
+    script(monkeypatch, out("ASK", message="Which ride do you prefer? 1. Uber Go AC ₹811 2. Premier AC ₹839",
+                            options=["Uber Go AC ₹811", "Premier AC ₹839"]))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and "asked this already" in a.state["feedback"][0]
+
+
+def test_option_names_with_icon_words_still_count_as_listed_and_chosen(tmp_path, monkeypatch):
+    go = {**GO_AC, "label": "Uber Go AC Person 4 3 mins away ₹811.15 ₹954.30"}
+    premier = {**PREMIER_AC, "label": "Premier AC Person 4 3 mins away ₹839.20 ₹987.30"}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text=RIDE_PAGE, actions=[go, premier, REQUEST, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which ride?\n1. Uber Go AC ₹811.15\n2. Premier AC ₹839.20"},
+                        {"from": "user", "text": "“The cheapest one” → option 1: Uber Go AC ₹811.15"}, *PAID]
+    script(monkeypatch, out("CLICK", "Request Uber Go AC", commits=True,
+                            message="Uber Go AC · home → airport · Cash · ₹811.47"))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    assert a.asked, a.state["feedback"]

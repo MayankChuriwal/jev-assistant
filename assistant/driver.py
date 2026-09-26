@@ -387,12 +387,17 @@ class MiniAgent(Agent):
         chat = s["chat"]
         pairs = [(q["text"], r["text"]) for q, r in zip(chat, chat[1:]) if q["from"] == "agent" and r["from"] == "user"
                  and "I'll press" not in q["text"]]
-        told = (s["goal"] + " " + " ".join(r for _, r in pairs)).lower()
+        told = s["goal"] + " " + " ".join(r for _, r in pairs)
         names = list(dict.fromkeys(re.split(r"\s\d|₹", a["label"])[0].strip() for a in page["actions"]
                                    if a.get("kind") == "click" and rules.PRICE.search(a.get("label", ""))))
-        names = [n for n in names if len(n) >= 3]
-        listed = any(sum(n.lower() in q.lower() for n in names) >= 2 for q, _ in pairs)
-        if len(names) >= 2 and not listed and not any(n.lower() in told for n in names):
+        names = [n for n in names if len(n) > 3]
+
+        def named(name, text):  # most of its words: labels can carry icon words ("Uber Go AC Person")
+            own = set(re.findall(r"[a-z0-9]+", name.lower()))
+            return bool(own) and len(own & set(re.findall(r"[a-z0-9]+", text.lower()))) / len(own) >= 0.5
+
+        listed = any(sum(named(n, q) for n in names) >= 2 for q, _ in pairs)
+        if len(names) >= 2 and not listed and not any(named(n, told) for n in names):
             raise Retry("The user hasn't chosen yet: ASK which one they want, one line per option with its price "
                         f"and key detail (arrival time, seats) — {', '.join(names[:6])}. Then do the final step.")
         address = next((m for t in [page["text"], *reversed(s["recent"])] for m in DELIVERING.findall(t)), None)
@@ -428,11 +433,14 @@ class MiniAgent(Agent):
 
     def not_asked_before(self, message):
         """A question the user already answered is never asked again: mini gets the answer back instead."""
-        chat, words = self.state["chat"], set(re.findall(r"[a-z0-9]+", message.lower()))
+        def question(text):  # the question itself, without a list mini may have written into it
+            return set(re.findall(r"[a-z0-9]+", re.split(r"\?|\n|\s1[.)]\s", text)[0].lower()))
+
+        chat, words = self.state["chat"], question(message)
         for asked, reply in zip(chat, chat[1:]):
             if asked["from"] != "agent" or reply["from"] != "user":
                 continue
-            before = set(re.findall(r"[a-z0-9]+", asked["text"].split("\n")[0].lower()))
+            before = question(asked["text"])
             if words and len(words & before) / len(words | before) >= 0.7:
                 raise Retry(f"You asked this already and the user answered {reply['text']}. Use that answer; if the "
                             "page doesn't offer it, ASK a more specific question naming what the page shows.")
