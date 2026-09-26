@@ -560,3 +560,13 @@ def test_the_approval_shows_every_value_typed_into_the_form(tmp_path, monkeypatc
     jev_fake(monkeypatch, approvals=["no"])
     a.command("tick")
     assert "Customer name: Test User" in a.asked[0]["text"] and "pizza ·" not in a.asked[0]["text"]
+
+
+def test_current_location_is_detected_never_typed(tmp_path, monkeypatch):
+    place = {"id": "e18", "kind": "fill", "label": "Enter your delivery location", "role": "textbox", "value": "",
+             "node": 18}
+    a = mini_with(tmp_path, page=fake_page(text="Enter your delivery location\nLocate Me", actions=[place, WAIT]))
+    script(monkeypatch, out("TYPE", "Enter your delivery location", text="Use my current location"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.browser.act.call_count == 0 and "detect" in a.state["feedback"][0]

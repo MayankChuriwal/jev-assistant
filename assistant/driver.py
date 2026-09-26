@@ -510,6 +510,9 @@ class MiniAgent(Agent):
 
     def inputs_for(self, operation, action, act, page):
         if operation == "TYPE_TEXT":
+            if re.search(r"\bcurrent location\b", act["text"], re.IGNORECASE):
+                raise Retry("Don't type “current location”: click the site's own detect option (“Locate me”, “Use "
+                            "current location”, “Detect”), or pick a saved address.")
             value, shown = self.value(action, act["text"], page)
             return {"text": value}, shown
         if operation == "PRESS_KEY":
