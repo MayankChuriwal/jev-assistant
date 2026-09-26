@@ -28,7 +28,7 @@ CONFIRM = re.compile(r"\b(confirm|book (it|this|the)|place (it|the order)|should
 YES_NO = {"yes", "no", "y", "n", "confirm", "cancel", "ok"}
 DELEGATE = re.compile(r"\b(you (choose|decide|pick)|whatever|any( one)?|up to you|your (choice|call)|"
                       r"doesn'?t matter)\b", re.IGNORECASE)
-PAGE_TALK = re.compile(r"\b(element|click|tap|scroll)\b|\[\d+\]", re.IGNORECASE)
+PAGE_TALK = re.compile(r"\b(element|click|tap|scroll|swipe|drag)\b|\[\d+\]", re.IGNORECASE)
 PAYMENT = re.compile(r"\b(cash|upi|card|wallet|net ?banking|pay later|cod|cash on delivery)\b", re.IGNORECASE)
 
 
@@ -200,7 +200,7 @@ class MiniAgent(Agent):
         message = plain(decision["message"].strip() or fallback)
         op = "ASK" if act["op"] == "TELL" and message.endswith("?") else act["op"]  # a question waits for its answer
         options = [plain(o.strip()) for o in decision["options"] if o.strip()][:10]
-        if op == "ASK" and PAGE_TALK.search(message):
+        if op in {"ASK", "TELL"} and PAGE_TALK.search(message):
             raise Retry("The user can't see the page: never ask them about elements, clicks, or scrolling. Decide "
                         "yourself (read the element list, scroll, go back), or ASK for information about what they "
                         "want.")

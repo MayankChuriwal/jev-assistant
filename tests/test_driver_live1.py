@@ -388,3 +388,12 @@ def test_a_summary_without_the_price_the_page_shows_is_rewritten(tmp_path, monke
     jev_fake(monkeypatch, approvals=["no"])
     a.command("tick")
     assert "₹776.05" in a.asked[0]["text"]
+
+
+def test_telling_the_user_to_act_on_the_page_is_refused(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Swipe right to add item to cart", actions=[WAIT]))
+    script(monkeypatch, out("TELL", message="I need you to swipe right on the Margherita pizza to add it. Tell me when "
+                                            "you've done that."))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.told == [] and "can't see the page" in a.state["feedback"][0]
