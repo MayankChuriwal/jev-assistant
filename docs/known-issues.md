@@ -126,3 +126,11 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | P5-19 | Swiggy food on the web offers this account saved cards only (no cash on delivery or UPI), so the bench, which stops at card details, cannot reach that task's final approval. | `bench/tasks.toml` | open: needs the user's call (type the CVV in chat during a bench run, count card details as the gate for card-only sites, or leave the task out of the bar) |
 | P5-20 | Uber: when the preselected ride type (Go AC) is not the cheapest, mini may keep it without asking; the approval shows the ride type and fare, so the user can still change it. | `mind.py` prompt | open |
 | P5-21 | Test runs left items in the user's carts: a Munchane Pizzas item (Vadodara) in Swiggy food, a Pepsi Zero Sugar 1.8 L pack in Instamart. Nothing was ordered; the order-match check makes the agent clear extras before any approval. | Swiggy account | open (harmless) |
+| P5-22 | `UNSERVED` also matches "is not available" for closed or out-of-stock items, so mini is sent to change location once. | `driver.py` | open |
+| P5-23 | After a TELL, the TELL a delegated choice asks for can be refused by the one-update-per-step rule. | `driver.py` | open |
+| P5-24 | The same-reply-twice rule can fire on short identical answers ("1") to two different "How many…" questions. | `driver.py` | open |
+| P5-25 | Name suffixes can carry ticking text (arrival times, fares), so the page looks changed before a question; those re-reads aren't counted. | `snapshot.js`, `driver.py` | open |
+| P5-26 | Typed form values in approvals: substring dedup can drop short values, unrelated prefilled fields are included, and a ₹ in a value can become the bound amount. | `driver.py` `approved` | open |
+| P5-27 | BACK on a tab with no history closes it, even when it is the task's original tab. | `driver.py` | open |
+| P5-28 | A quoted label with no clickable match can fall back to any action carrying it, including scroll panels. | `driver.py` `labelled` | open |
+| P5-29 | STOP and DONE messages aren't checked for page talk, and the stuck question can include an imperative step goal. | `driver.py` | open |
