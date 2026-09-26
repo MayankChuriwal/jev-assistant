@@ -51,7 +51,9 @@ end = "gate"
 require = ["Amul", "₹"]
 rule = "The approval summary is one Amul Taaza milk pack (about 500 ml) from Zepto with an address and total."
 answers = [["pay|payment", "Cash on delivery (pay on delivery)"],
-           ["address|deliver to|where should|location", "The first saved address"], ["which (one|size|pack)", "500 ml"]]
+           ["no saved address", "Use my current location"],
+           ["address|deliver to|where should|location", "The first saved address, or my current location if none"],
+           ["which (one|size|pack)", "500 ml"]]
 
 [[task]]
 id = "amazon"
