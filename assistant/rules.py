@@ -4,7 +4,7 @@ import re
 from urllib.parse import urlparse
 
 COMMIT = re.compile(
-    r"\b(pay|place order|buy|purchase|book now|confirm (order|booking|ride|payment|purchase)"
+    r"\b(pay|place (your )?order|buy|purchase|book now|confirm (order|booking|ride|payment|purchase)"
     r"|request (ride|uber\w*|trip)|cancel (order|booking|subscription|ride)|delete"
     r"|submit (complaint|dispute|claim|request))\b",
     re.IGNORECASE,
@@ -53,6 +53,8 @@ def commit_label(operation, action, page, key=None, focused=""):
         label = page.get("text", "")
     else:
         return None
+    if re.search(r"\bproceed to (buy|checkout|pay)\b", label or "", re.IGNORECASE):
+        return None  # these open the checkout page; the order is placed later
     return label if COMMIT.search(label or "") else None
 
 

@@ -118,3 +118,10 @@ def test_ways_of_saying_current_location():
     for text in ("Current location", "use my current location", "my location", "here", "where I am."):
         assert rules.means_current_location(text), text
     assert not rules.means_current_location("Prestige Sunnyside Elm")
+
+
+def test_checkout_steps_are_not_commits_but_final_buttons_are():
+    page = {"text": ""}
+    click = lambda label: rules.commit_label("CLICK", {"label": label}, page)  # noqa: E731
+    assert click("Proceed to Buy (1 item)") is None and click("Proceed to Pay") is None
+    assert click("Place your order") and click("Pay ₹79") and click("Complete purchase") and click("Buy Now")
