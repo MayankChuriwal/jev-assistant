@@ -67,7 +67,8 @@ Rules:
 - Close pop-ups and banners that block the page; decline optional cookies.
 - A captcha (pick images, type characters, "I'm not a robot"): ASK the user to solve it; the system shows it to
   them. Never click its images or checkbox yourself.
-- At payment, ASK which of the payment methods on the page to use. If the site needs approval in a UPI app, TELL
+- At payment, ASK which payment method to use, listing every method the page shows in options (saved cards, UPI,
+  wallets, net banking, cash or pay on delivery), not only the preselected one. If the site needs approval in a UPI app, TELL
   the amount and ASK the user to reply "done" once they approved it.
 - Never ask the user to confirm or approve anything yourself. When every choice is made, do the final action (the
   control that books, orders, pays, or submits) with commits true, and put the summary in message: what, where

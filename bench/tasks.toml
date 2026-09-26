@@ -28,7 +28,7 @@ goal = "Order one Diet Coke 300 ml can on Swiggy Instamart"
 end = "gate"
 require = ["Diet Coke", "₹"]
 rule = "The approval summary is one Diet Coke (about 300 ml) from Swiggy Instamart with a delivery address and total."
-answers = [["pay|payment", "Cash on delivery if offered, otherwise the first option"],
+answers = [["pay|payment", "Cash on delivery (pay on delivery)"],
            ["address|deliver to|where should", "The first saved address"],
            ["which (one|size|pack)|variant", "300 ml, just one"]]
 
@@ -38,7 +38,7 @@ goal = "Order one Margherita pizza from Domino's on Swiggy"
 end = "gate"
 require = ["Margherita", "₹"]
 rule = "The approval summary is one Margherita pizza from Domino's on Swiggy with an address and total."
-answers = [["pay|payment", "Cash on delivery if offered, otherwise the first option"],
+answers = [["pay|payment", "Cash on delivery (pay on delivery)"],
            ["address|deliver to|where should", "The first saved address"], ["size|crust|which", "Regular, classic hand tossed"]]
 
 [[task]]
@@ -47,7 +47,7 @@ goal = "Order one 500 ml pack of Amul Taaza milk on Zepto"
 end = "gate"
 require = ["Amul", "₹"]
 rule = "The approval summary is one Amul Taaza milk pack (about 500 ml) from Zepto with an address and total."
-answers = [["pay|payment", "Cash on delivery if offered, otherwise the first option"],
+answers = [["pay|payment", "Cash on delivery (pay on delivery)"],
            ["address|deliver to|where should|location", "The first saved address"], ["which (one|size|pack)", "500 ml"]]
 
 [[task]]
@@ -56,7 +56,7 @@ goal = "Buy one boAt Airdopes 141 on Amazon.in"
 end = "gate"
 require = ["boAt", "₹"]
 rule = "The approval summary is one boAt Airdopes 141 from Amazon.in with an address and total."
-answers = [["pay|payment", "Cash on delivery if offered, otherwise the first option"],
+answers = [["pay|payment", "Cash on delivery (pay on delivery)"],
            ["colou?r|which (one|variant)", "Black, or the first colour"],
            ["address|deliver to|where should", "The first saved address"]]
 
