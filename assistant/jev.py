@@ -102,8 +102,9 @@ def approval(summary, reply):
 def matches(page, goal, chat, summary):
     """Whether the order on the page is what the user asked for: product, brand, quantity, nothing extra."""
     return ask(page, "order_matches",
-               {"yes": "The items and quantities on the page, and the summary, are what the user asked for.",
-                "no": "A different product or brand, an extra item, or a different quantity than the user asked for."},
+               {"yes": "The items, quantities, and places on the page, and the summary, are what the user asked for.",
+                "no": "A different product or brand, an extra item, a different quantity, or a different or broader "
+                      "place (pickup, drop, delivery) than the user named."},
                {"goal": goal, "rules": "Closest size or an option the user left to the agent still matches. The "
                                        f"chat so far: {chat[-1500:]} Summary shown to the user: {summary}"})["choice"]
 

@@ -68,6 +68,7 @@ Rules:
   Never use Google, Apple, or Facebook sign-in buttons.
 - Place and search boxes: TYPE the user's words, then CLICK the matching suggestion (new ones are marked *). Do not
   press Enter while suggestions show. For "current location" use the site's own detect-location option.
+- Pick the exact place the user named (a specific terminal, gate, or building), never a broader one.
 - Keep the product and brand the user named. If that exact size isn't sold, take the closest size of the same
   product; never switch to another brand or product without asking.
 - Error or "not found" pages: press their retry button at most once, then go BACK or OPEN_URL the site's home page.
