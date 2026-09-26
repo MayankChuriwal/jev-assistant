@@ -18,6 +18,8 @@ AFTER = {"confirmed": "The site confirms it is done: order placed, booking or ri
                       "partner assigned, form submitted.",
          "failed": "The site says it failed, was declined, or can't be done (no drivers, out of stock).",
          "processing": "The site is still working on it: finding a driver, confirming a payment, processing.",
+         "next_step": "Nothing is ordered or booked yet: the page shows the choice just made and another step or "
+                      "final button (Request, Place order, Pay).",
          "unclear": "The page doesn't show the result."}
 
 

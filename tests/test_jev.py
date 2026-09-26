@@ -45,7 +45,7 @@ def test_no_candidates_means_no_element(monkeypatch):
 
 def test_result_checks_and_reply_reading(monkeypatch):
     answers(monkeypatch, "result", "processing", {"confirmed": 0.1, "failed": 0.0, "processing": 0.8,
-                                                  "unclear": 0.1})
+                                                  "next_step": 0.0, "unclear": 0.1})
     assert jev.check(fake_page(), "Request the ride", "CLICK Request", "new text: Finding drivers",
                      after_commit=True) == "processing"
     answers(monkeypatch, "reply", "2", {"1": 0.1, "2": 0.8, "other": 0.1})

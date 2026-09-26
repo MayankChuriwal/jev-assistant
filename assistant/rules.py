@@ -22,6 +22,9 @@ SAVED_ADDRESS = re.compile(r"^(home|work|office|other|hotel)\b.*,|\b\d{6}\b|,.*\
 ADDRESS_EXTRA = re.compile(r"\b(current location|add (a )?new address)\b", re.IGNORECASE)
 CURRENT_PLACE = re.compile(r"^\s*(please )?(use )?((my |the )?(current|present) (location|place|address)|here|"
                            r"where i am|my location)\s*(please)?\s*\.?\s*$", re.IGNORECASE)
+# Payment methods named with "pay" (UPI Scan and Pay, Pay on Delivery): choosing one pays nothing by itself.
+METHOD = re.compile(r"\b(upi|cash|card|wallets?|net ?banking|pay later|pay on delivery|cash on delivery|scan and pay|"
+                    r"amazon pay|google pay|gpay|phonepe|paytm)\b", re.IGNORECASE)
 COMMERCE = re.compile(r"\b(book|order|buy|purchase|pay|reserve)\b", re.IGNORECASE)
 TO_USER = re.compile(r"^\s*(please|kindly|do you|would you|could you|can you|shall i|should i|are you)\b",
                      re.IGNORECASE)

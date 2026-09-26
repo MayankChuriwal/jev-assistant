@@ -485,8 +485,9 @@ class MiniAgent(Agent):
         operation, action, index = self.target(decision, page, entry)
         inputs, shown = self.inputs_for(operation, action, act, page)
         commit = self.commit_label(operation, action, act, page, inputs)
-        if commit and act["commits"] and operation == "CLICK" and not rules.COMMIT.search(commit):
-            verdict, sure = jev.final(page, commit, decision["next_goal"])  # only mini calls it final: check
+        method = rules.METHOD.search(commit or "") and not rules.PRICE.search(commit or "")
+        if commit and operation == "CLICK" and (method or act["commits"] and not rules.COMMIT.search(commit)):
+            verdict, sure = jev.final(page, commit, decision["next_goal"])  # a method named "…Pay", or mini's call
             if verdict == "step" and sure >= 0.8:
                 commit = None  # a step on the way (choosing or saving a selection): nothing is bought yet
         unflagged = self.state.setdefault("unflagged", {})
@@ -772,7 +773,10 @@ class MiniAgent(Agent):
             time.sleep(self.outcome_pause)
             self.observe()
         s["commit"] = None
-        if verdict == "confirmed":
+        if verdict == "next_step":  # it only chose something: the order or booking still needs its own yes
+            s["memory"].append(f"{commit['label']} was only a step; nothing is ordered or booked yet. The final "
+                               "control needs its own approval.")
+        elif verdict == "confirmed":
             s["memory"].append(f"Done: {commit['label']}, confirmed by the site. Report every detail the page shows.")
         elif verdict == "failed":
             s["memory"].append(f"{commit['label']} failed; trying again needs a new approval.")

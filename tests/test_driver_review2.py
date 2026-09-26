@@ -214,3 +214,40 @@ def test_a_refused_done_never_invites_telling_the_answer(tmp_path, monkeypatch):
     jev_fake(monkeypatch, achieved="no")
     a.command("tick")
     assert "TELL" not in a.state["feedback"][0].split("never")[0]
+
+
+UPI = {"id": "e5", "kind": "click", "label": "UPI Scan and Pay", "name": "UPI Scan and Pay", "role": "button",
+       "node": 5}
+CASH = {"id": "e4", "kind": "click", "label": "Cash", "name": "Cash", "role": "button", "node": 4}
+SAVE = {"id": "e6", "kind": "click", "label": "Save", "name": "Save", "role": "button", "node": 6}
+
+
+def test_a_payment_method_named_with_pay_is_just_chosen_when_jev_calls_it_a_step(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Payment methods\nCash\nUPI Scan and Pay\nSave",
+                                           actions=[CASH, UPI, SAVE, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which payment method do you want to use?"},
+                        {"from": "user", "text": "“UPI”"}]
+    script(monkeypatch, out("CLICK", "UPI Scan and Pay"))
+    jev_fake(monkeypatch, final=("step", 0.95))
+    a.command("tick")
+    assert a.asked == [] and a.browser.act.call_args.args[1]["id"] == "e5"
+
+
+def test_a_pay_button_with_an_amount_always_needs_the_approval(tmp_path, monkeypatch):
+    pay = {"id": "e7", "kind": "click", "label": "Pay ₹79", "name": "Pay ₹79", "role": "button", "node": 7}
+    a = mini_with(tmp_path, replies=[{"text": "no"}], page=fake_page(text="To pay ₹79\nPay ₹79", actions=[pay, WAIT]))
+    a.state["chat"] += PAID
+    script(monkeypatch, out("CLICK", "Pay ₹79", commits=True, message="Diet Coke · home · Cash · ₹79"))
+    jev_fake(monkeypatch, final=("step", 0.95), approvals=["no"])
+    a.command("tick")
+    assert a.asked and "I'll press “Pay ₹79”" in a.asked[0]["text"]
+
+
+def test_a_press_that_turned_out_to_be_a_step_lets_the_task_go_on(tmp_path, monkeypatch):
+    go = {"id": "e8", "kind": "click", "label": "Request Uber Go AC", "role": "button", "node": 8}
+    a = mini_with(tmp_path, page=fake_page(text="Cash\nUPI Scan and Pay\nRequest Uber Go AC", actions=[go, WAIT]))
+    a.state["commit"] = {"label": "UPI Scan and Pay", "checks": 0, "since": 0}
+    monkeypatch.setattr(driver.jev, "check", lambda *a, **k: "next_step")
+    a.watch({"next_goal": "choose UPI"})
+    assert a.state["status"] != "blocked" and a.state["commit"] is None
+    assert "only a step" in a.state["memory"][-1]
