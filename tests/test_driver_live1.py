@@ -329,3 +329,12 @@ def test_evidence_seen_on_an_earlier_page_counts(tmp_path, monkeypatch):
     a.state["page"] = a.browser.observe.return_value = product
     a.command("tick")
     assert a.state["status"] == "done" and a.told[-1]["evidence"] == "Nike Air Max 90 Rs. 3398"
+
+
+def test_a_confirmation_with_a_yes_or_no_plus_words_option_is_still_refused(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Uber Go AC ₹784.30", actions=[WAIT]))
+    script(monkeypatch, out("ASK", message="Shall I proceed to book this ride for you?",
+                            options=["Yes", "No, choose a different ride"]))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and "commits true" in a.state["feedback"][0]
