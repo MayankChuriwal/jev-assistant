@@ -52,6 +52,8 @@ SAVE = re.compile(r"^([^\n]{0,60}(?:free delivery|to save|no (?:small cart|deliv
                   re.IGNORECASE | re.MULTILINE)
 BILL = re.compile(r"\b((view|see|show) (detailed )?bill|bill details|price details|order summary)\b", re.IGNORECASE)
 CHECKOUT = re.compile(r"\b(proceed to (pay|checkout|buy)|checkout|make payment|go to payment)\b", re.IGNORECASE)
+PROCEED = re.compile(r"\bproceed to (pay|checkout|buy)\b|\bgo to (payment|checkout)\b", re.IGNORECASE)
+ITEMS = re.compile(r"\b(\d+) items?\b", re.IGNORECASE)
 ABOUT_USER = re.compile(r"\b(the|ask|tell|inform) user\b", re.IGNORECASE)  # a note to itself
 PAYMENT_FILLER = {"the", "a", "an", "if", "it", "its", "s", "offered", "otherwise", "on", "with", "my", "use",
                   "pay", "payment", "method", "please", "and", "or", "to", "for", "me", "i", "by", "option"}
@@ -530,6 +532,9 @@ class MiniAgent(Agent):
         operation, action, index = self.target(decision, page, entry)
         inputs, shown = self.inputs_for(operation, action, act, page)
         commit = self.commit_label(operation, action, act, page, inputs)
+        if commit and operation == "CLICK" and PROCEED.search(own_words(action)) and \
+                not rules.COMMIT.search(action.get("name", action.get("label", ""))):
+            commit = None  # its visible words say it only moves on to checkout or payment
         method = rules.METHOD.search(commit or "") and not rules.PRICE.search(commit or "")
         if commit and operation == "CLICK" and (method or act["commits"] and not rules.COMMIT.search(commit)):
             verdict, sure = jev.final(page, commit, decision["next_goal"])  # a method named "…Pay", or mini's call
@@ -682,8 +687,11 @@ class MiniAgent(Agent):
             raise Retry(f"“{commit}” commits: put the summary in message (what, where, option, payment method, and "
                         "the total exactly as the page shows it).")
         shown = next((m for t in [page["text"], *reversed(s["recent"])] for m in DELIVERING.findall(t)), None)
-        if shown and shown.strip()[:15].lower() not in summary.lower():
+        if shown and re.sub(r"\W", "", shown)[:12].lower() not in re.sub(r"\W", "", summary).lower():
             summary += f" · Delivering to: {shown.strip()}"  # the site's own address line, often a page back
+        count = next((int(n) for n in ITEMS.findall(page["text"])), 0)
+        if count > 1 and f"{count} item" not in summary:
+            summary += f" · {count} items in the cart"  # the page's own count: never let a summary say fewer
         typed = [f"{a['label'].rstrip(':')}: {a['value']}" for a in page["actions"]
                  if a.get("kind") == "fill" and a.get("role") != "searchbox" and "search" not in a["label"].lower()
                  and a.get("value") and not str(a["value"]).startswith("[") and str(a["value"]) not in summary]

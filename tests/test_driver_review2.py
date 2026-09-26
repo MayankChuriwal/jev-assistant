@@ -443,3 +443,28 @@ def test_an_approval_part_inside_another_part_is_dropped(tmp_path, monkeypatch):
     jev_fake(monkeypatch, approvals=["no"])
     a.command("tick")
     assert a.asked[0]["text"].count("Pay on Delivery") == 1
+
+
+def test_a_button_whose_visible_words_proceed_to_pay_is_a_step(tmp_path, monkeypatch):
+    pay = {"id": "e2", "kind": "click", "label": "Make payment, tap to go to payment (shows “Proceed to Pay”)",
+           "name": "Make payment, tap to go to payment", "shown": "Proceed to Pay", "role": "button", "node": 2}
+    a = mini_with(tmp_path, page=fake_page(text="Delivery fee ₹25\nTo pay ₹121\nProceed to Pay", actions=[pay, WAIT]))
+    script(monkeypatch, out("CLICK", "Proceed to Pay", commits=True, message="Diet Coke · Cash · ₹121"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and a.browser.act.call_args.args[1]["id"] == "e2"
+
+
+def test_an_approval_shows_the_address_once_and_the_item_count(tmp_path, monkeypatch):
+    pay = {"id": "e3", "kind": "click", "label": "Place order", "role": "button", "node": 3}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text="Delivering to: home 1601, AECS Layout\n3 items. Total: ₹211\nPlace order",
+                                 actions=[pay, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Where should I deliver?\n1. HOME, 1601, AECS Layout"},
+                        {"from": "user", "text": "“1” → option 1: HOME, 1601, AECS Layout"}, *PAID]
+    script(monkeypatch, out("CLICK", "Place order", commits=True,
+                            message="Diet Coke (1 unit) · HOME, 1601, AECS Layout · Cash · ₹211"))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    text = a.asked[0]["text"]
+    assert text.lower().count("1601") == 1 and "3 items" in text
