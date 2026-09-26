@@ -672,11 +672,8 @@ class MiniAgent(Agent):
             s["feedback"].append(self.NUDGES[same])
             s["same_nudges"].append(same)
         if same >= 8:
-            goal = s["mini"][-1]["next_goal"] if s["mini"] else s["goal"]
-            title = s["page"]["title"] or rules.host(s["page"]["url"])
             self.steady(s["page"])
-            reply = self.ask({"kind": "text", "text": f"I'm stuck on {title}: {goal} What should I do?"})
-            s["chat"].append({"from": "user", "text": f"“{str(reply.get('text', '')).strip()}”"})
+            self.stuck()
             for h in s["history"][-20:]:
                 h["page_changed"] = True  # the user's help starts a fresh count
         return None
