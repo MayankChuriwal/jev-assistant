@@ -598,3 +598,15 @@ def test_a_cancelled_bench_task_gets_cancel_not_a_scripted_answer(tmp_path):
     task = conversation.Task("t9", "Order a coke")
     task.script, task.cancelled = {"answers": [], "fallback": "ok"}, True
     assert c.ask(task, {"kind": "text", "text": "Which size?"}) == {"cancel": True}
+
+
+def test_a_bench_task_never_asks_for_card_details(tmp_path):
+    c = conversation.Core(WebChannel(tmp_path / "media"), profile=Profile(tmp_path / "p.json"),
+                          make_agent=lambda *a: None, start=lambda goal: ("https://x.test/", "x", {}), poll=0.01)
+    task = conversation.Task("t9", "Order a coke")
+    task.script = {"answers": [], "fallback": "ok"}
+    replies = []
+    threading.Thread(target=lambda: replies.append(c.ask(task, {"kind": "secret", "text": "Please provide the CVV "
+                                                                "for your HDFC Bank Card."})), daemon=True).start()
+    until(lambda: replies or c.open is not None)
+    assert replies == [{"cancel": True}] and task.cancelled and "card details" in task.bench["stopped"]

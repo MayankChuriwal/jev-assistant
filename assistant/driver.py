@@ -22,8 +22,8 @@ CODE_WORDS = re.compile(r"\b(code|otp|pin|passcode|password|cvv)\b", re.IGNORECA
 YES = re.compile(r"\b(yes|yeah|yep|yup|ok|okay|sure|go ahead|book it|confirm|do it|proceed|haan)\b", re.IGNORECASE)
 NOT_YES = re.compile(r"\?|\b(no|not|don'?t|wait|but|instead|cheaper|change|stop|cancel|hold)\b", re.IGNORECASE)
 DIALOGS = {"ACCEPT_DIALOG", "DISMISS_DIALOG"}
-CONFIRM = re.compile(r"\b(confirm|proceed|go ahead|book (it|this|the)|place (it|the order)|"
-                     r"should i (book|order|pay|request|place)|shall i)\b", re.IGNORECASE)
+CONFIRM = re.compile(r"\b(confirm|book (it|this|the)|place (it|the order)|should i (book|order|pay|request|place)|"
+                     r"shall i|do you want (me )?to (book|order|place|pay|request|proceed))\b", re.IGNORECASE)
 YES_NO = {"yes", "no", "y", "n", "confirm", "cancel", "ok"}
 PAYMENT = re.compile(r"\b(cash|upi|card|wallet|net ?banking|pay later|cod|cash on delivery)\b", re.IGNORECASE)
 
@@ -177,7 +177,12 @@ class MiniAgent(Agent):
         message = decision["message"].strip() or (act["text"].strip() if act["op"] != "DONE" else "")
         op = "ASK" if act["op"] == "TELL" and message.endswith("?") else act["op"]  # a question waits for its answer
         options = [o.strip() for o in decision["options"] if o.strip()][:10]
-        if op == "ASK" and CONFIRM.search(message) and all(o.lower().rstrip(".") in YES_NO for o in options):
+        secret = rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
+        if op == "ASK" and secret and rules.CARD_DETAIL.search(message) and not self.payment_asked(page):
+            raise Retry("Ask the user which payment method to use first: list the payment methods the page shows. "
+                        "Card details come only after they choose a card.")
+        if op == "ASK" and not secret and CONFIRM.search(message) and all(o.lower().rstrip(".") in YES_NO
+                                                                          for o in options):
             raise Retry("Don't ask the user to confirm. When everything is chosen, do the final action (the control "
                         "that books, orders, or pays) with commits true and the summary in message: the system asks "
                         "the user once. If something is still undecided, ASK with the choices listed.")
@@ -199,7 +204,6 @@ class MiniAgent(Agent):
             raise Retry("ASK needs the question in message.")
         if self.moved(page):
             raise StalePage("The page changed while mini decided. Choose again.")
-        secret = rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
         options = [] if secret else options
         text = message + "".join(f"\n{n}. {o}" for n, o in enumerate(options, 1))
         self.steady(page)  # a page still switching screens gets read again first
@@ -216,6 +220,11 @@ class MiniAgent(Agent):
             line += f" → option {pick}: {options[int(pick) - 1]}" if pick != "other" else " → none of the options"
         s["chat"].append({"from": "user", "text": line})
         return None
+
+    def payment_asked(self, page):
+        """False while the page offers payment methods and the user hasn't been asked which one to use."""
+        asked = any(c["from"] == "agent" and re.search(r"\bpay", c["text"], re.IGNORECASE) for c in self.state["chat"])
+        return asked or not PAYMENT.search(page["text"])
 
     def not_asked_before(self, message):
         """A question the user already answered is never asked again: mini gets the answer back instead."""
@@ -294,7 +303,8 @@ class MiniAgent(Agent):
                      else BROWSER_OP[act["op"]])
         if operation == "SELECT" and not action_space(page["actions"])[1].get("select_target"):
             operation = "CLICK"  # list items and custom dropdown options are clicked
-        quoted = re.search(r'"([^"]{2,})"', act["target"])
+        target = re.sub(r'\s*=\s*"[^"]*"(\s*\([^)]*\))?\s*$', "", act["target"].replace('\\"', '"'))
+        quoted = re.search(r'"(.{2,})"', re.sub(r"\s*\([^)]*\)\s*$", "", target))
         if quoted:  # mini copied a label from the list: match it exactly, never let a guess stand in for it
             found = self.labelled(page, operation, quoted[1])
             if found:
@@ -328,7 +338,7 @@ class MiniAgent(Agent):
         near = same or [(i, a) for i, a in candidates.items() if label in a["label"]]
         if len(near) == 1:
             return near[0]
-        if not near and not any(label[:40] in a["label"] for a in page["actions"]):
+        if not near and label[:40] in page["text"]:
             raise Retry(f"No element you can act on is labelled “{label}” right now. If the page text shows it, "
                         "something covers it (an open panel or pop-up): finish or close that first.")
         return None
@@ -375,8 +385,7 @@ class MiniAgent(Agent):
         if not summary:
             raise Retry(f"“{commit}” commits: put the summary in message (what, where, option, payment method, and "
                         "the total exactly as the page shows it).")
-        asked = any(c["from"] == "agent" and re.search(r"\bpay", c["text"], re.IGNORECASE) for c in s["chat"])
-        if PAYMENT.search(page["text"]) and not asked:  # the user always picks how to pay
+        if not self.payment_asked(page):  # the user always picks how to pay
             raise Retry("Ask the user which payment method to use first: list the payment methods the page shows "
                         "(open the payment selector if needed), then do the final action with their choice.")
         amounts = rules.PRICE.findall(summary)

@@ -144,3 +144,44 @@ def test_a_question_already_answered_is_not_asked_again(tmp_path, monkeypatch):
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.asked == [] and "The first saved address" in a.state["feedback"][0]
+
+
+SEARCH = {"id": "e7", "kind": "click", "label": 'Search for "Ice cream" "Chips" "Cold drinks"', "role": "button",
+          "node": 7}
+PANEL = {"id": "e8", "kind": "scroll_down", "label": "Search results", "role": "region", "node": 8}
+
+
+def test_an_escaped_quoted_label_still_matches_exactly(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Instamart", actions=[SEARCH, WAIT]))
+    script(monkeypatch, out("CLICK", '[2] button "Search for \\"Ice cream\\" \\"Chips\\" \\"Cold drinks\\""'))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.browser.act.call_args.args[:2] == ("CLICK", SEARCH)
+
+
+def test_scrolling_the_page_scrolls_its_panel_when_the_page_itself_does_not_scroll():
+    from assistant import jev
+
+    action, confidence, _, _ = jev.ground(fake_page(text="Results", actions=[PANEL, WAIT]), "SCROLL_DOWN", "",
+                                          "See more results", "Order a coke")
+    assert action == PANEL and confidence == 1.0
+
+
+def test_a_card_detail_needs_the_payment_method_asked_first(tmp_path, monkeypatch):
+    cvv = {"id": "e9", "kind": "fill", "label": "CVV", "role": "textbox", "value": "", "node": 9,
+           "constraints": {"type": "password"}}
+    a = mini_with(tmp_path, replies=[{"text": "123"}],
+                  page=fake_page(text="Preferred Payment\nHDFC Bank Card\nPay on Delivery\nPay 132",
+                                 actions=[cvv, WAIT]))
+    script(monkeypatch, out("ASK", message="Please provide the CVV for your HDFC Bank Card to proceed with payment."))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and "payment method" in a.state["feedback"][0]
+
+
+def test_a_question_that_says_proceed_is_not_a_confirmation(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, replies=[{"text": "Terminal 1"}], page=fake_page(text="Where to?", actions=[WAIT]))
+    script(monkeypatch, out("ASK", message="Which terminal should I use to proceed with the booking?"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert len(a.asked) == 1

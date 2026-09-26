@@ -33,6 +33,8 @@ def grade(spec, task, run, judge):
     reasons = []
     if any(h.get("committed") for h in state.get("history", [])):
         reasons.append("committed during a bench run")
+    if task.bench.get("stopped"):
+        reasons.append(task.bench["stopped"])
     if spec["end"] == "gate" and not task.bench["gate"]:
         reasons.append("never reached the final approval")
     if spec["end"] == "result" and task.status != "done":

@@ -37,8 +37,10 @@ def ground(page, operation, target, next_goal, goal):
     candidates = heads.get(HEAD[operation], {})
     if not candidates:
         return None, 0.0, [], None
-    if not target.strip():  # "the page" or "the focused element"
+    if not target.strip():  # "the page" or "the focused element"; a page that doesn't scroll scrolls its panel
         index = next((i for i, a in candidates.items() if a.get("node") is None), None)
+        if index is None and operation.startswith("SCROLL"):
+            index = next(iter(candidates))
         if index is not None:
             return candidates[index], 1.0, [], index
     answer = ask(page, "target", criteria(candidates),

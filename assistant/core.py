@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import jobs, messages, model
+from . import jobs, messages, model, rules
 from .agent import STOPPED
 from .driver import agent_class
 from .profile import SECRETS, Profile, Secrets
@@ -418,6 +418,11 @@ class Core:
 
     def ask(self, task, message):
         """The agent's asker: queue the question and wait for its answer, pausing and finally cancelling."""
+        if task.script is not None and message["kind"] == "secret" and rules.CARD_DETAIL.search(message["text"]):
+            task.bench["stopped"] = f"asked for card details: {message['text']}"  # a bench run never uses a card
+            self.say(f"(bench) Stopped: {task.bench['stopped']}", task)
+            task.cancelled = True
+            return {"cancel": True}
         if task.script is not None and message["kind"] not in {"secret", "image", "file"}:
             return {"cancel": True} if task.cancelled else self.scripted(task, message)  # codes still go to chat
         question = Question(next(self.question_ids), task, message, self.clock())
