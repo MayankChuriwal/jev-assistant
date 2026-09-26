@@ -32,6 +32,13 @@ PAGE_TALK = re.compile(r"\b(element|click|tap|scroll)\b|\[\d+\]", re.IGNORECASE)
 PAYMENT = re.compile(r"\b(cash|upi|card|wallet|net ?banking|pay later|cod|cash on delivery)\b", re.IGNORECASE)
 
 
+def plain(text):
+    """Text as the user should read it: entities unescaped until none are left (some sites escape twice)."""
+    while (unescaped := html.unescape(text)) != text:
+        text = unescaped
+    return text
+
+
 class Retry(Exception):
     """Nothing done this step; the reason goes to mini as feedback for the next one."""
 
@@ -190,9 +197,9 @@ class MiniAgent(Agent):
         s = self.state
         act = decision["action"]
         fallback = act["text"].strip() if act["op"] != "DONE" else ""
-        message = html.unescape(decision["message"].strip() or fallback)
+        message = plain(decision["message"].strip() or fallback)
         op = "ASK" if act["op"] == "TELL" and message.endswith("?") else act["op"]  # a question waits for its answer
-        options = [html.unescape(o.strip()) for o in decision["options"] if o.strip()][:10]
+        options = [plain(o.strip()) for o in decision["options"] if o.strip()][:10]
         if op == "ASK" and PAGE_TALK.search(message):
             raise Retry("The user can't see the page: never ask them about elements, clicks, or scrolling. Decide "
                         "yourself (read the element list, scroll, go back), or ASK for information about what they "
@@ -252,6 +259,16 @@ class MiniAgent(Agent):
                 line += " → none of the options"
         s["chat"].append({"from": "user", "text": line})
         return None
+
+    def summary(self, page):
+        """A summary mini left out, written by one focused call from the goal, chat, page, and the form's own values."""
+        s = self.state
+        payload = {"goal": s["goal"], "chat": s["chat"][-10:], "form": self.page_summary(page),
+                   "page": {"url": page["url"], "title": page["title"], "text": page["text"][:3000]}}
+        parts, meta = mind.summarize(payload)
+        usage = meta.get("usage") or {}
+        s["spend"] += usage.get("prompt_tokens", 0) * PRICES[0] + usage.get("completion_tokens", 0) * PRICES[1]
+        return " · ".join(parts[p].strip() for p in mind.SUMMARY_PARTS if parts.get(p, "").strip())
 
     def page_summary(self, page):
         """What the page holds when mini wrote no summary: filled fields and checked options, and the last total."""
@@ -455,7 +472,7 @@ class MiniAgent(Agent):
             return True
         if s["commit"]:
             raise Retry("An earlier committed action is still being checked; WAIT for it first.")
-        summary = html.unescape(decision["message"].strip()) or self.page_summary(page)
+        summary = plain(decision["message"].strip()) or self.summary(page)
         if not summary:
             raise Retry(f"“{commit}” commits: put the summary in message (what, where, option, payment method, and "
                         "the total exactly as the page shows it).")

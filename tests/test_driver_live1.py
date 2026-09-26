@@ -300,7 +300,11 @@ def test_an_empty_summary_is_written_from_the_form_itself(tmp_path, monkeypatch)
             {"id": "e4", "kind": "click", "label": "Bacon", "role": "checkbox", "checked": True, "node": 4},
             {"id": "e5", "kind": "fill", "label": "CVV", "role": "textbox", "value": "[secret]", "node": 5},
             {"id": "e6", "kind": "click", "label": "Submit order", "role": "button", "node": 6}]
+    from assistant import driver
+
     a = mini_with(tmp_path, replies=[{"text": "no"}], page=fake_page(text="Pizza order", actions=[*form, WAIT]))
+    monkeypatch.setattr(driver.mind, "summarize", lambda payload: (
+        {"what": payload["form"], "where": "", "option": "", "payment": "", "total": ""}, {}))
     script(monkeypatch, out("CLICK", "Submit order", commits=True, message=""))
     jev_fake(monkeypatch, approvals=["no"])
     a.command("tick")
@@ -338,3 +342,32 @@ def test_a_confirmation_with_a_yes_or_no_plus_words_option_is_still_refused(tmp_
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.asked == [] and "commits true" in a.state["feedback"][0]
+
+
+def test_an_empty_summary_is_written_by_a_focused_summary_call(tmp_path, monkeypatch):
+    from assistant import driver
+
+    pay = {"id": "e7", "kind": "click", "label": "Place Order", "role": "button", "node": 7}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text="Diet Coke 300 ml\nDelivering to Home\nPay on Delivery\nTotal ₹121",
+                                 actions=[pay, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which payment method?"},
+                        {"from": "user", "text": "“Pay on delivery”"}]
+    seen = []
+    monkeypatch.setattr(driver.mind, "summarize", lambda payload: seen.append(payload) or (
+        {"what": "1 × Diet Coke 300 ml", "where": "Home", "option": "", "payment": "Pay on Delivery",
+         "total": "₹121"}, {}))
+    script(monkeypatch, out("CLICK", "Place Order", commits=True, message=""))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    assert a.asked[0]["text"].startswith("1 × Diet Coke 300 ml · Home · Pay on Delivery · ₹121")
+    assert seen and seen[0]["page"]["text"].startswith("Diet Coke")
+
+
+def test_double_escaped_entities_are_fully_unescaped(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, replies=[{"text": "Wallets"}], page=fake_page(text="Pay", actions=[WAIT]))
+    script(monkeypatch, out("ASK", message="Which payment method?",
+                            options=["Wallets (PhonePe, Amazon Pay &amp;amp; more)"]))
+    jev_fake(monkeypatch, replies=["1"])
+    a.command("tick")
+    assert "Amazon Pay & more" in a.asked[0]["text"]
