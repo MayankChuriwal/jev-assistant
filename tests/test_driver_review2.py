@@ -195,3 +195,13 @@ def test_a_refused_confirmation_names_the_final_control_to_press(tmp_path, monke
     jev_fake(monkeypatch)
     a.command("tick")
     assert "“Request Uber Go AC”" in a.state["feedback"][0]
+
+
+def test_a_round_trip_price_is_not_the_answer_to_a_one_way_question(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="IndiGo 11:30 PM ₹16,609 round trip", actions=[WAIT]))
+    a.state["goal"] = "Find the cheapest flight from Bengaluru to Delhi next Friday"
+    script(monkeypatch, out("DONE", message="IndiGo at 11:30 PM for ₹16,609 round trip.",
+                            text="IndiGo 11:30 PM ₹16,609 round trip"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.state["status"] != "done" and "one-way" in a.state["feedback"][0]

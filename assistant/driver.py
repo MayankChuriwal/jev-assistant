@@ -438,6 +438,10 @@ class MiniAgent(Agent):
         texts = [page["text"], *reversed(s["recent"])]
         quote = self.evidence(decision["action"]["text"].strip(), decision["message"], texts)
         report = decision["message"].strip() or "Done."
+        if re.search(r"round.?trip", report, re.IGNORECASE) and not re.search(r"round.?trip|return", s["goal"],
+                                                                               re.IGNORECASE):
+            raise Retry("That is a round-trip price; the user asked for one way. Set the trip type to one-way, search "
+                        "again, and report the one-way price.")
         if jev.achieved(page, s["goal"], report) != "yes":
             s["done_refusals"] = s.get("done_refusals", 0) + 1
             if s["done_refusals"] < 3 or any(h.get("committed") for h in s["history"]) or \
