@@ -241,7 +241,11 @@
       if (!rname || (rname === 'gridcell' && e.querySelector('button,[role="button"]'))) continue;
       taken.add(e);
       const own = label(e), near = own ? '' : context(e);
-      const base = states(e, {node, role: rname, label: own || (near ? `${rname} in “${near}”` : rname), rect});
+      // A hidden name ("Make payment, tap to go to payment") keeps the words the button shows ("Proceed to Pay").
+      const shown = e.matches('[aria-label],[aria-labelledby]') ? (e.innerText || '').replace(/\s+/g, ' ').trim() : '';
+      const named = shown && shown.length <= 40 && !own.toLowerCase().includes(shown.toLowerCase()) ?
+        `${own} (shows “${shown}”)` : own;
+      const base = states(e, {node, role: rname, label: named || (near ? `${rname} in “${near}”` : rname), rect});
       if (e.tagName === 'SELECT') {
         const current = [...e.selectedOptions].map(o => o.label).join(', ');
         for (const o of e.options) if (!o.selected && !o.disabled && !o.closest('optgroup[disabled]'))

@@ -339,6 +339,14 @@ def test_a_clickable_wrapper_around_a_same_named_link_is_one_control(browser_at)
     helps = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click" and a["label"].startswith("Help")]
     assert helps == ["Help"]
 
+
+def test_a_button_named_apart_from_its_visible_words_carries_both(browser_at):
+    b = browser_at("/next.html")
+    html = "<button aria-label=\\\"Make payment, tap to go to payment\\\">Proceed to Pay</button>"
+    b.evaluate(f"document.body.insertAdjacentHTML('afterbegin', \"{html}\")")
+    labels = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click"]
+    assert any("Make payment" in label and "Proceed to Pay" in label for label in labels)
+
 def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
     from assistant.browser import forget_sites
 
