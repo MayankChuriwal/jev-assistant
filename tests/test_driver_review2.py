@@ -258,7 +258,8 @@ def test_an_approval_without_the_address_gets_the_sites_own_address_line(tmp_pat
     a = mini_with(tmp_path, replies=[{"text": "no"}],
                   page=fake_page(text="Pay on delivery\n1 item. Total: ₹156\nCash/Pay on Delivery",
                                  actions=[cod, WAIT]))
-    a.state["chat"] += PAID
+    a.state["chat"] += [{"from": "agent", "text": "Where should I deliver?\n1. home 1601, AECS Layout\n2. Here"},
+                        {"from": "user", "text": "“1” → option 1: home 1601, AECS Layout"}, *PAID]
     a.state["recent"] = ["Delivering to: home 1601, AECS Layout, Bengaluru\nPayment Options"]
     script(monkeypatch, out("CLICK", "Cash Pay cash at the time of delivery.", commits=True,
                             message="1 Diet Coke 300 ml can · Pay on Delivery · ₹156"))
@@ -335,3 +336,44 @@ def test_after_three_code_requests_the_task_stops_instead_of_sending_more_codes(
     for _ in range(4):
         a.command("tick")
     assert len(a.asked) == 3 and a.state["status"] == "blocked" and "codes" in a.told[-1]["text"]
+
+
+GO_AC = {"id": "e1", "kind": "click", "label": "Uber Go AC 4 2 mins away ₹811.47 ₹954.67", "role": "option",
+         "node": 1}
+PREMIER_AC = {"id": "e2", "kind": "click", "label": "Premier AC 4 1 min away ₹1,041.51 ₹1,225.31", "role": "option",
+              "node": 2}
+REQUEST = {"id": "e3", "kind": "click", "label": "Request Uber Go AC", "role": "button", "node": 3}
+RIDE_PAGE = "Uber Go AC\n₹811.47\nPremier AC\n₹1,041.51\nCash\nRequest Uber Go AC"
+
+
+def test_a_choice_between_priced_options_is_the_users_before_the_approval(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text=RIDE_PAGE, actions=[GO_AC, PREMIER_AC, REQUEST, WAIT]))
+    a.state["chat"] += PAID
+    script(monkeypatch, out("CLICK", "Request Uber Go AC", commits=True,
+                            message="Uber Go AC · home → airport · Cash · ₹811.47"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and "price" in a.state["feedback"][0] and "Premier AC" in a.state["feedback"][0]
+
+
+def test_once_the_user_picked_an_option_the_approval_goes_ahead(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text=RIDE_PAGE, actions=[GO_AC, PREMIER_AC, REQUEST, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which ride?\n1. Uber Go AC ₹811\n2. Premier AC ₹1,041"},
+                        {"from": "user", "text": "“1” → option 1: Uber Go AC ₹811"}, *PAID]
+    script(monkeypatch, out("CLICK", "Request Uber Go AC", commits=True,
+                            message="Uber Go AC · home → airport · Cash · ₹811.47"))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    assert a.asked and "Request Uber Go AC" in a.asked[0]["text"], a.state["feedback"]
+
+
+def test_a_delivery_address_is_asked_before_the_approval(tmp_path, monkeypatch):
+    pay = {"id": "e4", "kind": "click", "label": "Place order", "role": "button", "node": 4}
+    a = mini_with(tmp_path, page=fake_page(text="Delivering to: home 1601, AECS Layout\nTo pay ₹121\nPlace order",
+                                           actions=[pay, WAIT]))
+    a.state["chat"] += PAID
+    script(monkeypatch, out("CLICK", "Place order", commits=True, message="Diet Coke · home · Cash · ₹121"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and "where to deliver" in a.state["feedback"][0]

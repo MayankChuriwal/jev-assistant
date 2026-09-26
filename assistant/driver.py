@@ -376,6 +376,26 @@ class MiniAgent(Agent):
                 break
         return " · ".join(dict.fromkeys(parts))
 
+    def choices_made(self, page):
+        """Before an approval: the user picked among the priced options the page offers (ride types), and chose
+        where a delivery goes. Mini lists the options, with prices, when they haven't."""
+        s = self.state
+        chat = s["chat"]
+        pairs = [(q["text"], r["text"]) for q, r in zip(chat, chat[1:]) if q["from"] == "agent" and r["from"] == "user"
+                 and "I'll press" not in q["text"]]
+        told = (s["goal"] + " " + " ".join(r for _, r in pairs)).lower()
+        names = list(dict.fromkeys(re.split(r"\s\d|₹", a["label"])[0].strip() for a in page["actions"]
+                                   if a.get("kind") == "click" and rules.PRICE.search(a.get("label", ""))))
+        names = [n for n in names if len(n) >= 3]
+        listed = any(sum(n.lower() in q.lower() for n in names) >= 2 for q, _ in pairs)
+        if len(names) >= 2 and not listed and not any(n.lower() in told for n in names):
+            raise Retry("The user hasn't chosen yet: ASK which one they want, one line per option with its price "
+                        f"and key detail (arrival time, seats) — {', '.join(names[:6])}. Then do the final step.")
+        address = next((m for t in [page["text"], *reversed(s["recent"])] for m in DELIVERING.findall(t)), None)
+        if address and not PLACE.search(s["goal"]) and not any(PLACE.search(q) for q, _ in pairs):
+            raise Retry(f"Ask the user where to deliver before the final step: the site has “{address.strip()}”. "
+                        "List their saved addresses and their current location, and use the one they pick.")
+
     def payment_answer(self):
         """The user's latest answer to a question about how to pay (approvals don't count), or None."""
         chat = self.state["chat"]
@@ -649,6 +669,7 @@ class MiniAgent(Agent):
         if not self.payment_asked(page):  # the user always picks how to pay
             raise Retry("Ask the user which payment method to use first: list the payment methods the page shows "
                         "(open the payment selector if needed), then do the final action with their choice.")
+        self.choices_made(page)
         amounts = rules.PRICE.findall(summary)
         missing = [x for x in amounts if not rules.amount_shown(x, page["text"])]
         if missing:
