@@ -331,6 +331,13 @@ class MiniAgent(Agent):
             if words and len(words & before) / len(words | before) >= 0.7:
                 raise Retry(f"You asked this already and the user answered {reply['text']}. Use that answer; if the "
                             "page doesn't offer it, ASK a more specific question naming what the page shows.")
+        pairs = [(q["text"], r["text"]) for q, r in zip(chat, chat[1:]) if q["from"] == "agent" and r["from"] == "user"]
+        if len(pairs) >= 2 and pairs[-1][1] == pairs[-2][1] and not DELEGATE.search(pairs[-1][1]) and not re.fullmatch(
+                r"\W*(yes|no|ok|okay|sure|yeah|yep|nope)\W*", pairs[-1][1], re.IGNORECASE):
+            last = set(re.findall(r"[a-z0-9]+", pairs[-1][0].split("\n")[0].lower()))
+            if words and len(words & last) / len(words | last) >= 0.3:  # reworded, still the same question
+                raise Retry(f"The user gave the same answer twice ({pairs[-1][1]}). Don't ask again: do what it says, "
+                            "or if the site can't, STOP and tell them why, naming what the site offers instead.")
 
     def evidence(self, quote, report, texts):
         """A quote proving the report, from the current page or one seen just before: mini's own when it is there,

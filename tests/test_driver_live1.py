@@ -485,3 +485,17 @@ def test_an_update_goes_out_before_the_next_step(tmp_path, monkeypatch):
     a.command("tick")
     a.command("tick")
     assert [m["text"] for m in a.told] == ["Searching flights for Friday."] and a.browser.act.called
+
+
+def test_the_same_reply_twice_to_one_question_means_stop_asking(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Pay with\nHDFC Bank Card 2479\nAMEX Card 1007", actions=[WAIT]))
+    a.state["chat"] += [
+        {"from": "agent", "text": "Which payment method would you like to use for paying ₹331?"},
+        {"from": "user", "text": "“Cash on delivery”"},
+        {"from": "agent", "text": "Cash on delivery is not available here. Would you like to use one of the cards?"},
+        {"from": "user", "text": "“Cash on delivery”"}]
+    script(monkeypatch, out("ASK", message="Cash on delivery is not available for this order. Please choose one of "
+                                           "the listed card payment options.", options=["HDFC Bank Card 2479"]))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and "same answer twice" in a.state["feedback"][0]
