@@ -116,3 +116,11 @@ def test_the_debug_view_shows_steps_and_a_masked_screenshot():
         {"id": "t1", "title": "Diet Coke", "status": "running", "host": "shop.test",
          "history": [{"action": "Pay ₹79"}], "screenshot": "iVBOR"}]
     assert masks == [{(1, 2)}]
+
+
+def test_one_named_public_origin_may_post_and_no_other(chat, monkeypatch):
+    monkeypatch.setenv("JEV_PUBLIC_ORIGIN", "https://abc.ngrok-free.app")
+    ok = chat.client.post("/webhook", json=WEBHOOK, headers={"Origin": "https://abc.ngrok-free.app"})
+    assert ok.json() == {"ok": True}
+    bad = chat.client.post("/webhook", json=WEBHOOK, headers={"Origin": "https://evil.ngrok-free.app"})
+    assert bad.status_code == 403

@@ -271,8 +271,9 @@ class ChatHandler(BaseHTTPRequestHandler):
     def local(self):
         """Host and Origin name this server, so no other site and no DNS-rebound name reaches it."""
         names = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
-        origin = self.headers.get("Origin")
-        return self.headers.get("Host") in names and (origin is None or origin.removeprefix("http://") in names)
+        origins = {f"http://{n}" for n in names} | {os.environ.get("JEV_PUBLIC_ORIGIN") or "http://127.0.0.1"}
+        origin = self.headers.get("Origin")  # JEV_PUBLIC_ORIGIN: one tunnel (ngrok) that forwards Host as local
+        return self.headers.get("Host") in names and (origin is None or origin in origins)
 
     def authorised(self, query):
         token = self.headers.get("X-Jev-Token") or (query.get("t") or [""])[0]
