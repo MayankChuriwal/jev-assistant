@@ -125,8 +125,8 @@ def test_a_browser_timeout_is_a_hiccup_not_the_end(tmp_path, monkeypatch):
 def test_the_payment_method_is_always_the_users_choice(tmp_path, monkeypatch):
     a = mini_with(tmp_path, replies=[{"text": "yes"}],
                   page=fake_page(text="Uber Go AC ₹785.93\nCash\nRequest Uber Go AC", actions=[GO, WAIT]))
-    script(monkeypatch, out("CLICK", "Request Uber Go AC", commits=True, message="Uber Go AC ₹785.93 to Terminal 1"),
-           out("CLICK", "Request Uber Go AC", commits=True, message="Uber Go AC ₹785.93 to Terminal 1, Cash"))
+    script(monkeypatch, out("CLICK", "Request Uber Go AC", commits=True, message="Uber Go AC · Terminal 1 · ₹785.93"),
+           out("CLICK", "Request Uber Go AC", commits=True, message="Uber Go AC · Terminal 1 · Cash · ₹785.93"))
     jev_fake(monkeypatch, approvals=["yes"])
     a.command("tick")
     assert a.asked == [] and "payment method" in a.state["feedback"][0]
@@ -416,3 +416,18 @@ def test_a_note_about_the_user_is_not_sent_to_them(tmp_path, monkeypatch):
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.told == [] and "speak to them" in a.state["feedback"][0]
+
+
+def test_a_summary_that_lists_no_details_is_rewritten(tmp_path, monkeypatch):
+    from assistant import driver
+
+    size = {"id": "e9", "kind": "click", "label": "Medium", "role": "radio", "node": 9, "checked": True}
+    submit = {"id": "e10", "kind": "click", "label": "Submit order", "role": "button", "node": 10}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text="Pizza size\nMedium\nSubmit order", actions=[size, submit, WAIT]))
+    monkeypatch.setattr(driver.mind, "summarize", lambda payload: (
+        {"what": "Pizza order", "where": "", "option": "Medium", "payment": "", "total": ""}, {}))
+    script(monkeypatch, out("CLICK", "Submit order", commits=True, message="Submitting the pizza order form now."))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    assert "Medium" in a.asked[0]["text"]
