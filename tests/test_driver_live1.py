@@ -605,3 +605,11 @@ def test_quoted_words_inside_a_container_are_clicked_there(tmp_path, monkeypatch
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.browser.act.call_args.args[1]["within"] == "Add New"
+
+
+def test_options_mini_numbered_itself_are_numbered_once(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, replies=[{"text": "2"}], page=fake_page(text="Saved addresses\nWork\nHome", actions=[WAIT]))
+    script(monkeypatch, out("ASK", message="Please choose one delivery address.", options=["1. Work", "2) Home"]))
+    jev_fake(monkeypatch, replies=["2"])
+    a.command("tick")
+    assert a.asked[0]["text"].endswith("\n1. Work\n2. Home")

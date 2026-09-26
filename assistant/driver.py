@@ -229,7 +229,7 @@ class MiniAgent(Agent):
         fallback = act["text"].strip() if act["op"] != "DONE" else ""
         message = plain(decision["message"].strip() or fallback)
         op = "ASK" if act["op"] == "TELL" and message.endswith("?") else act["op"]  # a question waits for its answer
-        options = [plain(o.strip()) for o in decision["options"] if o.strip()][:10]
+        options = [re.sub(r"^\d{1,2}[.)]\s+", "", plain(o.strip())) for o in decision["options"] if o.strip()][:10]
         if op in {"ASK", "TELL"} and PAGE_TALK.search(message):
             raise Retry("The user can't see the page: never ask them about elements, clicks, or scrolling. Decide "
                         "yourself (read the element list, scroll, go back), or ASK for information about what they "
