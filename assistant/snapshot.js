@@ -11,8 +11,10 @@
   const styles = new Map();
   const style = e => { let s = styles.get(e); if (!s) styles.set(e, s = view(e).getComputedStyle(e)); return s; };
   const safe = e => !['password', 'file', 'hidden'].includes(e.type);
-  const visible = e => !e.closest('[aria-hidden="true"],[inert]') &&
-    e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true});
+  // What a sighted user sees and can press. aria-hidden hides from screen readers only: Swiggy hides its visual menu
+  // cards (with their ADD buttons) behind a screen-reader copy, so controls count when rendered; text skips them.
+  const rendered = e => !e.closest('[inert]') && e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true});
+  const visible = e => !e.closest('[aria-hidden="true"]') && rendered(e);
   const byId = (e, id) => e.getRootNode().getElementById?.(id) || e.ownerDocument.getElementById(id);
   const name = (e, seen = new Set()) => {
     if (!e || seen.has(e)) return '';
@@ -28,10 +30,10 @@
   };
   const label = e => name(e).replace(/\s+/g, ' ').trim().slice(0, 160);
   // A control with no name of its own (an icon button on a product card) is named by the nearest text around it.
-  const context = e => {
+  const context = (e, own = '') => {
     for (let a = e.parentElement, n = 0; a && n < 4; a = a.parentElement, n++) {
       const t = label(a);
-      if (t) return t.slice(0, 80);
+      if (t && t !== own) return t.slice(0, 80);
     }
     return '';
   };
@@ -116,7 +118,7 @@
   };
   cache.locate = id => {
     const e = cache.nodes.get(id);
-    if (!e?.isConnected || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) return null;
+    if (!e?.isConnected || !rendered(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) return null;
     const r = e.getBoundingClientRect();
     return r.width && r.height ? cache.climb(e, r.x + r.width / 2, r.y + r.height / 2) : null;
   };
@@ -219,7 +221,7 @@
       const draggable = e.getAttribute('draggable') === 'true';
       const dirs = scrollDirs(e);
       if (!isSemantic && !clickable && !draggable && !dirs.length) continue;
-      if (!visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
+      if (!rendered(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
       const rect = box(e, dx, dy);
       if (!inView(rect) || (clickable && rect.w * rect.h > innerWidth * innerHeight / 2)) continue;
       const node = identity(e);
@@ -272,7 +274,7 @@
   cache.pageKey = () => [performance.timeOrigin, location.href, scrollX, scrollY, innerWidth, innerHeight,
     fields().map(e => [identity(e), e.value, e.checked, e.selectedIndex, e.disabled, e.readOnly])];
   cache.guard = (e, memo = new Map()) => {
-    if (!e?.isConnected || !visible(e)) return null;
+    if (!e?.isConnected || !rendered(e)) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
     if (scope && !memo.has(scope)) memo.set(scope, steady(scope.innerText?.slice(0, 6000)));
     return [identity(e), role(e), steady(name(e)), safe(e) ? e.value ?? null : null, e.checked ?? null, e.selectedIndex ?? null,
@@ -280,14 +282,19 @@
       e.getAttribute('aria-checked'), e.getAttribute('aria-selected'), e.getAttribute('href'), memo.get(scope) ?? ''];
   };
   // Fields that share a label ("Search for a location" for pickup and dropoff) are told apart, so nothing meant for
-  // one is typed into the other: by placeholder where they have one, else by position.
+  // one is typed into the other: by placeholder where they have one, else by position. Buttons that share one ("ADD"
+  // on every menu card) are told apart by the text around them.
   const byLabel = {};
-  for (const a of actions) if (a.kind === 'fill') (byLabel[a.label] ||= []).push(a);
+  for (const a of actions) if (a.kind === 'fill' || a.kind === 'click') (byLabel[a.kind + a.label] ||= []).push(a);
   for (const same of Object.values(byLabel)) {
     if (same.length < 2) continue;
+    const hints = same.map(a => {
+      const e = cache.nodes.get(a.node);
+      return a.kind === 'fill' ? e?.placeholder : e && context(e, a.label);
+    });
     same.forEach((a, i) => {
-      const hint = cache.nodes.get(a.node)?.placeholder;
-      a.label += ` (${hint && !a.label.includes(hint) ? hint : `${i + 1} of ${same.length}`})`;
+      const hint = hints[i], unique = hints.indexOf(hint) === hints.lastIndexOf(hint);
+      a.label += ` (${hint && unique && !a.label.includes(hint) ? hint : `${i + 1} of ${same.length}`})`;
     });
   }
   actions.push(...options);

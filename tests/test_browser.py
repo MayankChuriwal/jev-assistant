@@ -312,6 +312,15 @@ def test_a_control_with_no_name_is_labelled_by_the_text_around_it(browser_at):
     labels = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click"]
     assert any(label.startswith("clickable in “Margherita Pizza ₹170") for label in labels)
 
+
+def test_visible_buttons_hidden_from_screen_readers_are_offered_and_told_apart(browser_at):
+    b = browser_at("/next.html")
+    card = ("<div><p>{0}</p><div aria-hidden=\\\"true\\\"><button onclick=\\\"1\\\">ADD</button></div></div>")
+    html = card.format("Margherita Pizza ₹170") + card.format("Farmhouse Pizza ₹290")
+    b.evaluate(f"document.body.insertAdjacentHTML('afterbegin', \"{html}\")")
+    adds = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click" and a["label"].startswith("ADD")]
+    assert len(adds) == 2 and "Margherita" in adds[0] and "Farmhouse" in adds[1]
+
 def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
     from assistant.browser import forget_sites
 
