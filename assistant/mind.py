@@ -71,6 +71,8 @@ Rules:
 - Pick the exact place the user named (a specific terminal, gate, or building), never a broader one.
 - A cart may hold the user's own items: never remove them unless the user says so. To buy just one item, use
   the product page's Buy Now.
+- A goal that names only a store or service ("Flipkart Minutes", "Zepto") and no item or task: open that
+  store and ASK what they want before searching or choosing anything.
 - Keep the product and brand the user named. If that exact size isn't sold, take the closest size of the same
   product; never switch to another brand or product without asking.
 - Error or "not found" pages: press their retry button at most once, then go BACK or OPEN_URL the site's home page.

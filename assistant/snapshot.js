@@ -15,6 +15,12 @@
   // cards (with their ADD buttons) behind a screen-reader copy, so controls count when rendered; text skips them.
   const rendered = e => !e.closest('[inert]') && e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true});
   const visible = e => !e.closest('[aria-hidden="true"]') && rendered(e);
+  // A see-through text input laid over drawn boxes (one-time-code widgets) is where typing goes.
+  const typedThrough = e => e.tagName === 'INPUT' &&
+    !['radio', 'checkbox', 'file', 'hidden', 'submit', 'button', 'image', 'reset'].includes(e.type) &&
+    !e.closest('[inert]') && e.checkVisibility({checkVisibilityCSS: true}) &&
+    e.getBoundingClientRect().width > 0 && e.getBoundingClientRect().height > 0;
+  const reachable = e => rendered(e) || typedThrough(e);
   const byId = (e, id) => e.getRootNode().getElementById?.(id) || e.ownerDocument.getElementById(id);
   const name = (e, seen = new Set()) => {
     if (!e || seen.has(e)) return '';
@@ -130,7 +136,8 @@
   };
   cache.locate = id => {
     const e = cache.nodes.get(id);
-    if (!e?.isConnected || !rendered(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]')) return null;
+    if (!e?.isConnected || !reachable(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]'))
+      return null;
     const r = e.getBoundingClientRect();
     return r.width && r.height ? cache.climb(e, r.x + r.width / 2, r.y + r.height / 2) : null;
   };
@@ -219,7 +226,7 @@
     const c = {};
     if (e.tagName === 'INPUT') c.type = e.type;
     if (e.maxLength > 0) c.maxlength = e.maxLength;
-    for (const key of ['inputmode', 'pattern']) if (e.getAttribute(key)) c[key] = e.getAttribute(key);
+    for (const key of ['inputmode', 'pattern', 'autocomplete']) if (e.getAttribute(key)) c[key] = e.getAttribute(key);
     return c;
   };
   const taken = new Set();
@@ -254,7 +261,7 @@
         !(rendered(e) && sized(e) && inView(box(e, dx, dy))) ?
         [...(e.labels || [])].find(l => rendered(l) && sized(l)) || wrapper(e) : null;
       const at = proxy || e;
-      if (!rendered(at) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
+      if (!reachable(at) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
       const rect = box(at, dx, dy);
       if (!inView(rect) || (clickable && rect.w * rect.h > innerWidth * innerHeight / 2)) continue;
       const node = identity(at);
@@ -315,7 +322,7 @@
   cache.pageKey = () => [performance.timeOrigin, location.href, scrollX, scrollY, innerWidth, innerHeight,
     fields().map(e => [identity(e), e.value, e.checked, e.selectedIndex, e.disabled, e.readOnly])];
   cache.guard = (e, memo = new Map()) => {
-    if (!e?.isConnected || !rendered(e)) return null;
+    if (!e?.isConnected || !reachable(e)) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
     if (scope && !memo.has(scope)) memo.set(scope, steady(scope.innerText?.slice(0, 6000)));
     return [identity(e), role(e), steady(name(e)), safe(e) ? e.value ?? null : null, e.checked ?? null, e.selectedIndex ?? null,

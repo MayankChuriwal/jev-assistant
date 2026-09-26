@@ -289,3 +289,39 @@ def test_a_price_is_never_sent_as_an_update_for_a_question_goal(tmp_path, monkey
     assert "DONE" in a.state["feedback"][0]
     a.command("tick")
     assert a.told == []
+
+
+def test_a_code_goes_only_into_a_code_or_password_field(tmp_path, monkeypatch):
+    phone = {"id": "e1", "kind": "fill", "label": "Enter Phone Number", "role": "textbox", "value": "", "node": 1,
+             "constraints": {"type": "tel"}}
+    a = mini_with(tmp_path, page=fake_page(text="OTP Verification\nEnter Phone Number", actions=[phone, WAIT]))
+    a.keep_secret("482193")
+    script(monkeypatch, out("TYPE", "Enter Phone Number", text="[secret:answer1]"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.browser.act.call_count == 0 and "code field" in a.state["feedback"][0]
+
+
+def test_a_one_time_code_input_counts_as_a_code_field():
+    otp = {"kind": "fill", "label": "textbox in “Verify your number”", "constraints": {"autocomplete": "one-time-code"}}
+    assert rules.secret_field(otp)
+
+
+def test_the_user_is_never_asked_about_input_boxes(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="OTP Verification", actions=[WAIT]))
+    script(monkeypatch, out("ASK", message="Please describe exactly the OTP input box or its label so I can find it."))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and "can't see the page" in a.state["feedback"][0]
+
+
+def test_an_approval_never_repeats_a_part(tmp_path, monkeypatch):
+    pay = {"id": "e2", "kind": "click", "label": "Pay 121", "role": "button", "node": 2}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text="To pay ₹121\nPay 121", actions=[pay, WAIT]))
+    a.state["chat"] += PAID
+    script(monkeypatch, out("CLICK", "Pay 121", commits=True,
+                            message="Diet Coke 330 ml · home · HDFC Bank Card · HDFC Bank Card · ₹121"))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    assert a.asked[0]["text"].count("HDFC Bank Card") == 1

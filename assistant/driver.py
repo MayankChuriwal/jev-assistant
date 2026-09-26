@@ -29,7 +29,7 @@ CONFIRM = re.compile(r"\b(confirm|book (it|this|the)|place (it|the order)|should
 YES_NO = {"yes", "no", "y", "n", "confirm", "cancel", "ok"}
 DELEGATE = re.compile(r"\b(you (choose|decide|pick)|whatever (you|fits|works|is)|any (one|of them|is fine|will do)|"
                       r"up to you|your (choice|call)|doesn'?t matter)\b", re.IGNORECASE)
-PAGE_TALK = re.compile(r"\b(element|click|tap|scroll|swipe|drag)\b|\[\d+\]", re.IGNORECASE)
+PAGE_TALK = re.compile(r"\b(element|click|tap|scroll|swipe|drag|(input|text) ?box)\b|\[\d+\]", re.IGNORECASE)
 UNSERVED = re.compile(r"\bnot (available|serviceable|delivering)\b|coming soon|(doesn't|does not|don't|do not) "
                       r"deliver|unserviceable|out of (the )?(delivery|service) area", re.IGNORECASE)
 PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGNORECASE),
@@ -626,6 +626,7 @@ class MiniAgent(Agent):
             raise Retry("An earlier committed action is still being checked; WAIT for it first.")
         summary = re.sub(r"^(ordered|booked|placed|paid|requested)\s+", "", plain(decision["message"].strip()),
                          flags=re.IGNORECASE)  # nothing has happened until the user says yes
+        summary = " · ".join(dict.fromkeys(p.strip() for p in summary.split("·") if p.strip()))  # each part once
         if "·" not in summary or (rules.PRICE.search(page["text"]) and not rules.PRICE.search(summary)):
             summary = self.summary(page)  # left out, a sentence instead of the details, or missing the page's total
         if not summary:
@@ -700,6 +701,10 @@ class MiniAgent(Agent):
             s["typing"] = (where, {"source": "user", "key": found[1], "count": count + 1, "url": page["url"],
                                    "origin": None})
             return code, f"[secret:{found[1]}]"
+        known = re.search(r"\[secret:(answer\d+)\]", text)
+        if known and known[1] in s["answers"]:
+            raise Retry(f"A code or password goes only into its code field; “{action['label']}” isn't one. Find the "
+                        "code field (scroll or wait for it), or ASK the user if the code isn't asked for here.")
 
         def real(match):
             kind, key = match[1], match[2]

@@ -137,8 +137,10 @@ def profile_detail(action):
 
 def secret_field(action):
     """Whether a field takes a one-time code or a password: only the user or the Keychain knows its value."""
+    limits = action.get("constraints") or {}
     return action.get("kind") == "fill" and bool(action.get("group") or SECRET_ASK.search(action.get("label", ""))
-                                                 or (action.get("constraints") or {}).get("type") == "password")
+                                                 or limits.get("type") == "password"
+                                                 or limits.get("autocomplete") == "one-time-code")
 
 
 def code_field(page):

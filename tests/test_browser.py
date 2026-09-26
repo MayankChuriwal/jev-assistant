@@ -432,6 +432,16 @@ def test_sibling_hidden_radios_are_not_offered_through_one_shared_wrapper(browse
     nodes = [a["node"] for a in b.observe()["actions"] if a["label"] in ("Veg", "Non veg")]
     assert len(nodes) == len(set(nodes))
 
+
+def test_a_transparent_code_input_over_drawn_boxes_is_offered(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<p>OTP Verification</p><div style=\"position:relative;"
+               "width:240px;height:48px\"><div>_ _ _ _ _ _</div><input id=otp inputmode=numeric maxlength=6 "
+               "autocomplete=one-time-code style=\"position:absolute;left:0;top:0;width:240px;height:48px;opacity:0\">"
+               "</div>'); 1")
+    fills = [a for a in b.observe()["actions"] if a["kind"] == "fill"]
+    assert any(b.evaluate(f"window.__jevFast.nodes.get({a['node']}).id") == "otp" for a in fills)
+
 def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
     from assistant.browser import forget_sites
 
