@@ -251,3 +251,17 @@ def test_a_press_that_turned_out_to_be_a_step_lets_the_task_go_on(tmp_path, monk
     a.watch({"next_goal": "choose UPI"})
     assert a.state["status"] != "blocked" and a.state["commit"] is None
     assert "only a step" in a.state["memory"][-1]
+
+
+def test_an_approval_without_the_address_gets_the_sites_own_address_line(tmp_path, monkeypatch):
+    cod = {"id": "e9", "kind": "click", "label": "Cash Pay cash at the time of delivery.", "role": "button", "node": 9}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text="Pay on delivery\n1 item. Total: ₹156\nCash/Pay on Delivery",
+                                 actions=[cod, WAIT]))
+    a.state["chat"] += PAID
+    a.state["recent"] = ["Delivering to: home 1601, AECS Layout, Bengaluru\nPayment Options"]
+    script(monkeypatch, out("CLICK", "Cash Pay cash at the time of delivery.", commits=True,
+                            message="1 Diet Coke 300 ml can · Pay on Delivery · ₹156"))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    assert "Delivering to: home 1601, AECS Layout, Bengaluru" in a.asked[0]["text"]

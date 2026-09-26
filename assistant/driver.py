@@ -45,6 +45,7 @@ PLACE = re.compile(r"\b(address|deliver(y)? (to|location|address)|where (should|
 PAYMENT_Q = re.compile(r"\b(payment|pay (with|using|by|via)|how .{0,30}\bpay)\b", re.IGNORECASE)
 QUESTION_FILLER = {"would", "you", "like", "to", "a", "an", "the", "is", "which", "do", "want", "or", "and", "of",
                    "for", "your", "i", "me", "s", "it", "this", "that", "please", "can", "should", "we"}
+DELIVERING = re.compile(r"\b(?:delivering to|deliver to|delivery address)\s*:?\s*([^\n]{8,160})", re.IGNORECASE)
 ABOUT_USER = re.compile(r"\b(the|ask|tell|inform) user\b", re.IGNORECASE)  # a note to itself
 PAYMENT_FILLER = {"the", "a", "an", "if", "it", "its", "s", "offered", "otherwise", "on", "with", "my", "use",
                   "pay", "payment", "method", "please", "and", "or", "to", "for", "me", "i", "by", "option"}
@@ -341,7 +342,8 @@ class MiniAgent(Agent):
         """A summary mini left out, written by one focused call from the goal, chat, page, and the form's own values."""
         s = self.state
         payload = {"goal": s["goal"], "chat": s["chat"][-10:], "form": self.page_summary(page),
-                   "page": {"url": page["url"], "title": page["title"], "text": page["text"][:3000]}}
+                   "page": {"url": page["url"], "title": page["title"], "text": page["text"][:3000]},
+                   "pages_before": [t[:1500] for t in s["recent"][-3:]]}  # the address can be a page back
         parts, meta = mind.summarize(payload)
         usage = meta.get("usage") or {}
         s["spend"] += usage.get("prompt_tokens", 0) * PRICES[0] + usage.get("completion_tokens", 0) * PRICES[1]
@@ -626,6 +628,9 @@ class MiniAgent(Agent):
         if not summary:
             raise Retry(f"“{commit}” commits: put the summary in message (what, where, option, payment method, and "
                         "the total exactly as the page shows it).")
+        shown = next((m for t in [page["text"], *reversed(s["recent"])] for m in DELIVERING.findall(t)), None)
+        if shown and shown.strip()[:15].lower() not in summary.lower():
+            summary += f" · Delivering to: {shown.strip()}"  # the site's own address line, often a page back
         typed = [f"{a['label'].rstrip(':')}: {a['value']}" for a in page["actions"]
                  if a.get("kind") == "fill" and a.get("role") != "searchbox" and "search" not in a["label"].lower()
                  and a.get("value") and not str(a["value"]).startswith("[") and str(a["value"]) not in summary]
