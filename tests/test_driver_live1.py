@@ -580,3 +580,18 @@ def test_a_delivery_place_is_never_picked_for_the_user(tmp_path, monkeypatch):
     jev_fake(monkeypatch, replies=["other"])
     a.command("tick")
     assert "never chosen for them" in a.state["chat"][-1]["text"] and a.state.get("delegated_at") is None
+
+
+def test_a_choice_left_to_mini_is_not_asked_again_later(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Domino's Pizza is closed\nMunchane Pizzas\nBakingo", actions=[WAIT]))
+    a.state["chat"] += [
+        {"from": "agent", "text": "Domino's Pizza is currently closed. Would you like to try a different restaurant?"},
+        {"from": "user", "text": "“You choose whatever fits my goal best.” → the user leaves this choice to you: "
+                                 "pick the option that best fits the goal, TELL them which, and carry on"}]
+    a.state["history"].append({"step": 1, "operation": "CLICK", "action": "Search", "url": "https://s.test/"})
+    script(monkeypatch, out("ASK", message="Domino's is closed. Other pizza restaurants available like Munchane Pizzas "
+                                           "and Bakingo. Would you like a Margherita pizza from these or another "
+                                           "restaurant?", options=["Munchane Pizzas", "Bakingo"]))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and "left this choice to you" in a.state["feedback"][0]

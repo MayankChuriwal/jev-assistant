@@ -36,6 +36,8 @@ PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone)( number)?\b", re.IGNORECA
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
 TOTAL = re.compile(r"\b(total|to pay|payable|amount due)\b", re.IGNORECASE)
 PLACE = re.compile(r"\b(address|location|area|city|locality|pick ?up|drop|deliver(y)? to)\b", re.IGNORECASE)
+QUESTION_FILLER = {"would", "you", "like", "to", "a", "an", "the", "is", "which", "do", "want", "or", "and", "of",
+                   "for", "your", "i", "me", "s", "it", "this", "that", "please", "can", "should", "we"}
 ABOUT_USER = re.compile(r"\b(the|ask|tell|inform) user\b", re.IGNORECASE)  # a note to itself
 PAYMENT_FILLER = {"the", "a", "an", "if", "it", "its", "s", "offered", "otherwise", "on", "with", "my", "use",
                   "pay", "payment", "method", "please", "and", "or", "to", "for", "me", "i", "by", "option"}
@@ -364,6 +366,13 @@ class MiniAgent(Agent):
                 raise Retry(f"You asked this already and the user answered {reply['text']}. Use that answer; if the "
                             "page doesn't offer it, ASK a more specific question naming what the page shows.")
         pairs = [(q["text"], r["text"]) for q, r in zip(chat, chat[1:]) if q["from"] == "agent" and r["from"] == "user"]
+        content = set(re.findall(r"[a-z0-9]+", message.lower())) - QUESTION_FILLER
+        for asked, reply in pairs:
+            before = set(re.findall(r"[a-z0-9]+", asked.split("\n")[0].lower())) - QUESTION_FILLER
+            if "leaves this choice to you" in reply and content and before and \
+                    len(content & before) / min(len(content), len(before)) >= 0.5:
+                raise Retry(f"The user left this choice to you earlier (“{asked.splitlines()[0]}”): pick the option "
+                            "that best fits the goal, TELL them which, and act on it.")
         if len(pairs) >= 2 and pairs[-1][1] == pairs[-2][1] and not DELEGATE.search(pairs[-1][1]) and not re.fullmatch(
                 r"\W*(yes|no|ok|okay|sure|yeah|yep|nope)\W*", pairs[-1][1], re.IGNORECASE):
             last = set(re.findall(r"[a-z0-9]+", pairs[-1][0].split("\n")[0].lower()))
