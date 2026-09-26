@@ -26,6 +26,8 @@ DIALOGS = {"ACCEPT_DIALOG", "DISMISS_DIALOG"}
 CONFIRM = re.compile(r"\b(confirm|book (it|this|the)|place (it|the order)|should i (book|order|pay|request|place)|"
                      r"shall i|do you want (me )?to (book|order|place|pay|request|proceed))\b", re.IGNORECASE)
 YES_NO = {"yes", "no", "y", "n", "confirm", "cancel", "ok"}
+DELEGATE = re.compile(r"\b(you (choose|decide|pick)|whatever|any( one)?|up to you|your (choice|call)|"
+                      r"doesn'?t matter)\b", re.IGNORECASE)
 PAGE_TALK = re.compile(r"\b(element|click|tap|scroll)\b|\[\d+\]", re.IGNORECASE)
 PAYMENT = re.compile(r"\b(cash|upi|card|wallet|net ?banking|pay later|cod|cash on delivery)\b", re.IGNORECASE)
 
@@ -223,7 +225,13 @@ class MiniAgent(Agent):
         line = f"“{answer}”"
         if options and answer:
             pick = jev.read_reply(message, options, answer)
-            line += f" → option {pick}: {options[int(pick) - 1]}" if pick != "other" else " → none of the options"
+            if pick != "other":
+                line += f" → option {pick}: {options[int(pick) - 1]}"
+            elif DELEGATE.search(answer):
+                line += " → the user leaves this choice to you: pick the option that best fits the goal, TELL them "\
+                        "which, and carry on"
+            else:
+                line += " → none of the options"
         s["chat"].append({"from": "user", "text": line})
         return None
 
@@ -239,7 +247,7 @@ class MiniAgent(Agent):
             if asked["from"] != "agent" or reply["from"] != "user":
                 continue
             before = set(re.findall(r"[a-z0-9]+", asked["text"].split("\n")[0].lower()))
-            if words and len(words & before) / len(words | before) >= 0.8:
+            if words and len(words & before) / len(words | before) >= 0.7:
                 raise Retry(f"You asked this already and the user answered {reply['text']}. Use that answer; if the "
                             "page doesn't offer it, ASK a more specific question naming what the page shows.")
 

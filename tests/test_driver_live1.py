@@ -220,3 +220,22 @@ def test_html_entities_never_reach_the_user(tmp_path, monkeypatch):
     jev_fake(monkeypatch, replies=["1"])
     a.command("tick")
     assert "&amp;" not in a.asked[0]["text"] and "Amazon Pay & more" in a.asked[0]["text"]
+
+
+def test_a_reply_that_leaves_the_choice_to_mini_says_so(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, replies=[{"text": "You choose whatever fits my goal best."}],
+                  page=fake_page(text="Pizza places", actions=[WAIT]))
+    script(monkeypatch, out("ASK", message="Please choose a restaurant.", options=["Pizza 4P's", "Thin Tony's"]))
+    jev_fake(monkeypatch, replies=["other"])
+    a.command("tick")
+    assert "leaves this choice to you" in a.state["chat"][-1]["text"]
+
+
+def test_a_reworded_repeat_of_an_answered_question_is_caught(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Pizza places", actions=[WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Please choose a restaurant for your Margherita pizza from the "
+                                                  "following options."}, {"from": "user", "text": "“You choose”"}]
+    script(monkeypatch, out("ASK", message="Please choose a restaurant for your Margherita pizza from these options."))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == []
