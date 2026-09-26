@@ -165,3 +165,13 @@ def test_the_trace_is_saved_after_every_step(tmp_path, monkeypatch):
     first = a.state["trace_path"]
     a.command("tick")
     assert a.state["trace_path"] == first and len(json.loads(open(first).read())["steps"]) == 2
+
+
+def test_mini_knows_todays_date(tmp_path, monkeypatch):
+    import time
+
+    a = ride(tmp_path)
+    seen = script(monkeypatch, out("WAIT"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert seen[0]["today"] == time.strftime("%A, %d %B %Y")

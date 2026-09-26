@@ -173,7 +173,8 @@ class MiniAgent(Agent):
     def payload(self, seen):
         s = self.state
         return {
-            "goal": s["goal"], "chat": s["chat"][-20:], "profile": self.profile.summary(), "plan": s["plan"],
+            "goal": s["goal"], "today": time.strftime("%A, %d %B %Y"), "chat": s["chat"][-20:],
+            "profile": self.profile.summary(), "plan": s["plan"],
             "notes": s["memory"][-15:],
             "steps": [{k: h.get(k) for k in ("step", "operation", "action", "text", "check", "changed")}
                       for h in s["history"][-10:]],
@@ -186,7 +187,8 @@ class MiniAgent(Agent):
     def talk_step(self, decision, page):
         s = self.state
         act = decision["action"]
-        message = html.unescape(decision["message"].strip() or (act["text"].strip() if act["op"] != "DONE" else ""))
+        fallback = act["text"].strip() if act["op"] != "DONE" else ""
+        message = html.unescape(decision["message"].strip() or fallback)
         op = "ASK" if act["op"] == "TELL" and message.endswith("?") else act["op"]  # a question waits for its answer
         options = [html.unescape(o.strip()) for o in decision["options"] if o.strip()][:10]
         if op == "ASK" and PAGE_TALK.search(message):
@@ -265,13 +267,25 @@ class MiniAgent(Agent):
                 raise Retry(f"You asked this already and the user answered {reply['text']}. Use that answer; if the "
                             "page doesn't offer it, ASK a more specific question naming what the page shows.")
 
+    def evidence(self, quote, report, text):
+        """A quote from the page proving the report: mini's own when it is on the page, else the page line that shares
+        the most prices and numbers with the report."""
+        if quote and rules.verbatim(quote, text):
+            return quote
+        wanted = set(rules.PRICE.findall(report)) | set(re.findall(r"\d[\d:,.]*\d|\d", report))
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        scored = sorted(((sum(w in line for w in wanted), line) for line in lines), key=lambda x: -x[0])
+        if scored and scored[0][0] and len(scored[0][1]) <= 200:
+            return scored[0][1]
+        hints = "; ".join(f"“{line[:80]}”" for _, line in scored[:3] if _) or "none found"
+        raise Retry("DONE needs a quote in text: a short piece of the page text copied exactly, proving it. Lines that "
+                    f"look relevant: {hints}.")
+
     def finish_step(self, decision, page):
         s = self.state
         if s["commit"]:
             raise Retry("A committed action is still being checked; WAIT first.")
-        quote = decision["action"]["text"].strip()
-        if not quote or not rules.verbatim(quote, page["text"]):
-            raise Retry("DONE needs text: a short quote copied exactly from the page that proves the goal is done.")
+        quote = self.evidence(decision["action"]["text"].strip(), decision["message"], page["text"])
         report = decision["message"].strip() or "Done."
         if jev.achieved(page, s["goal"], report) != "yes":
             s["done_refusals"] = s.get("done_refusals", 0) + 1

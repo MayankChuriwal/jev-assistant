@@ -281,3 +281,13 @@ def test_two_updates_in_a_row_are_refused(tmp_path, monkeypatch):
     a.command("tick")
     a.command("tick")
     assert len(a.told) == 1 and "DONE" in a.state["feedback"][0]
+
+
+def test_done_finds_its_own_evidence_when_mini_paraphrases(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Top flights\nIndiGo\n1:00 AM – 3:50 AM\n₹16,976 round trip",
+                                           actions=[WAIT]))
+    script(monkeypatch, out("DONE", message="Cheapest: IndiGo at 1:00 AM for ₹16,976.",
+                            text="Cheapest flight is IndiGo at 1:00 AM costing ₹16,976"))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.state["status"] == "done" and a.told[-1]["evidence"] == "₹16,976 round trip"
