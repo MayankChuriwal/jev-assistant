@@ -164,7 +164,7 @@ class Core:
                     return self.say("The question changed while I was reading your message. Please answer again.")
                 return self.answer(self.open, event)
             if intent == "NEW_TASK":
-                return self.new_task(text)
+                return self.switch(event, text, active) if active else self.new_task(text)
             if intent in {"CANCEL", "AMEND"}:
                 if not active:
                     return self.say("Nothing is running right now.")
@@ -196,8 +196,28 @@ class Core:
                                 options + [(f"route:new:{event['id']}", "New task")])
         self.buttons("Which task should I stop?" if intent == "CANCEL" else "Which task is this change for?", options)
 
+    def switch(self, event, text, active):
+        """One task at a time: a new request while one runs asks whether to drop the running one."""
+        self.routes[event["id"]] = (text, "SWITCH", None)
+        titles = " and ".join(f"“{t.title}”" for t in active)
+        self.buttons(f"You're in the middle of {titles}. Drop it and start “{text[:60]}” instead?",
+                     [(f"switch:yes:{event['id']}", "Yes, start the new one"),
+                      (f"switch:no:{event['id']}", f"No, keep {active[0].title}"[:20])])
+
     def tapped(self, event):
         kind, _, rest = event["reply_id"].partition(":")
+        if kind == "switch":
+            answer, _, key = rest.partition(":")
+            routed = self.routes.pop(key, None)
+            if routed is None:
+                return None
+            active = [t for t in self.tasks.values() if t.status in ACTIVE]
+            if answer == "no":
+                return self.say(f"Okay, I'll keep going with {', '.join(t.title for t in active) or 'what I was doing'}"
+                                " and won't start the new request.")
+            for task in active:
+                self.cancel(task)
+            return self.new_task(routed[0])
         if kind == "route":
             target, _, key = rest.partition(":")
             routed = self.routes.pop(key, None)
@@ -205,7 +225,8 @@ class Core:
                 return None
             text, intent, asked = routed
             if target == "new":
-                return self.new_task(text)
+                active = [t for t in self.tasks.values() if t.status in ACTIVE]
+                return self.switch(event | {"id": key}, text, active) if active else self.new_task(text)
             task = self.tasks.get(target)
             if not task or task.status not in ACTIVE:
                 return self.say(f"{task.title if task else 'That task'} already finished.")

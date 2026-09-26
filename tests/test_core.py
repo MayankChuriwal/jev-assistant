@@ -131,7 +131,7 @@ def test_secret_answers_never_reach_the_classifier(world):
     world.scripts["Log in to Swiggy"] = [ask(OTP)]
     text(world, "Book a cab")
     assert until(lambda: interactive(world))
-    text(world, "Log in to Swiggy")
+    world.core.new_task("Log in to Swiggy")  # chat runs one task at a time; the core can run several
     assert until(lambda: len(world.core.queue) == 2)
     tap(world, "q1:o1")
     assert until(lambda: any(m.get("x_secret") for m in sent(world)))
@@ -145,9 +145,9 @@ def test_code_requests_open_at_once_and_the_rest_wait_oldest_first(world):
     world.scripts.update(A=[ask({"kind": "text", "text": "Where to?"})], B=[ask(ADDRESS)], C=[ask(OTP)])
     text(world, "A")
     assert until(lambda: world.core.open is not None)
-    text(world, "B")
+    world.core.new_task("B")
     assert until(lambda: len(world.core.queue) == 2)
-    text(world, "C")
+    world.core.new_task("C")
     assert until(lambda: world.core.open is not None and world.core.open.task.goal == "C")
     text(world, "482913")
     assert until(lambda: world.agents["C"].replies == [{"text": "482913"}])
@@ -255,10 +255,10 @@ def test_three_tasks_at_once_and_one_per_site(world):
     for g in "ABCDE":
         world.scripts[g] = [hold(gates[g])]
     for g in "ABC":
-        text(world, g)
+        world.core.new_task(g)
     assert until(lambda: sum(t.status == "running" for t in world.core.tasks.values()) == 3)
-    text(world, "D")
-    text(world, "E")
+    world.core.new_task("D")
+    world.core.new_task("E")
     assert until(lambda: "*D*\nQueued: D starts when one of your other tasks finishes." in bodies(world))
     assert until(lambda: "*E*\nWaiting for your other b.test task to finish first." in bodies(world))
     gates["A"].set()
@@ -321,7 +321,7 @@ def test_titles_prefix_messages_only_when_several_tasks_exist(world):
     world.scripts["Book a cab"] = [hold(second)]
     text(world, "Order Diet Coke")
     assert until(lambda: "First." in bodies(world))
-    text(world, "Book a cab")
+    world.core.new_task("Book a cab")
     assert until(lambda: world.core.tasks["t2"].status == "running")
     first.set()
     assert until(lambda: "*Order Diet Coke*\nThird." in bodies(world))
@@ -418,13 +418,13 @@ def test_an_unsure_task_pick_asks_which(world):
     world.hosts.update(A="a.test", B="b.test")
     world.scripts.update(A=[hold(gates["A"])], B=[hold(gates["B"])])
     text(world, "A")
-    text(world, "B")
+    world.core.new_task("B")
     assert until(lambda: sum(t.status == "running" for t in world.core.tasks.values()) == 2)
     world.intents.append(("AMEND", "t1", {"AMEND": 0.9}, {"t1": 0.55, "t2": 0.45}))
     text(world, "make it 2")
-    assert until(lambda: interactive(world)) and buttons(world) == ["route:t1:wamid.in3", "route:t2:wamid.in3"]
+    assert until(lambda: interactive(world)) and buttons(world) == ["route:t1:wamid.in2", "route:t2:wamid.in2"]
     assert world.core.tasks["t1"].updates == []
-    tap(world, "route:t2:wamid.in3")
+    tap(world, "route:t2:wamid.in2")
     assert world.core.tasks["t2"].updates == ["make it 2"]
     for gate in gates.values():
         gate.set()
@@ -496,7 +496,7 @@ def test_a_code_request_opens_at_once_and_earlier_buttons_still_work(world):
     world.scripts["Log in to Swiggy"] = [hold(gate), ask(OTP)]
     text(world, "Book a cab")
     assert until(lambda: interactive(world))
-    text(world, "Log in to Swiggy")
+    world.core.new_task("Log in to Swiggy")  # chat runs one task at a time; the core can run several
     assert until(lambda: world.core.tasks["t2"].status == "running")
     gate.set()
     assert until(lambda: world.core.open is not None and world.core.open.message["kind"] == "secret")
@@ -619,3 +619,32 @@ def test_a_bench_task_moves_on_when_no_sign_in_code_comes(world):
     world.clock.now += conversation.BENCH_CODE_WAIT + 1
     until(lambda: task.status not in conversation.ACTIVE)
     assert task.bench["stopped"] == "needs sign-in: no code came within 5 minutes"
+
+
+def test_a_new_request_while_a_task_runs_asks_to_drop_it_and_yes_switches(world):
+    gate = threading.Event()
+    world.scripts["Order Diet Coke"] = [hold(gate)]
+    world.scripts["Book a cab"] = [hold(threading.Event())]
+    text(world, "Order Diet Coke")
+    assert until(lambda: world.core.tasks["t1"].status == "running")
+    text(world, "Book a cab")
+    assert until(lambda: any("Drop it and start" in b for b in bodies(world)))
+    assert "t2" not in world.core.tasks
+    yes = interactive(world)[-1]["interactive"]["action"]["buttons"][0]["reply"]["id"]
+    tap(world, yes)
+    gate.set()  # the running task stops after its current step
+    assert until(lambda: world.core.tasks["t1"].status == "cancelled" and "t2" in world.core.tasks)
+
+
+def test_no_keeps_the_running_task_and_drops_the_new_request(world):
+    gate = threading.Event()
+    world.scripts["Order Diet Coke"] = [hold(gate)]
+    text(world, "Order Diet Coke")
+    assert until(lambda: world.core.tasks["t1"].status == "running")
+    text(world, "Book a cab")
+    assert until(lambda: any("Drop it and start" in b for b in bodies(world)))
+    no = interactive(world)[-1]["interactive"]["action"]["buttons"][1]["reply"]["id"]
+    tap(world, no)
+    assert until(lambda: any("keep going with Order Diet Coke" in b for b in bodies(world)))
+    assert world.core.tasks["t1"].status == "running" and "t2" not in world.core.tasks
+    gate.set()
