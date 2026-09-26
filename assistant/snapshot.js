@@ -284,14 +284,24 @@
   // Fields that share a label ("Search for a location" for pickup and dropoff) are told apart, so nothing meant for
   // one is typed into the other: by placeholder where they have one, else by position. Buttons that share one ("ADD"
   // on every menu card) are told apart by the text around them.
+  // The nearest ancestors whose text differs between same-named controls: each ADD's own menu card. Once two share
+  // an ancestor nothing higher can tell them apart.
+  const apart = els => {
+    let at = els;
+    for (let n = 0; n < 10 && at.every(Boolean); n++) {
+      at = at.map(a => a.parentElement);
+      if (!at.every(Boolean) || new Set(at).size < at.length) return null;
+      const texts = at.map(a => label(a).slice(0, 80));
+      if (texts.every(Boolean) && new Set(texts).size === texts.length) return texts;
+    }
+    return null;
+  };
   const byLabel = {};
   for (const a of actions) if (a.kind === 'fill' || a.kind === 'click') (byLabel[a.kind + a.label] ||= []).push(a);
   for (const same of Object.values(byLabel)) {
     if (same.length < 2) continue;
-    const hints = same.map(a => {
-      const e = cache.nodes.get(a.node);
-      return a.kind === 'fill' ? e?.placeholder : e && context(e, a.label);
-    });
+    const els = same.map(a => cache.nodes.get(a.node));
+    const hints = same[0].kind === 'fill' ? els.map(e => e?.placeholder) : apart(els) || [];
     same.forEach((a, i) => {
       const hint = hints[i], unique = hints.indexOf(hint) === hints.lastIndexOf(hint);
       a.label += ` (${hint && unique && !a.label.includes(hint) ? hint : `${i + 1} of ${same.length}`})`;

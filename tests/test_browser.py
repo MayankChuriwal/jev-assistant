@@ -321,6 +321,16 @@ def test_visible_buttons_hidden_from_screen_readers_are_offered_and_told_apart(b
     adds = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click" and a["label"].startswith("ADD")]
     assert len(adds) == 2 and "Margherita" in adds[0] and "Farmhouse" in adds[1]
 
+
+def test_same_named_buttons_are_told_apart_by_the_card_they_sit_in(browser_at):
+    b = browser_at("/next.html")
+    card = ("<div><p>{0}</p><div aria-hidden=\\\"true\\\"><div><div><div><span>−</span><button onclick=\\\"1\\\">"
+            "ADD</button><span>+</span></div><span>Customisable</span></div></div></div></div>")
+    html = card.format("Cheesy Macaroni Pizza ₹302") + card.format("Garlic Pizza ₹199")
+    b.evaluate(f"document.body.insertAdjacentHTML('afterbegin', \"{html}\")")
+    adds = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click" and a["label"].startswith("ADD")]
+    assert len(adds) == 2 and "Cheesy Macaroni" in adds[0] and "Garlic" in adds[1]
+
 def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
     from assistant.browser import forget_sites
 
