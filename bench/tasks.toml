@@ -36,15 +36,6 @@ answers = [["pay|payment", "Cash on delivery (pay on delivery)"],
            ["which (one|size|pack)|variant", "300 ml, just one"]]
 
 [[task]]
-id = "swiggy-food"
-goal = "Order one Margherita pizza from Domino's on Swiggy"
-end = "gate"
-require = ["Margherita", "₹"]
-rule = "The approval summary is one Margherita pizza from Domino's on Swiggy with an address and total."
-answers = [["pay|payment", "Cash on delivery (pay on delivery)"],
-           ["address|deliver to|where should", "The first saved address"], ["size|crust|which", "Regular, classic hand tossed"]]
-
-[[task]]
 id = "zepto"
 goal = "Order one 500 ml pack of Amul Taaza milk on Zepto"
 end = "gate"
@@ -112,3 +103,12 @@ end = "result"
 require = ["₹"]
 rule = "The report names a Nike Air Max shoe on Myntra and its price."
 answers = [["size|colou?r|which", "Any"]]
+
+[[task]]
+id = "swiggy-food"
+goal = "Order one Margherita pizza from Domino's on Swiggy"
+end = "gate"
+require = ["Margherita", "₹"]
+rule = "The approval summary is one Margherita pizza from Domino's on Swiggy with an address and total."
+answers = [["pay|payment", "Cash on delivery (pay on delivery)"],
+           ["address|deliver to|where should", "The first saved address"], ["size|crust|which", "Regular, classic hand tossed"]]
