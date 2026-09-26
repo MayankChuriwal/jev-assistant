@@ -168,6 +168,7 @@ class MiniAgent(Agent):
     def stuck(self):
         s = self.state
         goal = s["mini"][-1]["next_goal"] if s["mini"] else s["goal"]
+        goal = s["goal"] if ABOUT_USER.search(goal) else goal  # mini's step goals can be notes to itself
         title = s["page"]["title"] or rules.host(s["page"]["url"])
         reply = self.ask({"kind": "text", "text": f"I'm stuck on {title}: {goal} What should I do?"})
         s["chat"].append({"from": "user", "text": f"“{str(reply.get('text', '')).strip()}”"})
