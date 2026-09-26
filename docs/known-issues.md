@@ -106,7 +106,7 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | ID | Issue | Where | Status |
 |---|---|---|---|
 | P5-01 | The bench audits commits only; that no secret reaches a model rests on the single redacting outbound path (`model.post_json`). | `bench.py` | open (by design) |
-| P5-02 | HOVER falls back to LOOK, which clicks. | `driver.py` | open |
+| P5-02 | HOVER falls back to LOOK, which clicks. | `driver.py` | fixed (Plan 5 Task 14) |
 | P5-03 | Approvals for a spot found by LOOK rarely match again after the re-read, so the user may be asked twice. | `driver.py` `approved` | open |
 | P5-04 | The $0.50 spend cap counts mini's calls (decide, summarize), not LOOK or Jev. | `driver.py` | open |
 | P5-05 | Refused steps (guessed code, DONE without a quote, grounding misses) don't count toward the repeat-action nudges. | `driver.py` | partly fixed (Plan 5 Task 14): refusals escalate on their own: a nudge at 3, the user is asked at 6 |
