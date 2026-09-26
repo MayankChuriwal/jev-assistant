@@ -627,3 +627,12 @@ def test_card_details_are_asked_only_for_a_card_the_user_chose(tmp_path, monkeyp
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.asked == [] and "chose" in a.state["feedback"][0]
+
+
+def test_is_that_correct_with_yes_or_no_is_an_own_confirmation(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Go Non AC ₹775.79\nRequest Go Non AC", actions=[WAIT]))
+    script(monkeypatch, out("ASK", message="You chose the Go Non AC ride type with an estimated price between ₹775.79 "
+                                           "and ₹912.69. Is that correct?", options=["Yes", "No"]))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.asked == [] and "commits true" in a.state["feedback"][0]

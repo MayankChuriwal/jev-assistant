@@ -24,7 +24,8 @@ YES = re.compile(r"\b(yes|yeah|yep|yup|ok|okay|sure|go ahead|book it|confirm|do 
 NOT_YES = re.compile(r"\?|\b(no|not|don'?t|wait|but|instead|cheaper|change|stop|cancel|hold)\b", re.IGNORECASE)
 DIALOGS = {"ACCEPT_DIALOG", "DISMISS_DIALOG"}
 CONFIRM = re.compile(r"\b(confirm|book (it|this|the)|place (it|the order)|should i (book|order|pay|request|place)|"
-                     r"shall i|do you want (me )?to (book|order|place|pay|request|proceed))\b", re.IGNORECASE)
+                     r"shall i|do you want (me )?to (book|order|place|pay|request|proceed)|"
+                     r"is (that|this|everything) (correct|right|ok|okay))\b", re.IGNORECASE)
 YES_NO = {"yes", "no", "y", "n", "confirm", "cancel", "ok"}
 DELEGATE = re.compile(r"\b(you (choose|decide|pick)|whatever|any( one)?|up to you|your (choice|call)|"
                       r"doesn'?t matter)\b", re.IGNORECASE)
