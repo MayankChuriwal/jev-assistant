@@ -679,10 +679,10 @@ class MiniAgent(Agent):
             raise Retry("An earlier committed action is still being checked; WAIT for it first.")
         summary = re.sub(r"^(ordered|booked|placed|paid|requested)\s+", "", plain(decision["message"].strip()),
                          flags=re.IGNORECASE)  # nothing has happened until the user says yes
-        parts = list(dict.fromkeys(p.strip() for p in summary.split("·") if p.strip()))
-        summary = " · ".join(p for p in parts if not any(p.lower() in q.lower() and p != q for q in parts))  # once
         if "·" not in summary or (rules.PRICE.search(page["text"]) and not rules.PRICE.search(summary)):
             summary = self.summary(page)  # left out, a sentence instead of the details, or missing the page's total
+        parts = list(dict.fromkeys(p.strip() for p in summary.split("·") if p.strip()))
+        summary = " · ".join(p for p in parts if not any(p.lower() in q.lower() and p != q for q in parts))  # once
         if not summary:
             raise Retry(f"“{commit}” commits: put the summary in message (what, where, option, payment method, and "
                         "the total exactly as the page shows it).")

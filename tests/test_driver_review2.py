@@ -468,3 +468,17 @@ def test_an_approval_shows_the_address_once_and_the_item_count(tmp_path, monkeyp
     a.command("tick")
     text = a.asked[0]["text"]
     assert text.lower().count("1601") == 1 and "3 items" in text
+
+
+def test_a_rewritten_summary_never_repeats_a_part(tmp_path, monkeypatch):
+    cod = {"id": "e4", "kind": "click", "label": "Cash Pay cash at the time of delivery.", "role": "button", "node": 4}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text="Pay on delivery\nTotal: ₹121\nCash", actions=[cod, WAIT]))
+    a.state["chat"] += PAID
+    monkeypatch.setattr(driver.mind, "summarize", lambda payload: (
+        {"what": "1 Diet Coke", "where": "", "option": "Pay on Delivery", "payment": "Pay on Delivery",
+         "total": "₹121"}, {}))
+    script(monkeypatch, out("CLICK", "Cash Pay cash at the time of delivery.", commits=True, message=""))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    assert a.asked[0]["text"].count("Pay on Delivery") == 1
