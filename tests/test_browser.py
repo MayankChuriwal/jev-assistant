@@ -331,6 +331,14 @@ def test_same_named_buttons_are_told_apart_by_the_card_they_sit_in(browser_at):
     adds = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click" and a["label"].startswith("ADD")]
     assert len(adds) == 2 and "Cheesy Macaroni" in adds[0] and "Garlic" in adds[1]
 
+
+def test_a_clickable_wrapper_around_a_same_named_link_is_one_control(browser_at):
+    b = browser_at("/next.html")
+    html = "<div onclick=\\\"1\\\" style=\\\"cursor:pointer\\\"><a href=\\\"#help\\\">Help</a></div>"
+    b.evaluate(f"document.body.insertAdjacentHTML('afterbegin', \"{html}\")")
+    helps = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click" and a["label"].startswith("Help")]
+    assert helps == ["Help"]
+
 def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
     from assistant.browser import forget_sites
 

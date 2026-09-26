@@ -168,6 +168,11 @@
   // ponytail: cursor/onclick/tabindex heuristic for React-style clickable divs; listeners added in JS are invisible.
   const extra = e => e.hasAttribute('onclick') || typeof e.onclick === 'function' ||
     (e.hasAttribute('tabindex') && e.tabIndex >= 0) || (pointer(e) && !(e.parentElement && pointer(e.parentElement)));
+  // A clickable wrapper around a link or button of the same name (site headers) is that control, offered once.
+  const sameInside = e => {
+    const l = label(e);
+    return !!l && [...e.querySelectorAll(semantic)].some(d => label(d) === l);
+  };
   const scrollDirs = e => {
     const s = style(e), dirs = [], scrolls = v => /(auto|scroll|overlay)/.test(v);
     if (scrolls(s.overflowY) && e.scrollHeight > e.clientHeight + 2) {
@@ -217,7 +222,7 @@
         continue;
       }
       const isSemantic = e.matches(semantic);
-      const clickable = !isSemantic && !within(e) && extra(e);
+      const clickable = !isSemantic && !within(e) && extra(e) && !sameInside(e);
       const draggable = e.getAttribute('draggable') === 'true';
       const dirs = scrollDirs(e);
       if (!isSemantic && !clickable && !draggable && !dirs.length) continue;
