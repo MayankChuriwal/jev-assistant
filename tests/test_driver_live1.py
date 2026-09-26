@@ -546,3 +546,17 @@ def test_a_payment_option_must_be_the_one_the_user_chose(tmp_path, monkeypatch):
     assert a.browser.act.call_count == 0 and "chose" in a.state["feedback"][0]
     a.command("tick")
     assert a.browser.act.call_args.args[1]["id"] == "e14"
+
+
+def test_the_approval_shows_every_value_typed_into_the_form(tmp_path, monkeypatch):
+    name = {"id": "e15", "kind": "fill", "label": "Customer name:", "role": "textbox", "value": "Test User", "node": 15}
+    search = {"id": "e16", "kind": "fill", "label": "Search", "role": "searchbox", "value": "pizza", "node": 16}
+    submit = {"id": "e17", "kind": "click", "label": "Submit order", "role": "button", "node": 17}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text="Customer name\nSize\nMedium\nSubmit order",
+                                 actions=[name, search, submit, WAIT]))
+    script(monkeypatch, out("CLICK", "Submit order", commits=True,
+                            message="medium pizza with bacon · delivery at 19:00"))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    assert "Customer name: Test User" in a.asked[0]["text"] and "pizza ·" not in a.asked[0]["text"]

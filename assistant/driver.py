@@ -552,6 +552,11 @@ class MiniAgent(Agent):
         if not summary:
             raise Retry(f"“{commit}” commits: put the summary in message (what, where, option, payment method, and "
                         "the total exactly as the page shows it).")
+        typed = [f"{a['label'].rstrip(':')}: {a['value']}" for a in page["actions"]
+                 if a.get("kind") == "fill" and a.get("role") != "searchbox" and "search" not in a["label"].lower()
+                 and a.get("value") and not str(a["value"]).startswith("[") and str(a["value"]) not in summary]
+        if typed:
+            summary += " · " + " · ".join(dict.fromkeys(typed))  # every value the form will send
         if not self.payment_asked(page):  # the user always picks how to pay
             raise Retry("Ask the user which payment method to use first: list the payment methods the page shows "
                         "(open the payment selector if needed), then do the final action with their choice.")
