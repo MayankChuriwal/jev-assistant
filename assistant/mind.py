@@ -82,7 +82,8 @@ Rules:
   and asks once; the action runs only after their yes.
 - After a committed action the system watches the result. Then report every detail the page shows that the user
   needs: order or booking number, driver name, car, number plate, PIN to share, arrival time, amount.
-- DONE only when the page shows the goal achieved; text is a short quote copied exactly from the page.
+- DONE only when the page shows the goal achieved; text is a short quote copied exactly from the page. When the goal
+  asks for information, DONE's message is the answer: give it once, in DONE. TELL is only for progress updates.
 - One page-changing action per step. If an action keeps failing, change approach: scroll, close a pop-up, choose
   another element, go back.
 - STOP only when the goal cannot be done on this site; message says why and what was done.

@@ -260,3 +260,24 @@ def test_a_report_quoted_from_the_page_finishes_after_two_refusals_with_a_cautio
     for _ in range(3):
         a.command("tick")
     assert a.state["status"] == "done" and "couldn't fully confirm" in a.told[-1]["text"]
+
+
+DEPARTURE = {"id": "e3", "kind": "fill", "label": "Departure", "role": "textbox", "value": "", "node": 3}
+
+
+def test_clicking_a_quoted_text_field_clicks_it(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Flights", actions=[DEPARTURE, WAIT]))
+    script(monkeypatch, out("CLICK", '[15] textbox "Departure"'))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    assert a.browser.act.call_args.args[:2] == ("CLICK", DEPARTURE)
+
+
+def test_two_updates_in_a_row_are_refused(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, page=fake_page(text="Flights", actions=[WAIT]))
+    script(monkeypatch, out("TELL", message="Cheapest so far: IndiGo ₹8,207."),
+           out("TELL", message="Actually the cheapest is Akasa ₹16,613."))
+    jev_fake(monkeypatch)
+    a.command("tick")
+    a.command("tick")
+    assert len(a.told) == 1 and "DONE" in a.state["feedback"][0]

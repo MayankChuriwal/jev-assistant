@@ -209,8 +209,12 @@ class MiniAgent(Agent):
                 raise Retry("TELL needs a message.")
             if any(c["from"] == "agent" and c["text"] == message for c in s["chat"]):
                 raise Retry("You already told the user this. Carry on with the task, or finish with DONE.")
+            if s.get("told_at") == len(s["history"]):
+                raise Retry("You just told the user something. Do an action next, or finish with DONE: the answer the "
+                            "user asked for goes in DONE's message, never in another TELL.")
             self.say(message)
             s["chat"].append({"from": "agent", "text": message})
+            s["told_at"] = len(s["history"])
             return None
         if op in {"ASK", "STOP"} and rules.captcha_challenge(page):
             return self.relay_captcha(page)  # only the user solves a captcha
@@ -368,6 +372,10 @@ class MiniAgent(Agent):
         candidates = heads.get(jev.HEAD[operation], {})
         same = [(i, a) for i, a in candidates.items() if a["label"][:100] == label[:100]]
         near = same or [(i, a) for i, a in candidates.items() if label in a["label"]]
+        if not near and operation == "CLICK":  # a text field or other element clicked to open or focus it
+            others = [a for a in page["actions"] if a.get("node") is not None and a["label"][:100] == label[:100]]
+            if len({(a.get("frame"), a["node"]) for a in others}) == 1:
+                return None, others[0]
         if len(near) == 1:
             return near[0]
         if not near and label[:40] in page["text"]:
