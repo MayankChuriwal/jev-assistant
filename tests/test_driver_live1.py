@@ -244,12 +244,13 @@ def test_a_reworded_repeat_of_an_answered_question_is_caught(tmp_path, monkeypat
 def test_the_same_message_is_never_sent_twice(tmp_path, monkeypatch):
     a = mini_with(tmp_path, page=fake_page(text="Flights", actions=[WAIT]))
     script(monkeypatch, out("TELL", message="Cheapest: Air India 10:00 PM ₹8,200."),
-           out("TELL", message="Cheapest: Air India 10:00 PM ₹8,200."))
+           out("TELL", message="Cheapest: Air India 10:00 PM ₹8,200."), out("WAIT"))
     jev_fake(monkeypatch)
     a.command("tick")
     a.command("tick")
-    assert [m["text"] for m in a.told] == ["Cheapest: Air India 10:00 PM ₹8,200."]
     assert "already told" in a.state["feedback"][0]
+    a.command("tick")
+    assert [m["text"] for m in a.told] == ["Cheapest: Air India 10:00 PM ₹8,200."]
 
 
 def test_a_report_quoted_from_the_page_finishes_after_two_refusals_with_a_caution(tmp_path, monkeypatch):
@@ -276,11 +277,13 @@ def test_clicking_a_quoted_text_field_clicks_it(tmp_path, monkeypatch):
 def test_two_updates_in_a_row_are_refused(tmp_path, monkeypatch):
     a = mini_with(tmp_path, page=fake_page(text="Flights", actions=[WAIT]))
     script(monkeypatch, out("TELL", message="Cheapest so far: IndiGo ₹8,207."),
-           out("TELL", message="Actually the cheapest is Akasa ₹16,613."))
+           out("TELL", message="Actually the cheapest is Akasa ₹16,613."), out("WAIT"))
     jev_fake(monkeypatch)
     a.command("tick")
     a.command("tick")
-    assert len(a.told) == 1 and "DONE" in a.state["feedback"][0]
+    assert "DONE" in a.state["feedback"][0]
+    a.command("tick")
+    assert len(a.told) == 1
 
 
 def test_done_finds_its_own_evidence_when_mini_paraphrases(tmp_path, monkeypatch):
