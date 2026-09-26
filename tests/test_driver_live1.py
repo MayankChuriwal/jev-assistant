@@ -371,3 +371,20 @@ def test_double_escaped_entities_are_fully_unescaped(tmp_path, monkeypatch):
     jev_fake(monkeypatch, replies=["1"])
     a.command("tick")
     assert "Amazon Pay & more" in a.asked[0]["text"]
+
+
+def test_a_summary_without_the_price_the_page_shows_is_rewritten(tmp_path, monkeypatch):
+    from assistant import driver
+
+    req = {"id": "e8", "kind": "click", "label": "Request Go Non AC", "role": "button", "node": 8}
+    a = mini_with(tmp_path, replies=[{"text": "no"}],
+                  page=fake_page(text="Go Non AC ₹776.05\nCash\nRequest Go Non AC", actions=[req, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which payment method?"}, {"from": "user", "text": "“Cash”"}]
+    monkeypatch.setattr(driver.mind, "summarize", lambda payload: (
+        {"what": "Go Non AC ride", "where": "Sunnyside → Terminal 1", "option": "", "payment": "Cash",
+         "total": "₹776.05"}, {}))
+    script(monkeypatch, out("CLICK", "Request Go Non AC", commits=True,
+                            message="Booking Go Non AC from Sunnyside to Terminal 1 with cash."))
+    jev_fake(monkeypatch, approvals=["no"])
+    a.command("tick")
+    assert "₹776.05" in a.asked[0]["text"]

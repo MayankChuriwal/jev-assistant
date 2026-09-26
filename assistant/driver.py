@@ -472,7 +472,9 @@ class MiniAgent(Agent):
             return True
         if s["commit"]:
             raise Retry("An earlier committed action is still being checked; WAIT for it first.")
-        summary = plain(decision["message"].strip()) or self.summary(page)
+        summary = plain(decision["message"].strip())
+        if not summary or (rules.PRICE.search(page["text"]) and not rules.PRICE.search(summary)):
+            summary = self.summary(page)  # left out, or missing the total the page shows
         if not summary:
             raise Retry(f"“{commit}” commits: put the summary in message (what, where, option, payment method, and "
                         "the total exactly as the page shows it).")
