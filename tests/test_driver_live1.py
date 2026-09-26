@@ -570,3 +570,13 @@ def test_current_location_is_detected_never_typed(tmp_path, monkeypatch):
     jev_fake(monkeypatch)
     a.command("tick")
     assert a.browser.act.call_count == 0 and "detect" in a.state["feedback"][0]
+
+
+def test_a_delivery_place_is_never_picked_for_the_user(tmp_path, monkeypatch):
+    a = mini_with(tmp_path, replies=[{"text": "You choose whatever fits my goal best."}],
+                  page=fake_page(text="Domino's Pizza in Vadodara, Puri, Bengaluru", actions=[WAIT]))
+    script(monkeypatch, out("ASK", message="Please tell me your preferred delivery location for ordering.",
+                            options=["Vadodara", "Puri", "Bengaluru"]))
+    jev_fake(monkeypatch, replies=["other"])
+    a.command("tick")
+    assert "never chosen for them" in a.state["chat"][-1]["text"] and a.state.get("delegated_at") is None

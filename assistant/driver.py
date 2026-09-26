@@ -35,6 +35,7 @@ PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone)( number)?\b", re.IGNORECA
                 "email": re.compile(r"\be-?mail\b", re.IGNORECASE),
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
 TOTAL = re.compile(r"\b(total|to pay|payable|amount due)\b", re.IGNORECASE)
+PLACE = re.compile(r"\b(address|location|area|city|locality|pick ?up|drop|deliver(y)? to)\b", re.IGNORECASE)
 ABOUT_USER = re.compile(r"\b(the|ask|tell|inform) user\b", re.IGNORECASE)  # a note to itself
 PAYMENT_FILLER = {"the", "a", "an", "if", "it", "its", "s", "offered", "otherwise", "on", "with", "my", "use",
                   "pay", "payment", "method", "please", "and", "or", "to", "for", "me", "i", "by", "option"}
@@ -294,6 +295,9 @@ class MiniAgent(Agent):
             pick = jev.read_reply(message, options, answer)
             if pick != "other":
                 line += f" → option {pick}: {options[int(pick) - 1]}"
+            elif DELEGATE.search(answer) and PLACE.search(message):
+                line += " → a delivery or pickup place is never chosen for them: use a saved address or the site's "\
+                        "detect-location option; if neither works, STOP and say you need their address"
             elif DELEGATE.search(answer):
                 s["delegated_at"] = len(s["history"])
                 line += " → the user leaves this choice to you: pick the option that best fits the goal, TELL them "\
