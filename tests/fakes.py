@@ -107,7 +107,8 @@ def script(monkeypatch, *outs):
     return seen
 
 
-def jev_fake(monkeypatch, checks=("success",), replies=(), approvals=(), achieved="yes", final=("final", 1.0)):
+def jev_fake(monkeypatch, checks=("success",), replies=(), approvals=(), achieved="yes", final=("final", 1.0),
+             matches="yes"):
     """Jev by label: grounding matches mini's words inside element labels; checks and replies are scripted."""
     from assistant import driver
     from assistant.model import action_space
@@ -131,3 +132,4 @@ def jev_fake(monkeypatch, checks=("success",), replies=(), approvals=(), achieve
     monkeypatch.setattr(driver.jev, "approval", lambda *a: approvals.pop(0))
     monkeypatch.setattr(driver.jev, "achieved", lambda *a: achieved)
     monkeypatch.setattr(driver.jev, "final", lambda *a: final)
+    monkeypatch.setattr(driver.jev, "matches", lambda *a: matches)

@@ -651,3 +651,15 @@ def test_a_quoted_label_said_to_be_covered_goes_to_jev_the_second_time(tmp_path,
     assert a.browser.act.call_count == 0 and "covers it" in a.state["feedback"][0]
     a.command("tick")
     assert a.browser.act.call_args.args[1]["id"] == "e21"
+
+
+def test_an_order_that_does_not_match_the_goal_is_fixed_before_the_approval(tmp_path, monkeypatch):
+    pay = {"id": "e22", "kind": "click", "label": "Place order", "role": "button", "node": 22}
+    a = mini_with(tmp_path, page=fake_page(text="Pepsi Zero Sugar Soft Drink (300 ml), 1.8 ltr, quantity 1\n"
+                                                "To pay\n₹217\nPlace order", actions=[pay, WAIT]))
+    a.state["chat"] += [{"from": "agent", "text": "Which payment method?"}, {"from": "user", "text": "“Cash”"}]
+    script(monkeypatch, out("CLICK", "Place order", commits=True,
+                            message="1 Pepsi Zero Sugar · home · Cash · ₹217"))
+    jev_fake(monkeypatch, matches="no")
+    a.command("tick")
+    assert a.asked == [] and "doesn't match" in a.state["feedback"][0]

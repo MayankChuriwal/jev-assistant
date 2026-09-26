@@ -68,6 +68,8 @@ Rules:
   Never use Google, Apple, or Facebook sign-in buttons.
 - Place and search boxes: TYPE the user's words, then CLICK the matching suggestion (new ones are marked *). Do not
   press Enter while suggestions show. For "current location" use the site's own detect-location option.
+- Keep the product and brand the user named. If that exact size isn't sold, take the closest size of the same
+  product; never switch to another brand or product without asking.
 - Error or "not found" pages: press their retry button at most once, then go BACK or OPEN_URL the site's home page.
 - Delivery location: if the site shows a place the user didn't give or says it doesn't deliver there, change the
   location first (its location or address control, then detect current location). If detection fails, ASK the user

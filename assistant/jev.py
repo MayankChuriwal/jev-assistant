@@ -99,6 +99,15 @@ def approval(summary, reply):
                 "rules": "Only a clear yes is yes."})["choice"]
 
 
+def matches(page, goal, chat, summary):
+    """Whether the order on the page is what the user asked for: product, brand, quantity, nothing extra."""
+    return ask(page, "order_matches",
+               {"yes": "The items and quantities on the page, and the summary, are what the user asked for.",
+                "no": "A different product or brand, an extra item, or a different quantity than the user asked for."},
+               {"goal": goal, "rules": "Closest size or an option the user left to the agent still matches. The "
+                                       f"chat so far: {chat[-1500:]} Summary shown to the user: {summary}"})["choice"]
+
+
 def judge(goal, rule, final):
     return ask({"url": "", "title": "bench", "text": final}, "judge",
                {"pass": "The final message meets the rule.", "fail": "It does not meet the rule."},
