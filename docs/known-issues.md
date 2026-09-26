@@ -134,3 +134,5 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | P5-27 | BACK on a tab with no history closes it, even when it is the task's original tab. | `driver.py` | open |
 | P5-28 | A quoted label with no clickable match can fall back to any action carrying it, including scroll panels. | `driver.py` `labelled` | open |
 | P5-29 | STOP and DONE messages aren't checked for page talk, and the stuck question can include an imperative step goal. | `driver.py` | open |
+| P5-30 | Google Flights: one-way can be reset by a reload mid-search; the answer may then quote a round-trip fare without saying so (seen: ₹16,228 vs ~₹8,200 one-way). The round-trip check only catches answers that say "round trip". | `driver.py` `finish_step` | open |
+| P5-31 | Ola's web landing form (olacabs.com) has no working "current location"; the booking app is book.olacabs.com behind sign-in. A pickup must be typed. | `bench/tasks.toml` | open |
