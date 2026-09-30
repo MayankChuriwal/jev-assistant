@@ -211,3 +211,154 @@ def test_an_unclear_result_twice_stops_the_task(monkeypatch):
     monkeypatch.setattr(gate.jev, "after_commit", lambda *a: "unclear")
     with pytest.raises(Halt, match="can't tell whether Pay ₹79 went through"):
         gate.watch(w, "Pay ₹79", "Order a coke")
+
+
+# Fix round 1: what the review found in the gate. Every case errs toward asking.
+
+def control(label, node=60, role="button"):
+    return {"id": f"c{node}", "kind": "click", "label": label, "role": role, "node": node}
+
+
+def test_a_double_click_on_a_pay_button_commits_like_a_click(monkeypatch):
+    page = fake_page()
+    assert gate.commit_label(Fake(page), "DOUBLE_CLICK", PAY, page) == "Pay ₹79"
+    upi = control("UPI Scan and Pay", role="radio")
+    monkeypatch.setattr(gate.jev, "final", lambda *a: ("step", 0.9))
+    assert gate.commit_label(Fake(page), "DOUBLE_CLICK", upi, page) is None  # an ambiguous one is cleared as a click is
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("To pay ₹1,299 (you save ₹200)\nPay ₹1,299", "₹1,299"),            # an aside in brackets is not the payable figure
+    ("To pay ₹1,299 (was ₹1,499)\nPay ₹1,299", "₹1,299"),
+    ("To pay ₹1,299 · ₹50 cashback\nPay ₹1,299", None),                  # a line about cashback is not a total line
+    ("Total ₹79\nTo pay ₹1,299 · ₹50 cashback", "₹79"),                  # the other total line still counts
+    ("To pay ₹1,299\nAdd ₹99 more to pay ₹0 delivery fee", "₹1,299"),
+    ("To pay ₹1,299 + ₹20 fee, free delivery", None),
+    ("Amount due ₹120 incl. ₹20 fee", "₹120"),                           # the largest price on the line, not the last
+    ("To pay ₹50\nTo pay ₹79", "₹79"),                                   # the last payable line
+    ("To pay\n₹79", "₹79"),                                              # a price on the next line
+    ("To pay\nYou save ₹200", None),                                     # the next line is not a total either
+    ("To pay INR 1,499\nSave ₹30", "INR 1,499"),
+    ("Grand total $120", "$120"),
+    ("Item total ₹70\nSubtotal ₹70\nYou saved ₹10 discount", None)])
+def test_the_payable_total_is_the_largest_price_on_the_last_payable_line(text, expected):
+    assert gate.facts(fake_page(text=text), [])["total"] == expected
+
+
+def test_only_rupee_amounts_are_read():
+    assert gate.amount("$120") is None and gate.amount("€5") is None
+    assert gate.amount("INR 1,499") == 1499.0 and gate.amount("Rs 50") == 50.0 and gate.amount("₹ 7.5") == 7.5
+
+
+def test_a_total_in_another_currency_is_never_preauthorised(monkeypatch):
+    page = fake_page(text="Cart\nGrand total $120\nPay now")
+    summary(monkeypatch, ["Diet Coke", "Total $120"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no"}], preauth=True, cap=5000.0)
+    assert gate.preauthorised(w.state, gate.facts(page, []), page) is False
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, control("Pay now"), "Pay now", None)
+    assert len(w.asked) == 1
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("deliver within 500 m of me, don't ask", None), ("under 30 minutes", None), ("up to 2 items", None),
+    ("budget 500", None), ("max 1000 words", None),
+    ("up to 20000 mAh, under ₹1500", 1500.0), ("within 500 m, but max Rs. 250", 250.0),
+    ("up to INR 500", 500.0), ("under 300 rupees", 300.0), ("less than 99 rs", 99.0),
+    ("not more than ₹ 1,200 please", 1200.0), ("upto 40 inr", 40.0)])
+def test_a_cap_needs_a_rupee_marker_beside_the_number(text, expected):
+    assert gate.cap(text) == expected
+
+
+@pytest.mark.parametrize("label", ["Place order (Cash on Delivery)", "Buy now with UPI", "Confirm payment via card",
+                                   "Pay now using Google Pay"])
+def test_jev_cannot_clear_a_commit_that_only_mentions_a_payment_method(monkeypatch, label):
+    page = fake_page()
+    monkeypatch.setattr(gate.jev, "final", lambda *a: ("step", 0.9))
+    assert gate.commit_label(Fake(page), "CLICK", control(label), page) == label
+
+
+def test_an_approval_does_not_survive_a_changed_total(monkeypatch):
+    before = fake_page()
+    after = fake_page(text="Checkout\nDiet Coke ₹79\nDelivery fee ₹20\nTo pay ₹99\nPay ₹99")
+    summary(monkeypatch, ["Diet Coke", "Total ₹99"])
+    checks(monkeypatch)
+    w = Fake(after, replies=[{"text": "yes please"}])
+    gate.bind(w.state, PAY, "Pay ₹79", "₹79", before, "user")
+    assert gate.approved(w, before, PAY, "Pay ₹79", None) is True  # the same page: the approval stands
+    with pytest.raises(StalePage):
+        gate.approved(w, after, PAY, "Pay ₹99", None)  # ₹79 is still on the page, but the payable total is ₹99
+    assert len(w.asked) == 1 and w.state["approval"]["amount"] == "₹99"
+
+
+def test_an_approval_with_the_same_total_still_stands(monkeypatch):
+    page = fake_page(text="Checkout\nDiet Coke ₹79\nTo pay Rs. 79\nPay ₹79")
+    w = Fake(page)
+    gate.bind(w.state, PAY, "Pay ₹79", "₹79", page, "user")
+    assert gate.approved(w, page, PAY, "Pay ₹79", None) is True and w.asked == []
+
+
+@pytest.mark.parametrize("text", ["Amount INR 1,499\nSubmit order", "Total 1499\nPlace order",
+                                  "Fee payable: Rs 50\nSubmit order", "Amount 250 only\nSubmit order",
+                                  "Pay 1,200 rupees\nSubmit order", "Charge: INR 99\nSubmit order",
+                                  "To pay 1499\nSubmit order"])
+def test_without_a_cap_a_page_that_shows_money_is_never_preauthorised(monkeypatch, text):
+    page = fake_page(text=text, url="https://httpbin.org/forms/post")
+    submit = control("Submit order", node=50)
+    summary(monkeypatch, ["Medium pizza with bacon", "Test User at 19:00"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no"}], preauth=True)
+    w.state["site"] = "httpbin.org"
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, submit, "Submit order", None)
+    assert len(w.asked) == 1
+
+
+def test_a_cap_does_not_preauthorise_a_page_whose_amount_could_not_be_read(monkeypatch):
+    page = fake_page(text="Amount INR 1,499\nSubmit order", url="https://httpbin.org/forms/post")
+    w = Fake(page, preauth=True, cap=5000.0)
+    w.state["site"] = "httpbin.org"
+    assert gate.preauthorised(w.state, {"total": None}, page) is False
+    assert gate.preauthorised(w.state, {"total": "INR 1,499"}, page) is True  # read and within the cap
+
+
+def test_a_reply_that_is_not_a_clear_yes_lapses_any_earlier_approval(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no, make it 2"}])
+    w.state["approval"] = {"action_label": "Pay ₹79", "amount": "₹79", "host": "shop.test", "step": 0,
+                           "target": (None, 99), "by": "user"}  # an approval for another control
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert w.state["approval"] is None
+
+
+def test_a_yes_that_jev_reads_as_a_change_lapses_the_approval_too(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
+    checks(monkeypatch, approval="change")
+    w = Fake(page, replies=[{"text": "yes"}])
+    w.state["approval"] = {"action_label": "Pay ₹79", "amount": "₹79", "host": "shop.test", "step": 0,
+                           "target": (None, 99), "by": "user"}
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert w.state["approval"] is None
+
+
+def test_fees_from_an_earlier_page_count_only_while_its_total_is_the_current_one():
+    page = fake_page(text="Cart\nTo pay ₹79\nPay ₹79")
+    older = "Cart\nDelivery fee ₹30\nTo pay ₹109"
+    assert gate.facts(page, [older])["fees"] == []
+    same = "Cart\nHandling fee ₹5\nTo pay ₹79"
+    assert gate.facts(page, [older, same])["fees"] == ["Handling fee ₹5"]
+    assert gate.facts(page, [same.replace("₹79", "Rs. 79")])["fees"] == ["Handling fee ₹5"]
+    assert gate.facts(page, ["Cart\nHandling fee ₹5"])["fees"] == []  # no total to tell that it still applies
+    now = fake_page(text="Cart\nDelivery fee ₹20\nTo pay ₹99\nPay ₹99")
+    assert gate.facts(now, [same, older])["fees"] == ["Delivery fee ₹20"]
+
+
+def test_a_page_with_no_total_takes_its_fees_from_itself_only():
+    page = fake_page(text="Cart\nPlatform fee ₹3\nPay")
+    assert gate.facts(page, ["Cart\nHandling fee ₹5\nTo pay ₹79"])["fees"] == ["Platform fee ₹3"]

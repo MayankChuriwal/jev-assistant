@@ -9,11 +9,20 @@ from . import jev, planner, rules, skills
 from .browser import StalePage
 from .errors import Halt, Retry
 
-COMMIT_OPS = {"CLICK", "PRESS_KEY", "ACCEPT_DIALOG", "LOOK"}
+COMMIT_OPS = {"CLICK", "DOUBLE_CLICK", "PRESS_KEY", "ACCEPT_DIALOG", "LOOK"}
+CLICKS = {"CLICK", "DOUBLE_CLICK"}
 TOTAL = re.compile(r"\b(total|to pay|payable|amount due)\b", re.IGNORECASE)
 PAYABLE = re.compile(r"\b(to pay|grand total|order total|bill total|amount payable|total payable|net payable|"
                      r"amount due)\b", re.IGNORECASE)
-NOT_TOTAL = re.compile(r"\b(item total|sub ?total|saving|saved|discount|off)\b", re.IGNORECASE)
+# A line about what is saved, given back, or still to add is not the payable total.
+NOT_TOTAL = re.compile(r"\b(item total|sub ?total|save|saving|savings|saved|cashback|reward|rewards|coupon|discount|"
+                       r"off|free)\b|\badd\b.{0,30}\bmore\b", re.IGNORECASE)
+ASIDE = re.compile(r"\([^()]*\)")  # "(you save ₹200)": a remark in brackets is not the figure
+NUMBER = r"\d(?:[\d,]*\d)?(?:\.\d+)?"
+RUPEE = re.compile(r"(?:₹|\bRs\.?|\bINR\b)\s?(" + NUMBER + ")", re.IGNORECASE)
+PRICES = re.compile(rules.PRICE.pattern + r"|\bINR\s?" + NUMBER, re.IGNORECASE)  # prices in any currency, INR too
+MONEY = re.compile(r"\b(?:INR|rupees?)\s*\d|\d\s*(?:INR|rupees?|rs)\b|"
+                   r"\b(?:total|to pay|payable|amount due|amount)\b[^\n]{0,20}\d", re.IGNORECASE)
 DELIVERING = re.compile(r"\b(?:delivering to|deliver to|delivery address)\s*:?\s*([^\n]{8,160})", re.IGNORECASE)
 FEE = re.compile(r"^[^\n₹]{0,20}?((?:small cart|delivery|handling|platform|packaging|convenience|surge|late night|"
                  r"rain|service)\s+(?:fee|charges?)[^\n₹]{0,10}₹\s?[\d,]+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
@@ -21,21 +30,60 @@ ITEMS = re.compile(r"\b(\d+) items?\b", re.IGNORECASE)
 PROCEED = re.compile(r"\bproceed to (pay|checkout|buy)\b|\bgo to (payment|checkout)\b", re.IGNORECASE)
 YES = re.compile(r"\b(yes|yeah|yep|yup|ok|okay|sure|go ahead|book it|confirm|do it|proceed|haan)\b", re.IGNORECASE)
 NOT_YES = re.compile(r"\?|\b(no|not|don'?t|wait|but|instead|cheaper|change|stop|cancel|hold)\b", re.IGNORECASE)
-CAP = re.compile(r"\b(?:under|below|max(?:imum)?|up ?to|within|budget|less than|not more than)\s*(?:of\s*)?"
-                 r"(?:₹|rs\.?|inr)?\s*(\d[\d,]*(?:\.\d+)?)", re.IGNORECASE)
+CAP_WORD = r"\b(?:under|below|max(?:imum)?|up ?to|within|budget|less than|not more than)\s*(?:of\s*)?"
+CAP_BEFORE = re.compile(CAP_WORD + r"(?:₹|rs\.?|inr\b)\s*(" + NUMBER + ")", re.IGNORECASE)  # "under ₹300"
+CAP_AFTER = re.compile(CAP_WORD + "(" + NUMBER + r")\s*(?:inr\b|rupees?\b|rs\b|₹)", re.IGNORECASE)  # "300 rupees"
 FIELDS = ["what", "where", "option", "payment", "total"]  # approval lines for a task with no skill
 
 
 def cap(text):
-    """The spending cap the user's own words set ("under ₹300", "max Rs 500"), or None."""
-    match = CAP.search(text or "")
-    return float(match[1].replace(",", "")) if match else None
+    """The spending cap the user's own words set ("under ₹300", "max Rs 500", "budget of 500 INR"), or None. The
+    number must carry a rupee marker: "within 500 m" or "under 30 minutes" is not money."""
+    found = [m for rule in (CAP_BEFORE, CAP_AFTER) for m in rule.finditer(text or "")]
+    first = min(found, key=lambda m: m.start(), default=None)
+    return float(first[1].replace(",", "")) if first else None
 
 
 def amount(text):
-    """The number in the first price of `text` ("To pay ₹1,234.50" → 1234.5), or None."""
-    price = rules.PRICE.search(text or "")
-    return float(re.search(r"\d[\d,]*(?:\.\d+)?", price[0])[0].replace(",", "")) if price else None
+    """The number in the first rupee amount of `text` ("To pay ₹1,234.50" → 1234.5), or None. Another currency
+    (“$120”) is not read: the caller must treat it as unknown."""
+    price = RUPEE.search(text or "")
+    return float(price[1].replace(",", "")) if price else None
+
+
+def number(price):
+    """The number in a price of any currency, for comparing prices; None when there is none."""
+    digits = re.search(NUMBER, price or "")
+    return float(digits[0].replace(",", "")) if digits else None
+
+
+def worth(price):
+    """A price as the rupee amount and the bare number: two prices are the same only when both agree."""
+    return amount(price), number(price)
+
+
+def shows_money(text):
+    """Whether the page shows an amount of money in any form, even one `amount` cannot read."""
+    return bool(rules.PRICE.search(text) or RUPEE.search(text) or MONEY.search(text))
+
+
+def payable(text):
+    """The payable total a page shows: the last line that says what is payable (else the last plain total), and
+    the largest price on it. Lines about savings, cashback, or what to add are not totals; a price may sit on the
+    next line. None when the page says nothing clear."""
+    lines = [ASIDE.sub(" ", line) for line in text.splitlines()]
+    for kind in (PAYABLE, TOTAL):  # "To pay" first; a plain "total" only when nothing says what is payable
+        found = []
+        for i, line in enumerate(lines):
+            if not kind.search(line) or NOT_TOTAL.search(line):
+                continue
+            after = lines[i + 1] if i + 1 < len(lines) and not NOT_TOTAL.search(lines[i + 1]) else ""
+            prices = PRICES.findall(line) or PRICES.findall(after)
+            if prices:
+                found.append(max(prices, key=lambda price: number(price) or 0.0))
+        if found:
+            return found[-1]
+    return None
 
 
 def own_words(action):
@@ -59,8 +107,9 @@ def commit_label(w, operation, action, page, key=None, subgoal=None):
     goal = (subgoal or {}).get("do") or w.state["goal"]
     if label:
         words = own_words(action) or label
-        ambiguous = operation == "CLICK" and (PROCEED.search(words) or (rules.METHOD.search(words)
-                                                                         and not rules.PRICE.search(words)))
+        rest = rules.METHOD.sub("", PROCEED.sub("", words))  # a real commit word left over is never ambiguous
+        ambiguous = operation in CLICKS and not rules.COMMIT.search(rest) and (
+            PROCEED.search(words) or (rules.METHOD.search(words) and not rules.PRICE.search(words)))
         if ambiguous:
             verdict, sure = jev.final(page, label, goal)
             if verdict == "step" and sure >= 0.8:
@@ -76,20 +125,16 @@ def commit_label(w, operation, action, page, key=None, subgoal=None):
 
 def facts(page, recent):
     """What an approval must show, read by code from the page and the pages just before it: the payable total,
-    fees, the delivery address line, the item count, and the values typed into the form."""
+    fees, the delivery address line, the item count, and the values typed into the form. Fees count from an
+    earlier page only while that page's payable total is the current one."""
     seen = [page["text"], *reversed(recent[-5:])]
-    lines, total = page["text"].splitlines(), None
-    for kind in (PAYABLE, TOTAL):  # "To pay" first; a plain "total" only when nothing says what is payable
-        found = [(rules.PRICE.findall(line) or rules.PRICE.findall(" ".join(lines[i + 1:i + 2])))[-1:]
-                 for i, line in enumerate(lines) if kind.search(line) and not NOT_TOTAL.search(line)]
-        found = [f[0] for f in found if f]
-        if found:
-            total = found[-1]
-            break
+    total = payable(page["text"])
+    current = [page["text"]] + [t for t in reversed(recent[-5:]) if total is not None and payable(t) is not None
+                                and worth(payable(t)) == worth(total)]
     typed = [f"{a['label'].rstrip(':')}: {a['value']}" for a in page["actions"]
              if a.get("kind") == "fill" and a.get("role") != "searchbox" and "search" not in a["label"].lower()
              and a.get("value") and not str(a["value"]).startswith("[")]
-    return {"total": total, "fees": list(dict.fromkeys(f.strip() for t in seen for f in FEE.findall(t))),
+    return {"total": total, "fees": list(dict.fromkeys(f.strip() for t in current for f in FEE.findall(t))),
             "address": next((m.strip() for t in seen for m in DELIVERING.findall(t)), None),
             "items": next((int(n) for n in ITEMS.findall(page["text"])), 0), "typed": list(dict.fromkeys(typed))}
 
@@ -139,13 +184,15 @@ def bind(state, action, label, total, page, by):
 
 def preauthorised(state, found, page):
     """Whether the user's own words cover this commit: on the task's site, and within their cap when it costs
-    money. With no cap, only a commit whose page shows no amount at all (a form, a message)."""
+    money. A commit whose page shows no money at all (a form, a message) needs no cap; a total that is not in
+    rupees, or money the page shows but no total could be read for, is never covered."""
     here, site = skills.bare(rules.host(page["url"]).lower()), state["site"]
     if not state["preauth"] or not site or not (here == site or here.endswith("." + site)):
         return False
     if found["total"] is None:
-        return not rules.PRICE.search(page["text"])
-    return state["cap"] is not None and amount(found["total"]) <= state["cap"]
+        return not shows_money(page["text"])
+    value = amount(found["total"])
+    return value is not None and state["cap"] is not None and value <= state["cap"]
 
 
 def approved(w, page, action, label, subgoal):
@@ -154,9 +201,13 @@ def approved(w, page, action, label, subgoal):
     s = w.state
     approval = s["approval"]
     if approval and rules.approval_valid(approval, page, len(s["history"])) and matches(approval, action, label):
-        if not s["browser"].fresh(page, action):
-            raise StalePage("Page changed since the approval. Choose again.")
-        return True
+        shown = facts(page, s["recent"])["total"]
+        if approval["amount"] and shown and worth(shown) != worth(approval["amount"]):
+            s["approval"] = None  # the old amount may still be on the page, but the total payable changed
+        else:
+            if not s["browser"].fresh(page, action):
+                raise StalePage("Page changed since the approval. Choose again.")
+            return True
     if s["commit"]:
         raise Retry("An earlier committed action is still being checked; WAIT for it first.")
     found = facts(page, s["recent"])
@@ -187,6 +238,7 @@ def approved(w, page, action, label, subgoal):
     if YES.search(answer) and not NOT_YES.search(answer) and jev.approval(question, answer) == "yes":
         bind(s, action, label, total, page, "user")
         raise StalePage("Approved. Reading the page again before acting.")
+    s["approval"] = None  # nothing but a clear yes keeps an earlier approval alive
     raise Retry(f"The user did not approve: “{answer}”. Nothing was committed; do what they asked.")
 
 
