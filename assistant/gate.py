@@ -15,14 +15,16 @@ TOTAL = re.compile(r"\b(total|to pay|payable|amount due)\b", re.IGNORECASE)
 PAYABLE = re.compile(r"\b(to pay|grand total|order total|bill total|amount payable|total payable|net payable|"
                      r"amount due)\b", re.IGNORECASE)
 # A line about what is saved, given back, or still to add is not the payable total.
-NOT_TOTAL = re.compile(r"\b(item total|sub ?total|save|saving|savings|saved|cashback|reward|rewards|coupon|discount|"
+NOT_TOTAL = re.compile(r"\b(items? total|sub ?total|save|saving|savings|saved|cashback|reward|rewards|coupon|discount|"
                        r"off|free)\b|\badd\b.{0,30}\bmore\b", re.IGNORECASE)
-ASIDE = re.compile(r"\([^()]*\)")  # "(you save ₹200)": a remark in brackets is not the figure
+ASIDE = re.compile(r"\([^()]*\)")
+REMARK = re.compile(NOT_TOTAL.pattern + r"|\bwas\b|\bmrp\b", re.IGNORECASE)  # "(you save ₹200)", "(was ₹1,499)"
 NUMBER = r"\d(?:[\d,]*\d)?(?:\.\d+)?"
 RUPEE = re.compile(r"(?:₹|\bRs\.?|\bINR\b)\s?(" + NUMBER + ")", re.IGNORECASE)
 PRICES = re.compile(rules.PRICE.pattern + r"|\bINR\s?" + NUMBER, re.IGNORECASE)  # prices in any currency, INR too
-MONEY = re.compile(r"\b(?:INR|rupees?)\s*\d|\d\s*(?:INR|rupees?|rs)\b|"
-                   r"\b(?:total|to pay|payable|amount due|amount)\b[^\n]{0,20}\d", re.IGNORECASE)
+MONEY = re.compile(r"\b(?:USD|EUR|GBP|AED|INR|Rs)\.?\s?\d|₨\s?\d|\d\s*(?:/-|INR\b|rupees?\b|rs\b)|\brupees?\s*\d|"
+                   r"\b(?:total|to pay|payable|amount due|amount|price|fare|fees?|cost|charges?|rate)\b[^\n]{0,20}\d",
+                   re.IGNORECASE)
 DELIVERING = re.compile(r"\b(?:delivering to|deliver to|delivery address)\s*:?\s*([^\n]{8,160})", re.IGNORECASE)
 FEE = re.compile(r"^[^\n₹]{0,20}?((?:small cart|delivery|handling|platform|packaging|convenience|surge|late night|"
                  r"rain|service)\s+(?:fee|charges?)[^\n₹]{0,10}₹\s?[\d,]+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
@@ -67,23 +69,42 @@ def shows_money(text):
     return bool(rules.PRICE.search(text) or RUPEE.search(text) or MONEY.search(text))
 
 
+def unbracket(line):
+    """A line without its remarks in brackets ("(you save ₹200)", "(was ₹1,499)"). Any other bracket ("(₹2,999 incl.
+    GST)") keeps its words: its price may be the real one."""
+    while ASIDE.search(line):
+        line = ASIDE.sub(lambda m: " " if REMARK.search(m[0]) else f" {m[0][1:-1]} ", line)
+    return line
+
+
 def payable(text):
     """The payable total a page shows: the last line that says what is payable (else the last plain total), and
     the largest price on it. Lines about savings, cashback, or what to add are not totals; a price may sit on the
-    next line. None when the page says nothing clear."""
-    lines = [ASIDE.sub(" ", line) for line in text.splitlines()]
+    next line. None when the page says nothing clear, and None when a total line turned away for those words
+    carries a larger price than the one chosen: the page hides what is payable, so the user is asked."""
+    lines = [unbracket(line) for line in text.splitlines()]
+    turned_away = [price for line in lines if TOTAL.search(line) and NOT_TOTAL.search(line)
+                   for price in PRICES.findall(line)]
+    chosen = None
     for kind in (PAYABLE, TOTAL):  # "To pay" first; a plain "total" only when nothing says what is payable
         found = []
         for i, line in enumerate(lines):
             if not kind.search(line) or NOT_TOTAL.search(line):
                 continue
-            after = lines[i + 1] if i + 1 < len(lines) and not NOT_TOTAL.search(lines[i + 1]) else ""
-            prices = PRICES.findall(line) or PRICES.findall(after)
+            after = lines[i + 1] if i + 1 < len(lines) else ""
+            prices = PRICES.findall(line)
+            if not prices and NOT_TOTAL.search(after):
+                turned_away += PRICES.findall(after)  # "To pay" then "₹1,299 you save ₹200"
+            elif not prices:
+                prices = PRICES.findall(after)
             if prices:
                 found.append(max(prices, key=lambda price: number(price) or 0.0))
         if found:
-            return found[-1]
-    return None
+            chosen = found[-1]
+            break
+    if chosen is None or any((number(price) or 0.0) > (number(chosen) or 0.0) for price in turned_away):
+        return None
+    return chosen
 
 
 def own_words(action):
@@ -177,7 +198,8 @@ def bind(state, action, label, total, page, by):
     """The approval holds this control, host, and amount; it lapses when any of them changes."""
     target = (action.get("frame"), action["node"]) if action.get("node") is not None else None
     state["approval"] = {"action_label": label, "amount": total or "", "host": rules.host(page["url"]),
-                         "step": len(state["history"]), "target": target, "by": by}
+                         "step": len(state["history"]), "target": target, "by": by,
+                         "money": shows_money(page["text"])}
     if action.get("point"):
         state["approval"]["look"] = {"point": action["point"]}
 
@@ -202,7 +224,9 @@ def approved(w, page, action, label, subgoal):
     approval = s["approval"]
     if approval and rules.approval_valid(approval, page, len(s["history"])) and matches(approval, action, label):
         shown = facts(page, s["recent"])["total"]
-        if approval["amount"] and shown and worth(shown) != worth(approval["amount"]):
+        changed = bool(approval["amount"] and shown and worth(shown) != worth(approval["amount"]))
+        appeared = not approval["amount"] and not approval.get("money") and shows_money(page["text"])
+        if changed or appeared:
             s["approval"] = None  # the old amount may still be on the page, but the total payable changed
         else:
             if not s["browser"].fresh(page, action):

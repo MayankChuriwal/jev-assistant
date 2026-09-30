@@ -231,7 +231,7 @@ def test_a_double_click_on_a_pay_button_commits_like_a_click(monkeypatch):
     ("To pay ₹1,299 (you save ₹200)\nPay ₹1,299", "₹1,299"),            # an aside in brackets is not the payable figure
     ("To pay ₹1,299 (was ₹1,499)\nPay ₹1,299", "₹1,299"),
     ("To pay ₹1,299 · ₹50 cashback\nPay ₹1,299", None),                  # a line about cashback is not a total line
-    ("Total ₹79\nTo pay ₹1,299 · ₹50 cashback", "₹79"),                  # the other total line still counts
+    ("Total ₹79\nTo pay ₹1,299 · ₹50 cashback", None),                  # never fall back to a smaller total line
     ("To pay ₹1,299\nAdd ₹99 more to pay ₹0 delivery fee", "₹1,299"),
     ("To pay ₹1,299 + ₹20 fee, free delivery", None),
     ("Amount due ₹120 incl. ₹20 fee", "₹120"),                           # the largest price on the line, not the last
@@ -362,3 +362,77 @@ def test_fees_from_an_earlier_page_count_only_while_its_total_is_the_current_one
 def test_a_page_with_no_total_takes_its_fees_from_itself_only():
     page = fake_page(text="Cart\nPlatform fee ₹3\nPay")
     assert gate.facts(page, ["Cart\nHandling fee ₹5\nTo pay ₹79"])["fees"] == ["Platform fee ₹3"]
+
+
+# Fix round 2.
+
+@pytest.mark.parametrize("text, expected", [
+    ("To pay ₹1,299 (you save ₹200)", "₹1,299"),
+    ("To pay ₹1,299 (was ₹1,499)", "₹1,299"),
+    ("To pay ₹1,299 (MRP ₹1,599)", "₹1,299"),
+    ("To pay ₹999 (₹1,199 incl. GST)", "₹1,199"),                        # a price in brackets can be the real one
+    ("Grand total (₹2,999 incl. GST)\nDelivery fee ₹30", "₹2,999"),
+    ("Cart total ₹2,900\nTo pay (₹2,999 incl. taxes)", "₹2,999"),
+    ("To pay ₹999 (incl. ₹50 off)", "₹999"),
+    ("To pay (₹2,999 (incl. GST))", "₹2,999")])
+def test_a_bracket_hides_a_price_only_when_it_is_a_remark(text, expected):
+    assert gate.facts(fake_page(text=text), [])["total"] == expected
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Total ₹79\nTo pay ₹1,299 · ₹50 cashback", None),
+    ("Total ₹79\nTo pay ₹1,299 you save ₹200", None),
+    ("Total ₹79\nTo pay\n₹1,299 you save ₹200", None),                   # the turned-away price sits on the next line
+    ("Items total ₹1,249\nDelivery ₹30\nGrand total ₹1,278 · Saved ₹30", None),
+    ("Items total ₹1,249\nGrand total ₹1,278", "₹1,278"),               # an item total is not the payable total
+    ("Item total ₹1,000\nTo pay ₹700", None),                           # asks rather than guess: a larger total line
+    ("Item total ₹70\nHandling fee ₹5\nTo pay ₹79", "₹79"),
+    ("To pay ₹1,299\nAdd ₹99 more to pay ₹0 delivery fee", "₹1,299")])
+def test_a_total_line_that_was_turned_away_never_leaves_a_smaller_total(text, expected):
+    assert gate.facts(fake_page(text=text), [])["total"] == expected
+
+
+def test_a_payable_line_hidden_by_a_remark_is_not_preauthorised_on_a_smaller_total():
+    page = fake_page(text="Total ₹79\nTo pay ₹1,299 · ₹50 cashback\nPay")
+    w = Fake(page, preauth=True, cap=100.0)
+    assert gate.preauthorised(w.state, gate.facts(page, []), page) is False
+
+
+def test_an_approval_with_no_amount_does_not_survive_a_page_that_now_shows_money(monkeypatch):
+    form = fake_page(text="Pizza order\nSubmit order")
+    summary(monkeypatch, ["Medium pizza", "Test User at 19:00"])
+    checks(monkeypatch)
+    for now in ("Pizza order\nTo pay ₹2,999\nSubmit order", "Pizza order\nTotal: 2,999\nSubmit order",
+                "Pizza order\nPrice: 2,999/-\nSubmit order"):
+        w = Fake(form, replies=[{"text": "no"}])
+        gate.bind(w.state, PAY, "Submit order", "", form, "user")
+        assert gate.approved(w, form, PAY, "Submit order", None) is True and w.asked == []  # still no money
+        with pytest.raises(Retry, match="did not approve"):
+            gate.approved(w, fake_page(text=now), PAY, "Submit order", None)
+        assert len(w.asked) == 1 and w.state["approval"] is None
+
+
+def test_an_approval_given_on_a_page_with_money_but_no_readable_total_is_not_asked_for_again():
+    page = fake_page(text="Pizza order\nPrice: 1,499/-\nSubmit order")
+    w = Fake(page)
+    gate.bind(w.state, PAY, "Submit order", "", page, "user")
+    assert gate.approved(w, page, PAY, "Submit order", None) is True and w.asked == []
+
+
+@pytest.mark.parametrize("text", ["Price: 1,499/-", "Fare 250", "Cost 1499", "Charges: 99", "₨ 500", "USD 120",
+                                  "EUR 90", "AED 50", "Rate 1,200", "Fees: 15", "1,499/- only", "Rs 99"])
+def test_more_ways_to_show_money_are_never_preauthorised_without_a_cap(monkeypatch, text):
+    page = fake_page(text=f"Order form\n{text}\nSubmit order", url="https://httpbin.org/forms/post")
+    assert gate.shows_money(page["text"])
+    summary(monkeypatch, ["Medium pizza with bacon", "Test User at 19:00"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no"}], preauth=True)
+    w.state["site"] = "httpbin.org"
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, control("Submit order", node=50), "Submit order", None)
+    assert len(w.asked) == 1
+
+
+def test_a_page_with_no_amount_still_shows_no_money():
+    page = "Pizza order\nCustomer name\nPreferred delivery time\nDelivery instructions\nSubmit order"
+    assert not gate.shows_money(page)
