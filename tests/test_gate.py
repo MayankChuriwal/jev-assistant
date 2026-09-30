@@ -1,207 +1,213 @@
-"""The commit gate: nothing irreversible without one explicit yes for that exact action. Fakes only."""
+"""The commit gate over a fake worker: what commits, the facts an approval shows, asking and pre-authorising,
+binding the yes, and watching the result. Jev and mini are scripted."""
+
+from unittest.mock import Mock
 
 import pytest
-from fakes import act, agent_with, decision, fake_page
+from fakes import fake_page
 
-from assistant import agent as loop
+from assistant import gate
 from assistant.browser import StalePage
+from assistant.errors import Halt, Retry
 
-META = {"model": "fake", "latency_ms": 1}
-CARD = {"action_label": "Pay ₹79", "amount": "₹79", "lines": ["Diet Coke 300 ml", "Home"], "element": ""}
-WAIT = {"id": "wait", "kind": "wait", "label": "Wait", "node": None}
-
-
-@pytest.fixture(autouse=True)
-def card(monkeypatch):
-    monkeypatch.setattr(loop.jobs, "confirm_card", lambda context, page, label, elements=(): (dict(CARD), META))
+PAY = next(a for a in fake_page()["actions"] if a["label"] == "Pay ₹79")
 
 
-def outcomes(monkeypatch, *results):
-    queue = list(results)
-    monkeypatch.setattr(loop.jobs, "outcome", lambda context, page, label: (*queue.pop(0), META))
+class Fake:
+    """What the gate uses of a worker."""
+
+    bench, processing_ms, outcome_pause = False, 300000, 0
+
+    def __init__(self, page, replies=(), preauth=False, cap=None):
+        self.state = {"goal": "Order one Diet Coke", "chat": [], "recent": [page["text"]], "history": [],
+                      "approval": None, "commit": None, "preauth": preauth, "cap": cap, "site": "shop.test",
+                      "notes": [], "done": [], "mismatches": 0, "page": page, "reason": None,
+                      "browser": Mock(fresh=Mock(return_value=True), focused_label=Mock(return_value=""))}
+        self.replies, self.asked, self.said = list(replies), [], []
+
+    def skill(self):
+        return None
+
+    def say(self, text, kind="info", **extra):
+        self.said.append(text)
+
+    def ask(self, message):
+        self.asked.append(message)
+        return self.replies.pop(0) if self.replies else {"text": ""}
+
+    def moved(self, page):
+        return False
+
+    def steady(self, page):
+        pass
+
+    def elapsed(self):
+        return 0
+
+    def observe(self):
+        return self.state["page"]
+
+    def stop_if_interrupted(self):
+        pass
 
 
-def clicked(a):
-    return [call.args[1]["id"] for call in a.browser.act.call_args_list]
+def summary(monkeypatch, lines):
+    monkeypatch.setattr(gate.planner, "summary", lambda payload: list(lines))
 
 
-def approve(a, d):
-    """After a yes the page is read again before acting: the first act stops as stale, the next one runs."""
-    with pytest.raises(StalePage):
-        act(a, d)
-    return act(a, d)
+def checks(monkeypatch, matches="yes", approval="yes"):
+    monkeypatch.setattr(gate.jev, "matches", lambda *a: matches)
+    monkeypatch.setattr(gate.jev, "approval", lambda *a: approval)
 
 
-def test_a_commit_click_waits_for_an_explicit_yes(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}])
-    outcomes(monkeypatch, ("success", "Order placed #A1B2"))
-    with pytest.raises(StalePage):
-        act(a, decision("e6", "CLICK"))
-    assert clicked(a) == [] and a.state["approval"]["target"] == (None, 11)
-    act(a, decision("e6", "CLICK"))
-    assert a.asked[0]["kind"] == "confirm" and a.asked[0]["options"][0]["label"] == "Yes, Pay ₹79"
-    assert len(a.asked) == 1 and clicked(a) == ["e6"] and a.state["approval"] is None and a.state["commit"] is None
-    assert a.state["memory"][-1] == "Done: Pay ₹79 (Order placed #A1B2)"
-
-
-def test_no_means_nothing_is_clicked(tmp_path):
-    a = agent_with(tmp_path, replies=[{"option": "no"}, {"option": "items"}])
-    act(a, decision("e6", "CLICK"))
-    assert clicked(a) == [] and "change the items" in a.state["memory"][-1]
-
-
-def test_one_approval_covers_exactly_one_commit(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}, {"option": "no"}, {"option": "cancel"}])
-    outcomes(monkeypatch, ("failed", "Pay ₹79"))
-    act(a, decision("CONFIRM", "CONFIRM"))
-    assert a.state["approval"]["amount"] == "₹79"
-    act(a, decision("e6", "CLICK"))
-    assert clicked(a) == ["e6"] and len(a.asked) == 1 and "didn't go through" in a.told[-1]["text"]
-    act(a, decision("e6", "CLICK"))  # a retry is a new commit: ask again
-    assert clicked(a) == ["e6"] and a.asked[1]["kind"] == "confirm" and a.state["status"] == "cancelled"
-
-
-def test_the_commit_counts_even_if_the_next_observation_fails(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}, {"option": "no"}, {"option": "cancel"}])
-    with pytest.raises(StalePage):
-        act(a, decision("e6", "CLICK"))
-    a.browser.observe.side_effect = StalePage("still navigating")
-    with pytest.raises(StalePage):
-        act(a, decision("e6", "CLICK"))
-    assert clicked(a) == ["e6"] and a.state["approval"] is None
-    assert a.state["commit"]["label"] == "Pay ₹79" and a.state["commit"]["checks"] == 0
-    a.browser.observe.side_effect = None
-    act(a, decision("e6", "CLICK"))  # a second Pay needs a second yes
-    assert a.asked[1]["kind"] == "confirm" and clicked(a) == ["e6"]
-
-
-def test_an_approval_is_for_one_action_only(tmp_path, monkeypatch):
-    complaint = {"action_label": "Submit complaint", "amount": "", "lines": [], "element": ""}
-    monkeypatch.setattr(loop.jobs, "confirm_card", lambda context, page, label, elements=(): (complaint, META))
-    a = agent_with(tmp_path, replies=[{"option": "yes"}, {"option": "no"}, {"option": "cancel"}])
-    act(a, decision("CONFIRM", "CONFIRM"))
-    act(a, decision("e6", "CLICK"))  # "Pay ₹79" is not the approved complaint
-    assert clicked(a) == [] and a.asked[1]["kind"] == "confirm"
-
-
-def test_a_confirmed_commit_the_regex_misses_still_spends_the_approval(tmp_path, monkeypatch):
-    page = fake_page(actions=[{"id": "e1", "kind": "click", "label": "Place your order", "role": "button",
-                               "node": 5}, WAIT])
-    card = {"action_label": "Place your order", "amount": "₹79", "lines": [], "element": "1"}
-    monkeypatch.setattr(loop.jobs, "confirm_card", lambda context, page, label, elements=(): (card, META))
-    outcomes(monkeypatch, ("success", "Pay ₹79"))
-    a = agent_with(tmp_path, page=page, replies=[{"option": "yes"}])
-    act(a, decision("CONFIRM", "CONFIRM"))
-    assert a.state["approval"]["target"] == (None, 5)
-    act(a, decision("e1", "CLICK"))
-    assert clicked(a) == ["e1"] and a.state["approval"] is None
-    assert a.state["memory"][-1] == "Done: Place your order (Pay ₹79)"
-
-
-def test_a_changed_total_needs_a_new_approval(tmp_path):
-    a = agent_with(tmp_path, replies=[{"option": "no"}, {"option": "items"}])
-    a.state["approval"] = {"action_label": "Pay ₹79", "amount": "₹79", "host": "shop.test", "step": 0,
-                           "target": (None, 11)}
-    page = fake_page(text="Checkout\nTotal ₹99\nPay ₹99")
-    a.state["page"] = a.browser.observe.return_value = page
-    act(a, decision("e6", "CLICK"))
-    assert a.asked[0]["kind"] == "confirm" and clicked(a) == []
-
-
-def test_enter_in_a_field_whose_form_pays_is_a_commit(tmp_path):
-    a = agent_with(tmp_path, replies=[{"option": "no"}, {"option": "payment"}])
-    act(a, decision("e3", "PRESS_KEY", key="Enter"))
-    assert a.asked[0]["kind"] == "confirm" and clicked(a) == []
-    act(a, decision("e3", "PRESS_KEY", key="Tab"))
-    assert clicked(a) == ["e3"] and len(a.asked) == 2
-
-
-def test_enter_or_space_on_the_page_checks_the_focused_control(tmp_path):
-    a = agent_with(tmp_path, replies=[{"option": "no"}, {"option": "payment"}])
-    a.browser.focused_label.return_value = "Pay ₹79"
+def test_a_pay_button_commits_and_a_payment_method_named_pay_is_cleared_by_jev(monkeypatch):
     page = fake_page()
-    page["actions"].append({"id": "key_page", "kind": "key", "label": "The page", "role": "page", "node": None})
-    a.state["page"] = a.browser.observe.return_value = page
-    act(a, decision("key_page", "PRESS_KEY", key="Space"))
-    assert a.asked[0]["kind"] == "confirm" and clicked(a) == []
+    w = Fake(page)
+    assert gate.commit_label(w, "CLICK", PAY, page) == "Pay ₹79"
+    upi = {"id": "u", "kind": "click", "label": "UPI Scan and Pay", "role": "radio", "node": 40}
+    monkeypatch.setattr(gate.jev, "final", lambda *a: ("step", 0.9))
+    assert gate.commit_label(w, "CLICK", upi, page) is None
+    monkeypatch.setattr(gate.jev, "final", lambda *a: ("final", 0.9))
+    assert gate.commit_label(w, "CLICK", upi, page) == "UPI Scan and Pay"
 
 
-def test_pending_outcomes_are_rechecked_and_unclear_ones_stop_everything(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}])
-    outcomes(monkeypatch, ("pending", ""), ("unclear", ""))
-    approve(a, decision("e6", "CLICK"))
-    assert a.state["commit"]["checks"] == 1 and a.state["status"] == "ready"
-    act(a, decision("e5", "CLICK"))  # e.g. a step on the bank's page
-    assert a.state["status"] == "blocked" and "can't tell whether Pay ₹79 went through" in a.told[-1]["text"]
-    assert "bank" not in a.told[-1]["text"]  # not every commit is a payment
+def test_jev_never_clears_a_clear_commit(monkeypatch):
+    monkeypatch.setattr(gate.jev, "final", lambda *a: ("step", 1.0))
+    page = fake_page()
+    assert gate.commit_label(Fake(page), "CLICK", PAY, page) == "Pay ₹79"
 
 
-def test_an_outcome_the_model_cannot_classify_stops_the_task(tmp_path, monkeypatch):
-    def broken(context, page, label):
-        raise ValueError("The text model returned an invalid outcome; nothing executed.")
-
-    monkeypatch.setattr(loop.jobs, "outcome", broken)
-    a = agent_with(tmp_path, replies=[{"option": "yes"}])
-    approve(a, decision("e6", "CLICK"))
-    assert a.state["status"] == "blocked" and "can't tell whether Pay ₹79 went through" in a.told[-1]["text"]
-    assert "bank" not in a.told[-1]["text"]  # not every commit is a payment
+def test_inside_a_commit_subgoal_jev_confirms_a_control_the_regex_missed(monkeypatch):
+    page = fake_page()
+    go = {"id": "g", "kind": "click", "label": "Continue", "role": "button", "node": 41}
+    monkeypatch.setattr(gate.jev, "final", lambda *a: ("final", 0.7))
+    assert gate.commit_label(Fake(page), "CLICK", go, page, subgoal={"do": "place the order", "kind": "commit"}) \
+        == "Continue"
+    assert gate.commit_label(Fake(page), "CLICK", go, page, subgoal={"do": "open the cart", "kind": "act"}) is None
 
 
-def test_a_stale_page_after_approval_keeps_the_approval(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}])
-    outcomes(monkeypatch, ("success", "Pay ₹79"))
+@pytest.mark.parametrize("text, expected", [
+    ("order it, don't ask, under ₹300", 300.0), ("max Rs. 1,250", 1250.0), ("budget of 500 INR", 500.0),
+    ("upto ₹99.50", 99.5), ("order 2 cokes", None)])
+def test_caps_come_from_the_users_words(text, expected):
+    assert gate.cap(text) == expected
+
+
+def test_amounts_read_rupees_in_any_form():
+    assert gate.amount("To pay ₹1,234.50") == 1234.5 and gate.amount("Rs. 3,398") == 3398.0
+    assert gate.amount("free") is None
+
+
+def test_facts_come_from_the_page():
+    page = fake_page(text="Cart\n2 items\nDelivering to: Home, 12 MG Road, Bengaluru\nItem total ₹70\n"
+                          "Handling fee ₹5\nTo pay ₹79\nPay ₹79")
+    found = gate.facts(page, [])
+    assert found["total"] == "₹79" and found["items"] == 2 and found["address"].startswith("Home, 12 MG Road")
+    assert found["fees"] == ["Handling fee ₹5"]
+
+
+def test_a_clear_yes_binds_the_approval_and_reads_the_page_again(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "yes, go ahead"}])
     with pytest.raises(StalePage):
-        act(a, decision("e6", "CLICK"))
-    a.browser.act.side_effect = [StalePage("moved"), {}]
-    with pytest.raises(StalePage):
-        act(a, decision("e6", "CLICK"))
-    assert a.state["approval"] is not None
-    act(a, decision("e6", "CLICK"))
-    assert len(a.asked) == 1 and a.state["approval"] is None
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    question = w.asked[0]["text"]
+    assert question.startswith("Diet Coke 300 ml × 1\n• Total ₹79") and "I'll press “Pay ₹79” on shop.test" in question
+    assert w.state["approval"]["amount"] == "₹79" and w.state["approval"]["target"] == (None, 11)
+    assert gate.approved(w, page, PAY, "Pay ₹79", None) is True  # the same control, host, and amount
 
 
-def test_card_details_typed_during_the_task_can_be_saved_after_success(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}, {"option": "save"}])
-    a.state["card_parts"] = {"card.number": "4111111111111111", "card.expiry": "12/29", "card.cvv": "123"}
-    outcomes(monkeypatch, ("success", "Pay ₹79"))
-    approve(a, decision("e6", "CLICK"))
-    assert sorted(a.vault.writes) == [("card.card1111.cvv", "123"), ("card.card1111.expiry", "12/29"),
-                                      ("card.card1111.number", "4111111111111111")]
-    assert a.profile.data["cards"][-1] == {"id": "card1111", "label": "Card ••1111", "last4": "1111"}
-    assert a.state["card_parts"] == {}
+def test_a_yes_with_a_change_commits_nothing(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "yes but make it 2"}])
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert w.state["approval"] is None
 
 
-def test_done_waits_for_a_payment_that_is_still_settling(tmp_path, monkeypatch):
-    a = agent_with(tmp_path)
-    a.state["commit"] = {"label": "Pay ₹79", "checks": 0}
-    outcomes(monkeypatch, ("pending", ""), ("success", "Order placed #A1B2"))
-    results = []
-    monkeypatch.setattr(loop.jobs, "result",
-                        lambda context, page: results.append(page["url"]) or ("Ordered.", "Order placed #A1B2", True,
-                                                                              META))
-    act(a, decision("DONE", "DONE"))
-    assert a.state["status"] == "ready" and results == [] and a.state["commit"]["checks"] == 1
-    assert a.state["memory"][-1] == "Waiting for the result of Pay ₹79 before finishing."
-    act(a, decision("DONE", "DONE"))
-    assert a.state["status"] == "done" and len(results) == 1
-    assert "Done: Pay ₹79 (Order placed #A1B2)" in a.state["memory"]
+def test_an_amount_the_page_doesnt_show_is_sent_back(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke", "Total ₹97"])
+    checks(monkeypatch)
+    with pytest.raises(Retry, match="doesn't show ₹97"):
+        gate.approved(Fake(page), page, PAY, "Pay ₹79", None)
 
 
-def test_a_commit_the_site_is_still_working_on_is_watched_until_it_is_confirmed(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}])
-    outcomes(monkeypatch, ("processing", "Finding drivers nearby"), ("processing", "Finding drivers nearby"),
-             ("success", "Your driver is on the way"))
-    approve(a, decision("e6", "CLICK"))
-    assert [m["text"] for m in a.told].count("Pay ₹79: Finding drivers nearby. I'll tell you as soon as it's "
-                                             "confirmed.") == 1
-    assert a.state["commit"] is None and a.state["memory"][-1] == "Done: Pay ₹79 (Your driver is on the way)"
-    assert a.state["status"] == "ready"
+def test_an_order_that_doesnt_match_is_fixed_twice_then_asked(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Pepsi", "Total ₹79"])
+    checks(monkeypatch, matches="no")
+    w = Fake(page, replies=[{"text": "no"}])
+    for _ in range(2):
+        with pytest.raises(Retry, match="doesn't match"):
+            gate.approved(w, page, PAY, "Pay ₹79", None)
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert len(w.asked) == 1
 
 
-def test_a_commit_still_processing_after_the_wait_stops_with_what_the_site_shows(tmp_path, monkeypatch):
-    a = agent_with(tmp_path, replies=[{"option": "yes"}])
-    a.processing_ms = 0
-    outcomes(monkeypatch, ("processing", "Finding drivers nearby"))
-    approve(a, decision("e6", "CLICK"))
-    assert a.state["status"] == "blocked" and "Finding drivers nearby" in a.told[-1]["text"]
-    assert "bank" not in a.told[-1]["text"]
+def test_preauthorised_within_the_cap_runs_and_says_so(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, preauth=True, cap=100.0)
+    assert gate.approved(w, page, PAY, "Pay ₹79", None) is True
+    assert w.asked == [] and w.said[0].startswith("Placing: Diet Coke 300 ml × 1")
+    assert w.state["approval"]["by"] == "preauth"
+
+
+@pytest.mark.parametrize("cap", [78.0, None])
+def test_preauthorised_over_the_cap_or_without_one_still_asks(monkeypatch, cap):
+    page = fake_page(text="Total ₹79\nPay ₹79")
+    summary(monkeypatch, ["Diet Coke", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no"}], preauth=True, cap=cap)
+    with pytest.raises(Retry):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert len(w.asked) == 1
+
+
+def test_preauthorised_without_a_cap_submits_a_form_with_no_amount(monkeypatch):
+    page = fake_page(text="Pizza order\nCustomer name\nSubmit order", url="https://httpbin.org/forms/post")
+    submit = {"id": "s", "kind": "click", "label": "Submit order", "role": "button", "node": 50}
+    summary(monkeypatch, ["Medium pizza with bacon", "Test User at 19:00"])
+    checks(monkeypatch)
+    w = Fake(page, preauth=True)
+    w.state["site"] = "httpbin.org"
+    assert gate.approved(w, page, submit, "Submit order", None) is True
+
+
+def test_a_bench_run_never_uses_preauthorisation(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no"}], preauth=True, cap=100.0)
+    w.bench = True
+    with pytest.raises(Retry):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert w.state["bench_preauth"] is True and len(w.asked) == 1
+
+
+@pytest.mark.parametrize("verdicts, note", [(["processing", "confirmed"], "Done: Pay ₹79"),
+                                            (["failed"], "failed"), (["next_step"], "only a step")])
+def test_after_a_commit_the_site_is_watched_until_it_says(monkeypatch, verdicts, note):
+    w = Fake(fake_page())
+    w.state["commit"] = {"label": "Pay ₹79", "since": 0}
+    queue = list(verdicts)
+    monkeypatch.setattr(gate.jev, "after_commit", lambda *a: queue.pop(0))
+    gate.watch(w, "Pay ₹79", "Order a coke")
+    assert w.state["commit"] is None and note in w.state["notes"][-1] and w.state["reason"] == "commit"
+    assert (w.state["done"] == ["Pay ₹79"]) == (verdicts[-1] == "confirmed")
+    assert (len(w.said) == 1) == ("processing" in verdicts)
+
+
+def test_an_unclear_result_twice_stops_the_task(monkeypatch):
+    w = Fake(fake_page())
+    w.state["commit"] = {"label": "Pay ₹79", "since": 0}
+    monkeypatch.setattr(gate.jev, "after_commit", lambda *a: "unclear")
+    with pytest.raises(Halt, match="can't tell whether Pay ₹79 went through"):
+        gate.watch(w, "Pay ₹79", "Order a coke")
