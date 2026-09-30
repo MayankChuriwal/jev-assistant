@@ -72,6 +72,29 @@ def test_same_label_duplicates_count_as_one_choice():
     assert step["kind"] == "act" and step["margin"] == pytest.approx(0.8)
 
 
+def duplicate_step(probabilities, choice):
+    actions = [{"id": "a", "kind": "click", "label": "Search", "role": "button", "node": 1},
+               {"id": "b", "kind": "click", "label": "Search", "role": "button", "node": 2},
+               {"id": "c", "kind": "click", "label": "Cart", "role": "link", "node": 3},
+               {"id": "d", "kind": "click", "label": "Help", "role": "link", "node": 4}]
+    state, questions, heads, controls = build(page=fake_page(actions=actions))
+    answers = answers_for(questions, {"next": "CLICK"})
+    answers["click_target"] = {"choice": choice, "probabilities": probabilities, "confidence": probabilities[choice]}
+    return executor.decide(answers, questions, heads, controls)
+
+
+def test_a_raw_leader_that_trails_the_merged_label_does_not_act():
+    # Search x2 holds 0.60 between them; Cart's 0.34 is the biggest single element but not the merged leader.
+    step = duplicate_step({"1": 0.30, "2": 0.30, "3": 0.34, "4": 0.06}, choice="3")
+    assert step["kind"] == "think" and step["margin"] == pytest.approx(0.26)
+
+
+def test_duplicates_that_together_reach_the_target_probability_act():
+    step = duplicate_step({"1": 0.35, "2": 0.35, "3": 0.25, "4": 0.05}, choice="1")
+    assert step["kind"] == "act" and step["action"]["label"] == "Search"
+    assert step["margin"] == pytest.approx(0.45)
+
+
 def test_key_steps_carry_their_key():
     step = decide({"next": "KEY", "press_key_target": "Phone", "key": "Enter"})
     assert step["operation"] == "PRESS_KEY" and step["key"] == "Enter"

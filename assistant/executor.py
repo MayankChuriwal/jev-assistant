@@ -59,13 +59,18 @@ def request(page, subgoal, task, previous=None):
     return state, questions, heads, controls
 
 
-def margin(probabilities, labels):
-    """The top option's lead over the next one with a different label (same-label duplicates merged)."""
-    merged = {}
+def merged(probabilities, labels):
+    """Probability by label: options that share a label are one choice, so their probabilities add up."""
+    by_label = {}
     for index, p in probabilities.items():
         label = labels.get(index, index)
-        merged[label] = merged.get(label, 0.0) + p
-    top = sorted(merged.values(), reverse=True) + [0.0]
+        by_label[label] = by_label.get(label, 0.0) + p
+    return by_label
+
+
+def margin(probabilities, labels):
+    """The top option's lead over the next one with a different label (same-label duplicates merged)."""
+    top = sorted(merged(probabilities, labels).values(), reverse=True) + [0.0]
     return top[0] - top[1]
 
 
@@ -109,7 +114,11 @@ def decide(answers, questions, heads, controls):
         target = answers[head]
         labels = {i: heads[head][i].get("label", i) for i in target["probabilities"]}
         step["margin"] = margin(target["probabilities"], labels)
-        if target["probabilities"][target["choice"]] >= TARGET_P or step["margin"] >= TARGET_MARGIN:
+        by_label = merged(target["probabilities"], labels)
+        label = labels[target["choice"]]
+        # the chosen element must carry the leading label; then that label's whole mass (or its lead) decides
+        leads = by_label[label] >= max(by_label.values())
+        if leads and (by_label[label] >= TARGET_P or step["margin"] >= TARGET_MARGIN):
             chosen = {**step, "kind": "act", "operation": operation, "action": heads[head][target["choice"]]}
             if op == "KEY":
                 chosen["key"] = answers["key"]["choice"]
