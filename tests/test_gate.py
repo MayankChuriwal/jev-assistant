@@ -385,7 +385,7 @@ def test_a_bracket_hides_a_price_only_when_it_is_a_remark(text, expected):
     ("Total ₹79\nTo pay\n₹1,299 you save ₹200", None),                   # the turned-away price sits on the next line
     ("Items total ₹1,249\nDelivery ₹30\nGrand total ₹1,278 · Saved ₹30", None),
     ("Items total ₹1,249\nGrand total ₹1,278", "₹1,278"),               # an item total is not the payable total
-    ("Item total ₹1,000\nTo pay ₹700", None),                           # asks rather than guess: a larger total line
+    ("Item total ₹1,000\nTo pay ₹700", "₹700"),                         # a discounted cart: the item total is no hint
     ("Item total ₹70\nHandling fee ₹5\nTo pay ₹79", "₹79"),
     ("To pay ₹1,299\nAdd ₹99 more to pay ₹0 delivery fee", "₹1,299")])
 def test_a_total_line_that_was_turned_away_never_leaves_a_smaller_total(text, expected):
@@ -436,3 +436,138 @@ def test_more_ways_to_show_money_are_never_preauthorised_without_a_cap(monkeypat
 def test_a_page_with_no_amount_still_shows_no_money():
     page = "Pizza order\nCustomer name\nPreferred delivery time\nDelivery instructions\nSubmit order"
     assert not gate.shows_money(page)
+
+
+# Fix round 3: two structural backstops (the worst number on a money line, and a snapshot of the money lines).
+
+def cart(text, cap, url="https://shop.test/checkout", site="shop.test"):
+    page = fake_page(text=text, url=url)
+    w = Fake(page, preauth=True, cap=cap)
+    w.state["site"] = site
+    return w, page
+
+
+def test_numbers_read_commas_and_decimals():
+    assert gate.numbers("Total 1,499.00, 2,50,000 and 7 (19:05)") == [1499.0, 250000.0, 7.0, 19.0, 5.0]
+    assert gate.numbers("Customer name") == []
+
+
+def test_money_lines_take_the_line_after_a_money_word():
+    text = "Cart\nTotal\n1,499\nDiet Coke\nPrice: ₹40\nthanks"
+    assert gate.money_lines(text) == ["Total", "1,499", "Price: ₹40", "thanks"]
+    assert gate.money_lines("Pizza order\nCustomer name\nSubmit order") == []
+    assert gate.money_lines("Laptop 60,000 USD\nDiet Coke") == ["Laptop 60,000 USD"]  # a currency line alone
+
+
+def test_worst_is_the_largest_number_on_the_money_words_lines_brackets_included():
+    assert gate.worst("Diet Coke ₹4,000\nHandling fee ₹5\nTo pay ₹45") == 45.0
+    assert gate.worst("To pay ₹999 (₹1,199 incl. GST, free delivery)") == 1199.0
+    assert gate.worst("Total\n1,499") == 1499.0
+    assert gate.worst("Pizza order\nCustomer name") == 0.0
+
+
+def test_the_snapshot_holds_every_number_on_the_money_lines():
+    page = "Cart\nItems total ₹200 ₹150\nHandling fee ₹5\nGrand total ₹155\nPay"
+    assert gate.snapshot(page) == (5.0, 150.0, 155.0, 200.0)
+    assert gate.snapshot("Pizza order\nCustomer name") == ()
+
+
+@pytest.mark.parametrize("text, cap, expected", [
+    ("Total ₹79\nTo pay · ₹50 cashback applied\n₹1,299", 100.0, False),
+    ("Bill total ₹79\nGrand total · you saved\n₹1,299", 100.0, False),
+    ("To pay ₹999 (₹1,199 incl. GST, free delivery)", 1000.0, False),
+    ("Total ₹79\nTo pay (₹1,299 after ₹50 cashback)", 100.0, False),
+    ("Total\n1,499", 1000.0, False),
+    ("Diet Coke ₹40\nHandling fee ₹5\nTo pay ₹45", 100.0, True),
+    ("Item total ₹100\nDiscount ₹30\nTo pay ₹70", 300.0, True)])
+def test_under_a_cap_no_number_on_a_money_line_may_exceed_it(text, cap, expected):
+    w, page = cart(text, cap)
+    assert gate.preauthorised(w.state, gate.facts(page, []), page) is expected
+
+
+def test_the_bill_shown_to_the_user_is_not_a_smaller_total_beside_a_hidden_payable_line():
+    assert gate.facts(fake_page(text="Bill total ₹79\nGrand total · you saved\n₹1,299"), [])["total"] is None
+
+
+def test_the_snapshot_is_bound_with_the_approval(monkeypatch):
+    page = fake_page()
+    w = Fake(page)
+    gate.bind(w.state, PAY, "Pay ₹79", "₹79", page, "user")
+    assert w.state["approval"]["snapshot"] == gate.snapshot(page["text"]) == (79.0, 79.0) and \
+        "money" not in w.state["approval"]
+
+
+def test_a_fresh_yes_then_the_same_page_is_approved_without_a_second_question(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "yes"}])
+    with pytest.raises(StalePage):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert gate.approved(w, page, PAY, "Pay ₹79", None) is True and len(w.asked) == 1
+
+
+@pytest.mark.parametrize("before, after", [
+    ("Pizza order\nPrice: 1,499/-\nSubmit order", "Pizza order\nTo pay ₹14,999\nSubmit order"),
+    ("Cart\nItems total ₹200 ₹150\nHandling fee ₹5\nGrand total ₹155\nPay",
+     "Cart\nItems total ₹400 ₹300\nHandling fee ₹5\nGrand total ₹305\nPay"),
+    ("Pizza order\nSubmit order", "Pizza order\nTotal\n1,499\nSubmit order")])
+def test_an_approval_lapses_when_any_money_line_changes(monkeypatch, before, after):
+    first, second = fake_page(text=before), fake_page(text=after)
+    summary(monkeypatch, ["Medium pizza", "Test User at 19:00"])
+    checks(monkeypatch)
+    w = Fake(second, replies=[{"text": "no"}])
+    gate.bind(w.state, PAY, "Submit order", "", first, "user")
+    assert gate.approved(w, first, PAY, "Submit order", None) is True and w.asked == []
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, second, PAY, "Submit order", None)
+    assert len(w.asked) == 1 and w.state["approval"] is None
+
+
+def test_an_approval_with_no_snapshot_is_void(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no"}])
+    gate.bind(w.state, PAY, "Pay ₹79", "₹79", page, "user")
+    del w.state["approval"]["snapshot"]
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert len(w.asked) == 1
+
+
+def test_a_total_that_could_not_be_read_binds_no_amount_not_the_last_price_in_the_summary(monkeypatch):
+    page = fake_page(text="Cart\nDelivery fee ₹30\nPay")
+    summary(monkeypatch, ["Medium pizza", "Delivery fee ₹30"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "yes"}])
+    with pytest.raises(StalePage):
+        gate.approved(w, page, control("Pay", node=11), "Pay", None)
+    assert w.state["approval"]["amount"] == ""
+    assert gate.approved(w, page, control("Pay", node=11), "Pay", None) is True  # same page: no second question
+    assert len(w.asked) == 1
+
+
+@pytest.mark.parametrize("text", [
+    "Total\n1,499", "Amount payable\n1,499.00", "Fare\n250", "120 USD", "50 AED", "Pay 1,499", "SGD 50", "RM 50",
+    "¥500", "20 euros", "500 रुपये", "USD  120", "USD120", "Rs5", "₩9,000", "10 dollars", "₹\n1,499",
+    "Price: 1,499/-", "Fare 250", "Cost 1499", "Charges: 99", "₨ 500", "USD 120", "EUR 90", "AED 50",
+    "Amount INR 1,499", "Total 1499", "Bill\n99", "Due 50", "500 रुपया"])
+def test_these_pages_show_money_and_are_never_preauthorised_without_a_cap(monkeypatch, text):
+    page = fake_page(text=f"Order form\n{text}\nSubmit order", url="https://httpbin.org/forms/post")
+    assert gate.shows_money(page["text"])
+    summary(monkeypatch, ["Medium pizza with bacon", "Test User at 19:00"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no"}], preauth=True)
+    w.state["site"] = "httpbin.org"
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, control("Submit order", node=50), "Submit order", None)
+    assert len(w.asked) == 1
+
+
+@pytest.mark.parametrize("text", [
+    "Pizza order\nCustomer name\nSubmit order",
+    "Pizza Size\nSmall\nMedium\nLarge\nPreferred delivery time\nDelivery instructions\nSubmit order",
+    "Contact form\nYour message\nSubmit request"])
+def test_a_form_with_no_digits_on_its_money_lines_shows_no_money(text):
+    assert not gate.shows_money(text)

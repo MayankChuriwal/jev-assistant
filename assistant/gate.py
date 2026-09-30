@@ -22,9 +22,14 @@ REMARK = re.compile(NOT_TOTAL.pattern + r"|\bwas\b|\bmrp\b", re.IGNORECASE)  # "
 NUMBER = r"\d(?:[\d,]*\d)?(?:\.\d+)?"
 RUPEE = re.compile(r"(?:₹|\bRs\.?|\bINR\b)\s?(" + NUMBER + ")", re.IGNORECASE)
 PRICES = re.compile(rules.PRICE.pattern + r"|\bINR\s?" + NUMBER, re.IGNORECASE)  # prices in any currency, INR too
-MONEY = re.compile(r"\b(?:USD|EUR|GBP|AED|INR|Rs)\.?\s?\d|₨\s?\d|\d\s*(?:/-|INR\b|rupees?\b|rs\b)|\brupees?\s*\d|"
-                   r"\b(?:total|to pay|payable|amount due|amount|price|fare|fees?|cost|charges?|rate)\b[^\n]{0,20}\d",
-                   re.IGNORECASE)
+WORDS = re.compile(r"\b(?:total|to pay|pay|payable|bill|fees?|fare|price|cost|charges?|rate|amount|due|grand)\b",
+                   re.IGNORECASE)  # words that put a price on their line, or on the line after
+CURRENCY = re.compile(
+    r"[₹₨$€£¥₩]|\bRs(?![A-Za-z])|\b(?:INR|USD|EUR|GBP|AED|SGD)(?![A-Za-z])|(?-i:\bRM(?![A-Za-z]))|"
+    r"\b(?:rupees?|euros?|dollars?)(?![A-Za-z])|रुपये|रुपया|(?-i:\b[A-Z]{3}\s*\d|\d\s*[A-Z]{3}\b)|\d\s*/-",
+    re.IGNORECASE)
+DIGITS = re.compile(r"\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d+(?:\.\d+)?")  # 1,499.00 · 2,50,000 · 7
+ITEMISH = re.compile(r"\b(items? total|sub ?total)\b", re.IGNORECASE)
 DELIVERING = re.compile(r"\b(?:delivering to|deliver to|delivery address)\s*:?\s*([^\n]{8,160})", re.IGNORECASE)
 FEE = re.compile(r"^[^\n₹]{0,20}?((?:small cart|delivery|handling|platform|packaging|convenience|surge|late night|"
                  r"rain|service)\s+(?:fee|charges?)[^\n₹]{0,10}₹\s?[\d,]+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
@@ -64,9 +69,44 @@ def worth(price):
     return amount(price), number(price)
 
 
+def numbers(line):
+    """Every number on the line: 1,499.00 → 1499.0."""
+    return [float(n.replace(",", "")) for n in DIGITS.findall(line)]
+
+
+def money_lines(text):
+    """The lines that can hold money: those with a money word (and the line after it: "Total" then "1,499") or a
+    currency marker."""
+    lines, keep = text.splitlines(), set()
+    for i, line in enumerate(lines):
+        if WORDS.search(line):
+            keep |= {i, i + 1}
+        elif CURRENCY.search(line):
+            keep.add(i)
+    return [lines[i] for i in sorted(keep) if i < len(lines)]
+
+
+def snapshot(text):
+    """Every number on the money lines, in order of size: an approval holds only while it is unchanged."""
+    return tuple(sorted(n for line in money_lines(text) for n in numbers(line)))
+
+
+def worst(text):
+    """The largest number on a money-word line or the line after it; brackets count. 0.0 when there is none."""
+    lines, top = text.splitlines(), 0.0
+    for i, line in enumerate(lines):
+        if WORDS.search(line):
+            top = max([top, *numbers(line), *numbers(lines[i + 1] if i + 1 < len(lines) else "")])
+    return top
+
+
 def shows_money(text):
-    """Whether the page shows an amount of money in any form, even one `amount` cannot read."""
-    return bool(rules.PRICE.search(text) or RUPEE.search(text) or MONEY.search(text))
+    """Whether the page shows money in any form, even one `amount` cannot read: a number on a money line, or a
+    currency marker with a digit on its line or beside it."""
+    lines = text.splitlines()
+    return any(numbers(line) for line in money_lines(text)) or any(
+        CURRENCY.search(line) and any(numbers(near) for near in lines[max(i - 1, 0):i + 2])
+        for i, line in enumerate(lines))
 
 
 def unbracket(line):
@@ -80,11 +120,14 @@ def unbracket(line):
 def payable(text):
     """The payable total a page shows: the last line that says what is payable (else the last plain total), and
     the largest price on it. Lines about savings, cashback, or what to add are not totals; a price may sit on the
-    next line. None when the page says nothing clear, and None when a total line turned away for those words
-    carries a larger price than the one chosen: the page hides what is payable, so the user is asked."""
+    next line. None when the page says nothing clear, and None when a payable line turned away for those words
+    carries a larger price than the one chosen: the page hides what is payable, so the user is asked. (An item
+    total or "total savings" beside a payable line is no such thing: a discounted cart reads as its payable.)"""
     lines = [unbracket(line) for line in text.splitlines()]
-    turned_away = [price for line in lines if TOTAL.search(line) and NOT_TOTAL.search(line)
-                   for price in PRICES.findall(line)]
+    turned_away = []
+    for i, line in enumerate(lines):
+        if PAYABLE.search(line) and NOT_TOTAL.search(line) and not ITEMISH.search(line):
+            turned_away += PRICES.findall(line) or PRICES.findall(lines[i + 1] if i + 1 < len(lines) else "")
     chosen = None
     for kind in (PAYABLE, TOTAL):  # "To pay" first; a plain "total" only when nothing says what is payable
         found = []
@@ -199,7 +242,7 @@ def bind(state, action, label, total, page, by):
     target = (action.get("frame"), action["node"]) if action.get("node") is not None else None
     state["approval"] = {"action_label": label, "amount": total or "", "host": rules.host(page["url"]),
                          "step": len(state["history"]), "target": target, "by": by,
-                         "money": shows_money(page["text"])}
+                         "snapshot": snapshot(page["text"])}
     if action.get("point"):
         state["approval"]["look"] = {"point": action["point"]}
 
@@ -207,14 +250,16 @@ def bind(state, action, label, total, page, by):
 def preauthorised(state, found, page):
     """Whether the user's own words cover this commit: on the task's site, and within their cap when it costs
     money. A commit whose page shows no money at all (a form, a message) needs no cap; a total that is not in
-    rupees, or money the page shows but no total could be read for, is never covered."""
+    rupees, money the page shows but no total could be read for, or any number on a money line above the cap, is
+    never covered."""
     here, site = skills.bare(rules.host(page["url"]).lower()), state["site"]
     if not state["preauth"] or not site or not (here == site or here.endswith("." + site)):
         return False
     if found["total"] is None:
         return not shows_money(page["text"])
     value = amount(found["total"])
-    return value is not None and state["cap"] is not None and value <= state["cap"]
+    return (value is not None and state["cap"] is not None and value <= state["cap"]
+            and worst(page["text"]) <= state["cap"])
 
 
 def approved(w, page, action, label, subgoal):
@@ -223,11 +268,8 @@ def approved(w, page, action, label, subgoal):
     s = w.state
     approval = s["approval"]
     if approval and rules.approval_valid(approval, page, len(s["history"])) and matches(approval, action, label):
-        shown = facts(page, s["recent"])["total"]
-        changed = bool(approval["amount"] and shown and worth(shown) != worth(approval["amount"]))
-        appeared = not approval["amount"] and not approval.get("money") and shows_money(page["text"])
-        if changed or appeared:
-            s["approval"] = None  # the old amount may still be on the page, but the total payable changed
+        if snapshot(page["text"]) != approval.get("snapshot"):
+            s["approval"] = None  # any money line changed (or none was kept): the user approved something else
         else:
             if not s["browser"].fresh(page, action):
                 raise StalePage("Page changed since the approval. Choose again.")
@@ -245,7 +287,7 @@ def approved(w, page, action, label, subgoal):
     if w.moved(page):
         raise StalePage("The page changed while the approval was prepared. Choose again.")
     w.steady(page)
-    total = found["total"] or next(iter(rules.PRICE.findall(" ".join(lines))[-1:]), "")
+    total = found["total"] or ""  # never a fee from the summary: the snapshot guards what was shown
     if matched and preauthorised(s, found, page):
         if w.bench:
             s["bench_preauth"] = True  # a bench run logs what it would have done, then asks like any other
