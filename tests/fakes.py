@@ -133,3 +133,21 @@ def jev_fake(monkeypatch, checks=("success",), replies=(), approvals=(), achieve
     monkeypatch.setattr(driver.jev, "achieved", lambda *a: achieved)
     monkeypatch.setattr(driver.jev, "final", lambda *a: final)
     monkeypatch.setattr(driver.jev, "matches", lambda *a: matches)
+
+
+def answers_for(questions, picks):
+    """Valid Jev answers for a request: `picks` maps question names to a choice, an element's words, or (either,
+    probability). Unnamed questions get none (blocker), worked (effect), THINK (next), or their first option."""
+    defaults = {"blocker": "none", "effect": "worked", "next": "THINK"}
+    out = {}
+    for name, question in questions.items():
+        options = question["options"]
+        pick = picks.get(name, defaults.get(name, next(iter(options))))
+        choice, p = pick if isinstance(pick, tuple) else (pick, 0.9)
+        if choice not in options:  # words of an element: the first option whose element holds them
+            choice = next(i for i, o in options.items() if isinstance(o, dict) and choice in o.get("element", ""))
+        rest = [o for o in options if o != choice]
+        probabilities = {o: (1 - p) / len(rest) for o in rest}
+        probabilities[choice] = p if rest else 1.0
+        out[name] = {"choice": choice, "probabilities": probabilities, "confidence": p}
+    return out
