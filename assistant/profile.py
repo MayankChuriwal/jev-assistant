@@ -164,5 +164,15 @@ class Secrets:
         if isinstance(obj, list):
             return [self.redact(item) for item in obj]
         if isinstance(obj, dict):
-            return {key: self.redact(value) for key, value in obj.items()}
+            return {self.redact(key): self.redact(value) for key, value in obj.items()}
         return obj
+
+    def leaks(self, obj):
+        """Whether a registered value survives in `obj`: any string, dictionary keys included, images excepted."""
+        if isinstance(obj, str):
+            return not obj.startswith("data:image/") and any(regex.search(obj) for regex, _ in self.values.values())
+        if isinstance(obj, list):
+            return any(self.leaks(item) for item in obj)
+        if isinstance(obj, dict):
+            return any(self.leaks(key) or self.leaks(value) for key, value in obj.items())
+        return False

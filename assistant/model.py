@@ -1,5 +1,6 @@
 """TypeSafe makes choices; an optional small OpenAI-compatible model writes field values."""
 
+import contextvars
 import json
 import math
 import os
@@ -24,6 +25,37 @@ from .questions import (
 )
 
 CLIENT = httpx.Client(http2=True, timeout=25)
+TYPESAFE = "https://api.typesafe.ai/"
+METER = contextvars.ContextVar("jev_meter", default=None)  # the running task's model spend
+LEAK = "Refused to send: a secret survived redaction."
+JEV_INPUT = 0.042e-6  # dollars per Jev input token; Jev's output is free
+MINI = {"input": 0.40e-6, "cached": 0.10e-6, "output": 1.60e-6}  # GPT-4.1 mini, dollars per token
+
+
+def new_meter():
+    return {"mini": 0.0, "jev": 0.0, "mini_calls": 0, "jev_calls": 0}
+
+
+def spent(meter):
+    return meter["mini"] + meter["jev"]
+
+
+def charge(body, usage, jev):
+    """Add one call to the running task's meter. A Jev reply without usage is estimated from the request size."""
+    meter = METER.get()
+    if meter is None:
+        return
+    usage = usage or {}
+    if jev:
+        tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or len(json.dumps(body)) // 4
+        meter["jev"] += tokens * JEV_INPUT
+        meter["jev_calls"] += 1
+        return
+    cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+    meter["mini"] += ((usage.get("prompt_tokens", 0) - cached) * MINI["input"] + cached * MINI["cached"]
+                      + usage.get("completion_tokens", 0) * MINI["output"])
+    meter["mini_calls"] += 1
+
 
 # Observed kind -> the target question it feeds and the operations that consume that question.
 HEADS = {
@@ -52,6 +84,8 @@ def post_json(url, key, body):
     secrets = SECRETS.get()
     if secrets is not None:
         body = secrets.redact(body)  # the one outbound path to both models
+        if secrets.leaks(body):
+            raise RuntimeError(LEAK)  # never sent: a redaction gap must not reach a model
     for attempt in range(3):
         try:
             response = CLIENT.post(url, json=body, headers={"Authorization": f"Bearer {key}"})
@@ -65,7 +99,9 @@ def post_json(url, key, body):
             continue
         if response.is_error:
             raise RuntimeError(f"Model provider returned HTTP {response.status_code}; no action executed.")
-        return response.json()
+        result = response.json()
+        charge(body, result.get("usage") if isinstance(result, dict) else None, url.startswith(TYPESAFE))
+        return result
     raise RuntimeError("Model unavailable")
 
 

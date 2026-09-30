@@ -306,3 +306,44 @@ def test_a_dropped_connection_is_tried_again(monkeypatch):
     monkeypatch.setattr(model.CLIENT, "post", flaky)
     monkeypatch.setattr(model.time, "sleep", lambda seconds: None)
     assert model.post_json("https://example.test", "key", {}) == {"ok": True} and len(calls) == 3
+
+
+def test_a_secret_that_survives_redaction_is_never_sent(monkeypatch):
+    from assistant.profile import SECRETS, Secrets
+
+    class Broken(Secrets):
+        def redact(self, obj):
+            return obj  # a redaction bug: the scan must still stop the request
+
+    monkeypatch.setattr(model.CLIENT, "post", lambda *a, **k: pytest.fail("a secret was sent"))
+    token = SECRETS.set(Broken([("9876543210", "[profile:phone]")]))
+    try:
+        with pytest.raises(RuntimeError, match="secret survived redaction"):
+            model.post_json("https://api.openai.com/v1/chat/completions", "k", {"goal": "call 98765 43210"})
+    finally:
+        SECRETS.reset(token)
+
+
+def test_each_call_is_charged_to_the_running_task(monkeypatch):
+    class Response:
+        status_code, is_error = 200, False
+
+        def __init__(self, usage):
+            self.usage = usage
+
+        def json(self):
+            return {"usage": self.usage}
+
+    replies = [Response({"prompt_tokens": 1000, "prompt_tokens_details": {"cached_tokens": 400},
+                         "completion_tokens": 100}), Response({})]
+    monkeypatch.setattr(model.CLIENT, "post", lambda url, json, headers: replies.pop(0))
+    meter = model.new_meter()
+    token = model.METER.set(meter)
+    try:
+        model.post_json("https://api.openai.com/v1/chat/completions", "k", {"messages": []})
+        model.post_json("https://api.typesafe.ai/v1/systemone", "k", {"state": "x" * 400})
+    finally:
+        model.METER.reset(token)
+    assert meter["mini_calls"] == 1 and meter["jev_calls"] == 1
+    assert meter["mini"] == pytest.approx(600 * 0.40e-6 + 400 * 0.10e-6 + 100 * 1.60e-6)
+    assert meter["jev"] > 0 and model.spent(meter) == meter["mini"] + meter["jev"]

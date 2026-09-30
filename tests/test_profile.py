@@ -168,3 +168,11 @@ def test_parallel_saves_never_collide(tmp_path):
     for thread in threads:
         thread.join()
     assert errors == [] and json.loads((tmp_path / "profile.json").read_text())["cards"] == []
+
+
+def test_redaction_reaches_dictionary_keys_and_a_leak_is_seen():
+    secrets = profiles.Secrets([("9876543210", "[profile:phone]")])
+    body = {"Call 98765 43210": ["ok"], "shot": "data:image/png;base64,98765 43210"}
+    assert secrets.leaks(body)
+    clean = secrets.redact(body)
+    assert "Call [profile:phone]" in clean and not secrets.leaks(clean)
