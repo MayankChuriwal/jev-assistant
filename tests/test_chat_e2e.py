@@ -17,7 +17,8 @@ def test_an_order_is_planned_approved_in_chat_and_reported(tmp_path, monkeypatch
                    focused_label=Mock(return_value=""), downloads=[], pending_downloads=[])
     script_planner(monkeypatch, turn(subgoals=[sub("choose Office"), sub("pay", kind="commit")]),
                    turn("DONE", message="Order placed for ₹79.", text="Pay ₹79"))
-    steps = [{"next": "CLICK", "click_target": "Office"}, {"next": "DONE"}, {"next": "CLICK", "click_target": "Pay"}]
+    steps = [{"next": "CLICK", "click_target": "Office"},  # the candidates the planning turn reads
+             {"next": "CLICK", "click_target": "Office"}, {"next": "DONE"}, {"next": "CLICK", "click_target": "Pay"}]
     monkeypatch.setattr(jev, "request",
                         lambda state, questions: answers_for(questions, steps.pop(0) if len(steps) > 1 else steps[0]))
     jev_checks(monkeypatch)

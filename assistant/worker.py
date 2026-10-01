@@ -559,14 +559,17 @@ class Worker:
     def think(self, page):
         """One planner turn: a note, the rest of the plan, and one action."""
         s = self.state
-        payload = self.payload(page)
+        before = s["seen"]  # the planner still reads what changed since the last decision
+        self.refresh(page)
+        payload = self.payload(page, before)
         try:
             out, meta = planner.turn(payload)
         except ValueError:
             out, meta = planner.turn(payload)  # a cut-off or refused reply is asked once more
         reason = s["reason"]
         s["turns"].append({"step": len(s["history"]) + 1, "reason": reason,
-                           "latency_ms": meta.get("latency_ms", 0), **out})
+                           "latency_ms": meta.get("latency_ms", 0), **out,
+                           "candidates": payload["candidates"][:5], "feedback": payload["feedback"][-5:]})
         s["reason"], s["feedback"], s["seen"] = None, [], page
         if reason == "replan":
             s["subgoal_steps"] = 0
@@ -591,8 +594,35 @@ class Worker:
             return None
         return self.do(act, page)
 
-    def payload(self, page):
-        """What the planner reads, stable parts first so the provider's prompt cache holds them."""
+    def refresh(self, page):
+        """Jev's candidates for the page the planner is about to read, when they came from another one (the page
+        changed since Jev last decided, or Jev has read none yet): one Jev request on this page. Nothing is acted on
+        and the plan stays; a failed request keeps the old candidates, and the planner can still ASK, OPEN_URL, or
+        WAIT."""
+        s = self.state
+        if s["seen"] is not None and s["seen"].get("fingerprint") == page.get("fingerprint"):
+            return
+        sub = self.subgoal() or {"do": s["goal"], "done_when": "", "kind": "act", "values": []}
+        task = {"goal": s["goal"], "answers": self.user_words(), "recent": self.recent_steps()}
+        try:
+            state, questions, heads, controls = executor.request(page, sub, task, s["seen"])
+            try:
+                answers = jev.request(state, questions)
+            except ValueError:
+                answers = jev.request(state, questions)  # an invalid answer is asked once more
+            step = executor.decide(answers, questions, heads, controls)
+        except (ValueError, RuntimeError, TimeoutError):
+            return
+        s["jev"].append({"step": len(s["history"]) + 1, "subgoal": s["current"], "kind": "refresh",
+                         "op": step["op"], "p": round(step["p"], 3), "blocker": step["blocker"],
+                         "margin": step["margin"], "state": state, "questions": questions,
+                         "answers": {name: [a["choice"], round(a["probabilities"][a["choice"]], 3)]
+                                     for name, a in answers.items()}})
+        s["seen"], s["candidates"] = page, step["candidates"]
+
+    def payload(self, page, previous):
+        """What the planner reads, stable parts first so the provider's prompt cache holds them. `previous` is the
+        page the last decision was made on: what changed since then is marked."""
         s = self.state
         skill = self.skill()
         names = dict.fromkeys([*(skill["uses"] if skill else []), *s["situations"]])
@@ -605,7 +635,7 @@ class Worker:
             "memory": self.memory.recall(s["skill"], skills.bare(rules.host(page["url"]).lower()), s["goal"]),
             "steps": self.recent_steps(8),
             "committed_and_waiting": s["commit"]["label"] if s["commit"] else None,
-            "page": views.view(page, s["seen"]),
+            "page": views.view(page, previous),
             "candidates": [{"n": c["n"], "op": c["op"], "element": c["element"], "p": round(c["p"], 2)}
                            for c in s["candidates"]],
             "reason": s["reason"], "feedback": s["feedback"],
@@ -619,7 +649,9 @@ class Worker:
         if op in {"PICK", "TYPE"}:
             chosen = next((c for c in s["candidates"] if str(c["n"]) == act["pick"].strip()), None)
             if chosen is None:
-                raise Retry(f"{op} names one of Jev's candidates by its number; there are {len(s['candidates'])}.")
+                listed = ", ".join(f"{c['n']} {c['element']}" for c in s["candidates"]) or "none"
+                raise Retry(f"{op} names one of Jev's candidates by its number; there are {len(s['candidates'])} "
+                            f"(candidates: {listed}).")
             if op == "TYPE" and chosen["operation"] != "TYPE_TEXT":
                 raise Retry(f"Candidate {chosen['n']} is not a field to type into.")
             return self.act(chosen["operation"], chosen["action"], page, self.subgoal(), key=chosen.get("key"),

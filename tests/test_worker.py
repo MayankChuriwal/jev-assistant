@@ -22,7 +22,8 @@ def test_the_planner_plans_once_and_jev_does_the_steps(tmp_path, monkeypatch):
     jev_checks(monkeypatch)
     w.command("tick")
     w.command("tick")
-    assert len(seen) == 1 and seen[0]["reason"] == "start" and len(sent) == 1
+    assert len(seen) == 1 and seen[0]["reason"] == "start" and len(sent) == 2  # Jev's candidates for the plan, a step
+    assert [j["kind"] for j in w.state["jev"]] == ["refresh", "act"]
     operation, action = w.browser.act.call_args.args[:2]
     assert (operation, action["label"]) == ("CLICK", "Office") and w.state["history"][-1]["action"] == "Office"
 
@@ -1328,3 +1329,139 @@ def test_close_marks_the_worker_closed_after_the_final_trace(tmp_path):
     w.close()
     assert w.state["closed"] is True and Path(w.state["trace_path"]).exists()
     assert "closed" not in json.loads(Path(w.state["trace_path"]).read_text())
+
+
+# ---- live fix: the planner never PICKs from candidates Jev chose on another page
+
+
+def loading_page():
+    """An SPA search page still loading: no text, only its search box."""
+    return fake_page(text="", url="https://shop.test/search", actions=[
+        {"id": "s1", "kind": "fill", "label": "Search for products", "role": "searchbox", "value": "", "node": 1},
+        {"id": "wait", "kind": "wait", "label": "Wait", "node": None},
+    ])
+
+
+def tiles_page():
+    """The same search page once loaded: product tiles to add."""
+    return fake_page(text="Results for diet coke\nDiet Coke Can 300 ml ₹40\nCoke Zero ₹40\nSprite ₹35",
+                     url="https://shop.test/search", actions=[
+        {"id": "s1", "kind": "fill", "label": "Search for products", "role": "searchbox", "value": "diet coke",
+         "node": 1},
+        {"id": "t1", "kind": "click", "label": "Add Coke Zero", "role": "button", "node": 21},
+        {"id": "t2", "kind": "click", "label": "Add Sprite", "role": "button", "node": 22},
+        {"id": "t3", "kind": "click", "label": "Add Diet Coke Can", "role": "button", "node": 23},
+        {"id": "wait", "kind": "wait", "label": "Wait", "node": None},
+    ])
+
+
+def jev_on_both(state):
+    """Jev: the loading page shows the search subgoal done; on the tiles, Diet Coke is the control to press."""
+    if "Diet Coke" in state["page"]["text"]:
+        return {"next": "CLICK", "click_target": "Add Diet Coke"}
+    return {"next": "DONE"}
+
+
+def planner_picking(monkeypatch, element, start):
+    """A planner that plans with `start`, then PICKs the candidate showing `element`, or (as the live planner did) a
+    number from the page's element list when no candidate shows it. Returns the payloads it was shown."""
+    seen = []
+
+    def fake_turn(payload, image=None):
+        seen.append(payload)
+        if len(seen) == 1:
+            return start, {"model": "fake", "latency_ms": 1}
+        n = next((c["n"] for c in payload["candidates"] if element in c["element"]), 16)
+        return turn("PICK", pick=n), {"model": "fake", "latency_ms": 1}
+
+    monkeypatch.setattr(planner, "turn", fake_turn)
+    return seen
+
+
+def test_a_page_that_changed_after_jevs_done_gets_fresh_candidates_before_the_planner_picks(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=loading_page())
+    seen = planner_picking(monkeypatch, "Diet Coke", turn(subgoals=[sub("open search", "the search input shows")]))
+    sent = script_jev(monkeypatch, jev_on_both)
+    jev_checks(monkeypatch)
+    w.command("tick")  # the plan
+    w.command("tick")  # Jev: the search subgoal is done; the plan has nothing left
+    assert w.state["current"] == 1 and w.state["reason"] == "next"
+    w.browser.observe.return_value = tiles_page()  # the SPA finished loading
+    w.browser.fresh.return_value = False
+    w.command("tick")  # the planner, on the loaded page
+    assert seen[-1]["reason"] == "next" and any("Diet Coke" in c["element"] for c in seen[-1]["candidates"])
+    operation, action = w.browser.act.call_args.args[:2]
+    assert (operation, action["label"]) == ("CLICK", "Add Diet Coke Can")
+    assert not any("names one of Jev's candidates" in f for f in w.state["feedback"])
+    assert w.state["jev"][-1]["kind"] == "refresh" and "Diet Coke" in sent[-1][0]["page"]["text"]
+    assert w.state["plan"][-1]["do"] == "open search" and w.state["current"] == 1  # the refresh changed no plan
+    assert len(w.state["history"]) == 1  # only the planner's click: the refresh itself acted on nothing
+
+
+@pytest.mark.parametrize("error", [ValueError("bad answer"), RuntimeError("Jev is down")])
+def test_a_refresh_that_fails_keeps_the_old_candidates_and_the_tick_goes_on(tmp_path, monkeypatch, error):
+    w = worker_with(tmp_path, page=loading_page())
+    seen = planner_picking(monkeypatch, "Diet Coke", turn(subgoals=[sub("open search", "the search input shows")]))
+    script_jev(monkeypatch, jev_on_both)
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    calls = []
+
+    def broken(state, questions):
+        calls.append(state)
+        raise error
+
+    monkeypatch.setattr(jev, "request", broken)
+    old = list(w.state["candidates"])
+    w.browser.observe.return_value = tiles_page()
+    w.browser.fresh.return_value = False
+    w.command("tick")
+    assert len(seen) == 2 and seen[-1]["candidates"] == [
+        {"n": c["n"], "op": c["op"], "element": c["element"], "p": round(c["p"], 2)} for c in old]
+    assert len(calls) == (2 if isinstance(error, ValueError) else 1)  # an invalid answer is asked once more
+    assert w.state["status"] == "ready" and w.state["model_errors"] == 0 and w.state["errors"] == []
+    assert w.state["jev"][-1]["kind"] != "refresh"
+
+
+def test_a_planner_turn_on_the_page_jev_just_read_asks_jev_nothing_more(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]), turn("PICK", pick=1))
+    sent = script_jev(monkeypatch, {"next": ("CLICK", 0.4), "click_target": "Office"})
+    jev_checks(monkeypatch)
+    w.command("tick")  # the plan: Jev has read no page yet, so it is asked for candidates once
+    assert len(sent) == 1 and w.state["jev"][-1]["kind"] == "refresh" and seen[0]["candidates"]
+    w.command("tick")  # Jev is unsure; the planner picks from the candidates of this same page
+    assert len(sent) == 2 and [j["kind"] for j in w.state["jev"]] == ["refresh", "think"]
+    assert w.browser.act.call_args.args[1]["label"] == "Office"
+
+
+def test_a_refused_pick_lists_the_candidates_by_number_and_name(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn(subgoals=[sub()]), turn("PICK", pick=9))
+    script_jev(monkeypatch, {"next": ("CLICK", 0.4), "click_target": "Office"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    feedback = w.state["feedback"][-1]
+    assert "names one of Jev's candidates by its number" in feedback and not w.browser.act.called
+    listed = ", ".join(f"{c['n']} {c['element']}" for c in w.state["candidates"])
+    assert f"candidates: {listed}" in feedback and "Office" in feedback
+
+
+def test_planner_turns_keep_the_candidates_and_feedback_they_were_shown(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn(subgoals=[sub()]), turn("PICK", pick=9))
+    script_jev(monkeypatch, {"next": ("CLICK", 0.4), "click_target": "Office"})
+    jev_checks(monkeypatch)
+    for _ in range(9):  # a refused pick, again and again: feedback piles up across turns until a replan
+        w.command("tick")
+    first, last = w.state["turns"][0], w.state["turns"][-1]
+    assert first["feedback"] == [] and 0 < len(first["candidates"]) <= 5
+    assert set(first["candidates"][0]) == {"n", "op", "element", "p"}
+    assert any("names one of Jev's candidates" in f for t in w.state["turns"] for f in t["feedback"])
+    assert all(len(t["feedback"]) <= 5 and len(t["candidates"]) <= 5 for t in w.state["turns"])
+    assert last["candidates"] and last["reason"]
+    w.close()
+    trace = json.loads(Path(w.state["trace_path"]).read_text())
+    assert trace["turns"][-1]["candidates"] == last["candidates"] and "feedback" in trace["turns"][-1]
