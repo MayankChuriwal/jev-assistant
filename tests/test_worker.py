@@ -1465,3 +1465,74 @@ def test_planner_turns_keep_the_candidates_and_feedback_they_were_shown(tmp_path
     w.close()
     trace = json.loads(Path(w.state["trace_path"]).read_text())
     assert trace["turns"][-1]["candidates"] == last["candidates"] and "feedback" in trace["turns"][-1]
+
+
+def planned_order(tmp_path, monkeypatch, *replans, goal="Order Diet Coke on Instamart"):
+    """A worker whose first plan ends in the commit, then a replan turn for each of `replans` (lists of subgoals)."""
+    w = worker_with(tmp_path, goal=goal)
+    plan = [sub("open the cart"), sub("choose how to pay", kind="ask"), sub("place the order", kind="commit"),
+            sub("report the order", kind="report")]
+    script_planner(monkeypatch, turn(subgoals=plan), *(turn(subgoals=r) for r in replans))
+    script_jev(monkeypatch, {"next": "THINK"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    return w, plan
+
+
+def replan(w):
+    w.state["reason"] = "replan"
+    w.command("tick")
+
+
+def test_an_order_replan_that_drops_the_commit_is_refused_and_the_plan_kept(tmp_path, monkeypatch):
+    w, plan = planned_order(tmp_path, monkeypatch, [sub("open the fees"), sub("report the bill", kind="report")])
+    replan(w)
+    assert "must include the final commit subgoal" in w.state["feedback"][-1]
+    assert [g["do"] for g in w.state["plan"]] == [g["do"] for g in plan] and w.state["reason"] == "replan"
+
+
+def test_an_order_replan_that_keeps_the_commit_is_taken(tmp_path, monkeypatch):
+    w, _ = planned_order(tmp_path, monkeypatch, [sub("open the fees"), sub("place the order", kind="commit")])
+    replan(w)
+    assert [g["do"] for g in w.state["plan"]] == ["open the fees", "place the order"] and w.state["feedback"] == []
+
+
+def test_a_replan_that_drops_the_commit_is_taken_after_three_refusals_in_a_row(tmp_path, monkeypatch):
+    w, _ = planned_order(tmp_path, monkeypatch, [sub("open the fees")])
+    for _ in range(3):
+        replan(w)
+        assert w.state["plan"][0]["do"] == "open the cart"
+    replan(w)
+    assert [g["do"] for g in w.state["plan"]] == ["open the fees"] and w.state["commit_drops"] == 0
+
+
+@pytest.mark.parametrize("goal", ["What is the price of Diet Coke on Instamart?", "What did I order last on Swiggy?"])
+def test_a_lookup_replan_without_a_commit_is_taken(tmp_path, monkeypatch, goal):
+    w = worker_with(tmp_path, goal=goal)
+    first = [sub("open the cart"), sub("report the price", kind="report")]
+    if not rules.commerce_goal(goal):  # a plan with a commit in it: only an order or booking must keep it
+        first.insert(1, sub("place the order", kind="commit"))
+    script_planner(monkeypatch, turn(subgoals=first), turn(subgoals=[sub("open the orders")]))
+    script_jev(monkeypatch, {"next": "THINK"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    replan(w)
+    assert [g["do"] for g in w.state["plan"]] == ["open the orders"]
+
+
+@pytest.mark.parametrize("kind", ["report", "ask"])
+def test_continue_on_a_subgoal_only_the_planner_can_do_is_refused_then_replanned_then_asked(tmp_path, monkeypatch,
+                                                                                            kind):
+    w = worker_with(tmp_path, replies=[{"text": "place it"}])
+    script_planner(monkeypatch, turn(message="Your bill is ₹79."))
+    jev_checks(monkeypatch)
+    w.state.update(plan=[sub("report the bill", kind=kind)], reason="next")
+    for n in range(1, 7):
+        w.command("tick")
+        if n < 6:
+            assert any("CONTINUE does nothing here" in f for f in w.state["feedback"]) and w.asked == []
+        if n == 3:
+            assert "The goal is not finished" in w.state["feedback"][-1]
+            assert "ending with the commit step" in w.state["feedback"][-1] and w.state["reason"] == "replan"
+    assert len(w.asked) == 1 and "I'm stuck" in w.asked[0]["text"] and w.state["reason"] == "reply"
+    assert not w.browser.act.called

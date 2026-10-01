@@ -66,6 +66,8 @@ Rules:
 - Plan from the skill. When habit is given (an earlier run of this errand on this site), reuse its plan, changing
   only what this goal changes. On reason "start", ask in ONE message for every input the skill needs that the goal,
   the chat, and memory don't give; if nothing is missing, CONTINUE. Never ASK for what memory holds.
+- When the goal is an order or booking, every plan you write must still end with the commit subgoal (kind commit)
+  and then report; never drop it when replanning.
 - Never choose for the user what they didn't state: product variant or size, quantity above one, ride type, slot,
   seat, delivery address, payment method, tip. A pre-selected option isn't their choice. ASK with the choices you
   see and their prices. When the user leaves a choice to you ("you choose", "the cheapest"), pick the best fit and

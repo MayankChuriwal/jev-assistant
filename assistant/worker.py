@@ -26,6 +26,7 @@ SUBGOAL_STEPS = 12
 STUCK_AT = 8
 IDLE_HALT = 16  # ticks in a row with no browser step and no question to the user: ask at STUCK_AT, stop here
 CODE_ASKS = 3
+COMMIT_DROPS = 3  # an order's replan that drops its commit is refused this many times in a row, then taken
 CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QUIET = {"WAIT", "SCROLL_UP", "SCROLL_DOWN"}  # repeating these is not going in circles
 TALKING = {"ASK", "TELL", "DONE", "STOP"}
@@ -63,6 +64,10 @@ def picked(answer, options):
     if re.fullmatch(r"[0-9]{1,2}", text) and 1 <= int(text) <= len(options):
         return int(text)
     return next((n for n, option in enumerate(options, 1) if option.strip().casefold() == text), None)
+
+
+def has_commit(plan):
+    return any(g["kind"] == "commit" for g in plan)
 
 
 def plain(text):
@@ -127,6 +132,7 @@ class Worker:
             captcha_rounds=0, meter=new_meter(), escalations={}, margins=[], situations=[], uploaded=[], held=None,
             told_at=None, delegated_at=None, relaying=False, skill=None, preauth=False, cap=None, site="",
             cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None, closed=False,
+            commit_drops=0,
         )
 
     # ---- what the user and the models see
@@ -541,12 +547,17 @@ class Worker:
         return None
 
     def refused(self):
-        """The same planner action refused again and again: replan at 3, ask the user at 6."""
+        """The same planner action refused again and again: replan at 3, ask the user at 6. A CONTINUE refused (the
+        plan has nothing left Jev can do) hears that the goal isn't finished."""
         s = self.state
         act = s["turns"][-1]["action"] if s["turns"] else {}
         key = f"{act.get('op')}:{act.get('pick')}:{str(act.get('text', ''))[:40]}"
         count = s["refusals"][key] = s["refusals"].get(key, 0) + 1
-        if count == 3:
+        if count == 3 and act.get("op") == "CONTINUE":
+            s["feedback"].append(f"The goal is not finished: write the remaining subgoals{self.ending()}, or finish "
+                                 "with DONE or STOP. Never CONTINUE again here.")
+            s["reason"] = "replan"
+        elif count == 3:
             s["feedback"].append("This was refused 3 times: stop trying it. Change the plan, pick another candidate, "
                                  "or ASK the user.")
             s["reason"] = "replan"
@@ -579,6 +590,7 @@ class Worker:
                      "values": [v for v in g["values"] if v["field"].strip()]}
                     for g in out["subgoals"] if g["do"].strip()][:10]
         if subgoals:
+            self.keeps_commit(subgoals)
             s["plan"] = s["plan"][:s["current"]] + subgoals
             s["subgoal_steps"] = 0
         if s["replay"] and (reason == "start" or subgoals):  # a plan of another shape, now or later: no replay
@@ -589,10 +601,41 @@ class Worker:
         if act["op"] in TALKING:
             return self.talk(out, page)
         if act["op"] == "CONTINUE":
-            if self.subgoal() is None:
-                raise Retry("The plan has nothing left: give subgoals, or finish with DONE or STOP.")
+            sub = self.subgoal()
+            if sub is None:
+                raise Retry(f"The plan has nothing left: give subgoals{self.ending()}, or finish with DONE or STOP. "
+                            "CONTINUE does nothing here.")
+            if sub["kind"] in {"ask", "report"}:
+                yours = "ASK the question" if sub["kind"] == "ask" else "finish with DONE (the result and a quote)"
+                raise Retry(f"The current subgoal is yours, not Jev's: {yours}, or give the remaining subgoals"
+                            f"{self.ending()}. CONTINUE does nothing here.")
             return None
         return self.do(act, page)
+
+    def unordered(self):
+        """Whether the goal is an order or booking that hasn't gone through yet."""
+        s = self.state
+        return rules.commerce_goal(s["goal"]) and not s["done"] and not s["orders"]
+
+    def ending(self):
+        """What the rest of the plan must end with, for feedback: the commit, while an order hasn't gone through."""
+        return " (ending with the commit step: place the order, pay, or book)" if self.unordered() else ""
+
+    def keeps_commit(self, subgoals):
+        """A replan of an order or booking that drops the commit subgoal the plan still had is refused, and the plan
+        kept. After COMMIT_DROPS refusals in a row it is taken: the gate still guards every commit, and a plan that
+        runs out is refused at CONTINUE until the user is asked."""
+        s = self.state
+        dropped = (self.unordered() and has_commit(s["plan"][s["current"]:])
+                   and not has_commit(s["plan"][:s["current"]] + subgoals))
+        if not dropped or s["commit_drops"] >= COMMIT_DROPS:
+            s["commit_drops"] = 0
+            return
+        s["commit_drops"] += 1
+        s["reason"] = "replan"
+        raise Retry("This goal ends in an order or booking: the plan must include the final commit subgoal (kind "
+                    "commit: place the order, pay, or book) after the cart and payment steps; write the remaining "
+                    "subgoals.")
 
     def refresh(self, page):
         """Jev's candidates for the page the planner is about to read, when they came from another one (the page

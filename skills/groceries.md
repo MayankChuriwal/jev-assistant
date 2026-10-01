@@ -17,6 +17,7 @@ report: order number, arrival time, total
 7. Choose the payment method the user picks (see the payment skill).
 8. Place the order: the final control is the commit.
 9. Report the order number, arrival time, and total.
+An order needs all of steps 6 to 9: when you replan, the plan must still end with placing the order (the commit) and the report.
 ## Rules
 - Keep the brand and product the user named. If that exact size isn't sold, take the closest size of the same product and say so; never switch brand or product without asking.
 - The cart may already hold the user's own items: never remove them unless the user says so.
