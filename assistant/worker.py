@@ -69,6 +69,12 @@ def trivial(value):
     return (len(value) < 4 and not value.isdigit()) or bool(re.fullmatch(r"[^\W\d_]+(?:[\s'-]+[^\W\d_]+)*", value))
 
 
+def code_like(answer):
+    """Whether a hidden reply is a code the site sent (letters and digits, at least one digit, spaces and dashes
+    aside), not words such as "it never came"."""
+    return bool(re.fullmatch(r"(?=\D*\d)[^\W_]{3,12}", re.sub(r"[\s-]", "", str(answer or ""))))
+
+
 def picked(answer, options):
     """The option a hidden reply names by code alone (its number, or its words exactly), else None."""
     text = answer.strip().rstrip(".").casefold()
@@ -103,6 +109,16 @@ def blank(page):
         return False
     elements, _, _ = action_space(page["actions"])
     return len(elements) <= 1 and all(e.get("role", "") in CONTAINERS or not e["label"].strip() for e in elements)
+
+
+def unchanged(subgoals, rest):
+    """Whether a replan is the rest of the plan sent again: the same steps (their words and kind) with the same
+    values, in order. A new value (an address the user just gave) is a change."""
+    def shape(plan):
+        return [(step_words(g), g["kind"], [(v["field"].strip(), str(v["text"]).strip()) for v in g["values"]])
+                for g in plan]
+
+    return bool(subgoals) and shape(subgoals) == shape(rest)
 
 
 def with_commit(subgoals, rest):
@@ -195,7 +211,7 @@ class Worker:
             captcha_rounds=0, meter=new_meter(), escalations={}, margins=[], situations=[], uploaded=[], held=None,
             told_at=None, delegated_at=None, relaying=False, skill=None, preauth=False, cap=None, site="",
             cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None, closed=False,
-            commit_drops=0, idle_asked=0, circled={}, loops={}, fruitless=None, blank_waits=0,
+            commit_drops=0, idle_asked=0, circled={}, loops={}, fruitless=None, blank_waits=0, coded=[],
         )
 
     # ---- what the user and the models see
@@ -226,9 +242,12 @@ class Worker:
         self.release()
         message = {"from": "agent", **message}
         self.state["messages"].append(message)
+        if self.state["started_at"] is None:  # the wait is part of the task's time: busy = elapsed − waited ≥ 0
+            self.state["started_at"] = time.perf_counter()
         started = time.perf_counter()
         reply = self.asker(message) or {}
         self.state["waited_ms"] += round((time.perf_counter() - started) * 1000)
+        self.clock()  # recorded now: a cancel or a stop right after the wait must not leave elapsed behind waited
         if reply.get("cancel"):
             raise Halt("cancelled", "Cancelled. Nothing more will be done.")
         logged = {**reply, "text": "••••"} if message["kind"] == "secret" and "text" in reply else reply
@@ -238,6 +257,11 @@ class Worker:
     def elapsed(self):
         started = self.state["started_at"]
         return round((time.perf_counter() - started) * 1000) if started else 0
+
+    def clock(self):
+        """Record the task's time so far. Every wait for the user falls inside it, so the agent's busy time (elapsed
+        less waited) is never below zero."""
+        self.state["elapsed_ms"] = max(self.elapsed(), self.state["waited_ms"])
 
     def clean(self, page):
         """The page as the worker keeps it: hidden values replaced before anything reads or trims the text, and
@@ -299,6 +323,7 @@ class Worker:
             return self.tick()
         except Halt as halt:
             self.state["status"] = halt.status
+            self.clock()
             self.say(str(halt))
             return self.snapshot()
         finally:
@@ -335,7 +360,7 @@ class Worker:
                 s["feedback"].append(f"The last step failed ({error}); nothing was done. Decide again.")
             s["reason"] = s["reason"] or "unsure"
         self.count_idle(before, replies)
-        s["elapsed_ms"] = self.elapsed()
+        self.clock()
         self.checkpoint()
         return self.snapshot()
 
@@ -449,6 +474,10 @@ class Worker:
         except ValueError:
             answers = jev.request(state, questions)  # an invalid answer acts on nothing: asked once more
         step = executor.decide(answers, questions, heads, controls)
+        if step["kind"] == "blocker" and step["blocker"] == "captcha" and not rules.captcha_challenge(page):
+            # a captcha the page doesn't show (a "protected by reCAPTCHA" badge): the step goes on as if none blocked
+            unblocked = {"choice": "none", "probabilities": {"none": 1.0}, "confidence": 1.0}
+            step = executor.decide({**answers, "blocker": unblocked}, questions, heads, controls)
         s["jev"].append({"step": len(s["history"]) + 1, "subgoal": s["current"], "kind": step["kind"],
                          "op": step["op"], "p": round(step["p"], 3), "blocker": step["blocker"],
                          "margin": step["margin"], "state": state, "questions": questions,
@@ -572,12 +601,21 @@ class Worker:
                     f"{site} is asking for a code or password. Type it here; it stays hidden.")
         self.steady(page)  # a page still switching screens gets read again first
         reply = self.ask({"kind": "secret", "text": question})
-        if not card:
-            s["code_asks"] += 1  # a code counts once it was asked: a question dropped for a changed page doesn't
-        name = self.keep_secret(str(reply.get("text", "")).strip())
+        answer = str(reply.get("text", "")).strip()
+        name = self.keep_secret(answer)
+        if not card and code_like(answer):
+            self.count_code(name)  # a code the user got: a question dropped for a changed page, or "none", isn't one
         s["chat"] += [{"from": "agent", "text": question}, {"from": "user", "text": f"[secret:{name}] (hidden answer)"}]
         inputs, shown = self.value(field, f"[secret:{name}]", page)
         return self.run(page, "TYPE_TEXT", field, inputs, shown, goal="type what the user sent")
+
+    def count_code(self, name):
+        """One more code toward CODE_ASKS, once per answer: when the user's reply is a code, or a hidden answer is
+        typed into a code or password field."""
+        s = self.state
+        if name not in s["coded"]:
+            s["coded"].append(name)
+            s["code_asks"] += 1
 
     def relay_captcha(self, page):
         """A captcha only the user may solve: they see it with its squares numbered, and the worker clicks exactly
@@ -698,6 +736,8 @@ class Worker:
         subgoals = [{"do": g["do"].strip(), "done_when": g["done_when"].strip(), "kind": g["kind"],
                      "values": [v for v in g["values"] if v["field"].strip()]}
                     for g in out["subgoals"] if g["do"].strip()][:10]
+        if unchanged(subgoals, s["plan"][s["current"]:]):
+            subgoals = []  # the rest of the plan sent again as it was: the plan is kept, as for []
         moved_on = False  # whether this turn gave Jev another current subgoal
         if subgoals:
             was = self.subgoal()
@@ -914,8 +954,6 @@ class Worker:
         text = message + "".join(f"\n{n}. {o}" for n, o in enumerate(options, 1))
         self.steady(page)  # a page still switching screens gets read again first
         reply = self.ask({"kind": "secret" if secret else "text", "text": text})
-        if counts:
-            s["code_asks"] += 1  # a code counts once it was asked: a question dropped for a changed page doesn't
         answer = str(reply.get("text", "")).strip()
         s["chat"].append({"from": "agent", "text": text})
         pick = picked(answer, options) if secret else None
@@ -923,6 +961,8 @@ class Worker:
             s["chat"].append({"from": "user", "text": f"“{answer}” → option {pick}: {options[pick - 1]}"})
         elif secret:
             name = self.keep_secret(answer)
+            if counts and code_like(answer):
+                self.count_code(name)  # a code the user got; a dropped question or "it never came" is none
             s["chat"].append({"from": "user", "text": f"[secret:{name}] (hidden answer; type it as this placeholder)"})
         else:
             s["chat"].append({"from": "user", "text": self.read(message, options, answer)})
@@ -954,7 +994,10 @@ class Worker:
             raise Retry("A committed action is still being checked; WAIT first.")
         quote = self.evidence(act["text"].strip(), message, [page["text"], *reversed(s["recent"])])
         report = message or "Done."
-        if jev.achieved(page, s["goal"], report) != "yes":
+        # a lookup may read its answer across pages (a comparison of two sites): Jev also sees the last two before
+        before = [t for t in s["recent"] if t != page["text"]][-2:] if rules.lookup_goal(s["goal"], s["skill"]) \
+            else []
+        if jev.achieved(page, s["goal"], report, before=before) != "yes":
             s["done_refusals"] += 1
             committed = any(h.get("committed") for h in s["history"])
             if s["done_refusals"] < 3 or committed or rules.commerce_goal(s["goal"]):
@@ -1170,6 +1213,8 @@ class Worker:
         typing = s.pop("typing", None)
         if typing:
             s["typed"][typing[0]] = typing[1]
+            if not rules.CARD_DETAIL.search(typing[0][1]):
+                self.count_code(typing[1]["key"])  # a code or password typed counts, once, however it was asked
         if commit:
             approval = s["approval"] or {}
             s["approval"] = None

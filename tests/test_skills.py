@@ -75,3 +75,9 @@ def test_a_broken_skill_or_site_file_is_named_in_the_error(tmp_path):
     (sites / "nohost.md").write_text("---\nname: Shop\n---\nok")
     with pytest.raises(ValueError, match="nohost.md"):
         skills.load_sites(sites)
+
+
+def test_comparing_prices_is_a_lookup_and_groceries_are_bought():
+    loaded = skills.load()
+    assert loaded["groceries"]["description"].startswith("Order or buy groceries")
+    assert "comparing prices across grocery or shopping apps" in loaded["lookup"]["description"]

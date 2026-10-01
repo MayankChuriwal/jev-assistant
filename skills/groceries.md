@@ -1,6 +1,6 @@
 ---
 name: groceries
-description: Buy groceries or everyday items for quick delivery (Swiggy Instamart, Zepto, Blinkit)
+description: Order or buy groceries or everyday items for quick delivery (Swiggy Instamart, Zepto, Blinkit)
 inputs: item, quantity?
 sites: swiggy.com, zeptonow.com, blinkit.com
 uses: location, payment, sign-in

@@ -204,3 +204,12 @@ def test_the_memory_job_reads_the_message_and_what_is_known(monkeypatch):
     assert planner.memory("what do you know about me?", {"facts": []}) == out
     assert calls[0][0] == {"message": "what do you know about me?", "known": {"facts": []}}
     assert calls[0][1]["schema"] is planner.MEMORY_SCHEMA
+
+
+def test_the_planner_is_told_to_keep_an_unchanged_plan_with_no_subgoals():
+    assert "If the plan doesn't change, return subgoals: [] — never repeat it." in planner.SYSTEM
+
+
+def test_the_approval_summary_states_only_what_the_page_or_chat_shows():
+    assert "only state facts the page or chat shows" in planner.SUMMARY
+    assert "leave out a field the page doesn't show" in planner.SUMMARY

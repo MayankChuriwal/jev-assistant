@@ -1070,6 +1070,142 @@ def test_a_checkout_step_beside_a_payment_method_is_not_cleared_as_an_outright_c
     assert gate.commit_label(Fake(page), "CLICK", control("Proceed to Pay"), page, subgoal=ACT) is None  # a step
 
 
+# Live bench B: the approval is asked on the right control, at the right time, and only when the goal commits.
+
+MAKE_PAYMENT = {"id": "mp", "kind": "click", "role": "button", "node": 61, "name": "Make payment, tap to go to payment",
+                "shown": "Proceed to Pay", "label": "Make payment, tap to go to payment (shows “Proceed to Pay”)"}
+
+
+def test_a_control_that_shows_a_checkout_step_is_a_maybe_commit_whatever_its_hidden_name_says(monkeypatch):
+    page = fake_page(text=INSTAMART)
+    calls = jev_says(monkeypatch, ("step", 0.9))
+    w = Fake(page)
+    assert gate.commit_label(w, "CLICK", MAKE_PAYMENT, page, subgoal=ACT) is None
+    assert calls == ["Make payment, tap to go to payment"] and w.state["cleared"] == calls[0]
+    for verdict in [("final", 0.9), ("step", 0.79)]:  # unsure: the approval names the control
+        jev_says(monkeypatch, verdict)
+        assert gate.commit_label(Fake(page), "CLICK", MAKE_PAYMENT, page, subgoal=ACT) == calls[0]
+
+
+@pytest.mark.parametrize("name, shown", [("Pay ₹121", "Proceed to Pay"), ("Make payment", "Pay now"),
+                                         ("Make payment", "Proceed to Pay ₹121"), ("Place order", "Place order")])
+def test_a_control_with_a_price_or_a_final_word_on_show_stays_an_outright_commit(monkeypatch, name, shown):
+    page = fake_page(text=INSTAMART)
+    calls = jev_says(monkeypatch, ("step", 1.0))
+    control_ = {**MAKE_PAYMENT, "name": name, "shown": shown, "label": f"{name} (shows “{shown}”)"}
+    assert gate.commit_label(Fake(page), "CLICK", control_, page, subgoal=ACT) == name and calls == []
+
+
+MOVIE = "Drishyam The Conclusion\nUA16+ · Hindi\n2h 30m · Drama, Thriller\nAbout the movie\nBook tickets"
+
+
+def test_booking_words_on_a_page_with_no_money_are_a_maybe_commit(monkeypatch):
+    page = fake_page(text=MOVIE)
+    calls = jev_says(monkeypatch, ("step", 0.9))
+    for label in ["Book tickets", "Book", "Buy", "Reserve"]:
+        assert gate.commit_label(Fake(page), "CLICK", control(label), page, subgoal=ACT) is None, label
+    assert calls == ["Book tickets", "Book", "Buy", "Reserve"]
+    jev_says(monkeypatch, ("final", 0.9))
+    assert gate.commit_label(Fake(page), "CLICK", control("Book tickets"), page, subgoal=ACT) == "Book tickets"
+
+
+@pytest.mark.parametrize("text, label", [
+    (MOVIE + "\nTickets from ₹250", "Book tickets"), (MOVIE + "\nPrice 250", "Book tickets"),
+    (MOVIE, "Book tickets ₹500"), (MOVIE, "Book Ride"), (MOVIE, "Pay"), (MOVIE, "Place order"),
+    (MOVIE, "Confirm payment"), (MOVIE, "Buy now")])
+def test_a_page_with_money_or_a_control_that_pays_keeps_booking_words_outright(monkeypatch, text, label):
+    page = fake_page(text=text)
+    calls = jev_says(monkeypatch, ("step", 1.0))
+    assert gate.commit_label(Fake(page), "CLICK", control(label), page, subgoal=ACT) == label and calls == []
+
+
+BANNER = ("img1 Sign up/Login now to Lock Flight Prices & Pay Later Book Hotels @ ₹0 Get 3X refund, if your "
+          "waitlisted train doesn’t get confirmed")
+HOTEL = "Find the cheapest hotel in Goa rated above 4 for 2 adults next Saturday to Sunday on MakeMyTrip"
+
+
+def test_a_zero_amount_is_no_price_so_a_pay_later_banner_is_left_to_jev(monkeypatch):
+    page = fake_page(text="Hotels\nGoa\nSearch")
+    jev_says(monkeypatch, ("step", 0.9))
+    assert gate.commit_label(Fake(page), "CLICK", control(BANNER), page, subgoal=ACT) is None
+    jev_says(monkeypatch, ("step", 1.0))
+    priced = "Amazon Pay ₹10 cashback"  # a payment method beside a real price stays outright
+    assert gate.commit_label(Fake(page), "CLICK", control(priced), page, subgoal=ACT) == priced
+
+
+@pytest.mark.parametrize("label, verdict", [(BANNER, ("final", 0.9)), ("Pay ₹79", ("step", 1.0)),
+                                            ("Book now", ("final", 0.9)), ("Reserve", ("step", 0.5))])
+def test_a_goal_that_only_looks_things_up_never_asks_to_commit_it_is_told_to_read_and_report(monkeypatch, label,
+                                                                                            verdict):
+    page = fake_page()
+    jev_says(monkeypatch, verdict)
+    w = Fake(page)
+    w.state["goal"], w.state["skill"] = HOTEL, "travel"
+    with pytest.raises(Retry, match="doesn't buy or book anything"):
+        gate.commit_label(w, "CLICK", control(label), page, subgoal=ACT)
+    assert w.asked == []
+
+
+def test_a_lookup_still_runs_a_step_jev_clears_and_a_commit_subgoal_is_refused_too(monkeypatch):
+    page = fake_page()
+    w = Fake(page)
+    w.state["goal"] = "Compare the price of the Apple iPhone 16 128 GB on Flipkart and Amazon.in"
+    jev_says(monkeypatch, ("step", 0.9))
+    assert gate.commit_label(w, "CLICK", control("Reserve"), page, subgoal=ACT) is None
+    jev_says(monkeypatch, ("final", 0.9))
+    with pytest.raises(Retry, match="doesn't buy or book anything"):
+        gate.commit_label(w, "CLICK", control("Go"), page, subgoal={"do": "x", "kind": "commit"})
+
+
+def test_a_lookup_that_signs_in_is_still_asked_about_a_code_step_jev_is_unsure_of(monkeypatch):
+    page = fake_page()
+    w = Fake(page)
+    w.state["goal"] = "Where is my latest Flipkart order?"
+    jev_says(monkeypatch, ("step", 0.5))
+    assert gate.commit_label(w, "CLICK", control("Request OTP"), page, subgoal=ACT) == "Request OTP"
+
+
+@pytest.mark.parametrize("goal, label", [
+    ("Fill the web form at https://www.selenium.dev/selenium/web/web-form.html with the text Hello and submit it",
+     "Submit"), ("Cancel my latest undelivered Flipkart order", "Cancel order"),
+    ("Order one Diet Coke 300 ml can on Swiggy Instamart", "Pay ₹79")])
+def test_a_goal_that_submits_cancels_or_orders_is_still_asked(monkeypatch, goal, label):
+    page = fake_page()
+    jev_says(monkeypatch, ("final", 0.9))
+    w = Fake(page)
+    w.state["goal"] = goal
+    assert gate.commit_label(w, "CLICK", control(label), page, subgoal=ACT) == label
+
+
+def test_the_delivery_address_is_read_from_a_control_when_the_text_has_none():
+    selected = control("button in “Selected address: WORK, Ground floor, Bhive Workspace, Service Rd, Sector 6, HSR”")
+    here = control("Deliver to this address", node=62)
+    page = fake_page(text=INSTAMART, actions=[here, selected, MAKE_PAYMENT])
+    assert gate.facts(page, [])["address"] == "WORK, Ground floor, Bhive Workspace, Service Rd, Sector 6, HSR"
+    texted = fake_page(text="Delivering to: Home, 12 MG Road, Bengaluru\n" + INSTAMART, actions=[selected])
+    assert gate.facts(texted, [])["address"].startswith("Home, 12 MG Road")  # the page's own text first
+    assert gate.facts(fake_page(text=INSTAMART, actions=[here]), [])["address"] is None
+
+
+def test_an_address_read_from_a_control_reaches_the_approval(monkeypatch):
+    selected = control("button in “Selected address: WORK, Ground floor, Bhive Workspace, Service Rd, Sector 6, HSR”")
+    page = fake_page(text=INSTAMART, actions=[selected, MAKE_PAYMENT])
+    summary(monkeypatch, ["1 Diet Coke 300 ml can", "No saved delivery address provided", "Total ₹121"])
+    lines = gate.summary(Fake(page), page, gate.facts(page, []))
+    assert "Delivering to: WORK, Ground floor, Bhive Workspace, Service Rd, Sector 6, HSR" in lines
+    assert not any("provided" in line for line in lines)
+
+
+def test_a_summary_line_the_page_gave_no_fact_for_is_dropped(monkeypatch):
+    page = fake_page(text=INSTAMART)
+    summary(monkeypatch, ["1 Diet Coke 300 ml can", "No payment method provided", "form's name: None",
+                          "Seller: N/A", "Coupon: null", "Delivery slot: unknown", "Payment method: not provided",
+                          "Total ₹121"])
+    assert gate.summary(Fake(page), page, gate.facts(page, []))[:2] == ["1 Diet Coke 300 ml can", "Total ₹121"]
+    summary(monkeypatch, ["Diet Coke 300 ml × 1 · ₹50 (seller: N/A)", "Total ₹121"])  # a priced line stays
+    assert gate.summary(Fake(page), page, gate.facts(page, []))[0] == "Diet Coke 300 ml × 1 · ₹50 (seller: N/A)"
+
+
 def test_an_amount_the_redactor_hid_still_counts_as_money():
     """A secret equal to the price ("₹499" with a CVV 499) hides the number: the page still shows money."""
     for text in ("Renew\nTo pay ₹[secret:answer1]\nPay", "Renew\nTotal\n[secret:answer1]\nPay"):

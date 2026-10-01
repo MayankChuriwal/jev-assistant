@@ -66,6 +66,14 @@ TICKING = re.compile(  # a clock or a countdown changes by itself: these tokens,
 EXEMPT = re.compile(r"\b(?:items? total|sub ?total|total (?:savings?|saved|discount|cashback|rewards?|coupons?))\b",
                     re.IGNORECASE)  # these lines name a part of the bill, not what is payable
 DELIVERING = re.compile(r"\b(?:delivering to|deliver to|delivery address)\s*:?\s*([^\n]{8,160})", re.IGNORECASE)
+# The same line as a control's label ("button in “Selected address: WORK, Ground floor, …”"): up to its closing
+# quote, and only with a comma or a digit, as an address has ("Deliver to this address" is a button, not one).
+ADDRESS_LABEL = re.compile(r"\b(?:selected address|delivering to|deliver to|delivery address)\s*:?\s*([^\n”\"]{8,160})",
+                           re.IGNORECASE)
+# A summary line that only says the page gave no fact for its field ("form's name: None", "No payment method
+# provided"): left out, and the facts the page shows are added below.
+PLACEHOLDER = re.compile(r"\b(?:none|null|n/a|unknown|not provided)(?![\w/])|\bno\b[^.\n]{0,40}\bprovided\b",
+                         re.IGNORECASE)
 FEE = re.compile(r"^[^\n₹]{0,20}?((?:small cart|delivery|handling|platform|packaging|convenience|surge|late night|"
                  r"rain|service)\s+(?:fee|charges?)[^\n₹]{0,10}₹\s?[\d,]+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
 ITEMS = re.compile(r"\b(\d+) items?\b", re.IGNORECASE)
@@ -382,12 +390,54 @@ def cleared(w, page, label, goal):
     return False
 
 
+def priced(text):
+    """Whether the text names a price above zero: "Pay Later … @ ₹0" names none."""
+    return any((number(price) or 0.0) > 0 for price in rules.PRICE.findall(text or ""))
+
+
+ENTRY = {"book", "tickets", "ticket", "buy", "reserve"}  # words that open a booking before any price is shown
+
+
+def only_a_step(operation, action, label, page):
+    """Whether an outright match may still be only a step, so Jev's final check decides as for a maybe-commit: a
+    payment method named “…Pay” with no price; a control whose hidden name pays but whose shown words open checkout
+    ("Make payment, tap to go to payment" showing “Proceed to Pay”); or a control of booking words alone ("Book
+    tickets") on a page that shows no money at all. A price on the control, or a commit word left beside these
+    words, keeps it outright."""
+    if operation not in CLICKS:
+        return False
+    words = own_words(action) or label
+    if priced(words):
+        return False
+    rest = rules.METHOD.sub("", words)  # a real commit word left over is never ambiguous
+    if rules.METHOD.search(words) and not rules.COMMIT.search(rest):
+        return True
+    shown = action.get("shown") or ""
+    if rules.CHECKOUT_STEP.search(shown) and not rules.COMMIT.search(rules.CHECKOUT_STEP.sub("", shown)):
+        return True
+    tokens = set(re.findall(r"[^\W_]+", words.lower()))
+    return bool(tokens) and tokens <= ENTRY and not PRICES.search(flat(page["text"])) and not PRICES.search(words) \
+        and not shows_money(page["text"])
+
+
+def lookup(w, label, sure):
+    """A goal that only finds or compares never asks to commit: the planner hears to read and report instead. A
+    sign-in step Jev is unsure of ("Request OTP", "Verify code") is still asked about, as before."""
+    if not rules.lookup_goal(w.state["goal"], w.state.get("skill")):
+        return label
+    if not sure and rules.SENDS_A_CODE.search(label):
+        return label
+    raise Retry(f"This goal doesn't buy or book anything: don't press “{label}” or any pay or book control; read "
+                "what the page shows and report it.")
+
+
 def commit_label(w, operation, action, page, key=None, subgoal=None):
     """The words the approval names when this action commits, else None. Two tiers: a control the commit rule
-    matches outright always commits (Jev clears only an ambiguous match: a payment method named “…Pay” with no
-    price); a control whose words may commit ("Book Ola Mini", "Submit", "Proceed to Pay", a label the redactor
-    changed) commits unless Jev's final check is sure it is a step. Inside a commit subgoal, Jev's final check also
-    confirms a control neither tier names."""
+    matches outright always commits (Jev clears only one that may be a step: a payment method named “…Pay” with no
+    price, a control showing a checkout step, booking words on a page with no money); a control whose words may
+    commit ("Book Ola Mini", "Submit", "Proceed to Pay", a label the redactor changed) commits unless Jev's final
+    check is sure it is a step. Inside a commit subgoal, Jev's final check also confirms a control neither tier names.
+    A goal that only looks something up never asks: Retry."""
     if operation not in COMMIT_OPS or (operation == "PRESS_KEY" and key not in {"Enter", "Space"}) or \
             action.get("hover"):
         return None
@@ -398,21 +448,19 @@ def commit_label(w, operation, action, page, key=None, subgoal=None):
         label = form_submit(page, focused, rules.COMMIT.search)  # Enter submits the focused field's form
     goal = (subgoal or {}).get("do") or w.state["goal"]
     if label:  # a checkout step ("Proceed to Pay") is not matched outright: it is a maybe-commit below
-        words = own_words(action) or label
-        rest = rules.METHOD.sub("", words)  # a real commit word left over is never ambiguous
-        ambiguous = operation in CLICKS and not rules.COMMIT.search(rest) and rules.METHOD.search(words) and \
-            not rules.PRICE.search(words)
-        return None if ambiguous and cleared(w, page, label, goal) else label
+        if only_a_step(operation, action, label, page) and cleared(w, page, label, goal):
+            return None
+        return lookup(w, label, sure=True)
     maybe = rules.maybe_commit_label(operation, action, page, key, focused)
     if not maybe and page_key and key == "Enter":
         maybe = form_submit(page, focused, rules.maybe_commits)
     if maybe:
-        return None if cleared(w, page, maybe, goal) else maybe
+        return None if cleared(w, page, maybe, goal) else lookup(w, maybe, sure=False)
     if (subgoal or {}).get("kind") == "commit":
         name = action.get("label") or action.get("text") or operation.title()
         verdict, sure = jev.final(page, name, goal)
         if verdict == "final" and sure >= 0.5:
-            return name
+            return lookup(w, name, sure=True)
     return None
 
 
@@ -428,8 +476,12 @@ def facts(page, recent):
     typed = [f"{a['label'].rstrip(':')}: {a['value']}" for a in page["actions"]
              if a.get("kind") == "fill" and a.get("role") != "searchbox" and "search" not in a["label"].lower()
              and a.get("value") and not str(a["value"]).startswith("[")]
+    labelled = [m.strip() for a in page["actions"] for m in ADDRESS_LABEL.findall(a.get("label") or "")
+                if re.search(r"[,\d]", m)]
+    found = [m.strip() for m in DELIVERING.findall(text)] + labelled + \
+        [m.strip() for t in seen[1:] for m in DELIVERING.findall(t)]  # this page's text, its controls, then before
     return {"total": total, "fees": list(dict.fromkeys(f.strip() for t in current for f in FEE.findall(t))),
-            "address": next((m.strip() for t in seen for m in DELIVERING.findall(t)), None),
+            "address": next(iter(found), None),
             "items": next((int(n) for n in ITEMS.findall(text)), 0), "typed": list(dict.fromkeys(typed))}
 
 
@@ -443,6 +495,7 @@ def summary(w, page, found):
                "pages_before": [flat(t)[:1500] for t in s["recent"][-3:]]}
     lines = [re.sub(r"^(ordered|booked|placed|paid|requested)\s+", "", line, flags=re.IGNORECASE)
              for line in planner.summary(payload)]  # nothing has happened until the user says yes
+    lines = [line for line in lines if not PLACEHOLDER.search(line) or rules.PRICE.search(line)]  # a price stays
     missing = [x for x in rules.PRICE.findall(" ".join(lines)) if not shown(x, text)]
     if missing:
         raise Retry(f"The page doesn't show {', '.join(missing)}. Copy amounts exactly as the page shows them.")

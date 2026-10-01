@@ -225,6 +225,77 @@ def test_an_error_page_is_short_or_titled_so_and_an_error_word_far_down_a_long_p
 
 
 
+def test_a_captcha_challenge_drawn_as_a_control_counts_but_a_badge_never_does():
+    box = {"text": "Log in", "actions": [{"kind": "click", "label": "I'm not a robot", "role": "checkbox"}]}
+    assert rules.captcha_challenge(box)
+    badge = {"text": "Log in", "actions": [{"kind": "click", "label": "reCAPTCHA", "role": "link"}]}
+    assert not rules.captcha_challenge(badge)
+
+
+# Live bench B: a one-time code in a tel box is a code, not a phone number.
+
+OTP_TEL = {"kind": "fill", "label": "Enter 4 digit OTP", "constraints": {"type": "tel", "maxlength": 4}}
+
+
+@pytest.mark.parametrize("value", ["4829", " 48 29 ", "48-29"])
+def test_a_code_in_a_tel_box_is_typed_as_its_digits(value):
+    assert rules.format_error(rules.clean(value, OTP_TEL), OTP_TEL) is None
+    assert rules.clean(value, OTP_TEL) == "4829"
+
+
+@pytest.mark.parametrize("value, problem", [("48a9", "digits"), ("48291", "at most 4")])
+def test_a_code_in_a_tel_box_is_still_held_to_digits_and_its_length(value, problem):
+    assert problem in rules.format_error(rules.clean(value, OTP_TEL), OTP_TEL)
+
+
+def test_a_cvv_in_a_tel_box_is_a_code_and_a_phone_box_is_still_a_phone():
+    cvv = {"kind": "fill", "label": "CVV", "constraints": {"type": "tel", "maxlength": 3}}
+    assert rules.format_error("123", cvv) is None
+    phone = {"kind": "fill", "label": "Mobile number", "constraints": {"type": "tel"}}
+    assert "phone" in rules.format_error("call me", phone) and rules.format_error("+91 98765 43210", phone) is None
+    assert rules.clean("+91 98765 43210", phone) == "+91 98765 43210"  # a phone number keeps its spaces
+
+
+ORDERS = ["Order one 500 ml pack of Amul Taaza milk on Zepto", "Order one Diet Coke 300 ml can on Swiggy Instamart",
+          "Order one pack of Britannia white bread on Blinkit", "Buy one boAt Airdopes 141 on Amazon.in",
+          "Order one Margherita pizza from Domino's on Swiggy", "Order a pack of 6 eggs", "order 2 cokes",
+          "Order the cheapest atta", "Book 2 tickets on BookMyShow", "Pay my BESCOM electricity bill on Amazon.in",
+          "Reorder my last Swiggy order", "Fill the pizza order form at https://httpbin.org/forms/post and submit it"]
+LOOKUPS = ["Download the invoice for my latest Amazon.in order", "Where is my latest Flipkart order?",
+           "What did I order in my last Swiggy order and how much did it cost?", "Show my orders",
+           "Check the order status of my last order", "Is my latest Amazon.in order eligible for return?"]
+
+
+@pytest.mark.parametrize("goal", ORDERS)
+def test_an_order_or_booking_goal_is_commerce(goal):
+    assert rules.commerce_goal(goal)
+
+
+@pytest.mark.parametrize("goal", LOOKUPS)
+def test_an_order_named_as_a_thing_the_user_has_is_not_commerce(goal):
+    assert not rules.commerce_goal(goal)
+
+
+@pytest.mark.parametrize("goal, skill", [
+    ("Find the cheapest hotel in Goa rated above 4 for 2 adults next Saturday to Sunday on MakeMyTrip", "travel"),
+    ("Compare the price of the Apple iPhone 16 128 GB on Flipkart and Amazon.in and tell me which is cheaper", None),
+    ("Find the cheaper 1 kg pack of Aashirvaad atta between Zepto and Blinkit", "groceries"),
+    ("What is the price of the Apple iPhone 16 128 GB on Flipkart?", "shopping"),
+    ("Where is my latest Flipkart order?", "account"), ("Prices of atta on Zepto and Blinkit", "lookup")])
+def test_a_goal_that_only_finds_or_compares_is_a_lookup(goal, skill):
+    assert rules.lookup_goal(goal, skill)
+
+
+@pytest.mark.parametrize("goal, skill", [
+    ("Order one Diet Coke 300 ml can on Swiggy Instamart", "groceries"), ("Book an Uber to the airport", "lookup"),
+    ("Fill the web form at https://www.selenium.dev/selenium/web/web-form.html with the text Hello and submit it",
+     "forms"), ("Cancel my latest undelivered Flipkart order", "account"), ("Cancel my Amazon Prime membership", None),
+    ("Find the feedback form on shop.test and send it", "lookup"), ("Download the invoice for my last order", None),
+    ("Recharge my Jio number with the ₹299 plan on Paytm", "bills-recharges")])
+def test_a_goal_that_orders_submits_or_cancels_is_no_lookup(goal, skill):
+    assert not rules.lookup_goal(goal, skill)
+
+
 def test_an_error_page_by_its_opening_words_must_be_shorter_than_1500_characters():
     opening = "404 not found\n"
     assert rules.error_page({"title": "Shop", "text": opening + "x" * (1499 - len(opening))})

@@ -128,20 +128,30 @@ def decide(answers, questions, heads, controls):
     return {**step, "kind": "think"}
 
 
+GENERIC = {"search", "field", "box", "input", "enter", "your", "new", "text"}  # words any field's name may have
+PERSONAL = {"phone", "mobile", "tel", "telephone", "email", "mail", "otp", "password", "passcode", "code", "pin", "cvv",
+            "card"}  # a field the only value is never guessed into
+PLACE = {"location", "address", "pincode", "postcode", "city", "area", "locality"}
+
+
 def value(action, values):
-    """The subgoal value for a field: the one whose name shares at least half its words with the field's label, or
-    the only one. None when that can't be told: Jev picks among the names, or the planner writes the text."""
+    """The subgoal value for a field: the one whose name shares at least half its words with the field's label
+    (generic words such as "search" or "enter" aside), or the only one. The only one never goes by default into a
+    phone, email, code, password, or card field, nor into a place field unless its name is a place too. None when
+    that can't be told: Jev picks among the names, or the planner writes the text."""
     if not values:
         return None
-    label, best, share = words(action.get("label", "")), None, 0.0
+    label, best, share = words(action.get("label", "")) - GENERIC, None, 0.0
     for v in values:
-        name = words(v["field"])
+        name = words(v["field"]) - GENERIC
         overlap = len(name & label) / len(name) if name else 0.0
         if overlap > share:
             best, share = v, overlap
     if best and share >= 0.5:
         return best["text"]
-    return values[0]["text"] if len(values) == 1 else None
+    if len(values) != 1 or label & PERSONAL or (label & PLACE and not words(values[0]["field"]) & PLACE):
+        return None
+    return values[0]["text"]
 
 
 def repeats(history, operation, label, url):

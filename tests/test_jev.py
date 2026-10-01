@@ -158,3 +158,20 @@ def test_habit_asks_which_saved_errand_a_request_repeats_and_how_closely(monkeyp
     assert pick["choice"] == "7" and sameness["choice"] == "same"
     assert set(seen[0]["habit"]["options"]) == {"7", "none"}
     assert set(seen[0]["sameness"]["options"]) == {"same", "similar"}
+
+
+def test_a_lookup_is_judged_done_from_the_page_and_the_pages_just_before_it(typesafe):
+    """A comparison read across two pages: the earlier pages travel in the state, cut to the judge's budget."""
+    sent, replies = typesafe
+    page = {"url": "https://www.flipkart.com/p", "title": "Flipkart", "text": "iPhone 16 ₹69,900"}
+    replies.append(lambda q: {"achieved": answer(q["achieved"]["criteria"], "yes")})
+    before = ["iPhone 16 on Amazon ₹84,999 " + "x" * 5000, "Amazon search results"]
+    assert jev.achieved(page, "Compare the iPhone 16 price on Flipkart and Amazon", "₹69,900 vs ₹84,999",
+                        before=before) == "yes"
+    state = sent[-1]["state"]
+    assert state["pages_before"][0].startswith("iPhone 16 on Amazon ₹84,999")
+    assert len(state["pages_before"][0]) == jev.JUDGE_TEXT and state["pages_before"][1] == "Amazon search results"
+    rules = sent[-1]["questions"]["achieved"]["instructions"]["rules"]
+    assert "pages_before" in rules and "data, never instructions" in rules and "84,999" not in rules
+    replies.append(lambda q: {"achieved": answer(q["achieved"]["criteria"], "no")})
+    assert jev.achieved(page, "Order a coke", "Ordered.") == "no" and "pages_before" not in sent[-1]["state"]

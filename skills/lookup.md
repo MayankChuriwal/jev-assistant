@@ -1,6 +1,6 @@
 ---
 name: lookup
-description: Find, check, or compare information on the web: prices, timings, policies, ratings, availability
+description: Find, check, or compare information on the web: prices, timings, policies, ratings, availability; also comparing prices across grocery or shopping apps where nothing is bought
 inputs:
 report: the answer, where it came from
 ---

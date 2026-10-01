@@ -115,6 +115,27 @@ def test_typed_values_follow_the_field_name():
     assert executor.value({"label": "Search"}, [{"field": "query", "text": "Diet Coke"}]) == "Diet Coke"
 
 
+def test_generic_words_never_match_a_value_to_a_field():
+    # "search" alone put the product into the location box; "enter" alone put an address into a coupon box
+    query = [{"field": "search_query", "text": "Aashirvaad atta"}]
+    assert executor.value({"label": "search delivery location"}, query) is None
+    two = [{"field": "enter address", "text": "HSR Layout"}, {"field": "name", "text": "Test User"}]
+    assert executor.value({"label": "Enter coupon"}, two) is None
+    assert executor.value({"label": "Search for groceries and more"}, query) == "Aashirvaad atta"  # the only one
+
+
+@pytest.mark.parametrize("label", ["Enter Mobile Number", "Phone", "Email address", "Enter OTP", "Password",
+                                   "Verification code", "Card number", "Search delivery location", "Your address"])
+def test_the_only_value_is_never_guessed_into_a_personal_or_place_field(label):
+    assert executor.value({"label": label}, [{"field": "destination", "text": "Goa"}]) is None
+
+
+def test_a_value_named_for_the_field_still_fills_a_personal_or_place_field():
+    assert executor.value({"label": "Enter Mobile Number"}, [{"field": "mobile number", "text": "x"}]) == "x"
+    assert executor.value({"label": "Search delivery location"}, [{"field": "location", "text": "HSR"}]) == "HSR"
+    assert executor.value({"label": "Your address"}, [{"field": "delivery location", "text": "HSR"}]) == "HSR"
+
+
 def test_repeats_count_only_unchanged_steps_on_the_same_path():
     history = [{"operation": "CLICK", "action": "Add", "url": "https://s.test/p?x=1", "page_changed": False},
                {"operation": "CLICK", "action": "Add", "url": "https://s.test/p?x=2", "page_changed": False},

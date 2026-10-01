@@ -20,6 +20,7 @@ SEND = re.compile(r"\bsend\b", re.IGNORECASE)
 SENDS_A_CODE = re.compile(r"\b(code|otp|one[- ]?time|verification|passcode)\b", re.IGNORECASE)  # "Send OTP"
 REDACTED = re.compile(r"\[(secret|profile):", re.IGNORECASE)  # a hidden value may hide the commit word itself
 PROCEED_STEP = re.compile(r"\bproceed to (buy|checkout|pay)\b", re.IGNORECASE)
+CHECKOUT_STEP = re.compile(r"\b(?:proceed|continue) to (?:buy|checkout|pay|payment)\b", re.IGNORECASE)  # words shown
 APPROVAL_STEPS = 20
 SECRET_ASK = re.compile(r"\b(otp|one[- ]?time (pass(word|code)?|code)|verification code|security code|passcode|"
                         r"password|cvv|cvc|pin(?![\s-]?code)|\d[- ]?digit code|"
@@ -31,7 +32,19 @@ CHALLENGE = re.compile(r"i'?m not a robot|select all (the )?(images|squares)|cli
 # Payment methods named with "pay" (UPI Scan and Pay, Pay on Delivery): choosing one pays nothing by itself.
 METHOD = re.compile(r"\b(upi|cash|card|wallets?|net ?banking|pay later|pay on delivery|cash on delivery|scan and pay|"
                     r"amazon pay|google pay|gpay|phonepe|paytm)\b", re.IGNORECASE)
-COMMERCE = re.compile(r"\b(book|order|buy|purchase|pay|reserve)\b", re.IGNORECASE)
+COMMERCE = re.compile(r"\b(book|order|re-?order|buy|purchase|pay|reserve)\b", re.IGNORECASE)
+# "order" as a thing the user already has, not a verb: "my latest Amazon.in order", "the last order", "did I order",
+# "order status". "Order a…", "order 2…", "order the…", and "the pizza order form" stay commerce.
+HAD = re.compile(r"\b(?:my|our|last|latest|previous|recent|past|undelivered|pending)\b(?:\s+[\w.'&-]+){0,3}?\s+$|"
+                 r"\b(?:did|have|had|has)\s+(?:i|we)\s+$", re.IGNORECASE)
+ORDER_NOUN = re.compile(r"\s+(?:status|history|details?|id|number|tracking|summary|invoice)\b", re.IGNORECASE)
+# A goal that only finds out: it asks, finds, compares, or checks, and names no commit of any kind.
+LOOKS = re.compile(r"^\W*(?:please\s+)?(?:find|compare|search|look\s*up|check(?!\s*-?\s*out)|what|which|where|when|"
+                   r"how|who|is|are|tell me|show me)\b", re.IGNORECASE)
+COMMITS = re.compile(r"\b(?:cancel|submit|send|delete|remove|end|request|subscribe|unsubscribe|transfer|confirm|"
+                     r"recharge|fill|apply|register|complete|payment|checkout|check\s*-?\s*out|renew|activate|upgrade|"
+                     r"sign\s*up|join|message|reply|claim|return(?!\s+polic)|exchange(?!\s+rate)|refund|ordering|"
+                     r"booking(?!\.)|buying|paying|purchasing|reserving|renting|hiring)\b", re.IGNORECASE)
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -145,8 +158,10 @@ def code_field(page):
 
 
 def captcha_challenge(page):
-    """Whether the page shows a captcha challenge to solve (not just a "protected by reCAPTCHA" badge)."""
-    return bool(CHALLENGE.search(page.get("text", "")))
+    """Whether the page shows a captcha challenge to solve, in its text or on a control ("I'm not a robot"): not
+    just a "protected by reCAPTCHA" badge."""
+    return bool(CHALLENGE.search(page.get("text", "")) or
+                any(CHALLENGE.search(a.get("label") or "") for a in page.get("actions") or ()))
 
 
 CARD_DETAIL = re.compile(r"\b(cvv|cvc|card (number|no\.?|details?)|expir(y|ation)( date)?|upi pin)\b", re.IGNORECASE)
@@ -154,8 +169,23 @@ PRICE = re.compile(r"[₹$€£]\s?\d(?:[\d,]*\d)?(?:\.\d+)?|\bRs\.?\s?\d(?:[\d,
 
 
 def commerce_goal(goal):
-    """Whether the goal is finished only by a booking, an order, or a payment going through."""
-    return bool(COMMERCE.search(goal or ""))
+    """Whether the goal is finished only by a booking, an order, or a payment going through. An order the user
+    already has ("my last Swiggy order", "did I order", "order status") is a thing to look up, not a verb."""
+    goal = goal or ""
+    for match in COMMERCE.finditer(goal):
+        if match[1].lower() == "order" and (HAD.search(goal[:match.start()]) or ORDER_NOUN.match(goal, match.end())):
+            continue
+        return True
+    return False
+
+
+def lookup_goal(goal, skill=None):
+    """Whether the goal only finds, compares, or checks something: no order, booking, or payment, and no other commit
+    word (submit, send, cancel, fill...). Such a goal never asks to press a commit."""
+    goal = goal or ""
+    if commerce_goal(goal) or COMMITS.search(goal):
+        return False
+    return skill == "lookup" or bool(LOOKS.match(goal))  # never by a "?" alone: "Can you get me a coffee?" orders
 
 
 def attempt_limit(key):
@@ -167,10 +197,16 @@ def numeric(action):
     return constraints.get("inputmode") in {"numeric", "decimal"} or constraints.get("type") == "number"
 
 
+def tel_code(action):
+    """A one-time code, password, or card detail in a phone-number box (type=tel): its digits, never a phone number."""
+    secret = secret_field(action) or bool(CARD_DETAIL.search(action.get("label") or ""))
+    return secret and (action.get("constraints") or {}).get("type") == "tel"
+
+
 def clean(value, action):
     """The answer as it should be typed: trimmed, and without spaces or dashes in codes and number fields."""
     value = str(value).strip()
-    return re.sub(r"[\s-]", "", value) if action.get("group") or numeric(action) else value
+    return re.sub(r"[\s-]", "", value) if action.get("group") or numeric(action) or tel_code(action) else value
 
 
 def format_error(value, action):
@@ -185,7 +221,10 @@ def format_error(value, action):
     if numeric(action) and not re.fullmatch(r"[\d.,]+", value):
         return "This field takes numbers only."
     kind = constraints.get("type")
-    if kind == "tel" and not re.fullmatch(r"[\d\s+()-]{6,}", value):
+    card = bool(CARD_DETAIL.search(action.get("label") or ""))  # an expiry date keeps its "/"
+    if tel_code(action) and not re.fullmatch(r"[\d/]+" if card else r"\d+", value):  # digits, held to maxlength below
+        return "This code takes digits only."
+    if kind == "tel" and not tel_code(action) and not re.fullmatch(r"[\d\s+()-]{6,}", value):
         return "That doesn't look like a phone number."
     if kind == "email" and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
         return "That doesn't look like an email address."

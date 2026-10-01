@@ -25,12 +25,21 @@ def ask(page, name, options, instructions, elements=(), **data):
     return choose(state, name, options, instructions)
 
 
-def achieved(page, goal, report):
+JUDGE_TEXT = 2500  # characters of each earlier page a judgement reads (the bench judge's budget)
+
+
+def achieved(page, goal, report, before=()):
+    """Whether the page shows the goal done. `before` (a lookup's pages read just before this one, such as the other
+    site of a comparison) joins the state, each cut to JUDGE_TEXT."""
+    rules = "The agent's report is in the state. Judge only from the page. "
+    if before:
+        rules = ("The agent's report and the pages read just before this one (pages_before) are in the state. Judge "
+                 "only from the page and those pages. ")
+    extra = {"pages_before": [text[:JUDGE_TEXT] for text in before]} if before else {}
     return ask(page, "achieved", {"yes": "The page shows what the goal asks for: the outcome done, or the "
                                          "information it asks to find.",
                                   "no": "The page doesn't show that yet."},
-               {"goal": goal, "rules": "The agent's report is in the state. Judge only from the page. " + DATA_NOTE},
-               report=report)["choice"]
+               {"goal": goal, "rules": rules + DATA_NOTE}, report=report, **extra)["choice"]
 
 
 def final(page, label, step_goal):

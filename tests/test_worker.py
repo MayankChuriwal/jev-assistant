@@ -393,7 +393,8 @@ def test_a_code_blocker_without_a_code_field_goes_to_the_planner(tmp_path, monke
 
 
 def test_a_captcha_goes_to_the_user_as_a_numbered_picture(tmp_path, monkeypatch):
-    w = worker_with(tmp_path, replies=[{"text": "2"}])
+    page = fake_page(text="Verify\nSelect all images with traffic lights\nClick verify once there are none left")
+    w = worker_with(tmp_path, page=page, replies=[{"text": "2"}])
     w.browser.marked_screenshot = Mock(return_value="numbered")
     script_planner(monkeypatch, turn(subgoals=[sub("sign in")]))
     script_jev(monkeypatch, {"next": "CLICK", "click_target": "Home", "blocker": "captcha"})
@@ -1019,10 +1020,14 @@ def test_a_code_otp_or_pin_is_still_a_secret_ask(text):
 
 
 def test_an_id_the_task_needs_is_asked_hidden_once_and_kept_encrypted(tmp_path, monkeypatch):
-    w = worker_with(tmp_path, replies=[{"text": "1234567890"}])
+    page = fake_page()  # the only value never goes into the phone box by default: a consumer number field takes it
+    page["actions"].append({"id": "e10", "kind": "fill", "label": "Consumer number", "role": "textbox", "value": "",
+                            "node": 21, "constraints": {}})
+    page["fingerprint"] = fingerprint(page)
+    w = worker_with(tmp_path, page=page, replies=[{"text": "1234567890"}])
     script_planner(monkeypatch, turn(subgoals=[sub("enter the account", values=[("BESCOM account number",
                                                                                  "[profile:bescom_account]")])]))
-    sent = script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Phone number"})
+    sent = script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Consumer number"})
     jev_checks(monkeypatch)
     w.command("tick")
     w.command("tick")
@@ -1875,3 +1880,112 @@ def test_a_tab_that_vanished_stops_the_task_instead_of_crashing_it(tmp_path, mon
     other.browser.observe.side_effect = TabsClosed("Every tab of this task has closed.")
     other.command("tick")
     assert other.state["status"] == "blocked" and other.state["errors"] == []
+
+
+# ---- live bench B: codes in tel boxes, captchas only when shown, unchanged plans, lookups across pages, busy time
+
+def otp_page():
+    otp = {"id": "o1", "kind": "fill", "label": "Enter 4 digit OTP", "role": "textbox", "value": "", "node": 30,
+           "constraints": {"type": "tel", "maxlength": 4}}
+    login = {"id": "o2", "kind": "click", "label": "Log In", "role": "button", "node": 31}
+    return fake_page(text="Enter the 4 digit OTP sent to your phone\nLog In\nResend OTP", actions=[otp, login])
+
+
+def test_a_code_in_a_tel_box_is_typed_not_refused_as_a_phone_number(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=otp_page(), replies=[{"text": "48 29"}])
+    script_planner(monkeypatch, turn(subgoals=[sub("sign in with the code")]))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Enter 4 digit OTP", "blocker": "code"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert w.browser.act.call_args.kwargs["text"] == "4829" and w.state["feedback"] == []
+    assert w.state["code_asks"] == 1 and w.state["history"][-1]["text"] == "[secret:answer1]"
+
+
+@pytest.mark.parametrize("reply", ["I didn't get any code", "none", ""])
+def test_a_reply_that_is_no_code_does_not_count_as_a_code(tmp_path, monkeypatch, reply):
+    w = worker_with(tmp_path, page=otp_page(), replies=[{"text": reply}])
+    script_planner(monkeypatch, turn(subgoals=[sub("sign in with the code")]))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Enter 4 digit OTP", "blocker": "code"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert len(w.asked) == 1 and w.state["code_asks"] == 0 and not w.browser.act.called
+
+
+def test_a_planner_question_for_a_code_counts_only_a_reply_that_is_a_code(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=otp_page(), replies=[{"text": "it never came"}, {"text": "4829"}])
+    script_planner(monkeypatch, turn("ASK", message="What's the OTP sent to your phone?"))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.state["code_asks"] == 0
+    w.state["chat"], w.state["reason"] = [], "unsure"  # asked afresh
+    w.command("tick")
+    assert w.state["code_asks"] == 1
+
+
+def test_a_captcha_jev_names_on_a_page_that_shows_none_is_not_sent_to_the_user(tmp_path, monkeypatch):
+    page = fake_page(text="Log in\nThis site is protected by reCAPTCHA and the Google Privacy Policy")
+    w = worker_with(tmp_path, page=page)
+    w.browser.marked_screenshot = Mock(return_value="numbered")
+    script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]))
+    script_jev(monkeypatch, {"next": "CLICK", "click_target": "Office", "blocker": "captcha"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert w.asked == [] and w.state["captcha_rounds"] == 0
+    assert w.browser.act.call_args.args[0] == "CLICK" and w.browser.act.call_args.args[1]["label"] == "Office"
+
+
+def test_a_plan_sent_again_unchanged_keeps_the_plan_as_if_none_was_sent(tmp_path, monkeypatch):
+    w, first = planned_order(tmp_path, monkeypatch, [dict(g) for g in NO_COMMIT], first=NO_COMMIT)
+    w.state["subgoal_steps"] = 5
+    replan(w)  # an order's plan with no commit, sent again: not a replan to refuse
+    assert steps(w) == [(g["do"], g["kind"]) for g in first] and w.state["commit_drops"] == 0
+    assert not any("must include" in f for f in w.state["feedback"]) and len(w.payloads) == 2
+
+
+def test_a_plan_sent_again_with_a_new_value_is_taken(tmp_path, monkeypatch):
+    first = [sub("set the delivery location", values=[("delivery location", "")]),
+             sub("report the price", kind="report")]
+    again = [sub("set the delivery location", values=[("delivery location", "HSR Layout")]),
+             sub("report the price", kind="report")]
+    w, _ = planned_order(tmp_path, monkeypatch, again, goal="Find the price of atta on Blinkit", first=first)
+    replan(w)
+    assert w.state["plan"][0]["values"] == [{"field": "delivery location", "text": "HSR Layout"}]
+
+
+def test_a_lookup_is_judged_done_with_the_pages_read_just_before(tmp_path, monkeypatch):
+    page = fake_page(text="Flipkart\nApple iPhone 16 (Black, 128 GB)\n₹69,900")
+    goal = "Compare the price of the Apple iPhone 16 128 GB on Flipkart and Amazon.in and tell me which is cheaper"
+    w = worker_with(tmp_path, page=page, goal=goal)
+    w.state["recent"] = ["Amazon.in search", "Amazon.in\niPhone 16 128 GB\n₹84,999", page["text"]]
+    script_planner(monkeypatch, turn("DONE", message="₹69,900 on Flipkart, ₹84,999 on Amazon.in: Flipkart is cheaper.",
+                                     text="₹69,900"))
+    script_jev(monkeypatch, {"next": "THINK"})
+    seen = []
+    monkeypatch.setattr(jev, "achieved", lambda page, goal, report, before=(): seen.append(list(before)) or "yes")
+    w.command("tick")
+    assert w.state["status"] == "done" and seen == [["Amazon.in search", "Amazon.in\niPhone 16 128 GB\n₹84,999"]]
+    order = worker_with(tmp_path, goal="Order one Diet Coke on Instamart")
+    order.state["recent"] = ["Cart\nDiet Coke"]
+    script_planner(monkeypatch, turn("DONE", message="Ordered.", text="Pay ₹79"))
+    order.command("tick")
+    assert seen[-1] == []  # an order is judged on the page that shows it done
+
+
+def test_time_spent_waiting_for_the_user_never_exceeds_the_time_recorded(tmp_path, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(time, "perf_counter", lambda: clock[0])
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn("ASK", message="Where should I deliver it?"))
+    jev_checks(monkeypatch)
+
+    def slow(message):
+        clock[0] += 300  # the user didn't answer for five minutes, then the task was cancelled
+        return {"cancel": True}
+
+    w.asker = slow
+    w.command("tick")
+    assert w.state["status"] == "cancelled" and w.state["waited_ms"] == 300000
+    assert w.state["elapsed_ms"] >= w.state["waited_ms"] and w.trace()["elapsed_ms"] >= 300000
