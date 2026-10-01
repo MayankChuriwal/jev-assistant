@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import jev, messages, planner, rules, skills
+from . import jev, messages, planner, replay, rules, skills
 from . import learn as learning
 from .gate import cap, rule_cap, same_cart
 from .memory import LABELS, RULE_DAYS, UNSTORABLE, Memory, StoreError, Unstorable, rule_line, rupees
@@ -93,6 +93,7 @@ class Task:
         self.cancelled, self.sent_files, self.problems = False, 0, 0
         self.skill, self.preauth, self.cap, self.url, self.single = None, False, None, None, single
         self.script, self.bench = None, {"gate": None, "asked": []}  # a bench run: scripted replies
+        self.habit, self.sameness = None, None  # the saved habit this goal repeats
 
     def view(self, question=None):
         history = self.worker.state["history"] if self.worker else []
@@ -105,8 +106,8 @@ class Task:
 
 class Core:
     def __init__(self, channel, *, user="local", memory=None, make_worker=None, start=None, route=None, intake=None,
-                 split=None, chat=None, remember=None, learn=None, memory_job=None, library=None, clock=time.monotonic,
-                 poll=1.0):
+                 split=None, chat=None, remember=None, learn=None, memory_job=None, habit_job=None, library=None,
+                 clock=time.monotonic, poll=1.0):
         self.channel, self.user = channel, user
         self.memory = memory if memory is not None else Memory.open()
         self.make_worker = make_worker or self.worker_for
@@ -118,6 +119,7 @@ class Core:
         self.remember_job = remember or planner.remember
         self.learn = learn or learning.after
         self.memory_job = memory_job or planner.memory
+        self.habit_job = habit_job or jev.habit
         self.library = library if library is not None else {"skills": skills.load(), "sites": skills.load_sites()}
         self.clock, self.poll = clock, poll
         self.lock = threading.RLock()
@@ -130,7 +132,8 @@ class Core:
     def worker_for(self, task, url, asker, notify):
         library = {**self.library, "sites": skills.learned(self.library["sites"], self.memory.learned())}
         return Worker(url, task.goal, title=task.title, asker=asker, notify=notify, memory=self.memory,
-                      skill=task.skill, preauth=task.preauth, cap=task.cap, library=library)
+                      habit=task.habit, sameness=task.sameness, skill=task.skill, preauth=task.preauth, cap=task.cap,
+                      library=library)
 
     def hidden(self, call, *args):
         """A model call with the user's IDs redacted: read afresh each time, so a value a task learned
@@ -654,8 +657,25 @@ class Core:
                 info = self.hidden(self.intake, task.goal, kinds, False)
         task.skill = info["skill"] if info["skill"] in self.library["skills"] else None
         task.preauth, task.cap = info["preauth"] == "yes", cap(task.goal)
-        task.url, task.title = self.start_page(task)
+        matched = self.match_habit(task)
+        if matched:  # the habit's site and start page; no "which app?" question
+            task.habit, task.sameness = matched
+            note = skills.site_for(task.habit["start"], self.library["sites"])
+            task.url = task.habit["start"]
+            task.title = f"{note['name'] if note else task.habit['host']} · {task.goal}"[:60]
+        else:
+            task.url, task.title = self.start_page(task)
         task.host = site(task.url)
+
+    def match_habit(self, task):
+        """(habit, sameness) when Jev is sure this goal repeats a saved habit: the skill's live habits on the site the
+        goal names, else on any of the skill's sites. None otherwise."""
+        skill = self.library["skills"].get(task.skill) if task.skill else None
+        if not skill:
+            return None
+        note = skills.named(task.goal, self.library["sites"])
+        habits = self.memory.habits(skill=task.skill, hosts=[note["host"]] if note else (skill["sites"] or None))
+        return replay.match(self.hidden(self.habit_job, task.goal, habits), habits) if habits else None
 
     def start_page(self, task):
         """(start URL, title): the site the goal names; else the one the start job finds when the goal names a site

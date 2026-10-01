@@ -33,7 +33,7 @@ def core(tmp_path, starts=()):
     made, found = [], list(starts)
 
     def make_worker(task, url, asker, notify):
-        made.append((url, task.goal, task.title))
+        made.append((url, task.goal, task.title, (task.habit or {}).get("id"), task.sameness))
         return Done()
 
     c = conversation.Core(WebChannel(tmp_path / "media"), memory=memory, make_worker=make_worker,
@@ -143,3 +143,37 @@ def test_a_default_saved_in_the_old_wording_resolves_without_asking(tmp_path):
     until(lambda: made)
     assert made[0][0] == "https://www.swiggy.com/instamart" and c.open is None
     assert saved_rows(memory) == 1  # nothing new saved
+
+
+# ---- Plan 7 Task 8: a goal that repeats a habit
+
+
+def sure(habit_id, p=0.9):
+    return ({"choice": str(habit_id), "probabilities": {str(habit_id): p, "none": round(1 - p, 3)}, "confidence": p},
+            {"choice": "same", "probabilities": {"same": 0.9, "similar": 0.1}, "confidence": 0.9})
+
+
+def saved_habit(memory):
+    return memory.record_habit({"host": "zeptonow.com", "skill": "groceries", "title": "Zepto · Diet Coke",
+                                "goal": "order a diet coke", "start": "https://www.zeptonow.com/cn/diet-coke",
+                                "plan": [], "steps": [], "cart": []})
+
+
+def test_a_goal_that_repeats_a_habit_starts_where_it_did_and_skips_the_app_question(tmp_path):
+    c, made, memory = core(tmp_path)
+    habit = saved_habit(memory)
+    asked = []
+    c.habit_job = lambda goal, habits: asked.append([h["id"] for h in habits]) or sure(habit)
+    c.new_task("order a diet coke")
+    until(lambda: made)
+    assert made[0][0] == "https://www.zeptonow.com/cn/diet-coke" and made[0][3:] == (habit, "same")
+    assert made[0][2] == "Zepto · order a diet coke" and c.open is None and asked == [[habit]]
+
+
+def test_an_unsure_habit_match_is_ignored(tmp_path):
+    c, made, memory = core(tmp_path)
+    habit = saved_habit(memory)
+    c.habit_job = lambda goal, habits: sure(habit, p=0.6)
+    c.new_task("order a diet coke")
+    until(lambda: c.open is not None)
+    assert c.open.message["text"] == "Which app should I use for groceries: Swiggy or Zepto?"

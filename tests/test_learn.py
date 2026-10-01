@@ -228,3 +228,10 @@ def test_learned_lines_join_the_shipped_note_of_their_host_or_its_parent():
     note = skills.site_for("https://book.olacabs.com/x", merged)
     assert note["start"] == sites["olacabs.com"]["start"] and NOTE in note["body"] and "Booking is at" in note["body"]
     assert "Learned" not in sites["olacabs.com"]["body"]  # the shipped notes are untouched
+
+
+def test_a_replayed_run_counts_on_its_habit(memory):
+    found = learn.after(run_state(), memory, reflect=lambda digest: ([], []))
+    learn.after(run_state(replay={"habit": found["habit"], "fallbacks": []}), memory, reflect=lambda digest: ([], []))
+    kept = memory.habit(found["habit"])
+    assert (kept["replays"], kept["clean_replays"], kept["failed_in_a_row"]) == (1, 1, 0)

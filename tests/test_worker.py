@@ -1116,3 +1116,130 @@ def test_history_keeps_the_page_title_and_the_start(tmp_path, monkeypatch):
     assert w.state["idle_ticks"] == 0
     w.count_idle(len(w.state["history"]), w.replies())  # a second one in a row
     assert w.state["idle_ticks"] == 1 and w.state["idle"] == 2
+
+
+# ---- Plan 7 Task 8: habit replay in the worker
+
+
+def hstep(subgoal, op, name, **extra):
+    return {"subgoal": subgoal, "op": op, "name": name, "key": None, "value": None, "secret": False, "commit": False,
+            "url": "shop.test/checkout", "title": "Shop", **extra}
+
+
+def habit_for(*steps, plan=None):
+    return {"id": 7, "title": "Shop · Diet Coke", "goal": "Order Diet Coke", "start": "https://shop.test/checkout",
+            "plan": plan or [sub("choose the Office address", "Office is selected"), sub("pay", kind="commit")],
+            "steps": list(steps), "cart": []}
+
+
+def test_the_same_errand_skips_the_start_turn_and_trusts_a_unique_expected_control(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, habit=habit_for(hstep(0, "CLICK", "office")), sameness="same")
+    seen = script_planner(monkeypatch, turn())
+    script_jev(monkeypatch, {"next": ("CLICK", 0.4), "click_target": "Office"})  # under ACT_P: Phase A would escalate
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert seen == [] and w.told[0]["text"] == "Same as last time: Shop · Diet Coke."
+    assert w.browser.act.call_args.args[1]["label"] == "Office"
+    assert (w.state["replay"]["expected"], w.state["replay"]["matched"]) == (1, 1)
+    assert w.trace()["replay"]["matched"] == 1
+
+
+def test_a_recorded_label_shown_twice_never_skips_the_gates(tmp_path, monkeypatch):
+    twice = fake_page(actions=[*fake_page()["actions"],
+                               {"id": "e9", "kind": "click", "label": "Office", "role": "radio", "node": 20}])
+    w = worker_with(tmp_path, page=twice, habit=habit_for(hstep(0, "CLICK", "office")), sameness="same")
+    seen = script_planner(monkeypatch, turn())
+    script_jev(monkeypatch, {"next": ("CLICK", 0.4), "click_target": "Office"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert not w.browser.act.called and seen[0]["reason"] == "unsure"
+    assert w.state["replay"]["fallbacks"] == [{"subgoal": 0, "step": 1, "reason": "unsure"}]
+
+
+def test_another_pick_that_passes_the_gates_leaves_replay_for_that_subgoal_only(tmp_path, monkeypatch):
+    plan = [sub("choose the Office address"), sub("choose the Home address")]  # no commit: no approval asked
+    w = worker_with(tmp_path, habit=habit_for(hstep(0, "CLICK", "office"), hstep(1, "CLICK", "home"), plan=plan),
+                    sameness="same")
+    script_planner(monkeypatch, turn())
+    script_jev(monkeypatch, {"next": "CLICK", "click_target": "Home"}, {"next": "DONE"},
+               {"next": ("CLICK", 0.4), "click_target": "Home"})
+    jev_checks(monkeypatch)
+    for _ in range(3):
+        w.command("tick")
+    record = w.state["replay"]
+    assert record["fallbacks"] == [{"subgoal": 0, "step": 1, "reason": "Jev chose home"}] and record["left"] == [0]
+    assert (record["expected"], record["matched"]) == (2, 1)  # the next subgoal re-joined replay
+    assert [c.args[1]["label"] for c in w.browser.act.call_args_list] == ["Home", "Home"]
+
+
+def test_a_similar_errand_plans_once_with_the_habit_and_replays_only_a_plan_of_its_shape(tmp_path, monkeypatch):
+    habit = habit_for(hstep(0, "CLICK", "office"))
+    w = worker_with(tmp_path, habit=habit, sameness="similar")
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("choose the Home address"), sub("pay", kind="commit")]))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert seen[0]["reason"] == "start" and seen[0]["habit"]["plan"] == habit["plan"] and w.state["replay"]["on"]
+    other = worker_with(tmp_path, habit=habit, sameness="similar")
+    script_planner(monkeypatch, turn(subgoals=[sub("ask which address", kind="ask"), sub("pay", kind="commit")]))
+    other.command("tick")
+    assert other.state["replay"]["on"] is False
+
+
+def test_after_a_step_the_next_expected_control_on_the_page_skips_the_re_reads(tmp_path):
+    office = next(a for a in fake_page()["actions"] if a["label"] == "Office")
+    plain = worker_with(tmp_path)
+    replaying = worker_with(tmp_path, habit=habit_for(hstep(0, "CLICK", "office"), hstep(0, "CLICK", "pay")),
+                            sameness="same")
+    reads = []
+    for w in (plain, replaying):
+        before = w.browser.observe.call_count
+        w.run(w.state["page"], "CLICK", office, {}, None)
+        reads.append(w.browser.observe.call_count - before)
+    assert reads == [4, 1]  # the same page: three looks again, unless the habit's next control is already there
+
+
+def test_a_secret_step_is_typed_as_in_phase_a_and_replay_moves_past_it(tmp_path):
+    code = next(a for a in fake_page()["actions"] if a["label"] == "Code")
+    w = worker_with(tmp_path, habit=habit_for(hstep(0, "TYPE_TEXT", "code", secret=True), hstep(0, "CLICK", "pay")),
+                    sameness="same")
+    w.run(w.state["page"], "TYPE_TEXT", code, {"text": "123456"}, "[secret:answer1]")
+    assert w.state["replay"]["used"] == {"0": 1}
+
+
+def test_an_expected_step_that_changed_nothing_twice_keeps_the_loop_ladder(tmp_path, monkeypatch):
+    def looped(confidence):
+        w = worker_with(tmp_path, habit=habit_for(hstep(0, "CLICK", "office")), sameness="same")
+        w.state["history"] = [{"step": n, "subgoal": 0, "operation": "CLICK", "action": "Office", "page_changed": False,
+                               "url": "https://shop.test/checkout"} for n in (1, 2)]
+        seen = script_planner(monkeypatch, turn())
+        script_jev(monkeypatch, {"next": ("CLICK", confidence), "click_target": "Office"})
+        jev_checks(monkeypatch)
+        w.command("tick")
+        return w, seen
+
+    unsure, seen = looped(0.4)  # replay never trusts a step the ladder hands to the planner
+    assert not unsure.browser.act.called and seen[0]["reason"] == "unsure"
+    sure, _ = looped(0.9)  # Jev's next-best once, as in Phase A
+    assert sure.browser.act.call_args.args[1]["label"] != "Office"
+    assert (sure.state["replay"]["expected"], sure.state["replay"]["fallbacks"]) == (0, [])
+
+
+def test_a_captcha_square_the_user_picked_never_moves_replay(tmp_path):
+    office = next(a for a in fake_page()["actions"] if a["label"] == "Office")
+    w = worker_with(tmp_path, habit=habit_for(hstep(0, "CLICK", "office")), sameness="same")
+    w.state["relaying"] = True
+    w.run(w.state["page"], "CLICK", office, {}, None)
+    assert w.state["replay"]["used"] == {}
+
+
+def test_a_later_plan_of_another_shape_ends_replay_and_one_of_the_same_shape_keeps_it(tmp_path, monkeypatch):
+    def replanned(*subgoals):
+        w = worker_with(tmp_path, habit=habit_for(hstep(0, "CLICK", "office")), sameness="same")
+        w.state["reason"] = "replan"
+        script_planner(monkeypatch, turn(subgoals=list(subgoals)))
+        jev_checks(monkeypatch)
+        w.command("tick")
+        return w.state["replay"]["on"]
+
+    assert replanned(sub("choose the Office address"), sub("pay", kind="commit")) is True
+    assert replanned(sub("open the address list"), sub("choose Office"), sub("pay", kind="commit")) is False

@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import executor, gate, jev, planner, rules, skills, views
+from . import executor, gate, jev, learn, planner, replay, rules, skills, views
 from .browser import Browser, ExecutionUncertain, StalePage, unique
 from .errors import Halt, Retry
 from .memory import HOME, KEY, LABELS, Memory, StoreError, Unstorable
@@ -81,8 +81,8 @@ class Worker:
     quiet_wait = 1.5  # seconds to keep looking when a step seems to have changed nothing
     bench = False  # a bench run: a pre-authorisation is logged, never used
 
-    def __init__(self, url, goal, *, asker=None, notify=None, memory=None, browser=None, title=None, skill=None,
-                 preauth=False, cap=None, library=None, trace_dir=None, provide_file=None):
+    def __init__(self, url, goal, *, asker=None, notify=None, memory=None, habit=None, sameness=None, browser=None,
+                 title=None, skill=None, preauth=False, cap=None, library=None, trace_dir=None, provide_file=None):
         goal = goal.strip() if isinstance(goal, str) else ""
         if not goal:
             raise ValueError("Supply a task")
@@ -109,6 +109,12 @@ class Worker:
         self.state = self.new_state(self.browser, goal, title or goal[:60], page)
         self.state.update(skill=skill, preauth=preauth, cap=cap, site=skills.bare(urlparse(url).netloc.lower()),
                           start=url)
+        self.habit = habit
+        if habit:
+            self.state["replay"] = replay.start(habit, sameness)
+            if sameness == "same":  # the same errand: its plan, and no planner start turn
+                self.state["plan"], self.state["reason"] = [dict(g) for g in habit["plan"]], None
+                self.say(f"Same as last time: {habit['title']}.")
 
     @staticmethod
     def new_state(browser, goal, title, page):
@@ -120,7 +126,7 @@ class Worker:
             subgoal_steps=0, loop_from=0, code_asks=0, model_errors=0, mismatches=0, done_refusals=0,
             captcha_rounds=0, meter=new_meter(), escalations={}, margins=[], situations=[], uploaded=[], held=None,
             told_at=None, delegated_at=None, relaying=False, skill=None, preauth=False, cap=None, site="",
-            cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None,
+            cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None,
         )
 
     # ---- what the user and the models see
@@ -351,6 +357,10 @@ class Worker:
             return self.blocked(step, page)
         if step["kind"] == "done":
             return self.advance()
+        guided = self.guided(step, answers, page, controls)
+        if guided:
+            operation, action, key, text = guided
+            return self.act(operation, action, page, sub, key=key, text=text)
         if step["kind"] == "think":
             return self.escalate("unsure", page)
         label = step["action"].get("label") or step["operation"]
@@ -365,6 +375,51 @@ class Worker:
             s["switched"].append(key)
             return self.act(other["operation"], other["action"], page, sub, key=other.get("key"))
         return self.act(step["operation"], step["action"], page, sub, key=step.get("key"))
+
+    # ---- habit replay
+
+    def guided(self, step, answers, page, controls):
+        """Replay's say on Jev's answers: (operation, action, key, text) to act on when Jev's top pick is the step the
+        habit expects (passing the gates, or the only control on the page with that label), else None to go on as
+        in Phase A. Another pick that passes the gates, or none, takes this subgoal out of replay. A wait, a scroll,
+        a secret field, an expected control not on the page yet, or one that changed nothing twice (the loop ladder
+        decides) changes nothing."""
+        s = self.state
+        record = s["replay"]
+        expected = replay.expected(self.habit, record, s["current"]) if record else None
+        if not expected or expected["secret"]:
+            return None
+        verdict, chosen = replay.judge(expected, step, answers, page, controls)
+        if verdict in {"absent", "quiet"}:
+            return None
+        if verdict == "matched" and chosen[0] not in QUIET and executor.repeats(
+                s["history"][s["loop_from"]:], chosen[0], chosen[1].get("label") or chosen[0], page["url"]) >= 2:
+            return None  # it changed nothing twice: the loop ladder decides, as in Phase A
+        record["expected"] += 1
+        if verdict != "matched":
+            record["left"].append(s["current"])
+            record["fallbacks"].append({"subgoal": s["current"], "step": len(s["history"]) + 1,
+                                        "reason": f"Jev chose {chosen}" if verdict == "other" else "unsure"})
+            return None
+        record["matched"] += 1  # the cursor moves once the step has run (replay_moved): a page that moved runs nothing
+        operation, action, key = chosen
+        values = (self.subgoal() or {}).get("values") or []
+        text = next((v["text"] for v in values if v["field"] == expected["value"]), None) if expected["value"] else None
+        return operation, action, key, text
+
+    def replay_moved(self, operation, action):
+        """A step ran: when it was the habit's expected step (a code typed as in Phase A included), replay moves past
+        it. A captcha square the user picked never does."""
+        s = self.state
+        expected = replay.expected(self.habit, s["replay"], s["current"]) if s["replay"] and not s["relaying"] else None
+        if expected and operation == expected["op"] and learn.control_name(action.get("label")) == expected["name"]:
+            s["replay"]["used"][str(s["current"])] = s["replay"]["used"].get(str(s["current"]), 0) + 1
+
+    def expected_on(self, page):
+        """Whether the habit's next expected control is already on this page: no need to look again."""
+        s = self.state
+        expected = replay.expected(self.habit, s["replay"], s["current"]) if s["replay"] else None
+        return bool(expected) and replay.present(expected, page) > 0
 
     def blocked(self, step, page):
         """A blocker Jev sees. A captcha goes to the user as a picture; a code field is asked through the hidden
@@ -522,6 +577,8 @@ class Worker:
         if subgoals:
             s["plan"] = s["plan"][:s["current"]] + subgoals
             s["subgoal_steps"] = 0
+        if s["replay"] and (reason == "start" or subgoals):  # a plan of another shape, now or later: no replay
+            s["replay"]["on"] = s["replay"]["on"] and replay.same_shape(s["plan"], self.habit["plan"])
         act = out["action"]
         if act["op"] not in {"DONE", "TELL"}:
             self.release()  # a TELL waits one step: when the next move is DONE with the same words, they go once
@@ -551,6 +608,8 @@ class Worker:
             "candidates": [{"n": c["n"], "op": c["op"], "element": c["element"], "p": round(c["p"], 2)}
                            for c in s["candidates"]],
             "reason": s["reason"], "feedback": s["feedback"],
+            **({"habit": {"title": self.habit["title"], "goal": self.habit["goal"], "plan": self.habit["plan"]}}
+               if s["replay"] and s["reason"] == "start" else {}),
         }
 
     def do(self, act, page):
@@ -873,6 +932,7 @@ class Worker:
         if cleared:
             s["cleared_maybe"].append(cleared)
         s["subgoal_steps"] += 1
+        self.replay_moved(operation, action)  # the step ran: replay moves past it
         s["candidates"], s["refusals"], s["idle"] = [], {}, 0
         typing = s.pop("typing", None)
         if typing:
@@ -889,7 +949,7 @@ class Worker:
                 self.secrets.nodes.add((action.get("frame"), node))
         after = self.observe()
         for _ in range(3):  # a dropdown or dialog can render a moment after the click: look again before "nothing"
-            if operation == "WAIT" or views.change(page, after) != "nothing changed":
+            if operation == "WAIT" or views.change(page, after) != "nothing changed" or self.expected_on(after):
                 break
             time.sleep(self.quiet_wait / 3)
             after = self.observe()
@@ -1004,7 +1064,8 @@ class Worker:
             "plan": s["plan"], "notes": s["notes"], "chat": s["chat"],
             "steps": [{k: h.get(k) for k in TRACE_STEP} for h in s["history"]],
             "jev": s["jev"], "turns": s["turns"], "meter": s["meter"], "escalations": s["escalations"],
-            "margins": s["margins"], "files": [self.file_name(f) for f in s["files"]], "errors": s["errors"],
+            "margins": s["margins"], "replay": s["replay"], "files": [self.file_name(f) for f in s["files"]],
+            "errors": s["errors"],
             "standing_error": s.get("standing_error"),
         })
 

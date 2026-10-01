@@ -165,6 +165,24 @@ def intake(message, kinds, several=True):
     return {"several": "no", **{name: a["choice"] for name, a in answers.items()}}
 
 
+HABIT_RULE = ("Choose the earlier errand this request repeats: the same kind of errand on the same site. Choose none "
+              "when it is a new errand. " + DATA_NOTE)
+SAMENESS = {"same": "The request asks for the same items, quantities, places, and choices as that earlier errand.",
+            "similar": "The same kind of errand on that site, with different items, places, or choices."}
+
+
+def habit(goal, habits):
+    """Which saved habit a new request repeats, and how closely: (the habit's answer, an id or "none"; the sameness
+    answer, "same" or "similar"), each {"choice", "probabilities", "confidence"}."""
+    options = {str(h["id"]): f"{h['title']}: {h['goal']}" for h in habits}
+    options["none"] = "None of these: a new errand"
+    answers = request({"message": goal}, {
+        "habit": {"options": options, "instructions": {"message": goal, "rules": HABIT_RULE}},
+        "sameness": {"options": SAMENESS, "instructions": {
+            "message": goal, "rules": "Compare the request with the closest earlier errand. " + DATA_NOTE}}})
+    return answers["habit"], answers["sameness"]
+
+
 def value_for(field, names):
     """Which of a subgoal's value names goes into the field Jev chose to type into."""
     options = {str(n): name for n, name in enumerate(names, 1)}

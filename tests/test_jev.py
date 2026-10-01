@@ -142,3 +142,19 @@ def test_every_question_that_reads_page_text_keeps_that_text_out_of_its_rules(ty
         for word in words:
             assert word not in rules, (name, word)
             assert word in json.dumps(body["state"]), (name, word)  # the words still reach Jev, as data
+
+
+def test_habit_asks_which_saved_errand_a_request_repeats_and_how_closely(monkeypatch):
+    seen = []
+
+    def request(state, questions):
+        seen.append(questions)
+        return {"habit": {"choice": "7", "probabilities": {"7": 0.9, "none": 0.1}, "confidence": 0.9},
+                "sameness": {"choice": "same", "probabilities": {"same": 0.8, "similar": 0.2}, "confidence": 0.8}}
+
+    monkeypatch.setattr(jev, "request", request)
+    pick, sameness = jev.habit("Order Diet Coke on Zepto", [{"id": 7, "title": "Zepto · Diet Coke",
+                                                              "goal": "Order Diet Coke on Zepto"}])
+    assert pick["choice"] == "7" and sameness["choice"] == "same"
+    assert set(seen[0]["habit"]["options"]) == {"7", "none"}
+    assert set(seen[0]["sameness"]["options"]) == {"same", "similar"}
