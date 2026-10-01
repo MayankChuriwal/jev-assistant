@@ -4,6 +4,7 @@ confirms, and it can never clear a control the commit rule matches outright."""
 
 import re
 import time
+import unicodedata
 
 from . import jev, planner, rules, skills
 from .browser import StalePage
@@ -21,15 +22,27 @@ ASIDE = re.compile(r"\([^()]*\)")
 REMARK = re.compile(NOT_TOTAL.pattern + r"|\bwas\b|\bmrp\b", re.IGNORECASE)  # "(you save ₹200)", "(was ₹1,499)"
 NUMBER = r"\d(?:[\d,]*\d)?(?:\.\d+)?"
 RUPEE = re.compile(r"(?:₹|\bRs\.?|\bINR\b)\s?(" + NUMBER + ")", re.IGNORECASE)
-PRICES = re.compile(rules.PRICE.pattern + r"|\bINR\s?" + NUMBER, re.IGNORECASE)  # prices in any currency, INR too
-WORDS = re.compile(r"\b(?:total|to pay|pay|payable|bill|fees?|fare|price|cost|charges?|rate|amount|due|grand)\b",
-                   re.IGNORECASE)  # words that put a price on their line, or on the line after
+SYMBOLS = "[" + re.escape("".join(c for c in map(chr, range(0x10000)) if unicodedata.category(c) == "Sc")) + "]"
+SUFFIX = r"(?:\s?(?:lakhs?|lacs?|crores?|cr|millions?)\b|[KLM](?![A-Za-z]))?"  # ₹1.5L · ₹15K · ₹2 crore
+PRICES = re.compile("(?:" + rules.PRICE.pattern + r"|\bINR\s?" + NUMBER + ")" + SUFFIX, re.IGNORECASE)  # INR too
+WORDS = re.compile(r"\b(?:total|to pay|you pay|you will pay|pay|payable|bill|billed|charged|paid|fees?|fare|price|cost|"
+                   r"charges?|rate|amount|due|grand)\b", re.IGNORECASE)  # words that put a price on their line
 CURRENCY = re.compile(
-    r"[₹₨$€£¥₩]|\bRs(?![A-Za-z])|\b(?:INR|USD|EUR|GBP|AED|SGD)(?![A-Za-z])|(?-i:\bRM(?![A-Za-z]))|"
-    r"\b(?:rupees?|euros?|dollars?)(?![A-Za-z])|रुपये|रुपया|(?-i:\b[A-Z]{3}\s*\d|\d\s*[A-Z]{3}\b)|\d\s*/-",
-    re.IGNORECASE)
-DIGITS = re.compile(r"\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d+(?:\.\d+)?")  # 1,499.00 · 2,50,000 · 7
-ITEMISH = re.compile(r"\b(items? total|sub ?total)\b", re.IGNORECASE)
+    SYMBOLS + r"|\bRs(?![A-Za-z])|\b(?:INR|USD|EUR|GBP|AED|SGD|Rp)(?![A-Za-z])|(?-i:\bRM(?![A-Za-z]))|"
+    r"\b(?:rupees?|euros?|dollars?|pounds?|pesos?|baht|riyals?|dirhams?)(?![A-Za-z])|रुपये|रुपया|zł|"
+    r"(?-i:\b(?!ETA\b)[A-Z]{3}\s*\d|\d\s*(?!ETA\b)[A-Z]{3}\b)|\d\s*/-", re.IGNORECASE)
+MARK_WORD = re.compile(r"Rs|INR|USD|EUR|GBP|AED|SGD|RM|Rp|rupees?|euros?|dollars?|रुपये|रुपया", re.IGNORECASE)
+MARK_END = re.compile("(?:" + SYMBOLS + r"|\b(?:Rs|INR|USD|EUR|GBP|AED|SGD|RM|Rp)\.?)\s?$", re.IGNORECASE)
+READING = re.compile(r"(\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:(\s?(?:lakhs?|lacs?|crores?|cr|millions?)\b)|"
+                     r"([KLM](?![A-Za-z])))?", re.IGNORECASE)
+SCALES = {"k": 1e3, "l": 1e5, "lakh": 1e5, "lakhs": 1e5, "lac": 1e5, "lacs": 1e5, "m": 1e6, "million": 1e6,
+          "millions": 1e6, "cr": 1e7, "crore": 1e7, "crores": 1e7}
+UNIT = re.compile(r"\s?(?:ml|ltrs?|litres?|liters?|l|gms?|grams?|kgs?|mg|pcs?|pieces?|packs?|units?|cm|mm|km|m|%)"
+                  r"(?![A-Za-z])", re.IGNORECASE)  # "300 ml" is a size, not an amount
+TICKING = re.compile(r"\b\d{1,2}:\d{2}\b|\b(?:min|mins|minutes?|sec|secs|seconds?|hr|hrs|hours?|left|expires?|"
+                     r"expiring|eta|arriv\w+)\b", re.IGNORECASE)  # a clock or countdown changes by itself
+EXEMPT = re.compile(r"\b(?:items? total|sub ?total|total (?:savings?|saved|discount|cashback|rewards?|coupons?))\b",
+                    re.IGNORECASE)  # these lines name a part of the bill, not what is payable
 DELIVERING = re.compile(r"\b(?:delivering to|deliver to|delivery address)\s*:?\s*([^\n]{8,160})", re.IGNORECASE)
 FEE = re.compile(r"^[^\n₹]{0,20}?((?:small cart|delivery|handling|platform|packaging|convenience|surge|late night|"
                  r"rain|service)\s+(?:fee|charges?)[^\n₹]{0,10}₹\s?[\d,]+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
@@ -51,17 +64,44 @@ def cap(text):
     return float(first[1].replace(",", "")) if first else None
 
 
+def readings(line):
+    """(value, quantity) for every number on the line. An attached K, L, M or Cr (or lakh, crore, million) scales it
+    where it means money: after a currency marker, or on a money-word line that has no currency marker, so "₹1.5L"
+    and "Total 1.5L" read 150000 while "Diet Coke 2L" reads 2. `quantity` marks a size ("300 ml") that is not
+    money."""
+    marked, worded = bool(CURRENCY.search(line)), bool(WORDS.search(line))
+    found = []
+    for m in READING.finditer(line):
+        value, after = float(m[1].replace(",", "")), (m[2] or m[3] or "").strip().lower()
+        paid = bool(MARK_END.search(line[:m.start()]))
+        if m[2] or (m[3] and (paid or (worded and not marked))):
+            found.append((value * SCALES[after], False))
+        else:
+            found.append((value, bool(m[3] or (not paid and UNIT.match(line, m.end())))))
+    return found
+
+
+def numbers(line):
+    """Every number on the line: 1,499.00 → 1499.0, ₹1.5L → 150000.0."""
+    return [value for value, _ in readings(line)]
+
+
+def amounts(line):
+    """The numbers on the line that can be money: not a size or quantity with a unit."""
+    return [value for value, quantity in readings(line) if not quantity]
+
+
 def amount(text):
     """The number in the first rupee amount of `text` ("To pay ₹1,234.50" → 1234.5), or None. Another currency
     (“$120”) is not read: the caller must treat it as unknown."""
     price = RUPEE.search(text or "")
-    return float(price[1].replace(",", "")) if price else None
+    return numbers(text[price.start():])[0] if price else None
 
 
 def number(price):
     """The number in a price of any currency, for comparing prices; None when there is none."""
-    digits = re.search(NUMBER, price or "")
-    return float(digits[0].replace(",", "")) if digits else None
+    found = numbers(price or "")
+    return found[0] if found else None
 
 
 def worth(price):
@@ -69,41 +109,74 @@ def worth(price):
     return amount(price), number(price)
 
 
-def numbers(line):
-    """Every number on the line: 1,499.00 → 1499.0."""
-    return [float(n.replace(",", "")) for n in DIGITS.findall(line)]
+def marker_only(line):
+    """Whether the line is just a currency marker ("₹", "Rs.", "USD:", "रुपये")."""
+    token = line.strip().rstrip(":.").strip()
+    symbols = all(unicodedata.category(c) == "Sc" for c in token)
+    return bool(token) and (symbols or MARK_WORD.fullmatch(token) is not None)
+
+
+def flat(text):
+    """The page text with a currency marker on a line of its own joined to the next line ("₹\\n1,299" → "₹ 1,299")
+    and a number joined to a following "/-" line: the snapshot writes every text node on a line of its own. Empty
+    lines go. Every money check reads this form."""
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    joined, i = [], 0
+    while i < len(lines):
+        if re.fullmatch(r"\d[\d,]*(?:\.\d+)?", lines[i]) and i + 1 < len(lines) and lines[i + 1] == "/-":
+            joined.append(lines[i] + " /-")
+            i += 2
+        else:
+            joined.append(lines[i])
+            i += 1
+    out, pending = [], []
+    for line in joined:
+        if marker_only(line):
+            pending.append(line)
+        else:
+            out.append(" ".join([*pending, line]))
+            pending = []
+    return "\n".join(out + pending)
+
+
+def tight(text):
+    """The text with no space between a currency marker and its number ("₹ 79" → "₹79")."""
+    return re.sub("(" + SYMBOLS + r"|\bRs\.?|\bINR)\s+(?=\d)", r"\1", text, flags=re.IGNORECASE)
+
+
+def shown(figure, text):
+    """Whether the page text shows this amount, ignoring a space after the currency marker."""
+    return rules.amount_shown(figure, text) or rules.amount_shown(tight(figure), tight(text))
 
 
 def money_lines(text):
-    """The lines that can hold money: those with a money word (and the line after it: "Total" then "1,499") or a
-    currency marker."""
-    lines, keep = text.splitlines(), set()
+    """The lines that can hold money, in page order: any line with a money word or a currency marker, and the
+    lines on either side of a money word ("Qty 2", "Total" then "1,499"). A clock or countdown line is left out
+    unless it carries a currency marker. One set for the snapshot, the worst number, and the money check."""
+    lines, keep = flat(text).splitlines(), set()
     for i, line in enumerate(lines):
         if WORDS.search(line):
-            keep |= {i, i + 1}
+            keep |= {i - 1, i, i + 1}
         elif CURRENCY.search(line):
             keep.add(i)
-    return [lines[i] for i in sorted(keep) if i < len(lines)]
+    return [lines[i] for i in sorted(keep) if 0 <= i < len(lines)
+            and (CURRENCY.search(lines[i]) or not TICKING.search(lines[i]))]
 
 
 def snapshot(text):
-    """Every number on the money lines, in order of size: an approval holds only while it is unchanged."""
-    return tuple(sorted(n for line in money_lines(text) for n in numbers(line)))
+    """Every number on the money lines, in page order: an approval holds only while it is unchanged."""
+    return tuple(n for line in money_lines(text) for n in numbers(line))
 
 
 def worst(text):
-    """The largest number on a money-word line or the line after it; brackets count. 0.0 when there is none."""
-    lines, top = text.splitlines(), 0.0
-    for i, line in enumerate(lines):
-        if WORDS.search(line):
-            top = max([top, *numbers(line), *numbers(lines[i + 1] if i + 1 < len(lines) else "")])
-    return top
+    """The largest amount on the money lines, brackets included; 0.0 when there is none."""
+    return max((n for line in money_lines(text) for n in amounts(line)), default=0.0)
 
 
 def shows_money(text):
     """Whether the page shows money in any form, even one `amount` cannot read: a number on a money line, or a
     currency marker with a digit on its line or beside it."""
-    lines = text.splitlines()
+    lines = flat(text).splitlines()
     return any(numbers(line) for line in money_lines(text)) or any(
         CURRENCY.search(line) and any(numbers(near) for near in lines[max(i - 1, 0):i + 2])
         for i, line in enumerate(lines))
@@ -119,15 +192,16 @@ def unbracket(line):
 
 def payable(text):
     """The payable total a page shows: the last line that says what is payable (else the last plain total), and
-    the largest price on it. Lines about savings, cashback, or what to add are not totals; a price may sit on the
-    next line. None when the page says nothing clear, and None when a payable line turned away for those words
-    carries a larger price than the one chosen: the page hides what is payable, so the user is asked. (An item
-    total or "total savings" beside a payable line is no such thing: a discounted cart reads as its payable.)"""
-    lines = [unbracket(line) for line in text.splitlines()]
+    the largest price on it. A total line turned away for a remark (savings, cashback, free, add-more) hides
+    what is payable: its prices (own line and the next) are kept, and the answer is None when any is larger than
+    the total chosen, or when no line qualifies. An item total, subtotal or "total savings" line is no such hint.
+    A price may sit on the line after its label."""
+    lines = [unbracket(line) for line in flat(text).splitlines()]
     turned_away = []
     for i, line in enumerate(lines):
-        if PAYABLE.search(line) and NOT_TOTAL.search(line) and not ITEMISH.search(line):
-            turned_away += PRICES.findall(line) or PRICES.findall(lines[i + 1] if i + 1 < len(lines) else "")
+        rest = EXEMPT.sub(" ", line)
+        if TOTAL.search(rest) and NOT_TOTAL.search(rest):
+            turned_away += PRICES.findall(line) + PRICES.findall(lines[i + 1] if i + 1 < len(lines) else "")
     chosen = None
     for kind in (PAYABLE, TOTAL):  # "To pay" first; a plain "total" only when nothing says what is payable
         found = []
@@ -191,34 +265,36 @@ def facts(page, recent):
     """What an approval must show, read by code from the page and the pages just before it: the payable total,
     fees, the delivery address line, the item count, and the values typed into the form. Fees count from an
     earlier page only while that page's payable total is the current one."""
-    seen = [page["text"], *reversed(recent[-5:])]
-    total = payable(page["text"])
-    current = [page["text"]] + [t for t in reversed(recent[-5:]) if total is not None and payable(t) is not None
-                                and worth(payable(t)) == worth(total)]
+    text = flat(page["text"])
+    seen = [text, *(flat(t) for t in reversed(recent[-5:]))]
+    total = payable(text)
+    current = [text] + [t for t in seen[1:] if total is not None and payable(t) is not None
+                        and worth(payable(t)) == worth(total)]
     typed = [f"{a['label'].rstrip(':')}: {a['value']}" for a in page["actions"]
              if a.get("kind") == "fill" and a.get("role") != "searchbox" and "search" not in a["label"].lower()
              and a.get("value") and not str(a["value"]).startswith("[")]
     return {"total": total, "fees": list(dict.fromkeys(f.strip() for t in current for f in FEE.findall(t))),
             "address": next((m.strip() for t in seen for m in DELIVERING.findall(t)), None),
-            "items": next((int(n) for n in ITEMS.findall(page["text"])), 0), "typed": list(dict.fromkeys(typed))}
+            "items": next((int(n) for n in ITEMS.findall(text)), 0), "typed": list(dict.fromkeys(typed))}
 
 
 def summary(w, page, found):
     """The approval's lines: the planner's one line per skill field, then every fact it left out, from the page."""
     s = w.state
     skill = w.skill()
+    text = flat(page["text"])
     payload = {"goal": s["goal"], "fields": (skill or {}).get("summary") or FIELDS, "chat": s["chat"][-10:],
-               "facts": found, "page": {"url": page["url"], "title": page["title"], "text": page["text"][:3000]},
-               "pages_before": [t[:1500] for t in s["recent"][-3:]]}
+               "facts": found, "page": {"url": page["url"], "title": page["title"], "text": text[:3000]},
+               "pages_before": [flat(t)[:1500] for t in s["recent"][-3:]]}
     lines = [re.sub(r"^(ordered|booked|placed|paid|requested)\s+", "", line, flags=re.IGNORECASE)
              for line in planner.summary(payload)]  # nothing has happened until the user says yes
-    missing = [x for x in rules.PRICE.findall(" ".join(lines)) if not rules.amount_shown(x, page["text"])]
+    missing = [x for x in rules.PRICE.findall(" ".join(lines)) if not shown(x, text)]
     if missing:
         raise Retry(f"The page doesn't show {', '.join(missing)}. Copy amounts exactly as the page shows them.")
     joined = " ".join(lines).lower()
     extra = []
-    if found["total"] and not rules.amount_shown(found["total"], " ".join(lines)):
-        extra.append(f"Total: {found['total']}")
+    if found["total"] and not shown(found["total"], " ".join(lines)):
+        extra.append(f"Total: {tight(found['total'])}")
     extra += [fee for fee in found["fees"] if fee.split("₹")[0].strip().lower() not in joined]
     if found["address"] and re.sub(r"\W", "", found["address"])[:12].lower() not in re.sub(r"\W", "", joined):
         extra.append(f"Delivering to: {found['address']}")
