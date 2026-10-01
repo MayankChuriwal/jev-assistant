@@ -52,15 +52,117 @@ def home():
     return Path(os.environ.get("JEV_HOME") or Path.home() / ".jev")
 
 
-def open_memory():
-    """The user's memory, or None after saying why it can't be opened (Postgres down, a bad key)."""
+def save_key(key, path=None):
+    """Append JEV_MEMORY_KEY to .env (creating it), readable only by the user."""
+    path = Path(path) if path else Path.cwd() / ".env"
+    text = path.read_text() if path.exists() else ""
+    path.write_text(text + ("\n" if text and not text.endswith("\n") else "") + f"JEV_MEMORY_KEY={key}\n")
+    path.chmod(0o600)
+
+
+def open_memory(*, strict=True, **options):
+    """The user's memory, ready, or None after saying why not: Postgres reached, the key in place, and Phase A's
+    profile.json imported once. With no JEV_MEMORY_KEY and no ID stored yet, a key is generated into .env. With IDs
+    stored and no key, a strict open (the chat, `jev run`) refuses, because a new key would lose them; `jev memory`
+    still lists and forgets. `options` (url, schema) go to Memory.open."""
+    from cryptography.fernet import Fernet
+
     from .memory import Memory, StoreError
 
     try:
-        return Memory.open()
+        memory = Memory.open(**options)
+        if not os.environ.get("JEV_MEMORY_KEY"):
+            if memory.has_ids():
+                if strict:
+                    memory.close()
+                    print("jev: JEV_MEMORY_KEY is missing: the saved IDs can't be read without it. Put it back in "
+                          "your .env (or the host's secrets), or forget them with `jev memory forget id:<key>`.",
+                          file=sys.stderr)
+                    return None
+            else:
+                key = Fernet.generate_key().decode()
+                save_key(key)
+                os.environ["JEV_MEMORY_KEY"] = key
+                memory.unlock(key)
+                print("jev: Generated JEV_MEMORY_KEY in .env. Keep it: without it, the IDs you save can't be read.",
+                      file=sys.stderr)
+        if memory.fernet is not None and memory.import_profile(home() / "profile.json"):
+            print("jev: Imported your old profile into memory (profile.json is now profile.json.imported).",
+                  file=sys.stderr)
+        memory.refresh()
+        if memory.unreadable:
+            print(f"jev: Saved IDs this JEV_MEMORY_KEY can't open: {', '.join(memory.unreadable)}. I'll ask for them "
+                  "again when a task needs them.", file=sys.stderr)
+        return memory
     except StoreError as error:
         print(f"jev: {error}", file=sys.stderr)
         return None
+
+
+def print_listing(listing):
+    sections = [
+        ("IDs (values are never shown):", [f"  {i['ref']}  {i['label']}" for i in listing["ids"]]),
+        ("Facts:", [f"  {f['ref']}  {f['kind']}  " + (f"{f['label']}: {f['text']}" if f["label"] else f["text"])
+                    for f in listing["facts"]]),
+        ("Standing approvals:", [f"  {r['ref']}  {r['text']}" for r in listing["rules"]]),
+        ("Learned site notes:", [f"  {host}: {n} line{'' if n == 1 else 's'}"
+                                 for host, n in listing["notes"].items()]),
+        ("Habits:", [f"  {h['ref']}  {h['host']} · {h['skill']} · {h['title']} ({h['replays']} replays, "
+                     f"{h['clean_replays']} clean)" for h in listing["habits"]]),
+    ]
+    for title, lines in sections:
+        print(title)
+        print("\n".join(lines) if lines else "  none")
+
+
+def memory_command(action="list", rest=()):
+    """`jev memory`: what the agent keeps (never an ID's value); set an ID, typed hidden; forget; undo; notes."""
+    from .memory import LABELS, StoreError, Unstorable
+
+    memory = open_memory(strict=False)
+    if memory is None:
+        return 1
+    try:
+        if action == "list":
+            print_listing(memory.listing())
+        elif action == "set":
+            if not rest:
+                print("Usage: jev memory set <key> [label]", file=sys.stderr)
+                return 2
+            key, label = rest[0], " ".join(rest[1:])
+            memory.set_id(key, label, getpass.getpass(f"{label or key} (hidden): "), actor="user")
+            print(f"Saved your {label or LABELS.get(key) or key.replace('_', ' ')}. The models never see it.")
+        elif action == "forget":
+            if not rest:
+                print("Usage: jev memory forget <ref> (refs come from `jev memory`)", file=sys.stderr)
+                return 2
+            for ref in rest:
+                print(f"Forgot {memory.forget(ref)}.")
+        elif action == "undo":
+            print(f"Undone: {memory.undo()}.")
+        else:  # notes
+            learned = memory.learned()
+            for host in ([rest[0]] if rest else sorted(learned)):
+                print(host + "".join(f"\n  • {line}" for line in learned.get(host, [])))
+    except KeyError as error:
+        print(f"jev: nothing matches {error.args[0] if error.args else ''}", file=sys.stderr)
+        return 1
+    except (StoreError, Unstorable, ValueError) as error:
+        print(f"jev: {error}", file=sys.stderr)
+        return 1
+    finally:
+        memory.close()
+    return 0
+
+
+def purge_daily(memory, every=3600):
+    """While jev runs: once an hour, clear the copies of anything forgotten more than a day ago."""
+    while True:
+        time.sleep(every)
+        try:
+            memory.purge()
+        except Exception:  # Postgres away for a moment: the next hour tries again
+            pass
 
 
 def chrome_command():
@@ -377,6 +479,7 @@ def serve(port=CHAT_PORT, bench=None):
     memory = open_memory()
     if memory is None:
         return 1
+    threading.Thread(target=purge_daily, args=(memory,), daemon=True).start()  # forgotten means gone after a day
     if chrome():
         return 1
     channel = WebChannel(home() / "media")
@@ -429,6 +532,10 @@ def main(argv=None):
     forget_parser.add_argument("sites", nargs="+")
     traces_parser = commands.add_parser("traces", help="list the latest task traces")
     traces_parser.add_argument("--limit", type=int, default=10)
+    memory_parser = commands.add_parser("memory", help="what the agent remembers: list (default), set <key> [label], "
+                                                       "forget <ref>…, undo, notes [host]")
+    memory_parser.add_argument("action", nargs="?", default="list", choices=["list", "set", "forget", "undo", "notes"])
+    memory_parser.add_argument("rest", nargs="*")
     save_parser = commands.add_parser("bench-save", help="keep a trace step as a replay case")
     save_parser.add_argument("trace")
     save_parser.add_argument("step", type=int, help="the Jev request's number in the trace, 1 = first")
@@ -450,6 +557,8 @@ def main(argv=None):
         return traces(args.limit)
     if args.command == "forget":
         return forget(args.sites)
+    if args.command == "memory":
+        return memory_command(args.action, args.rest)
     if args.command == "bench-save":
         from . import bench as live
 

@@ -2,6 +2,7 @@
 
 import json
 import os
+import uuid
 
 import pytest
 from fakes import store
@@ -105,3 +106,87 @@ def test_a_memory_that_cannot_open_is_explained_and_not_used(monkeypatch, capsys
     monkeypatch.setattr(Memory, "open", refuse)
     assert server.open_memory() is None
     assert "jev: Postgres isn't running. Start it." in capsys.readouterr().err
+
+
+# ---- Plan 7 Task 4: memory at start-up, and `jev memory`
+
+OTHER_KEY = "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8="
+
+
+def test_first_start_makes_a_key_imports_the_old_profile_and_says_so(tmp_path, monkeypatch, database_url, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JEV_DATABASE_URL", database_url)
+    monkeypatch.setenv("JEV_HOME", str(tmp_path))
+    (tmp_path / "profile.json").write_text(json.dumps({"phone": "+91 98765 43210", "addresses": [],
+                                                       "preferences": []}))
+    memory = server.open_memory(schema=f"t_{uuid.uuid4().hex[:12]}")
+    try:
+        key = (tmp_path / ".env").read_text().split("JEV_MEMORY_KEY=")[1].strip()
+        assert os.environ["JEV_MEMORY_KEY"] == key and (tmp_path / ".env").stat().st_mode & 0o777 == 0o600
+        assert memory.id_value("phone") == "+91 98765 43210" and (tmp_path / "profile.json.imported").exists()
+        err = capsys.readouterr().err
+        assert "Generated JEV_MEMORY_KEY in .env" in err and "Imported your old profile" in err
+    finally:
+        memory.drop()
+
+
+def test_start_refuses_without_the_key_when_ids_are_stored(tmp_path, monkeypatch, database_url, capsys):
+    from conftest import TEST_KEY
+
+    from assistant.memory import Memory
+
+    schema = f"t_{uuid.uuid4().hex[:12]}"
+    seeded = Memory.open(database_url, schema=schema, key=TEST_KEY)
+    seeded.set_id("phone", "phone number", "+91 98765 43210")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JEV_DATABASE_URL", database_url)
+    try:
+        assert server.open_memory(schema=schema) is None
+        assert "JEV_MEMORY_KEY is missing: the saved IDs can't be read without it" in capsys.readouterr().err
+        assert not (tmp_path / ".env").exists()  # never a new key over saved IDs
+        listed = server.open_memory(strict=False, schema=schema)  # `jev memory` still lists and forgets
+        assert listed is not None and listed.has_ids()
+        listed.close()
+    finally:
+        seeded.drop()
+
+
+def test_saved_ids_another_key_cannot_open_are_reported_once(tmp_path, monkeypatch, database_url, capsys):
+    from conftest import TEST_KEY
+
+    from assistant.memory import Memory
+
+    schema = f"t_{uuid.uuid4().hex[:12]}"
+    seeded = Memory.open(database_url, schema=schema, key=TEST_KEY)
+    seeded.set_id("phone", "phone number", "+91 98765 43210")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JEV_DATABASE_URL", database_url)
+    monkeypatch.setenv("JEV_MEMORY_KEY", OTHER_KEY)
+    try:
+        memory = server.open_memory(schema=schema)
+        assert memory is not None and memory.ids() == []
+        assert "can't open: phone" in capsys.readouterr().err
+        memory.close()
+    finally:
+        seeded.drop()
+
+
+def test_jev_memory_lists_sets_forgets_and_undoes(monkeypatch, capsys):
+    memory = store()
+    monkeypatch.setattr(server, "open_memory", lambda **options: memory)
+    monkeypatch.setattr(server.getpass, "getpass", lambda prompt: "1234567890")
+    fact = memory.remember("address", "12 MG Road", label="Office", tags=["address"])
+    assert server.main(["memory", "set", "bescom_account", "BESCOM", "account", "number"]) == 0
+    assert memory.id_value("bescom_account") == "1234567890"
+    assert server.main(["memory"]) == 0
+    out = capsys.readouterr().out
+    assert "id:bescom_account  BESCOM account number" in out and f"{fact}  address  Office: 12 MG Road" in out
+    assert "1234567890" not in out
+    assert server.main(["memory", "forget", str(fact)]) == 0 and memory.facts() == []
+    assert server.main(["memory", "undo"]) == 0 and memory.facts()[0]["text"] == "12 MG Road"
+    assert server.main(["memory", "forget", "habit:999"]) == 1
+    memory.decide_notes(memory.draft_notes("zeptonow.com", ["Search appears after the location pop-up closes"]),
+                        save=True)
+    capsys.readouterr()
+    assert server.main(["memory", "notes"]) == 0
+    assert "zeptonow.com\n  • Search appears after the location pop-up closes" in capsys.readouterr().out
