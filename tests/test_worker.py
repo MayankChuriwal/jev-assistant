@@ -6,11 +6,14 @@ import time
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
 from fakes import fake_page, jev_checks, script_jev, script_planner, sub, turn, worker_with
 
-from assistant import jev, planner
-from assistant.browser import StalePage
-from assistant.worker import secret_field
+from assistant import jev, planner, rules
+from assistant.browser import ExecutionUncertain, StalePage, fingerprint
+from assistant.errors import Retry
+from assistant.profile import Profile
+from assistant.worker import STOPPED, Worker, secret_field
 
 
 def test_the_planner_plans_once_and_jev_does_the_steps(tmp_path, monkeypatch):
@@ -532,3 +535,210 @@ def test_an_emptied_code_field_is_asked_for_again(tmp_path, monkeypatch):
     w.command("tick")
     w.command("tick")
     assert len(w.asked) == 1 and w.asked[0]["kind"] == "secret"
+
+
+# ---- LOOK: a control found by sight is held to the same gate as a listed one
+
+LOOK = {"id": "look", "kind": "look", "node": None, "label": "Look at the screen"}
+VIEW = {"x": 0, "y": 0, "w": 800, "h": 600}
+PAY_SPOT = {"cell": "C4", "label": "Pay ₹79", "text": "Pay ₹79", "commits": True}
+# An "act" subgoal, not a "commit" one: it is the found control's own flag or words that must make it a commit.
+LOOK_PLAN = turn("LOOK", text="the orange button", subgoals=[sub("press the orange button")])
+
+
+def looking(tmp_path, monkeypatch, *found, replies=()):
+    """A worker over a mock browser with an 800×600 screen. Each `found` is what the model's look returns, in
+    order: a cell dict, or None when nothing on screen fits. The closer look always picks B2."""
+    page = fake_page()
+    page["actions"].append(dict(LOOK))
+    page["fingerprint"] = fingerprint(page)
+    w = worker_with(tmp_path, page=page, replies=replies)
+
+    def shot(region=None, columns=8, rows=6, masked=(), scale=1, hide=()):
+        return ("CLOSE" if region else "IMAGE"), rules.grid(region or VIEW, columns, rows)
+
+    w.browser.grid_screenshot = Mock(side_effect=shot)
+    queue = list(found)
+    monkeypatch.setattr(planner, "look", lambda *a: (queue.pop(0), {}))
+    monkeypatch.setattr(planner, "look_closer", lambda *a: ("B2", {}))
+    return w
+
+
+@pytest.mark.parametrize("found", [
+    {"cell": "C4", "label": "Orange button", "text": "", "commits": True},
+    {"cell": "C4", "label": "Orange button", "text": "Place order", "commits": False}])
+def test_a_control_found_by_sight_that_commits_is_asked_about_before_any_click(tmp_path, monkeypatch, found):
+    w = looking(tmp_path, monkeypatch, found, replies=[{"text": "no"}])
+    script_planner(monkeypatch, LOOK_PLAN)
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.asked[0]["approval"] and "I'll press “Orange button”" in w.asked[0]["text"]
+    w.browser.act.assert_not_called()
+    assert "did not approve" in w.state["feedback"][-1] and w.state["approval"] is None
+
+
+def test_an_approved_spot_is_clicked_when_looking_finds_the_same_spot(tmp_path, monkeypatch):
+    w = looking(tmp_path, monkeypatch, PAY_SPOT, dict(PAY_SPOT), replies=[{"text": "yes"}])
+    script_planner(monkeypatch, LOOK_PLAN)
+    jev_checks(monkeypatch)
+    look = {"op": "LOOK", "pick": "", "text": "the pay button"}
+    with pytest.raises(StalePage):
+        w.do(look, w.state["page"])
+    assert w.state["approval"]["look"] == {"point": [237.5, 337.5]} and w.browser.act.call_count == 0
+    w.do(look, w.state["page"])  # the page is unchanged and the same spot is found again
+    assert w.browser.act.call_count == 1 and w.browser.act.call_args.kwargs == {"point": [237.5, 337.5]}
+    assert w.state["history"][-1]["committed"] and w.state["history"][-1]["approved"] == "user"
+    assert len(w.asked) == 1 and w.state["approval"] is None
+
+
+def test_a_yes_to_one_spot_does_not_cover_another_spot(tmp_path, monkeypatch):
+    other = {**PAY_SPOT, "cell": "A1"}  # the same words, found somewhere else on the screen
+    w = looking(tmp_path, monkeypatch, PAY_SPOT, other, replies=[{"text": "yes"}, {"text": "no"}])
+    script_planner(monkeypatch, LOOK_PLAN)
+    jev_checks(monkeypatch)
+    look = {"op": "LOOK", "pick": "", "text": "the pay button"}
+    with pytest.raises(StalePage):
+        w.do(look, w.state["page"])
+    with pytest.raises(Retry, match="did not approve"):
+        w.do(look, w.state["page"])
+    assert len(w.asked) == 2 and w.browser.act.call_count == 0
+
+
+def test_a_yes_to_a_spot_does_not_cover_a_listed_control_with_the_same_label(tmp_path, monkeypatch):
+    w = looking(tmp_path, monkeypatch, PAY_SPOT, replies=[{"text": "yes"}, {"text": "no"}])
+    script_planner(monkeypatch, LOOK_PLAN)
+    jev_checks(monkeypatch)
+    page = w.state["page"]
+    with pytest.raises(StalePage):
+        w.do({"op": "LOOK", "pick": "", "text": "the pay button"}, page)
+    listed = next(a for a in page["actions"] if a["label"] == "Pay ₹79")
+    with pytest.raises(Retry, match="did not approve"):  # the page's own button needs its own yes
+        w.act("CLICK", listed, page, None)
+    assert len(w.asked) == 2 and w.browser.act.call_count == 0
+
+
+def test_looking_masks_secret_fields_and_blurs_the_users_details(tmp_path, monkeypatch):
+    w = looking(tmp_path, monkeypatch, {"cell": "C4", "label": "Blue button", "text": "", "commits": False})
+    w.secrets.nodes.add((None, 8))
+    script_planner(monkeypatch, turn("LOOK", text="the blue button", subgoals=[sub("pick the blue colour")]))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    first, closer = w.browser.grid_screenshot.call_args_list
+    for call in (first, closer):  # the wide look and the closer one both hide what must not be seen
+        assert call.kwargs["masked"] == {(None, 8)}
+        assert "Mayank Churiwal" in call.kwargs["hide"] and any("98765" in value for value in call.kwargs["hide"])
+    assert closer.kwargs["region"] == rules.grid(VIEW, 8, 6)["C4"]
+    assert w.browser.act.call_args.args[0] == "LOOK" and w.browser.act.call_args.kwargs == {"point": [237.5, 337.5]}
+
+
+def test_looking_and_finding_nothing_is_feedback_and_clicks_nothing(tmp_path, monkeypatch):
+    w = looking(tmp_path, monkeypatch, None)
+    script_planner(monkeypatch, turn("LOOK", text="the seat map", subgoals=[sub("choose a seat")]))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.browser.act.assert_not_called()
+    assert "Looking at the screen found nothing" in w.state["feedback"][-1]
+    assert w.browser.grid_screenshot.call_count == 1 and w.state["history"] == []
+
+
+# ---- a mutation is never retried, and the task has limits
+
+def office_click(tmp_path, monkeypatch):
+    """A worker whose first act step clicks Office, with the plan already made."""
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]))
+    script_jev(monkeypatch, {"next": "CLICK", "click_target": "Office"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    return w
+
+
+def test_a_click_that_may_have_landed_is_never_repeated(tmp_path, monkeypatch):
+    w = office_click(tmp_path, monkeypatch)
+    w.browser.act.side_effect = ExecutionUncertain("the click may have landed")
+    for _ in range(5):  # a driver that keeps ticking until the task stops
+        if w.state["status"] in STOPPED:
+            break
+        w.command("tick")
+    assert w.state["status"] == "blocked" and w.browser.act.call_count == 1
+    assert w.state["history"][-1]["unconfirmed"] == "the click may have landed"
+    assert "can't confirm it, so I stopped instead of repeating it" in w.told[-1]["text"]
+    assert list(w.steps()) == [] and w.browser.act.call_count == 1  # a stopped task is not driven again
+
+
+def test_the_executed_step_is_logged_before_its_result_is_read(tmp_path, monkeypatch):
+    w = office_click(tmp_path, monkeypatch)
+    w.browser.observe.side_effect = RuntimeError("the page went away")
+    w.command("tick")
+    assert w.browser.act.call_count == 1 and [h["action"] for h in w.state["history"]] == ["Office"]
+    assert "The last action already ran, but checking its result failed" in w.state["feedback"][-1]
+    assert w.state["reason"] == "unsure"  # the planner hears it next; Jev does not click again
+
+
+def test_the_150_action_limit_stops_before_any_model_is_asked(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    monkeypatch.setattr(planner, "turn", Mock(side_effect=AssertionError("the planner was asked")))
+    monkeypatch.setattr(jev, "request", Mock(side_effect=AssertionError("Jev was asked")))
+    w.state["history"] += [{"step": n, "operation": "CLICK", "action": "Tile"} for n in range(1, 151)]
+    w.command("tick")
+    assert w.state["status"] == "blocked" and "150-action limit" in w.told[-1]["text"]
+    w.browser.act.assert_not_called()
+
+
+def test_the_30_minute_limit_stops_before_any_model_is_asked(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    monkeypatch.setattr(planner, "turn", Mock(side_effect=AssertionError("the planner was asked")))
+    monkeypatch.setattr(jev, "request", Mock(side_effect=AssertionError("Jev was asked")))
+    w.state["started_at"] = time.perf_counter() - 31 * 60
+    w.command("tick")
+    assert w.state["status"] == "blocked" and "30 minutes" in w.told[-1]["text"]
+    w.browser.act.assert_not_called()
+
+
+# ---- a secret goes only where it belongs, and only as its placeholder
+
+@pytest.mark.parametrize("field, text, refusal", [
+    ("Phone number", "[secret:answer1]", "goes only into its code field"),  # a real answer, in the wrong field
+    ("Phone number", "[secret:answer9]", "isn't one of the user's answers"),
+    ("Code", "[secret:answer9]", "takes a code or password"),
+    ("Code", "481516", "takes a code or password")])  # literal digits: only the placeholder may be typed
+def test_a_secret_is_typed_only_as_the_placeholder_of_a_real_answer_into_a_code_field(tmp_path, monkeypatch, field,
+                                                                                    text, refusal):
+    w = worker_with(tmp_path)
+    assert w.keep_secret("481516") == "answer1"
+    script_planner(monkeypatch, turn(subgoals=[sub("fill the form")]), turn("TYPE", pick=1, text=text))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": field})
+    jev_checks(monkeypatch)
+    for _ in range(3):
+        w.command("tick")
+    assert refusal in w.state["feedback"][-1] and not w.browser.act.called
+    assert "481516" not in json.dumps([w.state["feedback"], w.state["chat"], w.trace()])
+    if field == "Code":
+        assert "placeholder" in w.state["feedback"][-1]
+
+
+# ---- a guessed deep link that lands on an error page starts again from the home page
+
+def cold_start(tmp_path, url, *pages):
+    browser = Mock(fresh=Mock(return_value=True), observe=Mock(side_effect=list(pages)), navigate=Mock(),
+                   downloads=[], pending_downloads=[])
+    w = Worker(url, "Order Diet Coke", profile=Profile(tmp_path / "profile.json"), browser=browser,
+               trace_dir=tmp_path / "traces")
+    return w, browser
+
+
+def test_an_error_page_behind_a_deep_link_reopens_the_home_page(tmp_path):
+    lost = fake_page(text="404\nPage not found", url="https://shop.test/p/diet-coke-9?ref=ad")
+    home = fake_page(text="Shop\nSearch for groceries", url="https://shop.test/")
+    w, browser = cold_start(tmp_path, lost["url"], lost, home)
+    browser.navigate.assert_called_once_with("https://shop.test/")
+    assert browser.observe.call_count == 2 and w.state["page"]["text"] == "Shop\nSearch for groceries"
+
+
+@pytest.mark.parametrize("url, text", [
+    ("https://shop.test/p/diet-coke-9", "Diet Coke 300 ml\nAdd to cart"),  # an ordinary page behind a deep link
+    ("https://shop.test/", "404\nPage not found")])  # an error page at the home page itself: nowhere else to go
+def test_only_an_error_page_behind_a_deep_link_is_reopened_from_the_home_page(tmp_path, url, text):
+    w, browser = cold_start(tmp_path, url, fake_page(text=text, url=url))
+    browser.navigate.assert_not_called()
+    assert browser.observe.call_count == 1 and w.state["page"]["text"] == text

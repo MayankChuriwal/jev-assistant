@@ -864,3 +864,37 @@ def test_more_ways_to_say_what_is_payable(text, expected):
 def test_zero_width_characters_hide_no_price():
     assert gate.flat("₹\u200b1,299") == "₹1,299"
     assert gate.facts(fake_page(text="To pay ₹\u200b1,299"), [])["total"] == "₹1,299"
+
+
+# Fix round 1 of Task 11: a control found by sight is held to the same gate, and its yes covers only its spot.
+
+SPOT = {"id": "look", "kind": "look", "node": None, "label": "Orange button", "point": [237.5, 337.5]}
+
+
+def test_a_control_found_by_sight_commits_when_it_says_so_or_reads_as_a_commit():
+    page = fake_page()
+    assert gate.commit_label(Fake(page), "LOOK", {**SPOT, "commits": True}, page) == "Orange button"
+    assert gate.commit_label(Fake(page), "LOOK", {**SPOT, "text": "Place order"}, page) == "Orange button"
+    assert gate.commit_label(Fake(page), "LOOK", {**SPOT, "text": "Seat 12A"}, page) is None
+
+
+def test_a_hover_found_by_sight_is_never_a_commit():
+    page = fake_page(text="Buy now")
+    hover = {**SPOT, "label": "Buy now", "text": "Buy now", "point": [1, 2], "hover": True}
+    assert gate.commit_label(Fake(page), "LOOK", hover, page) is None
+    assert gate.commit_label(Fake(page), "LOOK", {**hover, "commits": True}, page) is None
+    assert gate.commit_label(Fake(page), "LOOK", {**hover, "hover": False}, page) == "Buy now"  # a click would
+
+
+def test_a_spot_found_by_sight_matches_only_its_own_point_and_a_listed_control_only_its_own_node():
+    page = fake_page()
+    spot = {**SPOT, "label": "Pay ₹79"}
+    state = Fake(page).state
+    gate.bind(state, spot, "Pay ₹79", "₹79", page, "user")
+    approval = state["approval"]
+    assert approval["look"] == {"point": [237.5, 337.5]} and approval["target"] is None
+    assert gate.matches(approval, spot, "Pay ₹79")
+    assert not gate.matches(approval, {**spot, "point": [10, 10]}, "Pay ₹79")  # the same words, another spot
+    assert not gate.matches(approval, PAY, "Pay ₹79")  # the page's own button with the same label
+    gate.bind(state, PAY, "Pay ₹79", "₹79", page, "user")
+    assert gate.matches(state["approval"], PAY, "Pay ₹79") and not gate.matches(state["approval"], spot, "Pay ₹79")

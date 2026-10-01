@@ -1,7 +1,7 @@
 [project]
 name = "jev-assistant"
 version = "0.1.0"
-description = "A chat assistant that completes real web tasks; Jev chooses every browser operation."
+description = "A chat assistant that completes real web tasks; Jev chooses every browser step, GPT-4.1 mini plans and writes."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"

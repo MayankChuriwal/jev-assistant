@@ -130,3 +130,21 @@ def test_card_detail_labels_are_recognised(label):
 @pytest.mark.parametrize("label", ["promo code", "card holder name", "gift card code", "Phone number", "Notes"])
 def test_other_labels_are_not_card_details(label):
     assert not rules.CARD_DETAIL.search(label), label
+
+
+def test_a_captcha_challenge_is_told_from_a_badge():
+    challenge = "Verify\nSelect all images with traffic lights\nClick verify once there are none left"
+    assert rules.captcha_challenge({"text": challenge})
+    assert rules.captcha_challenge({"text": "Before you continue\n☐ I'm not a robot"})
+    assert not rules.captcha_challenge({"text": "Sign in\nThis site is protected by reCAPTCHA and the Google Terms"})
+    assert not rules.captcha_challenge({"text": ""}) and not rules.captcha_challenge({})
+
+
+def test_an_error_page_is_short_or_titled_so_and_an_error_word_far_down_a_long_page_is_not():
+    assert rules.error_page({"title": "Shop", "text": "404\nPage not found\nGo to the home page"})
+    assert rules.error_page({"title": "Oops", "text": "Something went wrong. Please try again."})
+    assert rules.error_page({"title": "404: This page could not be found.", "text": "x" * 3000})
+    ordinary = "Diet Coke 300 ml ₹40\n" + "Restaurants near you\n" * 100 + "If you see an error, page not found, retry"
+    assert len(ordinary) > 1500 and not rules.error_page({"title": "Shop", "text": ordinary})
+    short = "Restaurants near you\n" * 20 + "Report an error: page not found"  # short, but the words come late
+    assert 300 < len(short) < 1500 and not rules.error_page({"title": "Shop", "text": short})

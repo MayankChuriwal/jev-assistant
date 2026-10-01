@@ -192,3 +192,61 @@ def test_each_call_is_charged_to_the_running_task(monkeypatch):
     assert meter["mini_calls"] == 1 and meter["jev_calls"] == 1
     assert meter["mini"] == pytest.approx(600 * 0.40e-6 + 400 * 0.10e-6 + 100 * 1.60e-6)
     assert meter["jev"] > 0 and model.spent(meter) == meter["mini"] + meter["jev"]
+
+
+SCHEMA = {"type": "object", "additionalProperties": False, "required": ["text"],
+          "properties": {"text": {"type": "string"}}}
+
+
+def completion(message, finish="stop"):
+    return Mock(return_value={"choices": [{"message": message, "finish_reason": finish}], "usage": {}})
+
+
+def test_a_schema_holds_the_reply_to_strict_json_schema(monkeypatch):
+    post = reply('{"text": "ok"}')
+    monkeypatch.setattr(model, "post_json", post)
+    model.text_json("system", {"goal": "g"}, schema=SCHEMA)
+    assert post.call_args.args[2]["response_format"] == {
+        "type": "json_schema", "json_schema": {"name": "reply", "strict": True, "schema": SCHEMA}}
+    model.text_json("system", {"goal": "g"}, schema=SCHEMA, schema_name="plan")
+    assert post.call_args.args[2]["response_format"]["json_schema"]["name"] == "plan"
+
+
+def test_a_reply_cut_off_at_the_token_limit_is_an_error_not_a_partial_step(monkeypatch):
+    monkeypatch.setattr(model, "post_json", completion({"content": '{"text": "ok'}, finish="length"))
+    with pytest.raises(ValueError, match="cut off"):
+        model.text_json("system", {"goal": "g"}, schema=SCHEMA)
+
+
+def test_a_refused_reply_is_an_error_even_with_content(monkeypatch):
+    monkeypatch.setattr(model, "post_json", completion({"content": '{"text": "ok"}', "refusal": "I can't help"}))
+    with pytest.raises(ValueError, match="cut off or refused"):
+        model.text_json("system", {"goal": "g"}, schema=SCHEMA)
+
+
+@pytest.mark.parametrize("content", ["not json at all", '["text", "ok"]', '"ok"', "", None])
+def test_a_reply_that_is_not_a_json_object_is_an_error(monkeypatch, content):
+    monkeypatch.setattr(model, "post_json", completion({"content": content}))
+    with pytest.raises(ValueError, match="no JSON object"):
+        model.text_json("system", {"goal": "g"})
+
+
+def test_a_reply_with_no_choices_is_an_error(monkeypatch):
+    monkeypatch.setattr(model, "post_json", Mock(return_value={"choices": []}))
+    with pytest.raises(ValueError, match="no JSON object"):
+        model.text_json("system", {"goal": "g"})
+
+
+def test_criteria_carries_each_options_state_and_current_value():
+    candidates = {
+        "1": {"id": "e1", "kind": "click", "label": "Seat 12A", "role": "option", "node": 4, "value": "12A",
+              "checked": True, "selected": False, "expanded": False, "popup": "menu", "current": "step"},
+        "2": {"id": "e2", "kind": "select", "label": "Size → 300 ml", "role": "combobox", "node": 5, "value": "300",
+              "current_value": "600 ml"},
+        "page_scroll_down": {"id": "page_scroll_down", "kind": "scroll_down", "label": "Page", "role": "page",
+                             "node": None}}
+    assert model.criteria(candidates) == {
+        "1": {"element": "[1] Seat 12A", "current_value": "12A", "role": "option", "checked": True,
+              "selected": False, "expanded": False, "popup": "menu", "current": "step"},
+        "2": {"element": "[2] Size → 300 ml", "current_value": "600 ml", "role": "combobox"},
+        "page_scroll_down": {"element": "Page", "current_value": "", "role": "page"}}
