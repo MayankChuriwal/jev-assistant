@@ -17,3 +17,4 @@ report: the answer, where it came from
 - "Best-rated", "cheapest", or "closest" means sorting by that, never a cut-off number the user didn't give.
 - A filter that leaves nothing: loosen it one step before reporting that none was found.
 - Comparing across sites: when one site can't serve the item or place, say which, and still finish the others before DONE.
+- Moving to the next site in a comparison is your own OPEN_URL to its address (sites lists each one's start and search address); never make "open the other site" a step on the page.

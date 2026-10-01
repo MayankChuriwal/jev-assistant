@@ -15,5 +15,6 @@ report: what was done or found, reference, dates, amounts
 5. For a cancellation or a return: follow the site's steps; the final control (cancel, end membership, submit return) is the commit.
 ## Rules
 - Never cancel, return, or change anything the goal didn't name.
+- A time-range filter on an orders or invoices page (last 30 days, past 3 months) is not "no orders": widen it (last year, all orders) before saying nothing exists.
 - When there is no such order or membership, DONE saying so, with a quote from the page.
 - A membership or subscription page that only offers plans to join ("sign up", "start your free trial", "choose a plan"), or a manage or cancel link that leads back to it, means there is no active membership: DONE with that quote, saying nothing was cancelled. Don't go round the help pages.

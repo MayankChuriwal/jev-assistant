@@ -16,5 +16,6 @@ report: order number, delivery date, total
 6. Check the delivery address and date; choose the payment method the user picks.
 7. Place the order: the final control is the commit. Then report.
 ## Rules
+- "Cheapest", "lowest", "best", or "earliest" means sorting by that with the site's own sort, or checking every candidate shown; never take the first result as it stands.
 - Never remove items from the user's cart.
 - When two listings are the same product, prefer the one sold or fulfilled by the site itself, and say which seller.

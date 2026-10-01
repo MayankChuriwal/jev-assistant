@@ -16,6 +16,7 @@ report: order number, restaurant, arrival time, total
 6. Choose the payment method the user picks.
 7. Place the order: the final control is the commit. Then report.
 ## Rules
+- Find the dish in the chosen restaurant's own menu (its menu search or categories). Cuisine tags under a restaurant's name lead to other restaurants: don't click them.
 - A closed restaurant or a dish that isn't available: TELL the user and ASK for an alternative (another outlet, another dish).
 - The cart may hold items from before: never remove them unless the user says so; ASK when it holds another restaurant's items.
 - Name fees the user could avoid before the final step.

@@ -7,9 +7,13 @@ description: Set the delivery or pickup location, or handle a site that doesn't 
 - Typing an address is never enough: after typing it into the location box, CLICK the first matching suggestion, then the confirm button if one appears, and check that the page now shows the place.
 - Type just the area and city into a location box, never a long full address the box cuts short; never invent a place.
 - A location dialog's box takes only places: close the dialog (Escape or its ×) before searching for products, and never type a product into it.
-- "Current location" means the site's detect-location option ("Locate me", "Use current location", "Detect"); never type the words "current location". After pressing it, WAIT once and read the page again before deciding it failed.
-- No detect option listed when the current location is wanted: focus the pickup or location box and read its suggestions (the first one often says "current location"); else ASK.
+- "Current location" is a ladder; never type the words "current location":
+  1. Press the site's detect-location option ("Locate me", "Use current location", "Detect") ONCE, then WAIT once and read the page; never press it again.
+  2. The page didn't change: click the empty location box and choose a suggestion marked as the user's own location ("Your location", "Current location"), never a place whose name merely contains those words.
+  3. No such suggestion: ASK once for the area.
+  4. The answer is "current location" again: STOP and say the site can't detect it.
 - Saved addresses: use the one the user named; ASK which when there are several and they named none; use it directly when exactly one exists.
 - The user's answer to where to deliver: a saved address they name is picked from the list; any other place is typed into the location box, then CLICK the suggestion that matches it and confirm, as above.
 - The site shows a place the user didn't give, or says it doesn't deliver to or serve that place: change the location first; if detecting fails, ASK where to deliver or pick up, for this task only.
+- One outlet, store, or seller that doesn't deliver there is not a location problem: keep the user's place and choose another outlet that serves it, or ASK; never move the delivery to a place the user didn't give.
 - Out of stock, sold out, or closed is not a location problem: TELL the user and ASK for an alternative.

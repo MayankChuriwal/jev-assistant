@@ -17,3 +17,5 @@ report: booking reference, route or hotel, date and time, fare
 - Never report a round-trip price for a one-way question: check the trip type after every search (a reload can reset it).
 - "Cheapest" is the lowest price after sorting by price, not the first result.
 - A hotel's nightly price and its total differ: say which one you give.
+- Close an open date or guest picker (Escape) before pressing Search; the search is done only when results show.
+- For a question, close a login pop-up instead of signing in.

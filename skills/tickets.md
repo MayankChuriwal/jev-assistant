@@ -17,3 +17,5 @@ report: booking id, venue, date and time, seats, total
 ## Rules
 - Dates like "tomorrow" or "this weekend" are resolved for you in dates; "evening" means shows from 5 pm.
 - Convenience fees are part of the total: name them.
+- Choose the show time from the chosen movie's own list of show times (a venue's page lists every movie's shows), and check that the page title names that movie before choosing seats.
+- Select the number of seats asked, then proceed. Never toggle a seat on and off: if a seat won't select, pick another seat or row, or ASK.

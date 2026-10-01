@@ -18,4 +18,5 @@ report: driver, car, number plate, PIN, arrival time, fare
 ## Rules
 - Pick the exact place the user named (a specific terminal, gate, or building), never a broader one.
 - A pre-selected ride type is not the user's choice.
-- Pickup and drop boxes can share a label: fill the pickup first, then the drop.
+- Type the pickup and the drop each into its own box; they can share a label: fill the pickup first, then the drop.
+- The drop suggestion you click must contain the place the user named.
