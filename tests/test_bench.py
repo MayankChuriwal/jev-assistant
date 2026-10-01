@@ -609,6 +609,26 @@ def test_each_pair_opens_its_schema_on_the_bench_memorys_database_and_key(tmp_pa
     assert seen == [("bench_x_1", memory.url, "+91 98765 43210")] and core.memory is memory
 
 
+def test_a_pass_not_run_keeps_the_bar_unmet_and_stays_out_of_the_learning_numbers():
+    good = [row() for _ in range(10)]
+    first_missing = {**row(first="fail"), "not_run": [1]}  # pass 1 never ran: not a failure that learning fixed
+    numbers = bench.learn_summary(good + [first_missing])
+    assert numbers["not_run"] == 1 and not numbers["done"] and all(numbers["bar"].values())
+    assert (numbers["failed_first"], numbers["fixed"], numbers["both"]) == (0, 0, 10)
+    assert numbers["passed"] == [10, 10]
+    slow = {**row(busy=(40.0, 39.0), spend=(0.01, 0.0099)), "not_run": [2]}  # never in the medians
+    numbers = bench.learn_summary(good + [slow, slow, slow, slow, slow, slow, slow, slow, slow, slow, slow])
+    assert numbers["time_ratio"] == 0.3 and numbers["spend_ratio"] == 0.2 and numbers["not_run"] == 11
+
+
+def test_the_report_says_the_bar_cannot_be_met_while_a_pass_did_not_run(tmp_path):
+    shown = {"questions": [0, 0], "steps": [1, 1], "sameness": "same", "fallbacks": [], "facts": 0, "ids": 0}
+    bench.learn_report([*({**row(), **shown} for _ in range(10)), {**row(first="fail"), **shown, "not_run": [1]}],
+                       tmp_path)
+    page = (tmp_path / "learn.html").read_text()
+    assert "Learning bar not met" in page and "The bar can't be met while any pass did not run (1)." in page
+
+
 def test_the_time_ratio_uses_unrounded_busy_time():
     rows = [{**row(), "busy": [40.0, 20.0], "busy_raw": [40.04, 20.9]} for _ in range(10)]  # 0.522, not 0.5
     numbers = bench.learn_summary(rows)

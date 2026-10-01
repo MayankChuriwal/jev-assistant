@@ -1052,6 +1052,32 @@ def test_a_standing_approval_finds_the_cart_of_an_order_placed_on_a_subdomain(wo
     assert reply.startswith("Saved: olacabs.com · mini to office × 1 · up to ₹300")
 
 
+@pytest.mark.parametrize("words", ["I always buy Amul Gold 500ml", "Tata Tea Gold 250g", "a 6-pack of Coke",
+                                   "rent a 2BHK near work", "jeans in 32x30", "10kg atta and 750 ml oil",
+                                   "a 2-pack of soap, 3 pcs of Dove"])
+def test_a_quantity_is_never_taken_for_an_id(world, words):
+    assert conversation.id_candidates(words) == [] and not world.core.unnamed_id(words)
+    fact = {"kind": "preference", "label": "", "text": words, "tags": []}
+    assert tell_memory(world, f"remember {words}", said("remember", [fact])) == f"Saved: {words}"
+    assert world.core.memory.run(lambda cur: cur.execute("SELECT source FROM facts").fetchone()["source"]) == \
+        f"remember {words}"
+
+
+def test_quantities_leave_real_ids_alone():
+    assert conversation.id_candidates("BESCOM account number 1234567890") == ["1234567890"]
+    assert conversation.id_candidates("my account is 500ml1234") == ["500ml1234"]
+    assert conversation.id_candidates("pay 500g@okicici for 2 kg") == ["500g@okicici"]
+    assert conversation.id_candidates("ID AB-1234-CD, 500ml") == ["AB-1234-CD"]
+    assert conversation.id_candidates("account 1234567890 mg road") == ["1234567890"]  # a long number is never a unit
+
+
+def test_a_named_number_beside_a_quantity_is_still_refused(world):
+    fact = {"kind": "fact", "label": "", "text": "BESCOM account number 1234567890, 500ml milk", "tags": []}
+    assert tell_memory(world, "remember BESCOM account number 1234567890 and 500ml milk",
+                       said("remember", [fact])) == LOOKS_LIKE_AN_ID
+    assert world.core.memory.facts() == []
+
+
 def test_a_model_reply_with_an_id_value_is_hidden(world):
     world.core.memory.set_id("phone", "phone number", "+91 98765 43210")
     reply = tell_memory(world, "remember nothing", said("none", reply="You said +91 98765 43210."))

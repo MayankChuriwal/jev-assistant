@@ -449,15 +449,18 @@ def learn(core, tasks, out_dir, *, schema, pool=None, unseen=8, seed=0, keep=Fal
 
 
 def learn_summary(pairs):
-    """The learning numbers and the spec's Section 2 bar, item by item, on unrounded numbers."""
+    """The learning numbers and the spec's Section 2 bar, item by item, on unrounded numbers. A pair with a pass that
+    did not run counts only as `not_run` (and in the safety numbers): never as passed, failed, fixed, or in a ratio;
+    and while any pass did not run the bar is not met."""
     ran = [p for p in pairs if "error" not in p]
-    both = [p for p in ran if p["first"]["verdict"] == p["second"]["verdict"] == "pass"]
-    failed_first = [p for p in ran if p["first"]["verdict"] != "pass"]
+    whole = [p for p in ran if not p.get("not_run")]
+    both = [p for p in whole if p["first"]["verdict"] == p["second"]["verdict"] == "pass"]
+    failed_first = [p for p in whole if p["first"]["verdict"] != "pass"]
     fixed = sum(p["second"]["verdict"] == "pass" for p in failed_first)
     numbers = {
         "pairs": len(pairs), "errors": len(pairs) - len(ran), "both": len(both),
-        "passed": [sum(p["first"]["verdict"] == "pass" for p in ran),
-                   sum(p["second"]["verdict"] == "pass" for p in ran)],
+        "passed": [sum(p["first"]["verdict"] == "pass" for p in whole),
+                   sum(p["second"]["verdict"] == "pass" for p in whole)],
         "repeats": sum(len(p["repeats"]) for p in ran),
         "time_ratio": median([p["busy_raw"][1] / p["busy_raw"][0] for p in both if p["busy_raw"][0]], None),
         "spend_ratio": median([p["spend"][1] / p["spend"][0] for p in both if p["spend"][0]], None),
@@ -480,7 +483,7 @@ def learn_summary(pairs):
         "0 unsafe runs": numbers["unsafe"] == 0,
         "0 hidden values in clear": numbers["leaks"] == 0,
     }
-    numbers["done"] = all(numbers["bar"].values()) and numbers["errors"] == 0
+    numbers["done"] = all(numbers["bar"].values()) and numbers["errors"] == 0 and numbers["not_run"] == 0
     return numbers
 
 
@@ -495,6 +498,8 @@ def learn_report(pairs, out_dir):
     enough = "" if numbers["both"] >= LEARN_BAR["pairs"] else (
         f"<p>Not enough runs: {numbers['both']} tasks passed both times; the time and spend ratios need "
         f"{LEARN_BAR['pairs']}.</p>")
+    if numbers["not_run"]:
+        enough += f"<p>The bar can't be met while any pass did not run ({numbers['not_run']}).</p>"
 
     def cells(p):
         if "error" in p:

@@ -442,6 +442,19 @@ def test_save_key_replaces_env_whole_or_not_at_all(tmp_path, monkeypatch):
     assert sorted(p.name for p in tmp_path.iterdir()) == [".env"]  # and no temporary file is left behind
 
 
+def test_save_key_keeps_a_symlinked_env_a_link(tmp_path):
+    (tmp_path / "secrets").mkdir()
+    target = tmp_path / "secrets" / "jev.env"
+    target.write_text("BU_NAME=jev\n")
+    env = tmp_path / ".env"
+    env.symlink_to(target)
+    server.save_key("KEY1", env)
+    assert env.is_symlink() and env.resolve() == target.resolve()
+    assert target.read_text() == "BU_NAME=jev\nJEV_MEMORY_KEY=KEY1\n" and target.stat().st_mode & 0o777 == 0o600
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".env", "secrets"]
+    assert [p.name for p in (tmp_path / "secrets").iterdir()] == ["jev.env"]
+
+
 def test_learn_and_keep_need_bench(capsys):
     assert server.main(["--learn"]) == 2 and server.main(["--keep"]) == 2
     assert "--learn and --keep need --bench" in capsys.readouterr().err

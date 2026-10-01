@@ -58,7 +58,7 @@ def save_key(key, path=None):
     """Put JEV_MEMORY_KEY in .env, creating it. An empty `JEV_MEMORY_KEY=` placeholder line is filled in, never
     duplicated; every other line stays as it was. The new file is written beside the old one, readable only by the
     user, and renamed over it: a crash leaves the old .env or the new one, never half of one."""
-    path = Path(path) if path else Path.cwd() / ".env"
+    path = (Path(path) if path else Path.cwd() / ".env").resolve()  # a symlinked .env keeps its link
     lines = path.read_text().splitlines() if path.exists() else []
     line, done, out = f"JEV_MEMORY_KEY={key}", False, []
     for existing in lines:

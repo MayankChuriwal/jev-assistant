@@ -44,6 +44,10 @@ AMOUNTS = re.compile(r"(?:₹|\brs\.?|\binr)\s*\d[\d,]*(?:\.\d+)?", re.I)  # ₹
 DATES = (re.compile(r"(?<!\d)(?:0?[1-9]|[12]\d|3[01])[/-](?:0?[1-9]|1[0-2])[/-](?:19|20)?\d{2}(?!\d)"),  # 12/05/2026
          re.compile(r"(?<!\d)(?:19|20)\d{2}[/-](?:0?[1-9]|1[0-2])[/-](?:0?[1-9]|[12]\d|3[01])(?!\d)"))  # 2026-05-12
 YEARS = re.compile(r"(?<![\w+])(?<!\d[\s-])(?:19|20)\d{2}(?!\w)(?![\s-]\d)")  # a year on its own, not inside a number
+# a quantity: 500ml, 250 g, 10kg, a 6-pack, 3 pcs, 32x30, 2BHK. A number of six digits or more is never one.
+UNITS = re.compile(r"(?<![\w.])(?:\d{1,5}(?:\.\d+)?\s?(?:ml|l|ltrs?|litres?|liters?|g|gms?|grams?|kgs?|mg|oz|pcs?|"
+                   r"pieces?|packs?|units?|cm|mm|m)|\d{1,4}\s?-\s?(?:packs?|pcs?|pieces?|count)|\d{1,4}\s?x\s?\d{1,4}|"
+                   r"\d{1,2}\s?bhk)(?![\w.@-])", re.I)
 # an email or UPI ID; a hyphenated code (AB-1234-CD) whole; a number of six digits or more, spaced or not; a code
 ID_CANDIDATES = (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)*"),
                  re.compile(r"\b(?=[A-Za-z0-9-]*[A-Za-z])(?=[A-Za-z0-9-]*\d)[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+\b"),
@@ -53,8 +57,9 @@ ID_CANDIDATES = (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)*"),
 
 def id_candidates(text):
     """The values in a message that can be an ID, each once: emails and UPI IDs, then hyphenated codes, numbers, and
-    codes. Prices, dates, and lone years are not candidates: a stray one must never become the ID. Only the first
-    ID_SCAN characters are read (the patterns slow down on a long unbroken run), without the word the cut splits."""
+    codes. Quantities (500ml, a 6-pack, 2BHK), prices, dates, and lone years are not candidates: a stray one must
+    never become the ID. Only the first ID_SCAN characters are read (the patterns slow down on a long unbroken run),
+    without the word the cut splits."""
     if len(text) > ID_SCAN:
         text = text[:ID_SCAN]
         text = text[:max(0, *map(text.rfind, " \n\t"))]
@@ -62,6 +67,8 @@ def id_candidates(text):
     for n, pattern in enumerate(ID_CANDIDATES):
         found += [match[0].strip() for match in pattern.finditer(text)]
         text = pattern.sub(" ", text)
+        if n == 0:  # after emails, before codes: a quantity is never an ID
+            text = UNITS.sub(" ", text)
         if n == 1:  # after emails and hyphenated codes, before the plain numbers
             for noise in (AMOUNTS, *DATES, YEARS):
                 text = noise.sub(" ", text)
