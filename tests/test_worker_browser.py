@@ -15,6 +15,11 @@ from assistant.worker import Worker
 pytestmark = pytest.mark.browser
 
 
+def no_cvv(text):
+    """True when the CVV is nowhere in the text. Timing fields ("elapsed_ms": 123) are not a leak: drop them first."""
+    return re.search(r"(?<!\d)123(?!\d)", re.sub(r'"\w*_ms": \d+', "", text)) is None
+
+
 def shop_step(state):
     """What Jev would choose on each screen of shop.html."""
     text, elements = state["page"]["text"], state["elements"]
@@ -66,11 +71,11 @@ def test_the_worker_signs_in_orders_and_reports_on_a_real_page(chrome, site, tmp
     # no request to Jev or the planner carries the code, the CVV, or the phone number
     requests = json.dumps([state for state, _ in sent]) + json.dumps(seen, default=str)
     assert "482913" not in requests and "98765" not in requests
-    assert re.search(r"(?<!\d)123(?!\d)", requests) is None  # the CVV, anywhere ("••1234" is the card, not it)
+    assert no_cvv(requests)  # the CVV, anywhere ("••1234" is the card, not it)
     # nor does the trace written at close
     trace = Path(w.state["trace_path"]).read_text()
     assert json.loads(trace)["status"] == "done"
-    assert "482913" not in trace and "98765" not in trace and re.search(r"(?<!\d)123(?!\d)", trace) is None
+    assert "482913" not in trace and "98765" not in trace and no_cvv(trace)
 
 
 # ---- Plan 7 Task 11: the same errand twice
@@ -100,7 +105,7 @@ def shop_run(site, tmp_path, memory, monkeypatch, *, turns, habit=None):
         assert w.state["status"] == "done" and log(w.browser) == ["otp:482913", "pay:office:3"]
     finally:
         w.close()
-    return w, seen, sent
+    return w, seen, sent, unsure
 
 
 def test_the_same_errand_replays_its_habit_to_the_approval_without_the_planner(chrome, site, tmp_path, monkeypatch):
@@ -109,13 +114,16 @@ def test_the_same_errand_replays_its_habit_to_the_approval_without_the_planner(c
     start = turn(subgoals=[sub("sign in and place the order", "the order is placed",
                                values=[("phone number", "[profile:phone]")])])
     done = turn("DONE", message="Order placed #A1B2, arriving in 12 minutes.", text="Order placed #A1B2")
-    first, seen_one, sent_one = shop_run(site, tmp_path, memory, monkeypatch, turns=[start, turn(), done])
+    first, seen_one, sent_one, _ = shop_run(site, tmp_path, memory, monkeypatch, turns=[start, turn(), done])
     learn.after(first.state, memory, reflect=lambda digest: ([], []))
     habit = memory.habits(skill="groceries")[0]
-    second, seen_two, sent_two = shop_run(site, tmp_path, memory, monkeypatch, turns=[done], habit=habit)
+    second, seen_two, sent_two, unsure_two = shop_run(site, tmp_path, memory, monkeypatch, turns=[done], habit=habit)
     assert [p["reason"] for p in seen_one] == ["start", "unsure", "commit"]
     assert [p["reason"] for p in seen_two] == ["commit"]  # nothing before the approval
-    assert len(sent_two) < len(sent_one)
+    # Jev was asked about the Office click in pass 2 too, and was unsure (p=0.4): replay's unique control made the
+    # click, not a confident Jev and not the planner
+    assert unsure_two == [True] and any("Office" in json.dumps(q) for _, q in sent_two)
+    assert len(sent_two) < len(sent_one)  # a thin signal: the reason lists above are what discriminate
     record = second.state["replay"]
     assert record["fallbacks"] == [] and record["matched"] >= 4
     assert second.state["messages"][0]["text"] == "Same as last time: " + habit["title"] + "."
@@ -126,5 +134,5 @@ def test_the_same_errand_replays_its_habit_to_the_approval_without_the_planner(c
         lambda cur, t=table: cur.execute(f"SELECT to_jsonb(r)::text AS row FROM {t} r"
                                          + (" WHERE ref NOT LIKE 'ids:%'" if t == "events" else "")).fetchall()))
     for text in (requests, tables, *(Path(t).read_text() for t in traces)):
-        assert "482913" not in text and "98765" not in text and re.search(r"(?<!\d)123(?!\d)", text) is None
+        assert "482913" not in text and "98765" not in text and no_cvv(text)
     assert bench.secret_audit(memory, traces) == []
