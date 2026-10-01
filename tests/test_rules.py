@@ -197,3 +197,12 @@ def test_an_error_page_is_short_or_titled_so_and_an_error_word_far_down_a_long_p
     assert len(ordinary) > 1500 and not rules.error_page({"title": "Shop", "text": ordinary})
     short = "Restaurants near you\n" * 20 + "Report an error: page not found"  # short, but the words come late
     assert 300 < len(short) < 1500 and not rules.error_page({"title": "Shop", "text": short})
+
+
+
+def test_an_error_page_by_its_opening_words_must_be_shorter_than_1500_characters():
+    opening = "404 not found\n"
+    assert rules.error_page({"title": "Shop", "text": opening + "x" * (1499 - len(opening))})
+    long = opening + "x" * 1600
+    assert len(long) > 1500 and not rules.error_page({"title": "Shop", "text": long})
+    assert rules.error_page({"title": "404 not found", "text": long})  # the title still says so

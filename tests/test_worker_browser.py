@@ -2,6 +2,7 @@
 shows: sign-in, a code, an address, a CVV, the approval, and the order. Run: uv run pytest -m browser"""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -28,8 +29,9 @@ def shop_step(state):
         if filled:
             return {"next": "CLICK", "click_target": "Verify"}
         return {"next": "TYPE", "type_text_target": "One-time code", "blocker": "code"}
-    if next(e for e in elements if e["label"].startswith("Office")).get("checked") not in (True, "true"):
-        return {"next": "CLICK", "click_target": "Office"}  # "checked" reads "true" or "false", both truthy as text
+    # snapshot.js reports a radio's state as the string "true" or "false": compare it, never test its truthiness
+    if next(e for e in elements if e["label"].startswith("Office")).get("checked") != "true":
+        return {"next": "CLICK", "click_target": "Office"}
     if "CVV" not in filled:
         return {"next": "TYPE", "type_text_target": "CVV", "blocker": "code"}
     return {"next": "CLICK", "click_target": "Pay"}
@@ -58,10 +60,14 @@ def test_the_worker_signs_in_orders_and_reports_on_a_real_page(chrome, site, tmp
     assert asked == ["secret", "secret", "text"]  # the code, the CVV, the approval
     assert [bool(q.get("approval")) for q in questions] == [False, False, True] and "Pay" in questions[-1]["text"]
     assert w.state["messages"][-1]["kind"] == "result" and "A1B2" in w.state["messages"][-1]["text"]
+    assert "Order placed" in w.state["page"]["text"]  # the site itself shows the order placed
+    # the phone typed was the real number: the code screen shows its last four digits
+    assert any("Code sent to •••• 3210" in state["page"]["text"] for state, _ in sent)
     # no request to Jev or the planner carries the code, the CVV, or the phone number
     requests = json.dumps([state for state, _ in sent]) + json.dumps(seen, default=str)
-    assert "482913" not in requests and "98765" not in requests and '"123"' not in requests
+    assert "482913" not in requests and "98765" not in requests
+    assert re.search(r"(?<!\d)123(?!\d)", requests) is None  # the CVV, anywhere ("••1234" is the card, not it)
     # nor does the trace written at close
     trace = Path(w.state["trace_path"]).read_text()
     assert json.loads(trace)["status"] == "done"
-    assert "482913" not in trace and "98765" not in trace and '"123"' not in trace
+    assert "482913" not in trace and "98765" not in trace and re.search(r"(?<!\d)123(?!\d)", trace) is None

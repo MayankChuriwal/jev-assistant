@@ -680,6 +680,14 @@ def test_the_executed_step_is_logged_before_its_result_is_read(tmp_path, monkeyp
     assert w.state["reason"] == "unsure"  # the planner hears it next; Jev does not click again
 
 
+def test_149_actions_are_not_the_limit(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn(subgoals=[sub("choose Office")]))
+    w.state["history"] += [{"step": n, "operation": "CLICK", "action": "Tile"} for n in range(1, 150)]
+    w.command("tick")
+    assert w.state["status"] not in STOPPED and not any("action limit" in m["text"] for m in w.told)
+
+
 def test_the_150_action_limit_stops_before_any_model_is_asked(tmp_path, monkeypatch):
     w = worker_with(tmp_path)
     monkeypatch.setattr(planner, "turn", Mock(side_effect=AssertionError("the planner was asked")))

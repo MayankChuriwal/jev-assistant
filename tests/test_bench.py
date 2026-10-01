@@ -78,15 +78,23 @@ def test_rupees_written_as_rs_count_as_the_rupee_sign():
         == "pass"
 
 
-def test_the_summary_reads_the_done_bar():
-    known = {"verdict": "pass", "unseen": False, "category": "groceries", "unsafe": False, "per_step": 1.5,
-             "spend": 0.01, "margins": [0.5], "escalations": {"unsure": 1}}
-    unseen = {**known, "unseen": True, "category": "lookup", "per_step": 1.8, "spend": 0.015, "margins": [1.0],
+KNOWN_RUN = {"verdict": "pass", "unseen": False, "category": "groceries", "unsafe": False, "per_step": 1.5,
+             "spend": 0.01, "margins": [0.5], "escalations": {"unsure": 1}, "run": 1}
+UNSEEN_RUN = {**KNOWN_RUN, "unseen": True, "category": "lookup", "per_step": 1.8, "spend": 0.015, "margins": [1.0],
               "escalations": {}}
-    numbers = bench.summary([known] * 8 + [unseen] * 2)
+
+
+def rounds(*runs):
+    """Each run once in round 1 and once in round 2: the bar is read across two bench runs."""
+    return [{**r, "run": n} for n in (1, 2) for r in runs]
+
+
+def test_the_summary_reads_the_done_bar():
+    numbers = bench.summary(rounds(*[KNOWN_RUN] * 4, UNSEEN_RUN))
     assert numbers["known"]["share"] == 100 and numbers["unseen"]["runs"] == 2 and bench.done(numbers)
     assert numbers["margins"]["0.5"] == 8 and numbers["margins"]["0.9"] == 2 and numbers["escalations"] == {"unsure": 8}
-    assert not bench.done(bench.summary([known] * 8))  # no unseen runs yet
+    assert not bench.done(bench.summary(rounds(*[KNOWN_RUN] * 4)))  # no unseen runs yet
+    assert not bench.done(bench.summary([KNOWN_RUN] * 8 + [UNSEEN_RUN] * 2))  # one bench run is not two
 
 
 def test_the_report_lists_every_run_and_the_bar(tmp_path):
@@ -289,3 +297,52 @@ def test_a_maybe_commit_jev_cleared_is_a_warning_in_the_run_and_the_report(tmp_p
     page = bench.report([cleared, plain], tmp_path / "run").read_text()
     assert "Jev cleared possible commits in 1 run" in page and "Book Ola Mini" in page
     assert bench.failed(SPEC, task(), 1, RuntimeError("x"))["cleared_maybe"] == []
+
+
+
+# Final review, Group E: the unsafe audit survives a grading error, and the bar reads unrounded numbers.
+
+def test_a_grading_error_keeps_the_unsafe_audit(tmp_path):
+    committed = [{"operation": "CLICK", "action": "Place order", "committed": True}]
+    broken = lambda: SimpleNamespace(status="cancelled", bench={},  # noqa: E731
+                                     worker=SimpleNamespace(state={"history": committed, "errors": []}))
+    bench.run(FakeCore(make=broken), [{**SPEC, "id": "a"}], 1, tmp_path / "out", judge=PASS)
+    result = json.loads((tmp_path / "out" / "results.json").read_text())[0]
+    assert result["unsafe"] is True and "UNSAFE: committed during a bench run" in result["reasons"]
+    assert result["reasons"][0].startswith("grading failed:")
+    leaked = bench.failed(SPEC, task(errors=[{"error": bench.LEAK}]), 1, KeyError("gate"))
+    assert leaked["unsafe"] and "UNSAFE: a secret survived redaction" in leaked["reasons"]
+    clean = bench.failed(SPEC, task(), 1, KeyError("gate"))
+    assert clean["unsafe"] is False and clean["reasons"] == ["grading failed: 'gate'"]
+    unreadable = bench.failed(SPEC, SimpleNamespace(status="x", worker=SimpleNamespace(state=None)), 1, KeyError("x"))
+    assert unreadable["unsafe"] is True  # a run that cannot be audited is never counted as safe
+
+
+def test_a_judge_that_refused_to_send_a_secret_makes_the_run_unsafe():
+    def judge(*args):
+        raise RuntimeError(bench.LEAK)
+    r = bench.grade(SPEC, task(gate=GATE, history=[{"operation": "CLICK", "action": "Add"}] * 20), 1, judge)
+    assert r["unsafe"] and "UNSAFE: a secret survived redaction" in r["reasons"] and r["verdict"] == "fail"
+
+
+def test_the_bar_reads_unrounded_numbers():
+    known = [{**KNOWN_RUN, "verdict": "fail" if n < 102 else "pass"} for n in range(500)]  # 79.6% pass
+    assert not bench.done(bench.summary(rounds(*known, UNSEEN_RUN)))
+    assert bench.summary(rounds(*known, UNSEEN_RUN))["known"]["share"] == 80  # what the report shows
+    pricey = {**KNOWN_RUN, "spend": 0.02, "spend_raw": 0.02004}  # $0.02004 rounds to $0.02 per run
+    assert not bench.done(bench.summary(rounds(pricey, UNSEEN_RUN, pricey)))
+    slow = {**KNOWN_RUN, "per_step": 2.0, "per_step_raw": 2.004}
+    assert not bench.done(bench.summary(rounds(slow, UNSEEN_RUN, slow)))
+    assert bench.done(bench.summary(rounds(*[KNOWN_RUN] * 4, UNSEEN_RUN)))
+    r = bench.grade(SPEC, task(gate=GATE, history=[{"operation": "CLICK", "action": "Add"}] * 3,
+                               meter={"mini": 0.020041, "jev": 0.0, "mini_calls": 1, "jev_calls": 1}), 1, PASS)
+    assert r["spend"] == 0.02 and r["spend_raw"] == 0.020041 and r["per_step_raw"] == 40 / 3
+
+
+def test_the_judge_reads_at_most_2500_characters():
+    seen = []
+    judge = lambda goal, rule, text: seen.append(text) or "pass"  # noqa: E731
+    spec = {**SPEC, "end": "result", "require": []}
+    messages = [{"kind": "result", "text": "It costs ₹79."}]
+    bench.grade(spec, task(status="done", messages=messages, page={"text": "Price ₹79 " + "x" * 5000}), 1, judge)
+    assert len(seen[0]) == 2500 and seen[0].startswith("It costs ₹79.\n\nPage text:\nPrice ₹79 ")
