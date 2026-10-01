@@ -1,0 +1,840 @@
+"""One task's runtime: its tab, its state, and the loop that joins System One (executor.py: Jev chooses each step)
+and System Two (planner.py: mini plans, resolves what Jev is unsure about, and writes). The gate (gate.py) guards
+every commit. The user is asked only for what they alone can give, and no model ever sees a secret."""
+
+import html
+import json
+import re
+import sys
+import time
+from pathlib import Path
+from urllib.parse import urlparse
+
+from . import executor, gate, jev, planner, rules, skills, views
+from .browser import Browser, ExecutionUncertain, StalePage, unique
+from .errors import Halt, Retry
+from .model import METER, action_space, new_meter, spent
+from .profile import HOME, SECRETS, Profile, Secrets
+
+STOPPED = {"done", "blocked", "failed", "cancelled"}
+PRIVATE = {"browser", "answers"}  # hold secret values
+MAX_ACTIONS = 150
+MAX_MINUTES = 30
+MAX_SPEND = 0.25
+SUBGOAL_STEPS = 12
+STUCK_AT = 8
+CODE_ASKS = 3
+QUIET = {"WAIT", "SCROLL_UP", "SCROLL_DOWN"}  # repeating these is not going in circles
+TALKING = {"ASK", "TELL", "DONE", "STOP"}
+TRACE_STEP = ("step", "subgoal", "operation", "action", "text", "key", "files", "page_changed", "url", "changed",
+              "effect", "committed", "approved", "elapsed_ms", "unconfirmed")
+PLACEHOLDER = re.compile(r"\[(profile|secret):([\w.]+)\]")
+CODE_WORDS = re.compile(r"\b(code|otp|pin|passcode|password|cvv)\b", re.IGNORECASE)
+DELEGATE = re.compile(r"\b(you (choose|decide|pick)|whatever (you|fits|works|is)|any (one|of them|is fine|will do)|"
+                      r"up to you|your (choice|call)|doesn'?t matter)\b", re.IGNORECASE)
+PLACE = re.compile(r"\b(address|deliver(y)? (to|location|address)|where (should|do you want|to deliver|are you)|"
+                   r"pick ?-?up (location|point|address|from)|drop(-| )?off|drop location)\b", re.IGNORECASE)
+PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGNORECASE),
+                "email": re.compile(r"\b(your e-?mail|e-?mail (address|id))\b", re.IGNORECASE),
+                "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
+PROFILE_NAMES = {"phone": "phone number", "email": "email address", "name": "full name", "upi_id": "UPI ID"}
+
+
+def plain(text):
+    """Text as the user should read it: entities unescaped until none are left (some sites escape twice)."""
+    while (unescaped := html.unescape(text)) != text:
+        text = unescaped
+    return text
+
+
+class Worker:
+    interrupted = None  # set by the chat: true once the user cancelled or changed the task during a step
+    trace_dir = HOME / "traces"
+    steady_ms = 3000  # a page still changing this soon after a step is read again before the user is asked
+    processing_ms = 300000  # how long to watch a commit the site is still working on
+    outcome_pause = 5.0  # seconds between looks at that commit
+    quiet_wait = 1.5  # seconds to keep looking when a step seems to have changed nothing
+    bench = False  # a bench run: a pre-authorisation is logged, never used
+
+    def __init__(self, url, goal, *, asker=None, notify=None, profile=None, browser=None, title=None, skill=None,
+                 preauth=False, cap=None, library=None, trace_dir=None, provide_file=None):
+        goal = goal.strip() if isinstance(goal, str) else ""
+        if not goal:
+            raise ValueError("Supply a task")
+        self.asker, self.notify, self.provide_file = asker, notify, provide_file
+        self.profile = profile or Profile()
+        self.secrets = Secrets(self.profile.hidden_values())
+        self.library = library if library is not None else {"skills": skills.load(), "sites": skills.load_sites()}
+        if trace_dir:
+            self.trace_dir = Path(trace_dir)
+        token = SECRETS.set(self.secrets)
+        try:
+            self.browser = browser or Browser(url, geolocation=self.profile.geolocation())
+            try:
+                page = self.clean(self.browser.observe())
+                home = urlparse(url)._replace(path="/", params="", query="", fragment="").geturl()
+                if url != home and rules.error_page(page):  # a guessed deep link: start from the home page
+                    self.browser.navigate(home)
+                    page = self.clean(self.browser.observe())
+            except Exception:
+                self.browser.close()
+                raise
+        finally:
+            SECRETS.reset(token)
+        self.state = self.new_state(self.browser, goal, title or goal[:60], page)
+        self.state.update(skill=skill, preauth=preauth, cap=cap, site=skills.bare(urlparse(url).netloc.lower()))
+
+    @staticmethod
+    def new_state(browser, goal, title, page):
+        return dict(
+            browser=browser, goal=goal, title=title, page=page, status="ready", started_at=None, elapsed_ms=0,
+            waited_ms=0, history=[], messages=[], files=list(page.get("downloads", [])), answers={}, typed={},
+            approval=None, commit=None, done=[], errors=[], plan=[], current=0, notes=[], chat=[], feedback=[],
+            reason="start", candidates=[], seen=None, recent=[], jev=[], turns=[], refusals={}, switched=[],
+            subgoal_steps=0, loop_from=0, code_asks=0, model_errors=0, mismatches=0, done_refusals=0,
+            captcha_rounds=0, meter=new_meter(), escalations={}, margins=[], situations=[], uploaded=[], held=None,
+            told_at=None, delegated_at=None, relaying=False, skill=None, preauth=False, cap=None, site="",
+        )
+
+    # ---- what the user and the models see
+
+    def snapshot(self):
+        return {k: v for k, v in self.state.items() if k not in PRIVATE}
+
+    def send(self, text, kind="info", **extra):
+        message = {"from": "agent", "kind": kind, "text": text, **extra}
+        self.state["messages"].append(message)
+        if self.notify:
+            self.notify(message)
+
+    def release(self):
+        """An update held back one step (an answer told just before DONE goes out once) goes out now."""
+        held, self.state["held"] = self.state["held"], None
+        if held:
+            self.send(held)
+
+    def say(self, text, kind="info", **extra):
+        self.release()
+        self.send(text, kind, **extra)
+
+    def ask(self, message):
+        """One question to the user; returns the reply. Secret replies never enter the log."""
+        if self.asker is None:
+            raise Halt("blocked", "This step needs you, but no one is attached to answer.")
+        self.release()
+        message = {"from": "agent", **message}
+        self.state["messages"].append(message)
+        started = time.perf_counter()
+        reply = self.asker(message) or {}
+        self.state["waited_ms"] += round((time.perf_counter() - started) * 1000)
+        if reply.get("cancel"):
+            raise Halt("cancelled", "Cancelled. Nothing more will be done.")
+        logged = {**reply, "text": "••••"} if message["kind"] == "secret" and "text" in reply else reply
+        self.state["messages"].append({"from": "user", **logged})
+        return reply
+
+    def elapsed(self):
+        started = self.state["started_at"]
+        return round((time.perf_counter() - started) * 1000) if started else 0
+
+    def clean(self, page):
+        """The page as the worker keeps it: hidden values replaced before anything reads or trims the text, and
+        fields that hold a secret masked."""
+        page["text"] = self.secrets.text(page["text"])
+        page["title"] = self.secrets.text(page["title"])
+        page["actions"] = self.secrets.redact(page["actions"])
+        for action in page["actions"]:
+            if action.get("value") and (action.get("frame"), action.get("node")) in self.secrets.nodes:
+                action["value"] = "[secret]"  # an emptied field (a rejected code) still reads as empty
+        return page
+
+    def observe(self):
+        page = self.clean(self.state["browser"].observe())
+        self.state["page"] = page
+        self.state["files"].extend(page.get("downloads", []))
+        self.forget_accepted(page)
+        return page
+
+    def forget_accepted(self, page):
+        """A code the site took no longer counts against its field: the page moved on and the field is gone."""
+        labels = {a["label"] for a in page["actions"]}
+        for where, typed in list(self.state["typed"].items()):
+            moved = typed.get("url") and urlparse(typed["url"])[1:3] != urlparse(page["url"])[1:3]
+            if moved and where[1] not in labels:
+                del self.state["typed"][where]
+
+    def file_name(self, path):
+        """A file's name as logs and models may see it: profile values hidden, even inside names like Jane_Doe_CV."""
+        name = Path(path).name
+        spaced = re.sub(r"[_-]+", " ", name)
+        return self.secrets.text(spaced) if self.secrets.text(spaced) != spaced else name
+
+    def skill(self):
+        return self.library["skills"].get(self.state["skill"]) if self.state["skill"] else None
+
+    def subgoal(self):
+        s = self.state
+        return s["plan"][s["current"]] if s["current"] < len(s["plan"]) else None
+
+    def user_words(self):
+        return [c["text"] for c in self.state["chat"] if c["from"] == "user"]
+
+    def recent_steps(self, n=executor.RECENT):
+        keys = ("step", "operation", "action", "text", "effect", "changed")
+        return [{k: h.get(k) for k in keys} for h in self.state["history"][-n:]]
+
+    # ---- the loop
+
+    def command(self, name):
+        if name != "tick":
+            raise ValueError("Unknown command")
+        secrets, meter = SECRETS.set(self.secrets), METER.set(self.state["meter"])
+        try:
+            return self.tick()
+        except Halt as halt:
+            self.state["status"] = halt.status
+            self.say(str(halt))
+            return self.snapshot()
+        finally:
+            SECRETS.reset(secrets)
+            METER.reset(meter)
+
+    def tick(self):
+        s = self.state
+        if s["started_at"] is None:
+            s["started_at"] = time.perf_counter()
+        before = len(s["history"])
+        try:
+            self.step()
+            s["model_errors"] = 0
+        except StalePage:
+            s["status"] = "ready"
+            self.observe()
+        except Retry as why:
+            s["feedback"].append(str(why))
+            s["reason"] = s["reason"] or "unsure"  # the planner hears it next
+            self.refused()
+        except (ValueError, RuntimeError, TimeoutError) as error:  # a hiccup: feedback, never the end by itself
+            s["errors"].append({"step": len(s["history"]), "error": str(error)})
+            s["model_errors"] += 1
+            if s["model_errors"] >= 5:
+                pending = (f" {s['commit']['label']} may already have gone through; check it before trying again."
+                           if s["commit"] else "")
+                raise Halt("failed", f"The models stopped answering, so I stopped: {error}.{pending}") from error
+            if len(s["history"]) > before:  # the action itself ran; only reading its result failed
+                s["feedback"].append(f"The last action already ran, but checking its result failed ({error}). "
+                                     "Look at the page before repeating it.")
+            else:
+                s["feedback"].append(f"The last step failed ({error}); nothing was done. Decide again.")
+            s["reason"] = s["reason"] or "unsure"
+        s["elapsed_ms"] = self.elapsed()
+        self.checkpoint()
+        return self.snapshot()
+
+    def checkpoint(self):
+        """Write the trace after every step, to the same file, so a stop at any moment keeps it."""
+        try:
+            self.save_trace()
+        except OSError:
+            pass
+
+    def check_caps(self):
+        s = self.state
+        if len(s["history"]) >= MAX_ACTIONS:
+            raise Halt("blocked", f"Stopped at the {MAX_ACTIONS}-action limit.")
+        if self.elapsed() > MAX_MINUTES * 60000:
+            raise Halt("blocked", f"Stopped after {MAX_MINUTES} minutes.")
+        if spent(s["meter"]) > MAX_SPEND:
+            raise Halt("blocked", f"Stopped at the ${MAX_SPEND:.2f} model-spend limit.")
+
+    def step(self):
+        s = self.state
+        self.check_caps()
+        s.pop("typing", None)  # a code counts as an attempt only once it is typed
+        page = s["page"] if s["browser"].fresh(s["page"]) else self.observe()
+        if not s["recent"] or s["recent"][-1] != page["text"]:
+            s["recent"] = (s["recent"] + [page["text"]])[-10:]  # facts may come from a page seen a moment ago
+        if s["reason"]:
+            return self.think(page)
+        sub = self.subgoal()
+        if sub is None or sub["kind"] in {"ask", "report"}:
+            s["reason"] = "next"
+            return self.think(page)
+        if s["subgoal_steps"] >= SUBGOAL_STEPS:
+            s["feedback"].append(f"{SUBGOAL_STEPS} steps on “{sub['do']}” without finishing it: rewrite the plan.")
+            return self.escalate("replan", page)
+        return self.system_one(page, sub)
+
+    def system_one(self, page, sub):
+        """One Jev request for this step, and what its answers mean: act, finish the subgoal, a blocker, or the
+        planner."""
+        s = self.state
+        task = {"goal": s["goal"], "answers": self.user_words(), "recent": self.recent_steps()}
+        state, questions, heads, controls = executor.request(page, sub, task, s["seen"])
+        try:
+            answers = jev.request(state, questions)
+        except ValueError:
+            answers = jev.request(state, questions)  # an invalid answer acts on nothing: asked once more
+        step = executor.decide(answers, questions, heads, controls)
+        s["jev"].append({"step": len(s["history"]) + 1, "subgoal": s["current"], "kind": step["kind"],
+                         "op": step["op"], "p": round(step["p"], 3), "blocker": step["blocker"],
+                         "margin": step["margin"], "state": state, "questions": questions,
+                         "answers": {name: [a["choice"], round(a["probabilities"][a["choice"]], 3)]
+                                     for name, a in answers.items()}})
+        if step["margin"] is not None:
+            s["margins"].append(round(step["margin"], 3))
+        if s["history"] and step["effect"]:
+            s["history"][-1].setdefault("effect", step["effect"])
+        s["seen"], s["candidates"] = page, step["candidates"]
+        if step["kind"] == "blocker":
+            return self.blocked(step, page)
+        if step["kind"] == "done":
+            return self.advance()
+        if step["kind"] == "think":
+            return self.escalate("unsure", page)
+        return self.act(step["operation"], step["action"], page, sub, key=step.get("key"))
+
+    def blocked(self, step, page):
+        """A blocker Jev sees: its situation skill joins the planner's input, and the planner decides."""
+        situation = {"sign_in": "sign-in", "payment": "payment", "unavailable": "location"}.get(step["blocker"])
+        if situation and situation not in self.state["situations"]:
+            self.state["situations"].append(situation)
+        return self.escalate(f"blocker:{step['blocker']}", page)
+
+    def escalate(self, reason, page):
+        s = self.state
+        s["escalations"][reason] = s["escalations"].get(reason, 0) + 1
+        s["reason"] = reason
+        return self.think(page)
+
+    def advance(self):
+        """The page shows the subgoal done: the next one starts; the planner hears only when it must act."""
+        s = self.state
+        s["current"] += 1
+        s["subgoal_steps"] = 0
+        after = self.subgoal()
+        if after is None or after["kind"] in {"ask", "report"}:
+            s["reason"] = "next"
+        return None
+
+    def refused(self):
+        """The same planner action refused again and again: replan at 3, ask the user at 6."""
+        s = self.state
+        act = s["turns"][-1]["action"] if s["turns"] else {}
+        key = f"{act.get('op')}:{act.get('pick')}:{str(act.get('text', ''))[:40]}"
+        count = s["refusals"][key] = s["refusals"].get(key, 0) + 1
+        if count == 3:
+            s["feedback"].append("This was refused 3 times: stop trying it. Change the plan, pick another candidate, "
+                                 "or ASK the user.")
+            s["reason"] = "replan"
+        if count >= 6:
+            s["refusals"][key] = 0
+            self.stuck()
+
+    # ---- System Two
+
+    def think(self, page):
+        """One planner turn: a note, the rest of the plan, and one action."""
+        s = self.state
+        payload = self.payload(page)
+        try:
+            out, meta = planner.turn(payload)
+        except ValueError:
+            out, meta = planner.turn(payload)  # a cut-off or refused reply is asked once more
+        reason = s["reason"]
+        s["turns"].append({"step": len(s["history"]) + 1, "reason": reason,
+                           "latency_ms": meta.get("latency_ms", 0), **out})
+        s["reason"], s["feedback"], s["seen"] = None, [], page
+        if reason == "replan":
+            s["subgoal_steps"] = 0
+        if out["note"].strip():
+            s["notes"].append(out["note"].strip())
+        subgoals = [{"do": g["do"].strip(), "done_when": g["done_when"].strip(), "kind": g["kind"],
+                     "values": [v for v in g["values"] if v["field"].strip()]}
+                    for g in out["subgoals"] if g["do"].strip()][:10]
+        if subgoals:
+            s["plan"] = s["plan"][:s["current"]] + subgoals
+            s["subgoal_steps"] = 0
+        act = out["action"]
+        if act["op"] not in {"DONE", "TELL"}:
+            self.release()  # a TELL waits one step: when the next move is DONE with the same words, they go once
+        if act["op"] in TALKING:
+            return self.talk(out, page)
+        if act["op"] == "CONTINUE":
+            if self.subgoal() is None:
+                raise Retry("The plan has nothing left: give subgoals, or finish with DONE or STOP.")
+            return None
+        return self.do(act, page)
+
+    def payload(self, page):
+        """What the planner reads, stable parts first so the provider's prompt cache holds them."""
+        s = self.state
+        skill = self.skill()
+        names = dict.fromkeys([*(skill["uses"] if skill else []), *s["situations"]])
+        situations = [self.library["skills"][n] for n in names if n in self.library["skills"]]
+        return {
+            "skill": skills.render(skill, situations, skills.site_for(page["url"], self.library["sites"])),
+            "goal": s["goal"], "today": time.strftime("%A, %d %B %Y"), "dates": planner.dates(s["goal"]),
+            "plan": [{"n": n, **g, "current": n - 1 == s["current"]} for n, g in enumerate(s["plan"], 1)],
+            "notes": s["notes"][-15:], "chat": s["chat"][-20:], "profile": self.profile.summary(),
+            "steps": self.recent_steps(8),
+            "committed_and_waiting": s["commit"]["label"] if s["commit"] else None,
+            "page": views.view(page, s["seen"]),
+            "candidates": [{"n": c["n"], "op": c["op"], "element": c["element"], "p": round(c["p"], 2)}
+                           for c in s["candidates"]],
+            "reason": s["reason"], "feedback": s["feedback"],
+        }
+
+    def do(self, act, page):
+        """The planner's browser actions: one of Jev's candidates, an address, WAIT, BACK, or a look."""
+        s, op = self.state, act["op"]
+        if op in {"PICK", "TYPE"}:
+            chosen = next((c for c in s["candidates"] if str(c["n"]) == act["pick"].strip()), None)
+            if chosen is None:
+                raise Retry(f"{op} names one of Jev's candidates by its number; there are {len(s['candidates'])}.")
+            if op == "TYPE" and chosen["operation"] != "TYPE_TEXT":
+                raise Retry(f"Candidate {chosen['n']} is not a field to type into.")
+            return self.act(chosen["operation"], chosen["action"], page, self.subgoal(), key=chosen.get("key"),
+                            text=act["text"] if op == "TYPE" else None)
+        if op == "OPEN_URL":
+            url = act["text"].strip()
+            parts = urlparse(url)
+            if parts.scheme not in {"http", "https"} or not parts.netloc:
+                raise Retry("OPEN_URL needs a full http(s) address in text.")
+            if not skills.template_host(url, skills.site_for(page["url"], self.library["sites"])):
+                raise Retry("A search address built from the site's template must stay on that site.")
+            return self.run(page, "OPEN_URL", self.control(page, "OPEN_URL"), {"url": url}, url)
+        if op == "WAIT":
+            return self.run(page, "WAIT", self.control(page, "WAIT"), {}, None)
+        if op == "BACK":
+            _, heads, controls = action_space(page["actions"])
+            current = next((a for a in heads.get("tab_target", {}).values() if a.get("current")), None)
+            if "GO_BACK" not in controls and current and len(heads["tab_target"]) > 1:
+                return self.run(page, "CLOSE_TAB", current, {}, None)  # a new tab: back is its opener
+            return self.run(page, "GO_BACK", self.control(page, "GO_BACK"), {}, None)
+        what = act["text"].strip() or (self.subgoal() or {}).get("do") or "the control the task needs next"
+        spot = self.look(page, what)  # LOOK
+        if spot is None:
+            raise Retry("Looking at the screen found nothing that fits. Try another way.")
+        return self.act("LOOK", {**self.control(page, "LOOK"), **spot}, page, self.subgoal())
+
+    def talk(self, out, page):
+        """ASK, TELL, DONE, or STOP from the planner, its words checked against the universal rules first."""
+        s = self.state
+        act = out["action"]
+        message = plain(out["message"].strip() or (act["text"].strip() if act["op"] != "DONE" else ""))
+        op = "ASK" if act["op"] == "TELL" and message.endswith("?") else act["op"]  # a question waits for its answer
+        options = [re.sub(r"^\d{1,2}[.)]\s+", "", plain(o.strip())) for o in out["options"] if o.strip()][:10]
+        problem = planner.lint(op, message, options, s["chat"])
+        if problem:
+            raise Retry(problem)
+        if op == "TELL":
+            if not message:
+                raise Retry("TELL needs a message.")
+            if s["told_at"] == len(s["history"]):
+                raise Retry("You just told the user something. Do an action next, or finish with DONE: the answer "
+                            "the user asked for goes in DONE's message, never in another TELL.")
+            self.release()
+            s["held"] = message
+            s["chat"].append({"from": "agent", "text": message})
+            s["told_at"] = len(s["history"])
+            return None
+        if op == "STOP":
+            raise Halt("blocked", message or "I stopped: I can't find a way to finish this on the site.")
+        if op == "DONE":
+            return self.finish(act, message, page)
+        if not message:
+            raise Retry("ASK needs the question in message.")
+        secret = rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
+        held = [k for k, pattern in PROFILE_ASKS.items() if self.profile.data.get(k) and pattern.search(message)]
+        if not secret and held:
+            raise Retry(f"The user's profile has it: use [profile:{held[0]}] as the value instead of asking.")
+        if s["delegated_at"] == len(s["history"]):
+            raise Retry("The user just left this choice to you: pick the option that best fits the goal, TELL them "
+                        "which one, and act on it.")
+        if secret and CODE_WORDS.search(message) and not rules.CARD_DETAIL.search(message):
+            if s["code_asks"] >= CODE_ASKS:
+                raise Halt("blocked", f"Signing in to {rules.host(page['url'])} isn't working after {CODE_ASKS} codes, "
+                                      "so I stopped rather than send you more. Please sign in once in the agent's "
+                                      "Chrome window, then ask me again.")
+            s["code_asks"] += 1
+        if self.moved(page):
+            raise StalePage("The page changed while the planner decided. Decide again.")
+        options = [] if secret else options
+        text = message + "".join(f"\n{n}. {o}" for n, o in enumerate(options, 1))
+        self.steady(page)  # a page still switching screens gets read again first
+        reply = self.ask({"kind": "secret" if secret else "text", "text": text})
+        answer = str(reply.get("text", "")).strip()
+        s["chat"].append({"from": "agent", "text": text})
+        if secret:
+            name = self.keep_secret(answer)
+            s["chat"].append({"from": "user", "text": f"[secret:{name}] (hidden answer; type it as this placeholder)"})
+        else:
+            s["chat"].append({"from": "user", "text": self.read(message, options, answer)})
+        s["reason"] = "reply"
+        return None
+
+    def read(self, message, options, answer):
+        """The user's reply as the chat keeps it: their words, and the option Jev reads them as."""
+        s = self.state
+        line = f"“{answer}”"
+        if options and answer:
+            pick = jev.read_reply(message, options, answer)
+            if pick != "other":
+                return line + f" → option {pick}: {options[int(pick) - 1]}"
+        if DELEGATE.search(answer) and PLACE.search(message):
+            return line + (" → a delivery or pickup place is never chosen for them: use the site's detect-location "
+                           "option, or ASK which saved address (use it only if exactly one exists); if neither works, "
+                           "STOP and say you need their address")
+        if DELEGATE.search(answer):
+            s["delegated_at"] = len(s["history"])
+            return line + (" → the user leaves this choice to you: pick the option that best fits the goal, TELL "
+                           "them which, and carry on")
+        return line + (" → none of the options" if options else "")
+
+    def finish(self, act, message, page):
+        """DONE: a quote from the page backs the report, and Jev must see the goal done on the page."""
+        s = self.state
+        if s["commit"]:
+            raise Retry("A committed action is still being checked; WAIT first.")
+        quote = self.evidence(act["text"].strip(), message, [page["text"], *reversed(s["recent"])])
+        report = message or "Done."
+        if jev.achieved(page, s["goal"], report) != "yes":
+            s["done_refusals"] += 1
+            committed = any(h.get("committed") for h in s["history"])
+            if s["done_refusals"] < 3 or committed or rules.commerce_goal(s["goal"]):
+                raise Retry("The page doesn't show the goal done yet. Keep going until it does; the answer goes in "
+                            "DONE, never in a TELL.")
+            report += " (I couldn't fully confirm this on the page, so please double-check it.)"
+        held = set(re.findall(r"[a-z0-9]+", (s["held"] or "").lower()))
+        said = set(re.findall(r"[a-z0-9]+", report.lower()))
+        if held and said and len(held & said) / min(len(held), len(said)) >= 0.6:
+            s["held"] = None  # the answer, told a step early: it goes out once, here
+        self.say(report, kind="result", evidence=quote)
+        s["status"] = "done"
+        return None
+
+    def evidence(self, quote, report, texts):
+        """A quote proving the report, from the current page or one seen just before: the planner's own when it is
+        there, else the line that shares the most prices and numbers with the report."""
+        if quote and any(rules.verbatim(quote, text) for text in texts):
+            return quote
+        wanted = set(rules.PRICE.findall(report)) | set(re.findall(r"\d[\d:,.]*\d|\d", report))
+        lines = [line.strip() for text in texts for line in text.splitlines() if line.strip()]
+        scored = sorted(((sum(w in line for w in wanted), line) for line in lines), key=lambda x: -x[0])
+        if scored and scored[0][0] and len(scored[0][1]) <= 200:
+            return scored[0][1]
+        hints = "; ".join(f"“{line[:80]}”" for n, line in scored[:3] if n) or "none found"
+        raise Retry("DONE needs a quote in text: a short piece of the page text copied exactly, proving it. Lines "
+                    f"that look relevant: {hints}.")
+
+    # ---- acting
+
+    def act(self, operation, action, page, sub, key=None, text=None):
+        """One operation through the gate: a commit runs only with an approval or a valid pre-authorisation."""
+        inputs, shown = self.inputs(operation, action, page, sub, key, text)
+        label = gate.commit_label(self, operation, action, page, inputs.get("key"), sub)
+        if label:
+            gate.approved(self, page, action, label, sub)  # returns True, or raises StalePage or Retry
+        return self.run(page, operation, action, inputs, shown, commit=label, goal=(sub or {}).get("do", ""))
+
+    def inputs(self, operation, action, page, sub, key=None, text=None):
+        """(browser inputs, what the history shows) for one operation."""
+        if operation == "TYPE_TEXT":
+            return self.value(action, text if text is not None else self.value_for(action, sub), page)
+        if operation == "PRESS_KEY":
+            return {"key": key or "Enter"}, None
+        if operation == "LOOK":
+            return {"point": action["point"], **({"hover": True} if action.get("hover") else {})}, action.get("label")
+        if operation == "UPLOAD":
+            return {"files": self.files_for(action)}, None
+        return {}, None
+
+    def value_for(self, action, sub):
+        """The subgoal's text for the field Jev chose: by the field's name, or the only value. With none, the
+        planner writes it (the field is its candidate 1)."""
+        text = executor.value(action, (sub or {}).get("values") or [])
+        if text is None:
+            self.state["candidates"] = [{"n": 1, "op": "TYPE", "operation": "TYPE_TEXT", "element": action["label"],
+                                         "p": 1.0, "action": action}]
+            raise Retry(f"Jev chose to type into “{action['label']}”, but the subgoal has no value for it: TYPE "
+                        "pick 1 with the text, or decide otherwise.")
+        return text
+
+    def value(self, action, text, page):
+        """({"text": what to type}, what logs show). Placeholders become the user's values here, after every model
+        call. A code, password, or CVV field takes only the user's hidden answer, once, within the attempt limit."""
+        s = self.state
+        if not text:
+            raise Retry("TYPE needs the text to type.")
+        if rules.secret_field(action):
+            found = re.fullmatch(r"\s*\[secret:(answer\d+)\]\s*", text)
+            if not found or found[1] not in s["answers"]:
+                raise Retry(f"“{action['label']}” takes a code or password: the system asks the user for it; type "
+                            "only the placeholder of their answer ([secret:answerN]).")
+            where = (rules.host(page["url"]), action["label"])
+            typed = s["typed"].get(where) or {}
+            if typed.get("key") == found[1]:
+                raise Retry(f"That code ({text}) was already typed into “{action['label']}”. If the site rejected "
+                            "it, the system asks the user for a new one.")
+            count = typed.get("count", 0)
+            if count >= (2 if rules.CARD_DETAIL.search(action["label"]) else 3):  # a CVV gets two tries, a code three
+                raise Halt("blocked", f"The site rejected {count} codes for “{action['label']}”, so I stopped before "
+                                      "your account gets locked.")
+            code = rules.clean(s["answers"][found[1]], action)
+            problem = rules.format_error(code, action)
+            if problem:
+                raise Retry(f"The user's answer doesn't fit “{action['label']}”: {problem} Ask them again.")
+            s["typing"] = (where, {"key": found[1], "count": count + 1, "url": page["url"]})
+            return {"text": code}, f"[secret:{found[1]}]"
+        known = re.search(r"\[secret:(answer\d+)\]", text)
+        if known and known[1] in s["answers"]:
+            raise Retry(f"A code or password goes only into its code field; “{action['label']}” isn't one.")
+
+        def real(match):
+            kind, key = match[1], match[2]
+            if kind == "profile":
+                return self.profile_value(key)
+            if key in s["answers"]:
+                return s["answers"][key]
+            raise Retry(f"[secret:{key}] isn't one of the user's answers.")
+
+        return {"text": PLACEHOLDER.sub(real, text)}, text
+
+    def profile_value(self, key):
+        """A profile detail for a placeholder: from the profile, else asked once through the hidden field and kept."""
+        try:
+            return self.profile.value(key)
+        except KeyError:
+            pass
+        if key not in PROFILE_NAMES:
+            raise Retry(f"There is no profile detail called {key}.")
+        reply = self.ask({"kind": "secret", "text": f"What's your {PROFILE_NAMES[key]}? It stays hidden from the "
+                                                    "models, and I'll remember it for next time."})
+        value = str(reply.get("text", "")).strip()
+        if not value:
+            raise Halt("blocked", f"I need your {PROFILE_NAMES[key]} to go on.")
+        self.learn(key, value)
+        return value
+
+    def files_for(self, action):
+        """Files for an upload: ones the user sent in this task that no upload used yet, else asked for."""
+        s = self.state
+        if self.provide_file:
+            return self.provide_file(action)
+        sent = [m["file"] for m in s["messages"] if m.get("from") == "user" and m.get("file")]
+        unused = [f for f in sent if f not in s["uploaded"] and Path(f).is_file()]
+        if not unused:
+            name = action["label"].removeprefix("File input: ").removeprefix("Drop zone: ")
+            reply = self.ask({"kind": "file", "text": f"This step needs a file ({name}). Send it here."})
+            if not reply.get("file") or not Path(reply["file"]).is_file():
+                raise Halt("blocked", "No file arrived, so nothing was attached.")
+            unused = [reply["file"]]
+        s["uploaded"] += unused
+        return unused
+
+    def control(self, page, operation):
+        _, _, controls = action_space(page["actions"])
+        if operation in controls:
+            return controls[operation]
+        if operation == "GO_BACK":
+            raise Retry("There is no earlier page to go back to.")
+        if operation in {"ACCEPT_DIALOG", "DISMISS_DIALOG"}:
+            raise Retry("No browser dialog is open.")
+        return {"id": operation.lower(), "kind": operation.lower(), "node": None, "label": operation.title()}
+
+    def run(self, page, operation, action, inputs, shown, commit=None, goal=""):
+        """Execute one operation, record it, and read the page again; a commit is then watched."""
+        s = self.state
+        self.stop_if_interrupted()
+        label = action.get("label") or operation
+        entry = {"step": len(s["history"]) + 1, "subgoal": s["current"], "operation": operation, "action": label,
+                 "kind": action.get("kind"), "text": shown, "key": inputs.get("key"),
+                 "files": [self.file_name(f) for f in inputs["files"]] if "files" in inputs else None,
+                 "page_changed": None, "url": page["url"], "committed": bool(commit),
+                 "approved": (s["approval"] or {}).get("by") if commit else None}
+        try:
+            s["browser"].act(operation, action, page, **inputs)
+        except ExecutionUncertain as error:
+            s["history"].append({**entry, "unconfirmed": str(error), "elapsed_ms": self.elapsed()})
+            raise Halt("blocked", f"I may already have done “{label}” but can't confirm it, so I stopped instead of "
+                                  "repeating it. Please check before trying again.") from error
+        s["elapsed_ms"] = self.elapsed()
+        s["history"].append({**entry, "executed_ms": s["elapsed_ms"], "elapsed_ms": s["elapsed_ms"]})
+        s["subgoal_steps"] += 1
+        s["candidates"], s["refusals"] = [], {}
+        typing = s.pop("typing", None)
+        if typing:
+            s["typed"][typing[0]] = typing[1]
+        if commit:
+            s["approval"] = None
+            s["commit"] = {"label": commit, "since": s["elapsed_ms"]}
+        if shown and str(shown).startswith("[secret:"):
+            for node in action.get("group") or [action.get("node")]:
+                self.secrets.nodes.add((action.get("frame"), node))
+        after = self.observe()
+        for _ in range(3):  # a dropdown or dialog can render a moment after the click: look again before "nothing"
+            if operation == "WAIT" or views.change(page, after) != "nothing changed":
+                break
+            time.sleep(self.quiet_wait / 3)
+            after = self.observe()
+        last = s["history"][-1]
+        last.update(page_changed=after["fingerprint"] != page["fingerprint"], url=after["url"],
+                    changed=views.change(page, after))
+        s["status"] = "ready"
+        if s["commit"]:
+            return gate.watch(self, commit, goal or s["goal"])
+        return self.track_loop(last)
+
+    def track_loop(self, last):
+        """The same step on the same page changing nothing, again and again: the user is asked at STUCK_AT."""
+        s = self.state
+        if last["page_changed"] or last["operation"] in QUIET or s["relaying"]:
+            return None
+        if executor.repeats(s["history"][s["loop_from"]:], last["operation"], last["action"], last["url"]) >= STUCK_AT:
+            self.steady(s["page"])
+            self.stuck()
+            s["loop_from"] = len(s["history"])  # the user's help starts a fresh count
+        return None
+
+    def look(self, page, purpose):
+        """Find by sight what the element list can't name: one grid question, then a closer one inside the chosen
+        cell. Mini answers with cell names only; code turns the cell into a point. None when nothing fits."""
+        s = self.state
+        hide = self.hidden_details()
+        image, cells = s["browser"].grid_screenshot(masked=self.secrets.nodes, hide=hide)
+        context = f"Goal: {s['goal']}\nStep: {(self.subgoal() or {}).get('do', '')}"
+        found, _ = planner.look(context, page, purpose, image, cells)
+        if found is None:
+            return None
+        close, finer = s["browser"].grid_screenshot(region=cells[found["cell"]], columns=4, rows=4,
+                                                    masked=self.secrets.nodes, hide=hide, scale=2)
+        cell, _ = planner.look_closer(found["label"], close, finer)
+        return {"point": list(rules.centre(finer[cell])), "label": found["label"], "text": found.get("text", ""),
+                "commits": found.get("commits", False)}
+
+    # ---- the user
+
+    def stuck(self):
+        s = self.state
+        sub = self.subgoal()
+        title = s["page"]["title"] or rules.host(s["page"]["url"])
+        question = f"I'm stuck on {title}, trying to {sub['do'] if sub else s['goal']}. What should I do?"
+        coded = rules.code_field(s["page"])  # the reply may be the code itself: keep it out of every log
+        reply = self.ask({"kind": "secret" if coded else "text", "text": question})
+        answer = str(reply.get("text", "")).strip()
+        s["chat"].append({"from": "agent", "text": question})
+        if coded:
+            s["chat"].append({"from": "user", "text": f"[secret:{self.keep_secret(answer)}] (hidden answer)"})
+        else:
+            s["chat"].append({"from": "user", "text": f"“{answer}”"})
+        s["reason"] = "reply"
+
+    def steady(self, page):
+        """Asking costs the user's time: right after a step, wait until steady_ms for the page to settle; a page
+        that still changes is read again first."""
+        last = self.state["history"][-1] if self.state["history"] else None
+        while last and self.elapsed() - last.get("executed_ms", 0) < self.steady_ms:
+            time.sleep(0.25)
+            if self.moved(page):
+                self.state["status"] = "ready"
+                raise StalePage("The page changed while I was about to ask. Decide again.")
+
+    def moved(self, page):
+        """Whether the page's elements changed since it was read. Text that ticks (arrival times) doesn't count."""
+        if self.state["browser"].fresh(page):
+            return False
+        return views.lines(self.observe()) != views.lines(page)
+
+    def keep_secret(self, value):
+        """Hold a secret answer for this task: registered for redaction, usable by its name, never logged."""
+        name = f"answer{len(self.state['answers']) + 1}"
+        self.state["answers"][name] = value
+        self.secrets.add(value, f"[secret:{name}]")
+        return name
+
+    def learn(self, key, value):
+        """A detail the user gave joins their profile: hidden from every model from now on."""
+        self.profile.data[key] = value
+        self.profile.save()
+        for hidden, placeholder in self.profile.hidden_values():
+            self.secrets.add(hidden, placeholder)
+        self.say(f"Saved your {PROFILE_NAMES[key]} to your profile. The models never see it.")
+
+    def update(self, text):
+        """A change the user sent for this task: the planner hears it next, and any approval is void."""
+        s = self.state
+        s["chat"].append({"from": "user", "text": f"(change) {text}"})
+        s["approval"] = None
+        s["reason"] = "reply"
+
+    def stop_if_interrupted(self):
+        """A cancel or a change from the user arrived while this step was decided: decide again with it."""
+        if self.interrupted and self.interrupted():
+            self.state["status"] = "ready"
+            raise StalePage("The user cancelled or changed the task. Decide again.")
+
+    def hidden_details(self):
+        return [value for value, _ in self.profile.hidden_values()]  # screenshots blur them where the page shows them
+
+    # ---- records
+
+    def trace(self):
+        """The task as the bench and `jev traces` read it, redacted like everything that leaves the task."""
+        s = self.state
+        result = next((m for m in reversed(s["messages"]) if m.get("kind") == "result"), None)
+        return self.secrets.redact({
+            "goal": s["goal"], "title": s["title"], "status": s["status"], "skill": s["skill"],
+            "preauth": s["preauth"], "elapsed_ms": s["elapsed_ms"], "waited_ms": s["waited_ms"],
+            "result": {"text": result["text"], "evidence": result.get("evidence", "")} if result else None,
+            "questions": sum(m["from"] == "agent" and m.get("kind") not in {"info", "result"} for m in s["messages"]),
+            "messages": [{k: v for k, v in m.items() if k != "image"} for m in s["messages"]],
+            "plan": s["plan"], "notes": s["notes"], "chat": s["chat"],
+            "steps": [{k: h.get(k) for k in TRACE_STEP} for h in s["history"]],
+            "jev": s["jev"], "turns": s["turns"], "meter": s["meter"], "escalations": s["escalations"],
+            "margins": s["margins"], "files": [self.file_name(f) for f in s["files"]], "errors": s["errors"],
+        })
+
+    def save_trace(self):
+        """Write the trace to ~/.jev/traces/<time>-<title>.json, readable only by the user."""
+        self.trace_dir.mkdir(parents=True, exist_ok=True)
+        path = self.state.get("trace_path")
+        if not path:
+            slug = re.sub(r"[^a-z0-9]+", "-", self.state["title"].lower()).strip("-")[:40] or "task"
+            path = unique(self.trace_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{slug}.json")
+            self.state["trace_path"] = str(path)
+        path = Path(path)
+        temporary = path.with_suffix(".tmp")
+        temporary.touch(mode=0o600)
+        temporary.write_text(json.dumps(self.trace(), indent=2, ensure_ascii=False, default=str))
+        temporary.replace(path)  # a stop mid-write never leaves an empty or half-written trace
+        return path
+
+    def settle(self, timeout=10.0):
+        """Before the tabs close: wait (bounded) for downloads still in flight and keep every one that arrived."""
+        browser = self.state["browser"]
+        deadline = time.monotonic() + timeout
+        while browser.pending_downloads and time.monotonic() < deadline:
+            time.sleep(0.1)
+        arrived = browser.downloads[:]
+        del browser.downloads[:len(arrived)]
+        self.state["files"].extend(arrived)
+
+    def close(self):
+        try:
+            self.state["trace_path"] = str(self.save_trace())
+        except OSError as error:  # a trace is a record: never a reason to leave the tabs open
+            print(f"jev: trace not saved: {error}", file=sys.stderr)
+        finally:
+            self.browser.close()
+
+    def steps(self):
+        """Tick until the task stops, yielding the state after each step (for scripts)."""
+        while self.state["status"] not in STOPPED:
+            yield self.command("tick")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
