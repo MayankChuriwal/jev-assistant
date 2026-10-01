@@ -1,0 +1,361 @@
+# Live bench, unseen pool. Each run samples 8 with a logged seed. Never write a skill, site note, or rule for these
+# tasks or their sites: their pass rate measures how the agent does on tasks nobody tuned it for.
+
+[[task]]
+id = "bigbasket-rice"
+category = "groceries"
+goal = "Find the cheapest 1 kg pack of basmati rice on BigBasket"
+end = "result"
+rule = "The report names a 1 kg basmati rice pack on BigBasket and its price, the lowest among the results."
+
+[[task]]
+id = "jiomart-oil"
+category = "groceries"
+goal = "What is the price of a 1 litre Fortune sunflower oil pouch on JioMart?"
+end = "result"
+rule = "The report gives JioMart's price for a 1 litre Fortune sunflower oil pouch."
+
+[[task]]
+id = "blinkit-eggs"
+category = "groceries"
+goal = "Order a pack of 6 eggs on Blinkit"
+end = "gate"
+rule = "The approval summary is a pack of 6 eggs from Blinkit with an address and total."
+
+[[task]]
+id = "zepto-bananas"
+category = "groceries"
+goal = "What's the price of a dozen bananas on Zepto?"
+end = "result"
+rule = "The report gives Zepto's price for bananas, per dozen or for the pack size it names."
+
+[[task]]
+id = "instamart-chips"
+category = "groceries"
+goal = "Order one packet of Lay's Classic Salted chips on Swiggy Instamart"
+end = "gate"
+rule = "The approval summary is one packet of Lay's Classic Salted from Swiggy Instamart with an address and total."
+
+[[task]]
+id = "zomato-biryani"
+category = "food"
+goal = "Order one chicken biryani from Meghana Foods on Zomato"
+end = "gate"
+rule = "The approval summary is one chicken biryani from Meghana Foods on Zomato with an address and total."
+answers = [["outlet|branch|which (one|restaurant)", "The nearest one that is open"]]
+
+[[task]]
+id = "swiggy-coffee"
+category = "food"
+goal = "Order one cappuccino from Third Wave Coffee on Swiggy"
+end = "gate"
+rule = "The approval summary is one cappuccino from Third Wave Coffee on Swiggy with an address and total."
+answers = [["outlet|branch", "The nearest one that is open"], ["size|milk|which", "Regular"]]
+
+[[task]]
+id = "eazydiner-table"
+category = "food"
+goal = "Book a table for 2 tonight at 8 pm at a Koramangala restaurant on EazyDiner"
+end = "gate"
+rule = "The approval is a table for 2 tonight around 8 pm at a Koramangala restaurant on EazyDiner."
+answers = [["restaurant|which", "Any well-rated one"], ["name", "@user"]]
+
+[[task]]
+id = "district-table"
+category = "food"
+goal = "Reserve a table for 4 this Saturday for lunch at Toit on District"
+end = "gate"
+rule = "The approval is a table for 4 this Saturday at lunch time at Toit on District."
+
+[[task]]
+id = "croma-tv"
+category = "shopping"
+goal = "What is the price of the Samsung 43 inch Crystal 4K TV on Croma?"
+end = "result"
+rule = "The report gives Croma's price for a Samsung 43 inch Crystal 4K TV."
+
+[[task]]
+id = "reliance-phone"
+category = "shopping"
+goal = "Find the price of the OnePlus Nord CE4 on Reliance Digital"
+end = "result"
+rule = "The report gives Reliance Digital's price for a OnePlus Nord CE4 and its variant."
+
+[[task]]
+id = "nykaa-sunscreen"
+category = "shopping"
+goal = "Buy one Minimalist SPF 50 sunscreen on Nykaa"
+end = "gate"
+rule = "The approval summary is one Minimalist SPF 50 sunscreen from Nykaa with an address and total."
+
+[[task]]
+id = "ajio-tshirt"
+category = "shopping"
+goal = "Find the cheapest plain white T-shirt for men on AJIO"
+end = "result"
+rule = "The report names a plain white men's T-shirt on AJIO and its price, the lowest among the results."
+
+[[task]]
+id = "decathlon-bottle"
+category = "shopping"
+goal = "Buy one 1 litre steel water bottle on Decathlon India"
+end = "gate"
+rule = "The approval summary is one 1 litre steel water bottle from Decathlon with an address and total."
+
+[[task]]
+id = "amazon-book"
+category = "shopping"
+goal = "Buy the paperback of Atomic Habits on Amazon.in"
+end = "gate"
+rule = "The approval summary is one paperback of Atomic Habits from Amazon.in with an address and total."
+
+[[task]]
+id = "lenskart-glasses"
+category = "shopping"
+goal = "What is the price of the cheapest Vincent Chase blue-light glasses on Lenskart?"
+end = "result"
+rule = "The report names Vincent Chase blue-light glasses on Lenskart and the lowest price shown."
+
+[[task]]
+id = "uber-auto"
+category = "rides"
+goal = "Book an Uber Auto from my current location to Indiranagar Metro Station"
+end = "gate"
+rule = "The approval summary is an Uber Auto ride to Indiranagar Metro Station with its fare."
+answers = [["drop|destination|where to", "Indiranagar Metro Station"]]
+
+[[task]]
+id = "rapido-auto"
+category = "rides"
+goal = "Book a Rapido auto from my current location to MG Road Metro Station"
+end = "gate"
+rule = "The approval summary is a Rapido auto ride to MG Road Metro Station with its fare."
+answers = [["drop|destination|where to", "MG Road Metro Station"]]
+
+[[task]]
+id = "redbus"
+category = "travel"
+goal = "Find the cheapest overnight bus from Bengaluru to Goa this Friday on redBus"
+end = "result"
+rule = "The report names an overnight Bengaluru to Goa bus this Friday on redBus with its operator, departure time, and fare."
+
+[[task]]
+id = "ixigo-train"
+category = "travel"
+goal = "Find the next Vande Bharat train from Bengaluru to Chennai on ixigo and its departure time"
+end = "result"
+rule = "The report names a Vande Bharat train from Bengaluru to Chennai with its departure date and time."
+
+[[task]]
+id = "cleartrip-flight"
+category = "travel"
+goal = "Find the cheapest flight from Mumbai to Bengaluru tomorrow on Cleartrip"
+end = "result"
+rule = "The report names an airline, a departure time, and a one-way price for a Mumbai to Bengaluru flight tomorrow."
+
+[[task]]
+id = "booking-hotel"
+category = "travel"
+goal = "Find a hotel in Mysuru under ₹4,000 a night for next Saturday on Booking.com rated 8 or above"
+end = "result"
+rule = "The report names a Mysuru hotel rated 8 or above with a nightly price under ₹4,000 for next Saturday."
+
+[[task]]
+id = "makemytrip-flight"
+category = "travel"
+goal = "Find the cheapest flight from Delhi to Goa next Friday on MakeMyTrip"
+end = "result"
+rule = "The report names an airline, a departure time, and a one-way price for a Delhi to Goa flight next Friday."
+
+[[task]]
+id = "goibibo-hotel"
+category = "travel"
+goal = "Find the cheapest 3-star hotel in Ooty for 2 adults this weekend on Goibibo"
+end = "result"
+rule = "The report names a 3-star hotel in Ooty with its price for this weekend for 2 adults."
+
+[[task]]
+id = "bms-comedy"
+category = "tickets"
+goal = "Find the cheapest ticket for a comedy show in Bengaluru this weekend on BookMyShow"
+end = "result"
+rule = "The report names a comedy show in Bengaluru this weekend with its venue, date, and cheapest ticket price."
+
+[[task]]
+id = "district-event"
+category = "tickets"
+goal = "Find an event in Bengaluru this Sunday on District and tell me its ticket price"
+end = "result"
+rule = "The report names an event in Bengaluru this Sunday on District with its ticket price."
+
+[[task]]
+id = "pvr-show"
+category = "tickets"
+goal = "What time is the first show of the most popular Hindi movie tomorrow at PVR Orion Mall on the PVR Cinemas website?"
+end = "result"
+rule = "The report names a Hindi movie and its first show time tomorrow at PVR Orion Mall."
+
+[[task]]
+id = "airtel-recharge"
+category = "bills"
+goal = "Recharge an Airtel prepaid number with the ₹349 plan on Airtel's website"
+end = "gate"
+rule = "The approval summary is a ₹349 Airtel prepaid recharge."
+answers = [["number|mobile", "@user"]]
+
+[[task]]
+id = "tataplay"
+category = "bills"
+goal = "Recharge my Tata Play DTH with ₹300 on Paytm"
+end = "gate"
+rule = "The approval summary is a ₹300 Tata Play recharge on Paytm."
+answers = [["subscriber|customer|account|id|number", "@user"]]
+
+[[task]]
+id = "bwssb"
+category = "bills"
+goal = "Pay my BWSSB water bill on Paytm"
+end = "gate"
+rule = "The approval summary is a BWSSB water bill payment on Paytm with the amount due."
+answers = [["rr|account|consumer|number", "@user"]]
+
+[[task]]
+id = "jio-plans"
+category = "bills"
+goal = "What is the cheapest Jio prepaid plan with unlimited 5G on jio.com?"
+end = "result"
+rule = "The report names a Jio prepaid plan with unlimited 5G, its price and validity, the cheapest listed."
+
+[[task]]
+id = "amazon-return"
+category = "account"
+goal = "Is my latest Amazon.in order eligible for return, and until when?"
+end = "result"
+rule = "The report names the latest Amazon.in order and says whether it can be returned and until when."
+
+[[task]]
+id = "flipkart-cancel"
+category = "account"
+goal = "Cancel my latest undelivered Flipkart order"
+end = "gate|result"
+rule = "Either the approval is for cancelling the latest undelivered Flipkart order, or the report says there is none."
+answers = [["reason|why", "I don't need it any more"]]
+
+[[task]]
+id = "swiggy-last"
+category = "account"
+goal = "What did I order in my last Swiggy order and how much did it cost?"
+end = "result"
+rule = "The report names the items and total of the user's last Swiggy order."
+
+[[task]]
+id = "uber-last"
+category = "account"
+goal = "How much was my last Uber ride?"
+end = "result"
+rule = "The report gives the fare of the user's last Uber ride and its date."
+
+[[task]]
+id = "demoqa-form"
+category = "forms"
+goal = "Fill the student registration form at https://demoqa.com/automation-practice-form with first name Test, last name User, gender Male, mobile 9999999999, and submit it"
+end = "gate"
+rule = "The approval summary lists Test, User, Male, and 9999999999 on the demoqa form."
+
+[[task]]
+id = "w3-form"
+category = "forms"
+goal = "Fill the form at https://www.w3schools.com/html/tryit.asp?filename=tryhtml_form_submit with first name John and last name Doe and submit it"
+end = "gate"
+rule = "The approval summary lists John and Doe on the w3schools form."
+
+[[task]]
+id = "dropdown"
+category = "forms"
+goal = "Choose Option 2 in the dropdown at https://the-internet.herokuapp.com/dropdown and tell me which option is selected"
+end = "result"
+rule = "The report says Option 2 is selected."
+
+[[task]]
+id = "checkboxes"
+category = "forms"
+goal = "Tick both checkboxes at https://the-internet.herokuapp.com/checkboxes and tell me which are ticked"
+end = "result"
+rule = "The report says both checkboxes are ticked."
+
+[[task]]
+id = "myntra-return"
+category = "lookup"
+goal = "What is Myntra's return policy for shoes?"
+end = "result"
+rule = "The report states Myntra's return window or conditions for shoes."
+
+[[task]]
+id = "lalbagh"
+category = "lookup"
+goal = "What are the opening hours of Lalbagh Botanical Garden?"
+end = "result"
+rule = "The report gives Lalbagh Botanical Garden's opening and closing times."
+
+[[task]]
+id = "weather"
+category = "lookup"
+goal = "What's the weather forecast for Bengaluru tomorrow?"
+end = "result"
+rule = "The report gives tomorrow's forecast for Bengaluru with temperatures or rain."
+
+[[task]]
+id = "mysuru-population"
+category = "lookup"
+goal = "What is the population of Mysuru according to Wikipedia?"
+end = "result"
+rule = "The report gives Mysuru's population as Wikipedia states it."
+
+[[task]]
+id = "gold"
+category = "lookup"
+goal = "What is today's 22 carat gold price per gram in Bengaluru?"
+end = "result"
+rule = "The report gives a 22 carat gold price per gram in Bengaluru for today."
+
+[[task]]
+id = "dolo"
+category = "lookup"
+goal = "Find the price of a strip of Dolo 650 on Tata 1mg"
+end = "result"
+rule = "The report gives Tata 1mg's price for a strip of Dolo 650."
+
+[[task]]
+id = "practo"
+category = "lookup"
+goal = "Find a dermatologist in Indiranagar with an appointment available tomorrow on Practo"
+end = "result"
+rule = "The report names a dermatologist in Indiranagar on Practo with a slot tomorrow."
+
+[[task]]
+id = "imdb"
+category = "lookup"
+goal = "What is the IMDb rating of the movie 12th Fail?"
+end = "result"
+rule = "The report gives IMDb's rating for 12th Fail."
+
+[[task]]
+id = "airpods"
+category = "lookup"
+goal = "Compare the price of Apple AirPods Pro 2 on Croma and Flipkart and tell me which is cheaper"
+end = "result"
+rule = "The report gives both prices for AirPods Pro 2 and says which site is cheaper."
+
+[[task]]
+id = "milk-compare"
+category = "lookup"
+goal = "Which is cheaper for 1 litre of Amul Gold milk: BigBasket or Zepto?"
+end = "result"
+rule = "The report gives both prices for 1 litre of Amul Gold milk and says which is cheaper."
+
+[[task]]
+id = "usd-inr"
+category = "lookup"
+goal = "How many Indian rupees is 100 US dollars today?"
+end = "result"
+rule = "The report gives today's rupee amount for 100 US dollars."

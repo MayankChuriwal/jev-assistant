@@ -1,63 +1,106 @@
-# Live bench tasks. Each run answers questions from `answers` (regex → reply), sends codes and captchas to the
-# user's web chat, and always answers NO at the final approval, so nothing is bought or booked.
-
-[[task]]
-id = "uber"
-goal = "Book an Uber from my current location to Kempegowda International Airport Terminal 1"
-end = "gate"
-require = ["Terminal 1", "₹"]
-rule = "The approval summary is an Uber ride to Kempegowda Airport Terminal 1 with a ride type and its fare."
-answers = [["pick ?up|from where|where are you", "My current location"],
-           ["drop|destination|where to|going", "Kempegowda International Airport Terminal 1"],
-           ["which (ride|option|one)|ride type|type of ride|ride variant|select a ride|ride option",
-            "The cheapest one"],
-           ["pay|payment", "Cash"]]
-
-[[task]]
-id = "ola"
-goal = "Book an Ola cab from my current location to Kempegowda International Airport Terminal 1"
-end = "gate"
-require = ["Terminal 1", "₹"]
-rule = "The approval summary is an Ola ride to Kempegowda Airport Terminal 1 with a cab type and its fare."
-answers = [["pick ?up|from where|where are you", "My current location"],
-           ["drop|destination|where to|going", "Kempegowda International Airport Terminal 1"],
-           ["which (cab|ride|option|one)|cab type|ride type|type of (cab|ride)|variant|select a (cab|ride)",
-            "The cheapest one"],
-           ["pay|payment", "Cash"]]
-
-[[task]]
-id = "instamart"
-goal = "Order one Diet Coke 300 ml can on Swiggy Instamart"
-end = "gate"
-require = ["Diet Coke", "₹"]
-rule = "The approval summary is one Diet Coke (about 300 ml) from Swiggy Instamart with a delivery address and total."
-answers = [["pay|payment", "Cash on delivery (pay on delivery)"],
-           ["address|deliver to|where should", "The first saved address"],
-           ["which (one|size|pack)|variant", "300 ml, just one"]]
+# Live bench, known tasks. Each run answers questions from `answers` (regex → reply), then bench.DEFAULTS, then the
+# fallback. Codes, captchas, and answers scripted as "@user" go to the user's web chat. Every final approval is
+# answered NO, so nothing is bought or booked. `end`: gate (reach the final approval), result (a reported answer),
+# file (a delivered file); "gate|result" accepts either.
 
 [[task]]
 id = "zepto"
+category = "groceries"
 goal = "Order one 500 ml pack of Amul Taaza milk on Zepto"
 end = "gate"
 require = ["Amul", "₹"]
 rule = "The approval summary is one Amul Taaza milk pack (about 500 ml) from Zepto with an address and total."
-answers = [["pay|payment", "Cash on delivery (pay on delivery)"],
-           ["no saved address", "Use my current location"],
-           ["address|deliver to|where should|location", "The first saved address, or my current location if none"],
-           ["which (one|size|pack)", "500 ml"]]
+answers = [["no saved address", "Use my current location"], ["which (one|size|pack)", "500 ml"]]
+
+[[task]]
+id = "instamart"
+category = "groceries"
+goal = "Order one Diet Coke 300 ml can on Swiggy Instamart"
+end = "gate"
+require = ["Diet Coke", "₹"]
+rule = "The approval summary is one Diet Coke (about 300 ml) from Swiggy Instamart with a delivery address and total."
+answers = [["which (one|size|pack)|variant", "300 ml, just one"]]
+
+[[task]]
+id = "blinkit"
+category = "groceries"
+goal = "Order one pack of Britannia white bread on Blinkit"
+end = "gate"
+require = ["Britannia", "₹"]
+rule = "The approval summary is one pack of Britannia white bread from Blinkit with an address and total."
+answers = [["which (one|size|pack)|variant", "The regular 400 g pack"]]
+
+[[task]]
+id = "swiggy-food"
+category = "food"
+goal = "Order one Margherita pizza from Domino's on Swiggy"
+end = "gate"
+require = ["Margherita", "₹"]
+rule = "The approval summary is one Margherita pizza from Domino's on Swiggy with an address and total."
+answers = [["restaurant|order from|outlet", "The nearest one that is open"],
+           ["size|crust|which", "Regular, classic hand tossed"]]
+
+[[task]]
+id = "zomato"
+category = "food"
+goal = "Order one masala dosa from a restaurant near me on Zomato"
+end = "gate"
+require = ["dosa", "₹"]
+rule = "The approval summary is one masala dosa from a Zomato restaurant with an address and total."
+answers = [["restaurant|which (one|place)", "The best rated one that delivers fastest"]]
 
 [[task]]
 id = "amazon"
+category = "shopping"
 goal = "Buy one boAt Airdopes 141 on Amazon.in"
 end = "gate"
 require = ["boAt", "₹"]
 rule = "The approval summary is one boAt Airdopes 141 from Amazon.in with an address and total."
-answers = [["pay|payment", "Cash on delivery (pay on delivery)"],
-           ["colou?r|which (one|variant)", "Black, or the first colour"],
-           ["address|deliver to|where should", "The first saved address"]]
+answers = [["colou?r|which (one|variant)", "Black, or the first colour"]]
+
+[[task]]
+id = "flipkart"
+category = "shopping"
+goal = "What is the price of the Apple iPhone 16 128 GB on Flipkart?"
+end = "result"
+require = ["₹"]
+rule = "The report gives Flipkart's price for an iPhone 16 128 GB."
+answers = [["colou?r|which", "Any colour"]]
+
+[[task]]
+id = "uber"
+category = "rides"
+goal = "Book an Uber from my current location to Kempegowda International Airport Terminal 1"
+end = "gate"
+require = ["Terminal 1", "₹"]
+rule = "The approval summary is an Uber ride to Kempegowda Airport Terminal 1 with a ride type and its fare."
+answers = [["drop|destination|where to|going", "Kempegowda International Airport Terminal 1"],
+           ["which (ride|option|one)|ride type|type of ride|select a ride|ride option", "The cheapest one"],
+           ["pay|payment", "Cash"]]
+
+[[task]]
+id = "ola"
+category = "rides"
+goal = "Book an Ola cab from my current location to Kempegowda International Airport Terminal 1"
+end = "gate"
+require = ["Terminal 1", "₹"]
+rule = "The approval summary is an Ola ride to Kempegowda Airport Terminal 1 with a cab type and its fare."
+answers = [["drop|destination|where to|going", "Kempegowda International Airport Terminal 1"],
+           ["which (cab|ride|option|one)|cab type|ride type|type of (cab|ride)|variant", "The cheapest one"],
+           ["pay|payment", "Cash"]]
+
+[[task]]
+id = "rapido"
+category = "rides"
+goal = "Book a Rapido bike from my current location to Indiranagar Metro Station"
+end = "gate"
+require = ["Indiranagar", "₹"]
+rule = "The approval summary is a Rapido bike ride to Indiranagar Metro Station with its fare."
+answers = [["drop|destination|where to|going", "Indiranagar Metro Station"], ["pay|payment", "Cash"]]
 
 [[task]]
 id = "bookmyshow"
+category = "tickets"
 goal = "Book 2 tickets on BookMyShow for the most popular Hindi movie tomorrow evening at any PVR in Bengaluru"
 end = "gate"
 require = ["2", "₹"]
@@ -67,22 +110,65 @@ answers = [["which (movie|film)", "The first one listed"], ["which (show|time)",
 
 [[task]]
 id = "flight"
+category = "travel"
 goal = "Find the cheapest flight from Bengaluru to Delhi next Friday on Google Flights and tell me the airline, time and price"
 end = "result"
 require = ["₹"]
-rule = "The report names an airline, a departure time, and a price for a Bengaluru to Delhi flight next Friday."
-answers = []
+rule = "The report names an airline, a departure time, and a one-way price for a Bengaluru to Delhi flight next Friday."
 
 [[task]]
-id = "flipkart"
-goal = "What is the price of the Apple iPhone 16 128 GB on Flipkart?"
+id = "hotel"
+category = "travel"
+goal = "Find the cheapest hotel in Goa rated above 4 for 2 adults next Saturday to Sunday on MakeMyTrip"
 end = "result"
 require = ["₹"]
-rule = "The report gives Flipkart's price for an iPhone 16 128 GB."
-answers = [["colou?r|which", "Any colour"]]
+rule = "The report names a Goa hotel rated above 4 with its price for next Saturday night for 2 adults."
+
+[[task]]
+id = "recharge"
+category = "bills"
+goal = "Recharge my Jio number with the ₹299 plan on Paytm"
+end = "gate"
+require = ["299"]
+rule = "The approval summary is a ₹299 Jio recharge for the user's number on Paytm."
+answers = [["which plan", "The ₹299 plan"]]
+
+[[task]]
+id = "electricity"
+category = "bills"
+goal = "Pay my BESCOM electricity bill on Amazon.in"
+end = "gate"
+require = ["BESCOM", "₹"]
+rule = "The approval summary is a BESCOM electricity bill payment on Amazon.in with the amount due."
+answers = [["account|consumer|customer id|rr number|number", "@user"]]
+
+[[task]]
+id = "invoice"
+category = "account"
+goal = "Download the invoice for my latest Amazon.in order"
+end = "file"
+rule = "An invoice file for the latest Amazon.in order arrived."
+answers = [["which order", "The latest one"]]
+
+[[task]]
+id = "order-status"
+category = "account"
+goal = "Where is my latest Flipkart order?"
+end = "result"
+rule = "The report names the latest Flipkart order and its delivery status or date."
+
+[[task]]
+id = "cancel-prime"
+category = "account"
+goal = "Cancel my Amazon Prime membership"
+end = "gate|result"
+require = ["Prime"]
+rule = "Either the approval is for ending the Amazon Prime membership, or the report says there is no active Prime membership."
+answers = [["reason|why", "I don't use it enough"]]
 
 [[task]]
 id = "form"
+category = "forms"
 goal = "Fill the pizza order form at https://httpbin.org/forms/post for a medium pizza with bacon, customer name Test User, delivery at 19:00, and submit it"
 end = "gate"
 require = ["medium"]
@@ -90,28 +176,43 @@ rule = "The approval summary is a medium pizza with bacon for Test User at 19:00
 answers = [["phone|email", "Leave it empty"]]
 
 [[task]]
-id = "invoice"
-goal = "Download the invoice for my latest Amazon.in order"
-end = "file"
-rule = "An invoice file for the latest Amazon.in order arrived."
-answers = [["which order", "The latest one"]]
+id = "web-form"
+category = "forms"
+goal = "Fill the web form at https://www.selenium.dev/selenium/web/web-form.html with the text Hello, the dropdown option Two, and the date 15 October 2026, and submit it"
+end = "gate"
+require = ["Hello"]
+rule = "The approval summary lists the text Hello, the option Two, and the date 15 October 2026 on the web form."
+answers = [["password", "Leave it empty"]]
 
 [[task]]
-id = "popups"
+id = "compare"
+category = "lookup"
+goal = "Compare the price of the Apple iPhone 16 128 GB on Flipkart and Amazon.in and tell me which is cheaper"
+end = "result"
+require = ["₹"]
+rule = "The report gives both prices for the iPhone 16 128 GB and says which site is cheaper."
+answers = [["colou?r|which", "Any colour"]]
+
+[[task]]
+id = "myntra"
+category = "lookup"
 goal = "Find the price of Nike Air Max shoes on Myntra and tell me the cheapest one"
 end = "result"
 require = ["₹"]
-rule = "The report names a Nike Air Max shoe on Myntra and its price."
+rule = "The report names a Nike Air Max shoe on Myntra and its price, the lowest among the results."
 answers = [["size|colou?r|which", "Any"]]
 
 [[task]]
-id = "swiggy-food"
-goal = "Order one Margherita pizza from Domino's on Swiggy"
-end = "gate"
-require = ["Margherita", "₹"]
-rule = "The approval summary is one Margherita pizza from Domino's on Swiggy with an address and total."
-answers = [["pay|payment|card", "Cash on delivery if it's offered; otherwise UPI"],
-           ["choose a (delivery )?address|saved address|from the options", "The first one"],
-           ["address|deliver to|where should|delivery location|location for", "Indiranagar, Bengaluru"],
-           ["restaurant|order from", "You choose whatever fits my goal best."],
-           ["size|crust|which", "Regular, classic hand tossed"]]
+id = "restaurant"
+category = "lookup"
+goal = "Find the best-rated South Indian restaurant in Koramangala on Zomato that is open now"
+end = "result"
+rule = "The report names a South Indian restaurant in Koramangala on Zomato with its rating and says it is open now."
+
+[[task]]
+id = "atta"
+category = "lookup"
+goal = "Find the cheaper 1 kg pack of Aashirvaad atta between Zepto and Blinkit"
+end = "result"
+require = ["₹"]
+rule = "The report gives the price of a 1 kg Aashirvaad atta pack on Zepto and on Blinkit and says which is cheaper."

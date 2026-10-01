@@ -475,7 +475,11 @@ class Core:
             task.cancelled = True
             return {"cancel": True}
         if task.script is not None and message["kind"] not in {"secret", "image", "file"}:
-            return {"cancel": True} if task.cancelled else self.scripted(task, message)  # codes still go to chat
+            if task.cancelled:
+                return {"cancel": True}
+            reply = self.scripted(task, message)
+            if reply is not None:
+                return reply  # None: the script sends this question to the user's chat, like a code
         question = Question(next(self.question_ids), task, message, self.clock())
         with self.lock:
             if task.cancelled:  # cancelled while this step was deciding: never show its question
@@ -487,7 +491,7 @@ class Core:
         while not question.answered.wait(self.poll):
             waited = self.clock() - question.asked_at
             if task.script is not None and waited >= BENCH_CODE_WAIT:
-                task.bench["stopped"] = "needs sign-in: no code came within 5 minutes"
+                task.bench["stopped"] = "needs you: no answer came within 5 minutes"
                 with self.lock:
                     if question in self.queue:
                         self.queue.remove(question)
@@ -513,7 +517,8 @@ class Core:
         return question.reply
 
     def scripted(self, task, message):
-        """A bench task's reply: NO at the final approval (the run ends there), else the script's answer."""
+        """A bench task's reply: NO at the final approval (the run ends there), None to send the question to the
+        user's chat, else the script's answer."""
         from . import bench
 
         text = message["text"]
@@ -523,6 +528,8 @@ class Core:
             task.cancelled = True
             return {"cancel": True}
         answer = bench.reply(task.script, text)
+        if answer == bench.FORWARD:
+            return None
         task.bench["asked"].append({"question": text, "answer": answer})
         self.say(f"(bench) {text}\n→ {answer}", task)
         return {"text": answer}

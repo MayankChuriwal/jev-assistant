@@ -392,10 +392,16 @@ def serve(port=CHAT_PORT, bench=None):
     if bench:
         from . import bench as live
 
-        path, only, repeat = bench
+        path, only, repeat, unseen, seed = bench
         tasks = [t for t in live.load(path) if not only or t["id"] in only.split(",")]
+        pool = Path(path).with_name("unseen.toml")
+        pool = pool if pool.exists() and not only and unseen else None
+        seed = seed if seed is not None else int(time.time()) % 100000
         out = home() / "bench" / time.strftime("%Y%m%d-%H%M%S")
-        threading.Thread(target=lambda: print(f"Bench report: {live.run(core, tasks, repeat, out)}", flush=True),
+        print(f"Bench: {len(tasks)} known × {repeat}" + (f", {unseen} unseen per run, seed {seed}" if pool else ""),
+              flush=True)
+        threading.Thread(target=lambda: print("Bench report:", live.run(core, tasks, repeat, out, pool=pool,
+                                                                        unseen=unseen, seed=seed), flush=True),
                          daemon=True).start()
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))  # stop like Ctrl+C
     try:
@@ -427,12 +433,14 @@ def main(argv=None):
     traces_parser.add_argument("--limit", type=int, default=10)
     save_parser = commands.add_parser("bench-save", help="keep a trace step as a replay case")
     save_parser.add_argument("trace")
-    save_parser.add_argument("step", type=int)
-    save_parser.add_argument("expect", help='e.g. "op=ASK" or "op=TYPE, target~where to"')
-    commands.add_parser("replay", help="run mini on every saved replay case")
+    save_parser.add_argument("step", type=int, help="the Jev request's number in the trace, 1 = first")
+    save_parser.add_argument("expect", help='e.g. "op=CLICK, target~search"')
+    commands.add_parser("replay", help="ask Jev every saved replay case again (uses the paid API)")
     parser.add_argument("--bench", nargs="?", const="bench/tasks.toml", help="run the live bench file")
     parser.add_argument("--only", help="bench task ids, comma separated")
     parser.add_argument("--repeat", type=int, default=2)
+    parser.add_argument("--unseen", type=int, default=8, help="unseen bench tasks sampled per run")
+    parser.add_argument("--seed", type=int, help="seed for sampling unseen tasks (default: from the clock)")
     args = parser.parse_args(argv)
     if args.command == "chrome":
         return chrome()
@@ -458,4 +466,4 @@ def main(argv=None):
         for r in results:
             print(("ok   " if r["ok"] else "FAIL ") + r["case"] + ("" if r["ok"] else f"  got {r['got']}"))
         return 0 if all(r["ok"] for r in results) else 1
-    return serve(bench=args.bench and (args.bench, args.only, args.repeat))
+    return serve(bench=args.bench and (args.bench, args.only, args.repeat, args.unseen, args.seed))

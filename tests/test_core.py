@@ -633,7 +633,7 @@ def test_a_bench_task_moves_on_when_no_sign_in_code_comes(world):
     until(lambda: world.core.open is not None)
     world.clock.now += conversation.BENCH_CODE_WAIT + 1
     until(lambda: task.status not in conversation.ACTIVE)
-    assert task.bench["stopped"] == "needs sign-in: no code came within 5 minutes"
+    assert task.bench["stopped"] == "needs you: no answer came within 5 minutes"
 
 
 def test_a_new_request_while_a_task_runs_starts_alongside_it(world):
@@ -704,3 +704,17 @@ def test_new_task_takes_the_core_lock_so_the_bench_thread_cannot_race_the_chat(w
         assert thread.is_alive() and not world.core.tasks
     thread.join(2)
     assert made and "t1" in world.core.tasks
+
+
+def test_a_bench_question_scripted_for_the_user_goes_to_the_chat(tmp_path):
+    c = conversation.Core(WebChannel(tmp_path / "media"), profile=Profile(tmp_path / "p.json"),
+                          make_worker=lambda *a: None, start=lambda goal: ("https://x.test/", "x", True),
+                          library=EMPTY, poll=0.01)
+    task = conversation.Task("t9", "Pay my bill")
+    task.script = {"answers": [["account", "@user"]], "fallback": "ok"}
+    replies = []
+    threading.Thread(target=lambda: replies.append(c.ask(task, {"kind": "text", "text": "What is your account "
+                                                                "number?"})), daemon=True).start()
+    assert until(lambda: c.open is not None)
+    c.answer(c.open, {"type": "text", "text": "1234567"})
+    assert until(lambda: replies) and replies == [{"text": "1234567"}]
