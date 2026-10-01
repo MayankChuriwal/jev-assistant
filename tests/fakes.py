@@ -4,7 +4,6 @@ Chrome, no models."""
 from unittest.mock import Mock
 
 from assistant.browser import fingerprint
-from assistant.profile import Profile
 
 MEMORY = None  # conftest sets this for each test: calling it returns the test's own Memory, made on first use
 
@@ -107,19 +106,24 @@ def jev_checks(monkeypatch, **overrides):
         monkeypatch.setattr(jev, name, lambda *a, _q=queue, **k: _q.pop(0) if len(_q) > 1 else _q[0])
 
 
-def worker_with(tmp_path, *, replies=(), page=None, goal="Order Diet Coke on Instamart", profile=None, **options):
-    """A Worker over a mock browser with the shipped skills. `replies` answer questions in order, then the user
-    cancels. Questions land in `w.asked`; one-way messages in `w.told`."""
+def worker_with(tmp_path, *, replies=(), page=None, goal="Order Diet Coke on Instamart", profile=None, memory=None,
+                **options):
+    """A Worker over a mock browser with the shipped skills, on this test's memory (or the one given). `profile` sets
+    IDs; an empty value leaves one unset; name and phone are set unless a test says otherwise. `replies` answer
+    questions in order, then the user cancels. Questions land in `w.asked`; one-way messages in `w.told`."""
+    from assistant.memory import LABELS
     from assistant.worker import Worker
 
     page = page or fake_page()
-    owner = Profile(tmp_path / "profile.json")
-    owner.data.update({"name": "Mayank Churiwal", "phone": "+91 98765 43210", **(profile or {})})
+    owner = memory if memory is not None else store()
+    for key, value in {"name": "Mayank Churiwal", "phone": "+91 98765 43210", **(profile or {})}.items():
+        if value:
+            owner.set_id(key, LABELS.get(key, key.replace("_", " ")), value)
     browser = Mock(fresh=Mock(return_value=True), observe=Mock(return_value=page), act=Mock(return_value={}),
                    screenshot=Mock(return_value="iVBORw0KGgo="), focused_label=Mock(return_value=""),
                    downloads=[], pending_downloads=[])
     asked, told, queue = [], [], list(replies)
-    w = Worker(page["url"], goal, profile=owner, browser=browser, trace_dir=tmp_path / "traces",
+    w = Worker(page["url"], goal, memory=owner, browser=browser, trace_dir=tmp_path / "traces",
                asker=lambda m: asked.append(m) or (queue.pop(0) if queue else {"cancel": True}),
                notify=told.append, **options)
     w.asked, w.told = asked, told

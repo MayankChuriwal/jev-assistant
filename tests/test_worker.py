@@ -7,12 +7,11 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
-from fakes import fake_page, jev_checks, script_jev, script_planner, sub, turn, worker_with
+from fakes import fake_page, jev_checks, script_jev, script_planner, store, sub, turn, worker_with
 
 from assistant import jev, planner, rules
 from assistant.browser import ExecutionUncertain, StalePage, fingerprint
 from assistant.errors import Retry
-from assistant.profile import Profile
 from assistant.worker import STOPPED, Worker, secret_field
 
 
@@ -89,7 +88,7 @@ def test_a_missing_profile_detail_is_asked_hidden_and_remembered(tmp_path, monke
     w.command("tick")
     w.command("tick")
     assert w.asked[0]["kind"] == "secret" and "email address" in w.asked[0]["text"]
-    assert w.browser.act.call_args.kwargs["text"] == "me@example.com" and w.profile.data["email"] == "me@example.com"
+    assert w.browser.act.call_args.kwargs["text"] == "me@example.com" and w.memory.id_value("email") == "me@example.com"
 
 
 def test_a_field_with_no_value_is_written_by_the_planner(tmp_path, monkeypatch):
@@ -735,7 +734,7 @@ def test_a_secret_is_typed_only_as_the_placeholder_of_a_real_answer_into_a_code_
 def cold_start(tmp_path, url, *pages):
     browser = Mock(fresh=Mock(return_value=True), observe=Mock(side_effect=list(pages)), navigate=Mock(),
                    downloads=[], pending_downloads=[])
-    w = Worker(url, "Order Diet Coke", profile=Profile(tmp_path / "profile.json"), browser=browser,
+    w = Worker(url, "Order Diet Coke", memory=store(), browser=browser,
                trace_dir=tmp_path / "traces")
     return w, browser
 
@@ -901,8 +900,7 @@ def test_a_trivial_hidden_answer_is_kept_but_never_hides_words_on_later_pages(tm
 
 def test_profile_values_learned_by_one_task_are_hidden_from_the_next_model_call_of_another(tmp_path, monkeypatch):
     first = worker_with(tmp_path, replies=[{"text": "me@example.com"}], profile={"email": ""})
-    second = worker_with(tmp_path)
-    second.profile = first.profile  # the chat core gives every task the same profile
+    second = worker_with(tmp_path, memory=first.memory)  # the chat core gives every task the same memory
     assert first.profile_value("email") == "me@example.com"
     assert second.secrets.text("mail me@example.com") == "mail me@example.com"  # not yet: no command since
     script_planner(monkeypatch, turn("STOP", message="Done here."))
@@ -1012,3 +1010,58 @@ def test_a_code_otp_or_pin_is_still_a_secret_ask(text):
     from assistant.worker import CODE_WORDS
 
     assert CODE_WORDS.search(text)
+
+
+# ---- Plan 7 Task 3: memory instead of the profile
+
+
+def test_an_id_the_task_needs_is_asked_hidden_once_and_kept_encrypted(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, replies=[{"text": "1234567890"}])
+    script_planner(monkeypatch, turn(subgoals=[sub("enter the account", values=[("BESCOM account number",
+                                                                                 "[profile:bescom_account]")])]))
+    sent = script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Phone number"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert w.asked[0] == {"from": "agent", "kind": "secret", "text": "What's your BESCOM account number? It stays "
+                          "hidden from the models, and I'll remember it for next time."}
+    assert w.browser.act.call_args.kwargs["text"] == "1234567890"
+    assert w.memory.id_value("bescom_account") == "1234567890"
+    assert "Saved your BESCOM account number. The models never see it." in [m["text"] for m in w.told]
+    assert "1234567890" not in json.dumps([s for s, _ in sent]) + json.dumps(w.trace(), default=str)
+
+
+def test_the_planner_reads_memory_and_never_an_id_value(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    w.memory.remember("address", "12, 4th Cross, Koramangala", label="Home", tags=["address"])
+    seen = script_planner(monkeypatch, turn("STOP", message="Done here."))
+    w.command("tick")
+    block = seen[0]["memory"]
+    assert {"key": "phone", "label": "phone number"} in block["ids"] and block["addresses"][0]["label"] == "Home"
+    assert "profile" not in seen[0] and "98765" not in json.dumps(seen[0], default=str)
+
+
+def test_asking_for_an_id_memory_holds_is_refused(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, profile={"bescom_account": "1234567890"})
+    script_planner(monkeypatch, turn("ASK", message="What is your BESCOM account number?"))
+    w.command("tick")
+    assert "Memory has it: use [profile:bescom_account]" in w.state["feedback"][-1] and not w.asked
+
+
+def test_a_forgotten_id_stays_hidden_in_the_running_task_and_is_asked_again_next_time(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, profile={"email": "me@example.com"})
+    script_planner(monkeypatch, turn("STOP", message="Done here."))
+    w.memory.forget("id:email")
+    w.command("tick")  # the running task still hides what it already knew
+    assert w.secrets.text("mail me@example.com") == "mail [profile:email]"
+    later = worker_with(tmp_path, replies=[{"text": "new@example.com"}], memory=w.memory)
+    assert later.profile_value("email") == "new@example.com" and later.asked[0]["kind"] == "secret"
+
+
+def test_an_id_that_is_never_kept_is_used_for_this_task_only(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, replies=[{"text": "4111 1111 1111 1111"}])
+    assert w.profile_value("consumer_number") == "4111 1111 1111 1111"
+    assert w.profile_value("consumer_number") == "4111 1111 1111 1111" and len(w.asked) == 1
+    assert any("for this task only" in m["text"] for m in w.told)
+    with pytest.raises(KeyError):
+        w.memory.id_value("consumer_number")

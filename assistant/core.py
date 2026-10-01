@@ -10,8 +10,8 @@ from urllib.parse import urlparse
 
 from . import jev, messages, planner, rules, skills
 from .gate import cap
+from .memory import UNSTORABLE, Memory, Unstorable
 from .privacy import SECRETS, Secrets
-from .profile import Profile
 from .worker import DELEGATE, STOPPED, Worker
 
 MAX_RUNNING = 3
@@ -56,10 +56,10 @@ class Task:
 
 
 class Core:
-    def __init__(self, channel, *, user="local", profile=None, make_worker=None, start=None, route=None, intake=None,
+    def __init__(self, channel, *, user="local", memory=None, make_worker=None, start=None, route=None, intake=None,
                  split=None, chat=None, remember=None, library=None, clock=time.monotonic, poll=1.0):
         self.channel, self.user = channel, user
-        self.profile = profile or Profile()
+        self.memory = memory if memory is not None else Memory.open()
         self.make_worker = make_worker or self.worker_for
         self.start = start or planner.start
         self.route_message = route or jev.route
@@ -76,13 +76,13 @@ class Core:
         self.task_ids, self.question_ids = itertools.count(1), itertools.count(1)
 
     def worker_for(self, task, url, asker, notify):
-        return Worker(url, task.goal, title=task.title, asker=asker, notify=notify, profile=self.profile,
+        return Worker(url, task.goal, title=task.title, asker=asker, notify=notify, memory=self.memory,
                       skill=task.skill, preauth=task.preauth, cap=task.cap, library=self.library)
 
     def hidden(self, call, *args):
-        """A model call with the user's profile values redacted: read afresh each time, so a value a task learned
+        """A model call with the user's IDs redacted: read afresh each time, so a value a task learned
         a moment ago is hidden too."""
-        token = SECRETS.set(Secrets(self.profile.hidden_values()))
+        token = SECRETS.set(Secrets(self.memory.hidden_values()))
         try:
             return call(*args)
         finally:
@@ -249,18 +249,23 @@ class Core:
     def offer_remember(self, question, option):
         label = next((o["label"] for o in question.message["options"] if o["id"] == option), None)
         if label:
-            self.remembering[str(question.id)] = (question.message["text"], label, question.task.goal)
+            task = question.task
+            tags = [t for t in (task.skill, task.host) if t]
+            self.remembering[str(question.id)] = (question.message["text"], label, task.goal, tags)
             self.buttons(f"Remember “{label}” for next time?", [(f"remember:{question.id}", "Remember this")])
 
     def remember(self, key):
         item = self.remembering.pop(key, None)
         if item:
-            question, label, goal = item
+            question, label, goal, tags = item
             try:
                 preference, _ = self.hidden(self.remember_job, question, label)
+                self.memory.remember("preference", preference, tags=tags, source=f"{question} → {label}", task=goal,
+                                     actor="user")
+            except Unstorable:
+                return self.say(UNSTORABLE)
             except Exception as error:
                 return self.say(f"I couldn't save that: {error}")
-            self.profile.remember(preference, goal)
             self.say(f"Saved for next time: {preference}")
 
     def show_next(self):
@@ -432,11 +437,10 @@ class Core:
             note = skills.named(words, notes)
             return next((host for host, n in notes.items() if n is note), None) if note else None
 
-        prefix = f"default app for {skill['name'].lower()}:"
-        for saved in reversed(self.profile.data["preferences"]):  # the newest default naming one of its sites
-            if saved["text"].lower().startswith(prefix) and (host := resolve(saved["text"].split(":", 1)[1])):
-                self.say(f"Using {names[host]} for {skill['name']}, as you chose before.", task)
-                return host
+        saved = self.memory.default_app(skill["name"])
+        if saved and (host := resolve(saved)):
+            self.say(f"Using {names[host]} for {skill['name']}, as you chose before.", task)
+            return host
         listed = list(names.values())
         options = ", ".join(listed[:-1]) + f" or {listed[-1]}" if len(listed) > 1 else listed[0]
         reply = self.ask(task, {"kind": "text", "text": f"Which app should I use for {skill['name']}: {options}?"})
@@ -448,9 +452,9 @@ class Core:
         host = resolve(text)
         if host is None:
             return text  # an app the skill doesn't list: the user's own words, not saved
-        choice = f"Default app for {skill['name']}: {names[host]}"
-        if not any(p["text"].lower() == choice.lower() for p in self.profile.data["preferences"]):  # not twice
-            self.profile.remember(choice, task.goal)
+        if self.memory.default_app(skill["name"]) != names[host]:  # two tasks asked at once save it once
+            self.memory.remember("default_app", names[host], label=skill["name"], tags=[skill["name"]], source=text,
+                                 task=task.goal, actor="user", supersede=True)
             self.say(f"Saved: I'll use {names[host]} for {skill['name']} from now on.", task)
         return host
 

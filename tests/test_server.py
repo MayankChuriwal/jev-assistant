@@ -4,6 +4,7 @@ import json
 import os
 
 import pytest
+from fakes import store
 
 from assistant import server
 
@@ -69,21 +70,11 @@ def test_traces_lists_the_latest_runs(tmp_path, capsys):
     assert server.traces(folder=tmp_path / "none") == 0 and "No traces yet" in capsys.readouterr().out
 
 
-def test_the_profile_command_keeps_private_details_private(tmp_path, monkeypatch, capsys):
-    from assistant.profile import Profile
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("assistant.profile.HOME", tmp_path)
-    assert server.main(["profile", "--name", "Mayank Churiwal", "--phone", "+91 98765 43210"]) == 0
-    out = capsys.readouterr().out
-    assert Profile().data["name"] == "Mayank Churiwal" and "name: set" in out and "email: not set" in out
-    assert "98765" not in out and "Mayank" not in out
-
-
 def test_a_second_jev_explains_the_port_is_taken(monkeypatch, capsys):
     import socket
 
     monkeypatch.setattr(server, "chrome", lambda: 0)
+    monkeypatch.setattr(server, "open_memory", store)
     taken = socket.socket()
     taken.bind(("127.0.0.1", 0))
     taken.listen()

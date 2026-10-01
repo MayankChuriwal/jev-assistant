@@ -13,12 +13,12 @@ from urllib.parse import urlparse
 from . import executor, gate, jev, planner, rules, skills, views
 from .browser import Browser, ExecutionUncertain, StalePage, unique
 from .errors import Halt, Retry
+from .memory import HOME, KEY, LABELS, Memory, StoreError, Unstorable
 from .model import METER, action_space, new_meter, spent
-from .privacy import SECRETS, Secrets
-from .profile import HOME, Profile
+from .privacy import SECRETS, Secrets, storable, variants
 
 STOPPED = {"done", "blocked", "failed", "cancelled"}
-PRIVATE = {"browser", "answers"}  # hold secret values
+PRIVATE = {"browser", "answers", "ids"}  # hold secret values
 MAX_ACTIONS = 150
 MAX_MINUTES = 30
 MAX_SPEND = 0.25
@@ -41,7 +41,6 @@ PLACE = re.compile(r"\b(address|deliver(y)? (to|location|address)|where (should|
 PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGNORECASE),
                 "email": re.compile(r"\b(your e-?mail|e-?mail (address|id))\b", re.IGNORECASE),
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
-PROFILE_NAMES = {"phone": "phone number", "email": "email address", "name": "full name", "upi_id": "UPI ID"}
 
 
 def secret_field(action):
@@ -82,20 +81,20 @@ class Worker:
     quiet_wait = 1.5  # seconds to keep looking when a step seems to have changed nothing
     bench = False  # a bench run: a pre-authorisation is logged, never used
 
-    def __init__(self, url, goal, *, asker=None, notify=None, profile=None, browser=None, title=None, skill=None,
+    def __init__(self, url, goal, *, asker=None, notify=None, memory=None, browser=None, title=None, skill=None,
                  preauth=False, cap=None, library=None, trace_dir=None, provide_file=None):
         goal = goal.strip() if isinstance(goal, str) else ""
         if not goal:
             raise ValueError("Supply a task")
         self.asker, self.notify, self.provide_file = asker, notify, provide_file
-        self.profile = profile or Profile()
-        self.secrets = Secrets(self.profile.hidden_values())
+        self.memory = memory if memory is not None else Memory.open()
+        self.secrets = Secrets(self.memory.hidden_values())
         self.library = library if library is not None else {"skills": skills.load(), "sites": skills.load_sites()}
         if trace_dir:
             self.trace_dir = Path(trace_dir)
         token = SECRETS.set(self.secrets)
         try:
-            self.browser = browser or Browser(url, geolocation=self.profile.geolocation())
+            self.browser = browser or Browser(url, geolocation=self.memory.geolocation())
             try:
                 page = self.clean(self.browser.observe())
                 home = urlparse(url)._replace(path="/", params="", query="", fragment="").geturl()
@@ -114,7 +113,7 @@ class Worker:
     def new_state(browser, goal, title, page):
         return dict(
             browser=browser, goal=goal, title=title, page=page, status="ready", started_at=None, elapsed_ms=0,
-            waited_ms=0, history=[], messages=[], files=list(page.get("downloads", [])), answers={}, typed={},
+            waited_ms=0, history=[], messages=[], files=list(page.get("downloads", [])), answers={}, ids={}, typed={},
             approval=None, commit=None, done=[], errors=[], plan=[], current=0, notes=[], chat=[], feedback=[],
             reason="start", candidates=[], seen=None, recent=[], jev=[], turns=[], refusals={}, switched=[],
             subgoal_steps=0, loop_from=0, code_asks=0, model_errors=0, mismatches=0, done_refusals=0,
@@ -191,7 +190,7 @@ class Worker:
                 del self.state["typed"][where]
 
     def file_name(self, path):
-        """A file's name as logs and models may see it: profile values hidden, even inside names like Jane_Doe_CV."""
+        """A file's name as logs and models may see it: IDs hidden, even inside names like Jane_Doe_CV."""
         name = Path(path).name
         spaced = re.sub(r"[_-]+", " ", name)
         return self.secrets.text(spaced) if self.secrets.text(spaced) != spaced else name
@@ -217,7 +216,7 @@ class Worker:
             raise ValueError("Unknown command")
         if self.state["status"] in STOPPED:
             return self.snapshot()  # a stopped task is never driven again
-        for value, placeholder in self.profile.hidden_values():  # a value another task learned is hidden here too
+        for value, placeholder in self.memory.hidden_values():  # a value another task learned is hidden here too
             self.secrets.add(value, placeholder)
         secrets, meter = SECRETS.set(self.secrets), METER.set(self.state["meter"])
         try:
@@ -541,7 +540,8 @@ class Worker:
             "skill": skills.render(skill, situations, skills.site_for(page["url"], self.library["sites"])),
             "goal": s["goal"], "today": time.strftime("%A, %d %B %Y"), "dates": planner.dates(s["goal"]),
             "plan": [{"n": n, **g, "current": n - 1 == s["current"]} for n, g in enumerate(s["plan"], 1)],
-            "notes": s["notes"][-15:], "chat": s["chat"][-20:], "profile": self.profile.summary(),
+            "notes": s["notes"][-15:], "chat": s["chat"][-20:],
+            "memory": self.memory.recall(s["skill"], skills.bare(rules.host(page["url"]).lower()), s["goal"]),
             "steps": self.recent_steps(8),
             "committed_and_waiting": s["commit"]["label"] if s["commit"] else None,
             "page": views.view(page, s["seen"]),
@@ -616,9 +616,12 @@ class Worker:
         # options included: a reply typed in the open would reach the models. A picked option is read by code below.
         secret = (rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
                   or bool(rules.CARD_DETAIL.search(message)))
-        held = [k for k, pattern in PROFILE_ASKS.items() if self.profile.data.get(k) and pattern.search(message)]
+        saved = {i["key"]: i["label"] for i in self.memory.ids()}
+        held = [k for k, pattern in PROFILE_ASKS.items() if k in saved and pattern.search(message)]
+        held += [k for k, label in saved.items() if k not in PROFILE_ASKS and rules.words(label)
+                 and rules.words(label) <= rules.words(message)]
         if not secret and held:
-            raise Retry(f"The user's profile has it: use [profile:{held[0]}] as the value instead of asking.")
+            raise Retry(f"Memory has it: use [profile:{held[0]}] as the value instead of asking.")
         if s["delegated_at"] == len(s["history"]):
             raise Retry("The user just left this choice to you: pick the option that best fits the goal, TELL them "
                         "which one, and act on it.")
@@ -774,27 +777,45 @@ class Worker:
         def real(match):
             kind, key = match[1], match[2]
             if kind == "profile":
-                return self.profile_value(key)
+                return self.profile_value(key, action)
             if key in s["answers"]:
                 return s["answers"][key]
             raise Retry(f"[secret:{key}] isn't one of the user's answers.")
 
         return {"text": PLACEHOLDER.sub(real, text)}, text
 
-    def profile_value(self, key):
-        """A profile detail for a placeholder: from the profile, else asked once through the hidden field and kept."""
+    def profile_value(self, key, action=None):
+        """An ID for a placeholder: from this task or memory, else asked once through the hidden field and kept,
+        encrypted. Its name comes from the known labels, the subgoal value holding the placeholder, or the field."""
+        if key in self.state["ids"]:
+            return self.state["ids"][key]
         try:
-            return self.profile.value(key)
+            return self.memory.id_value(key)
         except KeyError:
             pass
-        if key not in PROFILE_NAMES:
-            raise Retry(f"There is no profile detail called {key}.")
-        reply = self.ask({"kind": "secret", "text": f"What's your {PROFILE_NAMES[key]}? It stays hidden from the "
-                                                    "models, and I'll remember it for next time."})
+        if not KEY.match(key):
+            raise Retry(f"[profile:{key}] isn't an ID name: use lowercase letters, digits, and underscores.")
+        values = (self.subgoal() or {}).get("values") or []
+        label = (LABELS.get(key) or next((v["field"].strip() for v in values if f"[profile:{key}]" in v["text"]
+                                          and v["field"].strip()), None)
+                 or (action or {}).get("label") or key.replace("_", " "))
+        if not storable(label):
+            raise Retry(f"“{label}” is never kept or asked for this way: the system asks for codes and card details "
+                        "itself.")
+        reply = self.ask({"kind": "secret", "text": f"What's your {label}? It stays hidden from the models, and I'll "
+                                                    "remember it for next time."})
         value = str(reply.get("text", "")).strip()
         if not value:
-            raise Halt("blocked", f"I need your {PROFILE_NAMES[key]} to go on.")
-        self.learn(key, value)
+            raise Halt("blocked", f"I need your {label} to go on.")
+        for hidden, placeholder in variants(key, value):
+            self.secrets.add(hidden, placeholder)  # hidden in this task even when it can't be kept
+        try:
+            self.memory.set_id(key, label, value)
+        except (Unstorable, StoreError, ValueError) as error:
+            self.state["ids"][key] = value
+            self.say(f"I'll use your {label} for this task only: {error}")
+            return value
+        self.say(f"Saved your {label}. The models never see it.")
         return value
 
     def files_for(self, action):
@@ -940,14 +961,6 @@ class Worker:
             self.secrets.add(value, f"[secret:{name}]")
         return name
 
-    def learn(self, key, value):
-        """A detail the user gave joins their profile: hidden from every model from now on."""
-        self.profile.data[key] = value
-        self.profile.save()
-        for hidden, placeholder in self.profile.hidden_values():
-            self.secrets.add(hidden, placeholder)
-        self.say(f"Saved your {PROFILE_NAMES[key]} to your profile. The models never see it.")
-
     def update(self, text):
         """A change the user sent for this task: the planner hears it next, and any approval is void."""
         s = self.state
@@ -962,7 +975,7 @@ class Worker:
             raise StalePage("The user cancelled or changed the task. Decide again.")
 
     def hidden_details(self):
-        return [value for value, _ in self.profile.hidden_values()]  # screenshots blur them where the page shows them
+        return [value for value, _ in self.memory.hidden_values()]  # screenshots blur them where the page shows them
 
     # ---- records
 

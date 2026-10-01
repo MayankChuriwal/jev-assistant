@@ -2,6 +2,8 @@
 
 from unittest.mock import Mock
 
+from fakes import store
+
 from assistant import server
 
 
@@ -46,6 +48,7 @@ def fake_worker(monkeypatch, command, **state):
     worker = Mock(state={"status": "ready", "commit": None, "history": [], "elapsed_ms": 0, **state})
     worker.command = Mock(side_effect=command)
     made = []
+    monkeypatch.setattr("assistant.server.open_memory", lambda *a, **k: store())
     monkeypatch.setattr("assistant.worker.Worker", lambda url, goal, **kw: made.append((url, goal, kw)) or worker)
     monkeypatch.setattr("assistant.jev.intake", lambda *a, **k: {"several": "no", "skill": "general", "preauth": "no"})
     monkeypatch.setattr("assistant.planner.start", lambda goal: ("https://found.test/", "Found", True))

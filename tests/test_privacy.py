@@ -1,115 +1,15 @@
-"""Redaction, never-store rules, and (until Plan 7 Task 3) the old profile and vault.
-The vault test uses a throwaway keychain, never the login keychain."""
-
-import json
-import stat
-import subprocess
-import threading
+"""Redaction (Secrets) and what is never stored."""
 
 import pytest
 
-from assistant import profile as profiles
-from assistant.profile import Profile, Vault
+from assistant import privacy
+from assistant.privacy import Secrets
 
 
-@pytest.fixture
-def profile(tmp_path):
-    p = Profile(tmp_path / "profile.json")
-    p.data.update(name="Mayank Churiwal", phone="+91 98765 43210", email="m@example.com",
-                  addresses=[{"label": "Home", "text": "12 MG Road, Bengaluru", "lat": 12.97, "lng": 77.6}],
-                  cards=[{"id": "hdfc", "label": "HDFC Visa", "last4": "1234"}], logins=["www.swiggy.com"])
-    return p
-
-
-def test_models_see_addresses_and_labels_but_only_names_of_hidden_values(profile):
-    summary = profile.summary()
-    assert summary["addresses"] == [{"label": "Home", "text": "12 MG Road, Bengaluru"}]
-    assert summary["cards"] == [{"id": "hdfc", "label": "HDFC Visa", "last4": "1234"}]
-    assert summary["profile_keys"] == ["name", "phone", "email"]
-    assert "card.hdfc.cvv" in summary["vault_keys"] and "login.www.swiggy.com" in summary["vault_keys"]
-    assert "98765" not in json.dumps(summary) and "Mayank" not in json.dumps(summary)
-
-
-def test_hidden_values_cover_common_reformattings(profile):
-    pairs = dict(profile.hidden_values())
-    assert pairs["+91 98765 43210"] == "[profile:phone]"
-    assert pairs["919876543210"] == pairs["9876543210"] == "[profile:phone]"
-    assert pairs["Mayank"] == pairs["Churiwal"] == "[profile:name]"
-    assert pairs["m@example.com"] == "[profile:email]"
-
-
-def test_values_are_read_only_for_set_hidden_fields(profile):
-    assert profile.value("phone") == "+91 98765 43210"
-    for key in ("upi_id", "addresses", "cards"):
-        with pytest.raises(KeyError):
-            profile.value(key)
-
-
-def test_saves_privately_and_round_trips(profile):
-    profile.remember("Default Instamart address: Home", "Order Diet Coke")
-    profile.add_card("icici", "ICICI Amex", "9876")
-    mode = stat.S_IMODE(profile.path.stat().st_mode)
-    assert mode == 0o600
-    again = Profile(profile.path)
-    assert again.data["preferences"] == [{"text": "Default Instamart address: Home", "from_task": "Order Diet Coke"}]
-    assert [c["id"] for c in again.data["cards"]] == ["hdfc", "icici"]
-    assert again.geolocation() == {"latitude": 12.97, "longitude": 77.6}
-
-
-def test_a_missing_file_is_an_empty_profile(tmp_path):
-    p = Profile(tmp_path / "none.json")
-    assert p.summary()["profile_keys"] == [] and p.geolocation() is None and p.hidden_values() == []
-
-
-import sys  # noqa: E402
-
-mac = pytest.mark.skipif(sys.platform != "darwin", reason="macOS Keychain")
-
-
-@pytest.fixture
-def keychain(tmp_path):
-    path = tmp_path / "test.keychain-db"
-    subprocess.run(["security", "create-keychain", "-p", "test", str(path)], check=True)
-    subprocess.run(["security", "unlock-keychain", "-p", "test", str(path)], check=True)
-    yield path
-    subprocess.run(["security", "delete-keychain", str(path)], check=False)
-
-
-@mac
-def test_vault_round_trips_awkward_secrets_without_argv(keychain, monkeypatch):
-    seen = []
-    real = subprocess.run
-
-    def spy(args, **kwargs):
-        seen.append((list(args), kwargs.get("input")))
-        return real(args, **kwargs)
-
-    monkeypatch.setattr(subprocess, "run", spy)
-    vault = Vault(keychain)
-    vault.set("card.hdfc.cvv", "1 2\"3'\\")
-    assert vault.get("card.hdfc.cvv") == "1 2\"3'\\"
-    vault.set("card.hdfc.cvv", "456")
-    assert vault.get("card.hdfc.cvv") == "456"
-    assert not any("456" in " ".join(args) for args, _ in seen)  # secrets never reach process arguments
-
-
-@mac
-def test_vault_reports_missing_and_rejects_bad_values(keychain):
-    vault = Vault(keychain)
-    with pytest.raises(KeyError):
-        vault.get("card.none.cvv")
-    for bad in ("", "two\nlines"):
-        with pytest.raises(ValueError):
-            vault.set("card.hdfc.cvv", bad)
-
-
-@mac
-def test_vault_notices_a_store_that_did_not_happen(tmp_path):
-    with pytest.raises(RuntimeError, match="did not store"):
-        Vault(tmp_path / "missing.keychain-db").set("card.hdfc.cvv", "123")
-
-
-from assistant.privacy import Secrets  # noqa: E402
+def test_phone_numbers_are_hidden_in_local_formats():
+    s = Secrets(privacy.variants("phone", "+91 98765 43210"))
+    for shown in ("(98765) 43210", "098765 43210", "+91-98765-43210", "98765.43210"):
+        assert "98765" not in s.text(f"call {shown} now"), shown
 
 
 def test_digit_secrets_are_hidden_in_any_spacing():
@@ -132,45 +32,6 @@ def test_redaction_is_deep_and_leaves_images_alone():
                               "img": "data:image/png;base64,482913AAAA"}
 
 
-def test_phone_numbers_are_hidden_in_local_formats(profile):
-    s = Secrets(profile.hidden_values())
-    for shown in ("(98765) 43210", "098765 43210", "+91-98765-43210", "98765.43210"):
-        assert "98765" not in s.text(f"call {shown} now"), shown
-
-
-def test_a_locked_keychain_never_hangs_the_task(monkeypatch):
-    seen = []
-
-    def hangs(args, **options):
-        seen.append(options.get("timeout"))
-        raise subprocess.TimeoutExpired(args, options.get("timeout"))
-
-    monkeypatch.setattr(profiles.subprocess, "run", hangs)
-    with pytest.raises(KeyError):
-        Vault().get("card.hdfc.cvv")  # the agent then asks for the value in chat instead
-    with pytest.raises(RuntimeError, match="Keychain"):
-        Vault().set("card.hdfc.cvv", "123")
-    assert seen == [profiles.KEYCHAIN_TIMEOUT] * 2
-
-
-def test_parallel_saves_never_collide(tmp_path):
-    p, errors = Profile(tmp_path / "profile.json"), []
-
-    def save_many():
-        try:
-            for _ in range(40):
-                p.save()
-        except Exception as error:
-            errors.append(error)
-
-    threads = [threading.Thread(target=save_many) for _ in range(8)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-    assert errors == [] and json.loads((tmp_path / "profile.json").read_text())["cards"] == []
-
-
 def test_redaction_reaches_dictionary_keys_and_a_leak_is_seen():
     secrets = Secrets([("9876543210", "[profile:phone]")])
     body = {"Call 98765 43210": ["ok"], "shot": "data:image/png;base64,98765 43210"}
@@ -178,8 +39,6 @@ def test_redaction_reaches_dictionary_keys_and_a_leak_is_seen():
     clean = secrets.redact(body)
     assert "Call [profile:phone]" in clean and not secrets.leaks(clean)
 
-
-# Final review, Group B: a short digit secret never matches inside a larger number.
 
 def test_a_short_digit_secret_never_matches_inside_a_larger_number():
     s = Secrets([("499", "[secret:answer1]")])
@@ -195,9 +54,6 @@ def test_a_long_digit_secret_keeps_its_spacing_tolerance_and_its_number_boundari
     assert s.text("OTP 482 913.") == "OTP [secret:otp]." and s.text("OTP 482-913") == "OTP [secret:otp]"
     assert s.text("Order 1,482913") == "Order 1,482913" and s.text("₹482913.50") == "₹482913.50"
 
-
-# Micro-fix: a phone or card number is redacted next to "." and ","; a short secret never sits inside a number,
-# not even a space-grouped amount.
 
 @pytest.mark.parametrize("shown", ["Mob.9876543210", "Mayank,9876543210,Bengaluru", "9876543210,560001",
                                    "Call:9876543210.", "+91 98765 43210", "+91-98765-43210", "(98765) 43210",
@@ -246,8 +102,6 @@ def test_a_four_digit_otp_follows_the_short_secret_rule():
         assert s.text(text) == shown and s.leaks(text), text
 
 
-# A short secret on its own line is redacted even after a line that ends in a digit; a spaced amount still is not.
-
 def test_a_short_digit_secret_on_its_own_line_is_redacted_after_a_line_ending_in_a_digit():
     s = Secrets([("299", "[secret:answer1]")])
     for text, shown in (("Order 4521\n299", "Order 4521\n[secret:answer1]"),
@@ -262,9 +116,6 @@ def test_a_spaced_amount_stays_whole_for_every_space_like_character(gap):
     s = Secrets([("299", "[secret:answer1]")])
     text = f"To pay ₹1{gap}299\nPay"
     assert s.text(text) == text and not s.leaks(text), repr(text)
-
-
-from assistant import privacy  # noqa: E402
 
 
 def test_card_numbers_aadhaar_pan_and_named_secrets_are_never_storable():

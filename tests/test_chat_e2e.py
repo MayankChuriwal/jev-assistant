@@ -2,13 +2,12 @@
 
 from unittest.mock import Mock
 
-from fakes import answers_for, fake_page, jev_checks, script_planner, sub, turn
+from fakes import answers_for, fake_page, jev_checks, script_planner, store, sub, turn
 from helpers import until
 
 from assistant import core as conversation
 from assistant import jev
 from assistant.channel_web import WebChannel
-from assistant.profile import Profile
 from assistant.worker import Worker
 
 
@@ -23,14 +22,14 @@ def test_an_order_is_planned_approved_in_chat_and_reported(tmp_path, monkeypatch
                         lambda state, questions: answers_for(questions, steps.pop(0) if len(steps) > 1 else steps[0]))
     jev_checks(monkeypatch)
     channel = WebChannel(tmp_path / "media")
-    profile = Profile(tmp_path / "profile.json")
+    memory = store()
 
     def make_worker(task, url, asker, notify):
-        return Worker(url, task.goal, asker=asker, notify=notify, profile=profile, browser=browser,
+        return Worker(url, task.goal, asker=asker, notify=notify, memory=memory, browser=browser,
                       trace_dir=tmp_path / "traces", skill=task.skill, preauth=task.preauth, cap=task.cap)
 
     routes = [("NEW_TASK", "none", {"NEW_TASK": 1.0}, {"none": 1.0}), ("ANSWER", "t1", {"ANSWER": 1.0}, {"t1": 1.0})]
-    chat = conversation.Core(channel, profile=profile, make_worker=make_worker, poll=0.01,
+    chat = conversation.Core(channel, memory=memory, make_worker=make_worker, poll=0.01,
                              route=lambda text, tasks, recent: routes.pop(0),
                              intake=lambda message, kinds, several=True: {"several": "no", "skill": "general",
                                                                           "preauth": "no"},

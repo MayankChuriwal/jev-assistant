@@ -50,6 +50,14 @@ def preauth_shadowed(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_database(monkeypatch):
+    """No test reaches the developer's own memory: a store opened without an address fails at once, and no real key
+    is in the environment. Tests pass their own `memory` (or use fakes.store())."""
+    monkeypatch.setenv("JEV_DATABASE_URL", "postgresql://never-the-real-memory@127.0.0.1:1/none")
+    monkeypatch.delenv("JEV_MEMORY_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def no_settling_wait(monkeypatch):
     """Fakes never change on their own, so waiting before asking the user, between looks at a commit the site is
     still processing, or for a click to show its effect would only slow the tests down."""

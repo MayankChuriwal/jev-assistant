@@ -6,10 +6,9 @@ import re
 from pathlib import Path
 
 import pytest
-from fakes import jev_checks, script_jev, script_planner, sub, turn
+from fakes import jev_checks, script_jev, script_planner, store, sub, turn
 from helpers import log
 
-from assistant.profile import Profile
 from assistant.worker import Worker
 
 pytestmark = pytest.mark.browser
@@ -38,8 +37,8 @@ def shop_step(state):
 
 
 def test_the_worker_signs_in_orders_and_reports_on_a_real_page(chrome, site, tmp_path, monkeypatch):
-    profile = Profile(tmp_path / "profile.json")
-    profile.data["phone"] = "+91 98765 43210"
+    memory = store()
+    memory.set_id("phone", "phone number", "+91 98765 43210")
     seen = script_planner(monkeypatch,
                           turn(subgoals=[sub("sign in and place the order", "the order is placed",
                                              values=[("phone number", "[profile:phone]")])]),
@@ -48,7 +47,7 @@ def test_the_worker_signs_in_orders_and_reports_on_a_real_page(chrome, site, tmp
     sent = script_jev(monkeypatch, shop_step)
     jev_checks(monkeypatch)
     replies, questions = [{"text": "482913"}, {"text": "123"}, {"text": "yes"}], []
-    w = Worker(site["a"] + "/shop.html", "Order Diet Coke from the shop", profile=profile, trace_dir=tmp_path / "t",
+    w = Worker(site["a"] + "/shop.html", "Order Diet Coke from the shop", memory=memory, trace_dir=tmp_path / "t",
                asker=lambda message: questions.append(message) or replies.pop(0))
     try:
         for state in w.steps():

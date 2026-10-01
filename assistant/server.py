@@ -52,6 +52,17 @@ def home():
     return Path(os.environ.get("JEV_HOME") or Path.home() / ".jev")
 
 
+def open_memory():
+    """The user's memory, or None after saying why it can't be opened (Postgres down, a bad key)."""
+    from .memory import Memory, StoreError
+
+    try:
+        return Memory.open()
+    except StoreError as error:
+        print(f"jev: {error}", file=sys.stderr)
+        return None
+
+
 def chrome_command():
     return ["open", "-gj", "-na", "Google Chrome", "--args", f"--user-data-dir={home() / 'chrome'}",
             f"--remote-debugging-port={PORT}", "--no-first-run", "--no-default-browser-check",
@@ -162,10 +173,12 @@ def run(goal, url=None):
     from . import worker as runtime
     from .gate import cap
     from .privacy import SECRETS, Secrets
-    from .profile import Profile
 
+    memory = open_memory()
+    if memory is None:
+        return 1
     library = {"skills": skills.load(), "sites": skills.load_sites()}
-    token = SECRETS.set(Secrets(Profile().hidden_values()))  # the goal may hold a phone number or an email
+    token = SECRETS.set(Secrets(memory.hidden_values()))  # the goal may hold a phone number or an email
     try:
         info = jev.intake(goal, skills.kinds(library["skills"]), several=False)
         skill = info["skill"] if info["skill"] in library["skills"] else None
@@ -174,7 +187,7 @@ def run(goal, url=None):
     finally:
         SECRETS.reset(token)
     worker = runtime.Worker(url, goal, asker=terminal_asker, notify=terminal_notify, skill=skill,
-                            preauth=info["preauth"] == "yes", cap=cap(goal), library=library)
+                            preauth=info["preauth"] == "yes", cap=cap(goal), library=library, memory=memory)
     shown = problems = 0
     try:
         while worker.state["status"] not in runtime.STOPPED:
@@ -198,22 +211,6 @@ def run(goal, url=None):
     finally:
         worker.close()
     return 0 if worker.state["status"] == "done" else 1
-
-
-def profile_command(args):
-    """Set the details every model sees only as placeholders, and show which are set (never their values)."""
-    from .profile import HIDDEN, Profile
-
-    profile = Profile()
-    changed = {key: value for key, value in (("name", args.name), ("phone", args.phone), ("email", args.email),
-                                             ("upi_id", args.upi)) if value}
-    if changed:
-        profile.data.update(changed)
-        profile.save()
-    print(f"Profile: {profile.path}")
-    for key in HIDDEN:
-        print(f"  {key}: {'set' if profile.data.get(key) else 'not set'}")
-    return 0
 
 
 def forget(sites):
@@ -377,11 +374,14 @@ def serve(port=CHAT_PORT, bench=None):
     from .channel_web import WebChannel
     from .core import Core
 
+    memory = open_memory()
+    if memory is None:
+        return 1
     if chrome():
         return 1
     channel = WebChannel(home() / "media")
     try:
-        core = Core(channel)
+        core = Core(channel, memory=memory)
         httpd = ChatServer(core, channel, port=port)
     except OSError as error:
         if error.errno != errno.EADDRINUSE:
@@ -425,9 +425,6 @@ def main(argv=None):
     run_parser = commands.add_parser("run", help="do one task in the agent Chrome, asking questions here")
     run_parser.add_argument("goal")
     run_parser.add_argument("--url", help="start page; found from the goal when omitted")
-    profile_parser = commands.add_parser("profile", help="set your name, phone, email, or UPI ID; no model sees them")
-    for flag in ("--name", "--phone", "--email", "--upi"):
-        profile_parser.add_argument(flag)
     forget_parser = commands.add_parser("forget", help="sign the agent Chrome out of sites, e.g. swiggy.com uber.com")
     forget_parser.add_argument("sites", nargs="+")
     traces_parser = commands.add_parser("traces", help="list the latest task traces")
@@ -451,8 +448,6 @@ def main(argv=None):
         return run(args.goal, args.url)
     if args.command == "traces":
         return traces(args.limit)
-    if args.command == "profile":
-        return profile_command(args)
     if args.command == "forget":
         return forget(args.sites)
     if args.command == "bench-save":

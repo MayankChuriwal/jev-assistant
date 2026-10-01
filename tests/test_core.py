@@ -4,11 +4,11 @@ import threading
 from types import SimpleNamespace
 
 import pytest
+from fakes import store
 from helpers import until
 
 from assistant import core as conversation
 from assistant.channel_web import WebChannel
-from assistant.profile import Profile
 
 ADDRESS = {"kind": "choice", "text": "Deliver to which address?", "remember": True,
            "options": [{"id": "o1", "label": "Home"}, {"id": "o2", "label": "Office"}]}
@@ -89,7 +89,7 @@ def world(tmp_path):
         return info if several else {**info, "several": "no"}
 
     w.core = conversation.Core(
-        w.channel, profile=Profile(tmp_path / "profile.json"), make_worker=make_worker,
+        w.channel, memory=store(), make_worker=make_worker,
         start=lambda goal: (f"https://{w.hosts.get(goal, 'shop.test')}/", goal, True), route=route, intake=intake,
         split=lambda message: w.splits.get(message, [message]), library=EMPTY,
         chat=lambda message, tasks: (f"About {len(tasks)} task(s).", {}),
@@ -256,8 +256,8 @@ def test_a_remember_button_follows_an_answered_choice(world):
     assert until(lambda: buttons(world) == ["remember:1"])
     tap(world, "remember:1")
     assert until(lambda: "Saved for next time: Default choice: Home" in bodies(world))
-    assert world.core.profile.data["preferences"][-1] == {"text": "Default choice: Home",
-                                                          "from_task": "Order Diet Coke"}
+    saved = world.core.memory.facts("preference")[0]
+    assert saved["text"] == "Default choice: Home" and "shop.test" in saved["tags"]
 
 
 def test_three_tasks_at_once_and_one_per_site(world):
@@ -587,7 +587,7 @@ def test_a_bench_task_answers_from_its_script_and_says_no_at_approval(tmp_path):
                                       "messages": []}, command=lambda n: None, settle=lambda: None,
                                close=lambda: None)
 
-    c = conversation.Core(channel, profile=Profile(tmp_path / "p.json"), make_worker=make_worker, library=EMPTY,
+    c = conversation.Core(channel, memory=store(), make_worker=make_worker, library=EMPTY,
                           start=lambda goal: ("https://m.uber.com/", "Uber", True), poll=0.01,
                           intake=lambda message, kinds, several=True: {"several": "no", "skill": "general",
                                                                        "preauth": "no"})
@@ -606,7 +606,7 @@ def test_shutting_down_cancels_running_tasks_so_their_traces_are_written(world):
 
 
 def test_a_cancelled_bench_task_gets_cancel_not_a_scripted_answer(tmp_path):
-    c = conversation.Core(WebChannel(tmp_path / "media"), profile=Profile(tmp_path / "p.json"),
+    c = conversation.Core(WebChannel(tmp_path / "media"), memory=store(),
                           make_worker=lambda *a: None, start=lambda goal: ("https://x.test/", "x", True), library=EMPTY,
                           poll=0.01)
     task = conversation.Task("t9", "Order a coke")
@@ -615,7 +615,7 @@ def test_a_cancelled_bench_task_gets_cancel_not_a_scripted_answer(tmp_path):
 
 
 def test_a_bench_task_never_asks_for_card_details(tmp_path):
-    c = conversation.Core(WebChannel(tmp_path / "media"), profile=Profile(tmp_path / "p.json"),
+    c = conversation.Core(WebChannel(tmp_path / "media"), memory=store(),
                           make_worker=lambda *a: None, start=lambda goal: ("https://x.test/", "x", True), library=EMPTY,
                           poll=0.01)
     task = conversation.Task("t9", "Order a coke")
@@ -707,7 +707,7 @@ def test_new_task_takes_the_core_lock_so_the_bench_thread_cannot_race_the_chat(w
 
 
 def test_a_bench_question_scripted_for_the_user_goes_to_the_chat(tmp_path):
-    c = conversation.Core(WebChannel(tmp_path / "media"), profile=Profile(tmp_path / "p.json"),
+    c = conversation.Core(WebChannel(tmp_path / "media"), memory=store(),
                           make_worker=lambda *a: None, start=lambda goal: ("https://x.test/", "x", True),
                           library=EMPTY, poll=0.01)
     task = conversation.Task("t9", "Pay my bill")
@@ -720,13 +720,13 @@ def test_a_bench_question_scripted_for_the_user_goes_to_the_chat(tmp_path):
     assert until(lambda: replies) and replies == [{"text": "1234567"}]
 
 
-def test_a_profile_value_learned_mid_session_is_hidden_from_the_concierges_next_model_call(tmp_path):
+def test_an_id_learned_mid_session_is_hidden_from_the_concierges_next_model_call(tmp_path):
     from assistant.privacy import SECRETS
 
-    profile = Profile(tmp_path / "p.json")
-    c = conversation.Core(WebChannel(tmp_path / "media"), profile=profile, make_worker=lambda *a: None,
+    memory = store()
+    c = conversation.Core(WebChannel(tmp_path / "media"), memory=memory, make_worker=lambda *a: None,
                           start=lambda goal: ("https://x.test/", "x", True), library=EMPTY, poll=0.01)
-    profile.data["phone"] = "9876543210"  # what a task's Worker.learn does while the chat runs
+    memory.set_id("phone", "phone number", "9876543210")  # what a task's worker does while the chat runs
     assert c.hidden(lambda: SECRETS.get().text("recharge 9876543210")) == "recharge [profile:phone]"
 
 
