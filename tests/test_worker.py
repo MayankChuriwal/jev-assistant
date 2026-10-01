@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 from fakes import fake_page, jev_checks, script_jev, script_planner, sub, turn, worker_with
 
-from assistant import planner
+from assistant import jev, planner
 
 
 def test_the_planner_plans_once_and_jev_does_the_steps(tmp_path, monkeypatch):
@@ -230,3 +230,91 @@ def test_an_otp_question_is_asked_through_the_hidden_field_without_options(tmp_p
     w.command("tick")
     assert w.asked[0]["kind"] == "secret" and w.asked[0]["text"] == "Enter your OTP"
     assert "482913" not in json.dumps(w.state["messages"]) and "482913" not in json.dumps(w.state["chat"])
+
+
+def card_page():
+    page = fake_page()
+    page["actions"].append({"id": "e9", "kind": "fill", "label": "Card number", "role": "textbox", "value": "",
+                            "node": 20, "constraints": {}})
+    return page
+
+
+def test_card_details_are_asked_hidden_and_never_reach_a_model_or_a_log(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=card_page(), replies=[{"text": "4111 1111 1111 1111"}])
+    seen = script_planner(monkeypatch,
+                          turn("ASK", message="What's your card number and expiry date?", options=["Visa", "Amex"]),
+                          turn(subgoals=[sub("enter the card number")]),
+                          turn("TYPE", pick=1, text="[secret:answer1]"))
+    sent = script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Card number"})
+    jev_checks(monkeypatch)
+    for _ in range(4):
+        w.command("tick")
+    assert w.asked[0]["kind"] == "secret" and w.asked[0]["text"] == "What's your card number and expiry date?"
+    assert w.browser.act.call_args.args[0] == "TYPE_TEXT"
+    assert w.browser.act.call_args.kwargs["text"].replace(" ", "") == "4111111111111111"
+    assert w.state["history"][-1]["text"] == "[secret:answer1]" and (None, 20) in w.secrets.nodes
+    assert len(seen) == 3
+    assert "4111" not in json.dumps([w.state["chat"], w.state["messages"], w.trace(), seen, sent])
+
+
+def test_literal_digits_are_refused_for_a_card_field(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=card_page())
+    script_planner(monkeypatch, turn(subgoals=[sub("enter the card number")]),
+                   turn("TYPE", pick=1, text="4111111111111111"))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Card number"})
+    jev_checks(monkeypatch)
+    for _ in range(3):
+        w.command("tick")
+    assert "takes a code or password" in w.state["feedback"][-1] and not w.browser.act.called
+
+
+def test_a_pending_commit_is_watched_again_before_anyone_acts(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    w.state["commit"] = {"label": "Pay ₹79", "since": 0, "goal": "Order Diet Coke"}
+    watched = []
+
+    def after_commit(page, goal, label):
+        watched.append((goal, label))
+        return "confirmed"
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("Jev or the planner acted on a page whose commit outcome is unknown")
+
+    monkeypatch.setattr(jev, "after_commit", after_commit)
+    monkeypatch.setattr(jev, "request", refuse)
+    monkeypatch.setattr(planner, "turn", refuse)
+    w.command("tick")
+    assert watched == [("Order Diet Coke", "Pay ₹79")] and w.state["done"] == ["Pay ₹79"]
+    assert any("Pay ₹79" in note for note in w.state["notes"]) and not any("None" in n for n in w.state["notes"])
+    assert w.state["commit"] is None and w.state["reason"] == "commit"
+
+
+def test_a_commit_watch_cut_short_resumes_with_its_own_label_and_goal(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, replies=[{"text": "yes"}])
+    script_planner(monkeypatch, turn(subgoals=[sub("place the order", kind="commit")]), turn())
+    script_jev(monkeypatch, {"next": "CLICK", "click_target": "Pay"})
+    jev_checks(monkeypatch)
+    watched, verdicts = [], ["processing", "confirmed"]
+    monkeypatch.setattr(jev, "after_commit", lambda page, goal, label: watched.append((goal, label)) or verdicts.pop(0))
+    w.interrupted = Mock(side_effect=[False, True, False, False, False])
+    for _ in range(4):
+        w.command("tick")
+    assert w.browser.act.call_count == 1 and watched == [("place the order", "Pay ₹79")] * 2
+    assert w.state["done"] == ["Pay ₹79"] and w.state["commit"] is None
+
+
+def test_a_code_question_that_was_dropped_is_not_counted(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, replies=[{"text": "123456"}])
+    script_planner(monkeypatch, turn("ASK", message="What's the verification code we sent you?"))
+    jev_checks(monkeypatch)
+    calls = []
+    w.moved = lambda page: calls.append(page) or len(calls) <= 4
+    for _ in range(4):
+        w.command("tick")
+    assert w.asked == [] and w.state["status"] != "blocked" and w.state["code_asks"] == 0
+    w.command("tick")
+    assert len(w.asked) == 1 and w.asked[0]["kind"] == "secret" and w.state["code_asks"] == 1
+    w.state["code_asks"], w.state["reason"] = 3, None
+    script_planner(monkeypatch, turn("ASK", message="Please type the OTP from the SMS"))
+    w.command("tick")
+    assert w.state["status"] == "blocked" and "isn't working after 3 codes" in w.told[-1]["text"]

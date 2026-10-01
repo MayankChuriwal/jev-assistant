@@ -40,6 +40,11 @@ PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGN
 PROFILE_NAMES = {"phone": "phone number", "email": "email address", "name": "full name", "upi_id": "UPI ID"}
 
 
+def secret_field(action):
+    """Whether only the user's hidden answer may go into this field: a code or password, or a card detail."""
+    return rules.secret_field(action) or bool(rules.CARD_DETAIL.search(action.get("label") or ""))
+
+
 def plain(text):
     """Text as the user should read it: entities unescaped until none are left (some sites escape twice)."""
     while (unescaped := html.unescape(text)) != text:
@@ -250,6 +255,9 @@ class Worker:
     def step(self):
         s = self.state
         self.check_caps()
+        if s["commit"]:  # a watch cut short: the outcome is known before Jev or the planner act on this page
+            gate.watch(self, s["commit"]["label"], s["commit"].get("goal") or s["goal"])
+            return None
         s.pop("typing", None)  # a code counts as an attempt only once it is typed
         page = s["page"] if s["browser"].fresh(s["page"]) else self.observe()
         if not s["recent"] or s["recent"][-1] != page["text"]:
@@ -445,25 +453,27 @@ class Worker:
             return self.finish(act, message, page)
         if not message:
             raise Retry("ASK needs the question in message.")
-        secret = rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
+        secret = (rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
+                  or bool(rules.CARD_DETAIL.search(message)))
         held = [k for k, pattern in PROFILE_ASKS.items() if self.profile.data.get(k) and pattern.search(message)]
         if not secret and held:
             raise Retry(f"The user's profile has it: use [profile:{held[0]}] as the value instead of asking.")
         if s["delegated_at"] == len(s["history"]):
             raise Retry("The user just left this choice to you: pick the option that best fits the goal, TELL them "
                         "which one, and act on it.")
-        if secret and CODE_WORDS.search(message) and not rules.CARD_DETAIL.search(message):
-            if s["code_asks"] >= CODE_ASKS:
-                raise Halt("blocked", f"Signing in to {rules.host(page['url'])} isn't working after {CODE_ASKS} codes, "
-                                      "so I stopped rather than send you more. Please sign in once in the agent's "
-                                      "Chrome window, then ask me again.")
-            s["code_asks"] += 1
+        counts = bool(secret and CODE_WORDS.search(message) and not rules.CARD_DETAIL.search(message))
+        if counts and s["code_asks"] >= CODE_ASKS:
+            raise Halt("blocked", f"Signing in to {rules.host(page['url'])} isn't working after {CODE_ASKS} codes, "
+                                  "so I stopped rather than send you more. Please sign in once in the agent's "
+                                  "Chrome window, then ask me again.")
         if self.moved(page):
             raise StalePage("The page changed while the planner decided. Decide again.")
         options = [] if secret else options
         text = message + "".join(f"\n{n}. {o}" for n, o in enumerate(options, 1))
         self.steady(page)  # a page still switching screens gets read again first
         reply = self.ask({"kind": "secret" if secret else "text", "text": text})
+        if counts:
+            s["code_asks"] += 1  # a code counts once it was asked: a question dropped for a changed page doesn't
         answer = str(reply.get("text", "")).strip()
         s["chat"].append({"from": "agent", "text": text})
         if secret:
@@ -567,7 +577,7 @@ class Worker:
         s = self.state
         if not text:
             raise Retry("TYPE needs the text to type.")
-        if rules.secret_field(action):
+        if secret_field(action):
             found = re.fullmatch(r"\s*\[secret:(answer\d+)\]\s*", text)
             if not found or found[1] not in s["answers"]:
                 raise Retry(f"“{action['label']}” takes a code or password: the system asks the user for it; type "
@@ -668,7 +678,7 @@ class Worker:
             s["typed"][typing[0]] = typing[1]
         if commit:
             s["approval"] = None
-            s["commit"] = {"label": commit, "since": s["elapsed_ms"]}
+            s["commit"] = {"label": commit, "since": s["elapsed_ms"], "goal": goal or s["goal"]}
         if shown and str(shown).startswith("[secret:"):
             for node in action.get("group") or [action.get("node")]:
                 self.secrets.nodes.add((action.get("frame"), node))
@@ -683,7 +693,7 @@ class Worker:
                     changed=views.change(page, after))
         s["status"] = "ready"
         if s["commit"]:
-            return gate.watch(self, commit, goal or s["goal"])
+            return gate.watch(self, s["commit"]["label"], s["commit"].get("goal") or s["goal"])
         return self.track_loop(last)
 
     def track_loop(self, last):
