@@ -665,3 +665,42 @@ def test_preauthorisation_and_its_cap_reach_the_task(world):
     text(world, goal)
     assert until(lambda: goal in world.made)
     assert world.made[goal].preauth and world.made[goal].cap == 300.0
+
+
+def test_errands_split_from_one_message_and_bench_tasks_see_no_chat_history(world):
+    message = "Buy milk on Zepto, don't ask me, under 300 rupees. And book a cab home, ask me first."
+    goals = ["Buy milk on Zepto, don't ask me, under 300 rupees", "Book a cab home, ask me first"]
+    world.intakes[message] = {"several": "yes"}
+    world.splits[message] = goals
+    calls, real = [], world.core.intake
+    world.core.intake = lambda m, chat, kinds, several=True: calls.append((m, list(chat), several)) or real(
+        m, chat, kinds, several)
+    world.core.log.extend([{"from": "user", "text": "earlier"}, {"from": "agent", "text": "hi"}])
+    text(world, message)
+    assert until(lambda: set(goals) <= set(world.agents))
+    assert [chat for m, chat, _ in calls if m in goals] == [[], []]  # one intake call for each split goal
+    first = next(c for c in calls if c[0] == message)
+    assert first[1] == [{"from": "user", "text": "earlier"}, {"from": "agent", "text": "hi"}] and first[2] is True
+
+
+def test_a_bench_task_reads_no_chat_history_for_its_intake(world):
+    calls, real = [], world.core.intake
+    world.core.intake = lambda m, chat, kinds, several=True: calls.append((m, list(chat), several)) or real(
+        m, chat, kinds, several)
+    world.core.log.extend([{"from": "user", "text": "earlier"}, {"from": "agent", "text": "hi"}])
+    world.core.new_task("Book a cab home", script={"answers": [], "fallback": "ok"})
+    assert until(lambda: "Book a cab home" in world.agents)
+    assert calls == [("Book a cab home", [], False)]
+
+
+def test_new_task_takes_the_core_lock_so_the_bench_thread_cannot_race_the_chat(world):
+    started = threading.Event()
+    made = []
+    with world.core.lock:  # held here; new_task on another thread must wait for it
+        thread = threading.Thread(target=lambda: (started.set(), made.append(world.core.new_task("Order a coke"))))
+        thread.start()
+        started.wait(2)
+        thread.join(0.3)
+        assert thread.is_alive() and not world.core.tasks
+    thread.join(2)
+    assert made and "t1" in world.core.tasks

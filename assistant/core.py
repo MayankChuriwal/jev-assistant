@@ -285,10 +285,11 @@ class Core:
     # ---- tasks
 
     def new_task(self, goal, script=None, single=False):
-        task = Task(f"t{next(self.task_ids)}", goal, single=single or script is not None)  # bench goals never split
-        task.script = script
-        self.tasks[task.id] = task
-        threading.Thread(target=self.run, args=(task,), name=f"jev-{task.id}", daemon=True).start()
+        with self.lock:  # the chat, a task's split, and the bench thread all add tasks while others read them
+            task = Task(f"t{next(self.task_ids)}", goal, single=single or script is not None)  # bench never splits
+            task.script = script
+            self.tasks[task.id] = task
+            threading.Thread(target=self.run, args=(task,), name=f"jev-{task.id}", daemon=True).start()
         return task
 
     def cancel(self, task):
@@ -381,7 +382,8 @@ class Core:
         """Before a task starts: its skill, pre-authorisation, cap, and start page. A message with several errands
         becomes several tasks; this one keeps the first."""
         kinds = skills.kinds(self.library["skills"])
-        info = self.hidden(self.intake, task.goal, self.log[-7:-1], kinds, not task.single)
+        recent = [] if task.single else self.log[-7:-1]  # a split errand or a bench goal has no chat before it
+        info = self.hidden(self.intake, task.goal, recent, kinds, not task.single)
         if info.get("several") == "yes":
             goals = self.hidden(self.split, task.goal)
             if len(goals) > 1:
@@ -418,15 +420,18 @@ class Core:
     def default_service(self, task, skill):
         """The app for a skill when the goal names none: the saved default, else asked once and saved. Returns a
         site note's host, the user's own words for an app the skill doesn't list, or None."""
-        names = {host: (self.library["sites"].get(host) or {}).get("name") or host for host in skill["sites"]}
-        prefix = f"default app for {skill['name']}:"
-        saved = next((p["text"] for p in self.profile.data["preferences"] if p["text"].lower().startswith(prefix)),
-                     None)
-        if saved:
-            name = saved.split(":", 1)[1].strip()
-            host = next((h for h, n in names.items() if n.lower() == name.lower()), None)
-            if host:
-                self.say(f"Using {name} for {skill['name']}, as you chose before.", task)
+        sites = self.library["sites"]
+        notes = {host: sites.get(host) or {"host": host, "name": host, "aliases": []} for host in skill["sites"]}
+        names = {host: note["name"] for host, note in notes.items()}
+
+        def resolve(words):  # which of the skill's sites these words name: its name, an alias, or its host
+            note = skills.named(words, notes)
+            return next((host for host, n in notes.items() if n is note), None) if note else None
+
+        prefix = f"default app for {skill['name'].lower()}:"
+        for saved in reversed(self.profile.data["preferences"]):  # the newest default naming one of its sites
+            if saved["text"].lower().startswith(prefix) and (host := resolve(saved["text"].split(":", 1)[1])):
+                self.say(f"Using {names[host]} for {skill['name']}, as you chose before.", task)
                 return host
         listed = list(names.values())
         options = ", ".join(listed[:-1]) + f" or {listed[-1]}" if len(listed) > 1 else listed[0]
@@ -436,11 +441,13 @@ class Core:
             return None
         if DELEGATE.search(text):
             return next(iter(names))  # left to me: the skill's usual first choice, not saved as a preference
-        host = next((h for h, n in names.items() if n.lower() in text.lower() or text.lower() in n.lower()), None)
+        host = resolve(text)
         if host is None:
-            return text
-        self.profile.remember(f"Default app for {skill['name']}: {names[host]}", task.goal)
-        self.say(f"Saved: I'll use {names[host]} for {skill['name']} from now on.", task)
+            return text  # an app the skill doesn't list: the user's own words, not saved
+        choice = f"Default app for {skill['name']}: {names[host]}"
+        if not any(p["text"].lower() == choice.lower() for p in self.profile.data["preferences"]):  # not twice
+            self.profile.remember(choice, task.goal)
+            self.say(f"Saved: I'll use {names[host]} for {skill['name']} from now on.", task)
         return host
 
     def apply_updates(self, task):
