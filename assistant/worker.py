@@ -1001,6 +1001,7 @@ class Worker:
             "steps": [{k: h.get(k) for k in TRACE_STEP} for h in s["history"]],
             "jev": s["jev"], "turns": s["turns"], "meter": s["meter"], "escalations": s["escalations"],
             "margins": s["margins"], "files": [self.file_name(f) for f in s["files"]], "errors": s["errors"],
+            "standing_error": s.get("standing_error"),
         })
 
     def save_trace(self):

@@ -54,8 +54,11 @@ ITEM_AFTER = re.compile(r"^(?P<item>.*?[^\W\d_].*?)\s*(?:×|(?<=\s)[xX])\s*(?P<q
                         UNIT.pattern + ")", re.IGNORECASE)  # "Diet Coke 300 ml × 2"; never "Box x 200ml"
 ITEM_BEFORE = re.compile(r"^(?P<qty>\d{1,3})\s*(?:×|[xX](?=\s))\s*(?P<item>.*[^\W\d_].*)$", re.IGNORECASE)  # "2 x Atta"
 MINUS = {"-", "−", "–", "—"}  # the stepper signs around a quantity: "−", "1", "+"
-BILL_LINE = re.compile(r"\b(?:delivery|handling|platform|packaging|convenience|surge|small cart|late night|rain|"
-                       r"service|tips?|fees?|charges?|taxes|tax|gst|cess)\b", re.IGNORECASE)  # a fee or tax on the bill
+BILL_WORDS = frozenset(  # the only words a bill line (a fee, tax, total, or saving) is made of
+    "delivery handling platform packaging convenience small cart surge late night fee fees charge charges "
+    "tax taxes gst cgst sgst cess item items sub total to pay payable grand order bill you your saved "
+    "save saving savings discount coupon off free incl including all on this partner tip amount due net "
+    "final applied cashback rewards of for the and at rs inr".split())
 QTY_LINE = re.compile(r"^(?:qty|quantity)\s*:?\s*(?P<qty>\d{1,3})$", re.IGNORECASE)  # "Qty 2" under the item's line
 TICKING = re.compile(  # a clock or a countdown changes by itself: these tokens, and their number, are not money
     r"\b\d{1,2}:\d{2}(?::\d{2})?\b|\b(?<![\d,.])\d+(?:\.\d+)?\s*(?:mins?|minutes?|secs?|seconds?|hrs?|hours?|left)\b|"
@@ -496,23 +499,24 @@ def stepper(lines):
                for i in range(len(lines) - 2) if re.fullmatch(r"\d{1,3}", lines[i + 1]))
 
 
+def bill_line(line):
+    """Whether every word on the line, its prices and numbers aside, belongs to the bill vocabulary: "Delivery fee
+    ₹30", "You saved ₹10 on this order". A line that only contains such a word ("Sugar Free Gold 25 Pellets",
+    "Total Whey Protein Bar") is not one."""
+    words = re.findall(r"[^\W\d_]+", PRICES.sub(" ", line).lower())
+    return bool(words) and all(word in BILL_WORDS for word in words)
+
+
 def unread_money(lines, used, page, value):
-    """Whether a line with a price on it is none of: a cart line `read_cart` used, a fee, tax, total, saving, or other
-    remark on the bill, or a page control that costs this payable total ("Pay ₹79") - an item the cart reading missed,
-    or an upsell. A line of only a price belongs to the line above it, and counts when that one does."""
+    """Whether a line with a price on it is none of: a cart line `read_cart` used, a bill line made only of bill words,
+    or a page control that costs this payable total ("Pay ₹79") - an item the cart reading missed, or an upsell. A line
+    of only a price belongs to the line directly above it, and counts only when that one does."""
     labels = {" ".join(tight(a.get("label") or "").lower().split()) for a in page.get("actions", [])
               if amount(a.get("label") or "") == value}
-    above = False  # whether the last line with words was a counted one
-    for i, line in enumerate(lines):
-        if has_words(line):
-            above = i in used or bool(BILL_LINE.search(line) or TOTAL.search(line) or PAYABLE.search(line)
-                                      or NOT_TOTAL.search(line) or EXEMPT.search(line)
-                                      or " ".join(tight(line).lower().split()) in labels)
-            if not above and PRICES.search(line):
-                return True
-        elif PRICES.search(line) and not above:
-            return True
-    return False
+    counted = [i in used or bill_line(line) or " ".join(tight(line).lower().split()) in labels
+               for i, line in enumerate(lines)]
+    return any(PRICES.search(line) and not (counted[i] if has_words(line) else i and counted[i - 1] and
+                                            has_words(lines[i - 1])) for i, line in enumerate(lines))
 
 
 def standing(w, found, page):

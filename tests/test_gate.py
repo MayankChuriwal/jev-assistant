@@ -1257,7 +1257,11 @@ def stray_lines():
             "an item count that fits nothing": SHOP + "\n3 items",
             "an upsell with a price": SHOP + "\nJoin Pass ₹99",
             "a stray priced item line": SHOP + f"\n{lays} ₹20",
-            "a stray item with its price on the next line": SHOP + f"\n{lays}\n₹20"}
+            "a stray item with its price on the next line": SHOP + f"\n{lays}\n₹20",
+            **{f"an item named with a bill word: {line!r}": SHOP + "\n" + line for line in [
+                "Sugar Free Gold 25 Pellets ₹20", "Sugar Free Gold 25 Pellets\n₹20", "Gluten Free Bread\n₹20",
+                "Lays Classic 52 g 10% off\n₹20", "Free Range Eggs ₹20", "Delivery Pack ₹20",
+                "Cotton Tips 100 pcs\n₹20", "Total Whey Protein Bar\n₹20"]}}
 
 
 @pytest.mark.parametrize("probe", list(stray_lines()))
@@ -1305,3 +1309,20 @@ def test_a_standing_approval_error_is_asked_about_and_kept_for_the_trace(monkeyp
     with pytest.raises(Retry):
         gate.approved(w, page, PAY, "Pay ₹79", None)
     assert w.state["standing_error"] == "database down" and w.said == []
+
+
+BILL = ("Checkout\nDiet Coke 300 ml × 1 — ₹40\nItem total ₹40\nDelivery fee ₹30\nHandling charge ₹5\nPlatform fee ₹4\n"
+        "GST ₹0\nYou saved ₹10 on this order\nTo pay ₹79\nPay ₹79")
+
+
+@pytest.mark.parametrize("text", [BILL, BILL.replace("Delivery fee ₹30", "Delivery fee\n₹30")])
+def test_a_realistic_bill_of_fees_taxes_and_savings_still_lets_the_rule_apply(monkeypatch, memory, text):
+    w, page, _ = with_rule(monkeypatch, memory, text=text)
+    assert gate.approved(w, page, PAY, "Pay ₹79", None) is True
+
+
+def test_a_failing_rule_lookup_reaches_the_trace(tmp_path, monkeypatch, memory):
+    w = worker_with(tmp_path, memory=memory)
+    monkeypatch.setattr(memory, "rules_for", lambda *a: (_ for _ in ()).throw(RuntimeError("database down")))
+    assert gate.standing(w, {"total": "₹79"}, fake_page(text=SHOP)) is None
+    assert w.trace()["standing_error"] == "database down"
