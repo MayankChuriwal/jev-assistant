@@ -33,7 +33,8 @@ def test_an_order_is_planned_approved_in_chat_and_reported(tmp_path, monkeypatch
                              route=lambda text, tasks, recent: routes.pop(0),
                              intake=lambda message, kinds, several=True: {"several": "no", "skill": "general",
                                                                           "preauth": "no"},
-                             start=lambda goal: ("https://shop.test/checkout", "Shop · Diet Coke", True))
+                             start=lambda goal: ("https://shop.test/checkout", "Shop · Diet Coke", True),
+                             learn=lambda state, memory: None)
     chat.receive({"from": "local", "id": "m1", "type": "text", "text": "Order Diet Coke", "context": None})
     assert until(lambda: chat.open is not None, timeout=5)
     assert "I'll press “Pay ₹79”" in chat.open.message["text"]

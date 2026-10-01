@@ -56,6 +56,18 @@ def load_sites(folder=FOLDER / "sites"):
     return found
 
 
+def learned(sites, lines):
+    """The site notes with each site's saved learned lines under "## Learned": hints from earlier runs. A site with
+    learned lines and no shipped note gets a note of its own. The shipped notes are never changed."""
+    out = dict(sites)
+    for host, found in lines.items():
+        note = dict(out.get(host) or {"host": host, "name": host, "aliases": [], "body": "",
+                                      "start": f"https://{host}/"})
+        note["body"] = (note["body"].rstrip() + "\n\n## Learned\n" + "\n".join(f"- {line}" for line in found)).strip()
+        out[host] = note
+    return out
+
+
 def kinds(skills):
     """The options Jev picks a task's skill from: {name: description}, kind skills only."""
     return {name: s["description"] for name, s in skills.items() if not s["situation"]}

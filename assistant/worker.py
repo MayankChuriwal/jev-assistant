@@ -29,8 +29,8 @@ CODE_ASKS = 3
 CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QUIET = {"WAIT", "SCROLL_UP", "SCROLL_DOWN"}  # repeating these is not going in circles
 TALKING = {"ASK", "TELL", "DONE", "STOP"}
-TRACE_STEP = ("step", "subgoal", "operation", "action", "text", "key", "files", "page_changed", "url", "changed",
-              "effect", "committed", "approved", "elapsed_ms", "unconfirmed")
+TRACE_STEP = ("step", "subgoal", "operation", "action", "title", "text", "key", "files", "page_changed", "url",
+              "changed", "effect", "committed", "approved", "elapsed_ms", "unconfirmed")
 PLACEHOLDER = re.compile(r"\[(profile|secret):([\w.]+)\]")
 CODE_WORDS = re.compile(r"\b(otp|passcode|password|cvv|pin(?![\s-]?code)|"  # a PIN code or promo code is no secret
                         r"(?<!pin )(?<!pin-)(?<!promo )(?<!zip )(?<!postal )code)\b", re.IGNORECASE)
@@ -107,7 +107,8 @@ class Worker:
         finally:
             SECRETS.reset(token)
         self.state = self.new_state(self.browser, goal, title or goal[:60], page)
-        self.state.update(skill=skill, preauth=preauth, cap=cap, site=skills.bare(urlparse(url).netloc.lower()))
+        self.state.update(skill=skill, preauth=preauth, cap=cap, site=skills.bare(urlparse(url).netloc.lower()),
+                          start=url)
 
     @staticmethod
     def new_state(browser, goal, title, page):
@@ -119,7 +120,7 @@ class Worker:
             subgoal_steps=0, loop_from=0, code_asks=0, model_errors=0, mismatches=0, done_refusals=0,
             captcha_rounds=0, meter=new_meter(), escalations={}, margins=[], situations=[], uploaded=[], held=None,
             told_at=None, delegated_at=None, relaying=False, skill=None, preauth=False, cap=None, site="",
-            cleared_maybe=[], idle=0, orders=[], checkout=None,
+            cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None,
         )
 
     # ---- what the user and the models see
@@ -271,6 +272,7 @@ class Worker:
         if len(s["history"]) > before or self.replies() > replies or s["status"] in STOPPED:
             return
         s["idle"] += 1
+        s["idle_ticks"] += 1  # never reset: learning reads it
         if s["idle"] >= IDLE_HALT:
             raise Halt("blocked", f"I'm going in circles on {rules.host(s['page']['url'])} and stopped. Tell me "
                                   f"more about what you want, or check the site yourself.{self.pending()}")
@@ -852,6 +854,7 @@ class Worker:
         self.stop_if_interrupted()
         label = action.get("label") or operation
         entry = {"step": len(s["history"]) + 1, "subgoal": s["current"], "operation": operation, "action": label,
+                 "title": page.get("title", ""), "relayed": s["relaying"],
                  "kind": action.get("kind"), "text": shown, "key": inputs.get("key"),
                  "files": [self.file_name(f) for f in inputs["files"]] if "files" in inputs else None,
                  "page_changed": None, "url": page["url"], "committed": bool(commit),

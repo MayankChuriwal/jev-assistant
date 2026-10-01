@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from . import jev, messages, planner, rules, skills
+from . import learn as learning
 from .gate import cap, rule_cap, same_cart
 from .memory import RULE_DAYS, UNSTORABLE, Memory, Unstorable, rupees
 from .privacy import SECRETS, Secrets
@@ -58,7 +59,7 @@ class Task:
 
 class Core:
     def __init__(self, channel, *, user="local", memory=None, make_worker=None, start=None, route=None, intake=None,
-                 split=None, chat=None, remember=None, library=None, clock=time.monotonic, poll=1.0):
+                 split=None, chat=None, remember=None, learn=None, library=None, clock=time.monotonic, poll=1.0):
         self.channel, self.user = channel, user
         self.memory = memory if memory is not None else Memory.open()
         self.make_worker = make_worker or self.worker_for
@@ -68,6 +69,7 @@ class Core:
         self.split = split or planner.split
         self.chat = chat or planner.chat
         self.remember_job = remember or planner.remember
+        self.learn = learn or learning.after
         self.library = library if library is not None else {"skills": skills.load(), "sites": skills.load_sites()}
         self.clock, self.poll = clock, poll
         self.lock = threading.RLock()
@@ -78,8 +80,9 @@ class Core:
         self.task_ids, self.question_ids = itertools.count(1), itertools.count(1)
 
     def worker_for(self, task, url, asker, notify):
+        library = {**self.library, "sites": skills.learned(self.library["sites"], self.memory.learned())}
         return Worker(url, task.goal, title=task.title, asker=asker, notify=notify, memory=self.memory,
-                      skill=task.skill, preauth=task.preauth, cap=task.cap, library=self.library)
+                      skill=task.skill, preauth=task.preauth, cap=task.cap, library=library)
 
     def hidden(self, call, *args):
         """A model call with the user's IDs redacted: read afresh each time, so a value a task learned
@@ -222,8 +225,8 @@ class Core:
             if intent is None and asked is not None and self.open is asked and asked.task is task:
                 return self.answer(asked, {"type": "text", "text": text})  # still the question it was sent to
             return self.amend(task, text)
-        if kind == "rule":
-            return self.decide_rule(rest)
+        if kind in {"rule", "note", "guess"}:  # an offer posted after a task
+            return {"rule": self.decide_rule, "note": self.decide_note, "guess": self.decide_guess}[kind](rest)
         question = next((q for q in self.queue if q.sent and event["reply_id"].startswith(f"q{q.id}:")), None)
         if question and messages.reply_for(question.id, question.message.get("options") or [], event) is not None:
             return self.answer(question, event)  # any question on screen, even one a code request moved aside
@@ -271,6 +274,61 @@ class Core:
             except Exception as error:
                 return self.say(f"I couldn't save that: {error}")
             self.say(f"Saved for next time: {preference}")
+
+    def after_task(self, task):
+        """After a task ends: learn from it, then offer what it taught (notes: Save or Skip; each guess: Remember or
+        No) and any standing approval. A bench run learns only in its learn mode, after grading."""
+        if task.script is not None or not task.worker:
+            return
+        try:
+            self.offer_learned(task)
+        except Exception as error:  # a failed reflection never costs the standing-approval offer below
+            self.say(f"I couldn't learn from {task.title}: {error}", task)
+        try:
+            self.offer_rules(task)
+        except Exception as error:
+            self.say(f"I couldn't offer to remember that order: {error}", task)
+
+    def offer_learned(self, task):
+        found = self.hidden(self.learn, task.worker.state, self.memory) or {}
+        if found.get("notes"):
+            key = f"note:{next(self.offer_ids)}"
+            self.offers[key] = (found["host"], [note_id for note_id, _ in found["notes"]])
+            self.buttons(f"I learned about {found['host']}:\n" + "\n".join(f"• {line}" for _, line in found["notes"]),
+                         [(f"{key}:save", "Save"), (f"{key}:skip", "Skip")])
+        for guess in found.get("guesses", []):
+            key = f"guess:{next(self.offer_ids)}"
+            self.offers[key] = (guess, task.goal)
+            self.buttons(f"Should I remember this? {guess['text']}", [(f"{key}:yes", "Remember"), (f"{key}:no", "No")])
+
+    def decide_note(self, rest):
+        number, _, choice = rest.partition(":")
+        offer = self.offers.pop(f"note:{number}", None)
+        if offer is None:
+            return None  # decided already
+        host, ids = offer
+        try:
+            self.memory.decide_notes(ids, save=choice == "save", actor="user")
+        except Exception as error:
+            return self.say(f"I couldn't save that: {error}")
+        self.say(f"Saved what I learned about {host}." if choice == "save" else "Skipped: I won't keep those notes.")
+
+    def decide_guess(self, rest):
+        number, _, choice = rest.partition(":")
+        offer = self.offers.pop(f"guess:{number}", None)
+        if offer is None:
+            return None  # decided already
+        guess, goal = offer
+        if choice != "yes":
+            return self.say("OK, I won't keep that.")
+        try:
+            self.memory.remember("preference", guess["text"], tags=guess["tags"], source="learned from a run",
+                                 task=goal, actor="user")
+        except Unstorable:
+            return self.say(UNSTORABLE)
+        except Exception as error:
+            return self.say(f"I couldn't save that: {error}")
+        self.say(f"Saved for next time: {guess['text']}")
 
     def offer_rules(self, task):
         """After an order you approved that the site confirmed, with its cart and rupee total read: offer to place the
@@ -419,12 +477,12 @@ class Core:
                     task.worker.close()
                 except Exception:
                     pass
-                try:
-                    self.offer_rules(task)
-                except Exception as error:  # never stops the slot release below
-                    self.say(f"I couldn't offer to remember that order: {error}", task)
             with self.slots:
                 self.slots.notify_all()
+            try:
+                self.after_task(task)  # after the slot is free: a reflection call never holds up a queued task
+            except Exception as error:
+                self.say(f"I couldn't learn from {task.title}: {error}", task)
             self.update_typing()
 
     def prepare(self, task):

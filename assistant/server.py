@@ -315,7 +315,7 @@ def run(goal, url=None):
     memory = open_memory()
     if memory is None:
         return 1
-    library = {"skills": skills.load(), "sites": skills.load_sites()}
+    library = {"skills": skills.load(), "sites": skills.learned(skills.load_sites(), memory.learned())}
     token = SECRETS.set(Secrets(memory.hidden_values()))  # the goal may hold a phone number or an email
     try:
         info = jev.intake(goal, skills.kinds(library["skills"]), several=False)
@@ -348,7 +348,31 @@ def run(goal, url=None):
             shown = len(state["history"])
     finally:
         worker.close()
+    learn_in_terminal(worker.state, memory)
     return 0 if worker.state["status"] == "done" else 1
+
+
+def learn_in_terminal(state, memory, *, read=input):
+    """After `jev run`: learn from the task, and ask here whether to keep what it taught."""
+    from . import learn
+    from .privacy import SECRETS, Secrets
+
+    token = SECRETS.set(Secrets(memory.hidden_values()))
+    try:
+        found = learn.after(state, memory)
+    except Exception as error:  # learning never fails a task that ran
+        print(f"Couldn't learn from this run: {error}")
+        return
+    finally:
+        SECRETS.reset(token)
+    if found["notes"]:
+        lines = "\n".join(f"  • {line}" for _, line in found["notes"])
+        keep = read(f"I learned about {found['host']}:\n{lines}\nSave these notes? [y/N] ").strip().lower()
+        memory.decide_notes([note_id for note_id, _ in found["notes"]], save=keep.startswith("y"), actor="user")
+    for guess in found["guesses"]:
+        if read(f"Remember “{guess['text']}”? [y/N] ").strip().lower().startswith("y"):
+            memory.remember("preference", guess["text"], tags=guess["tags"], source="learned from a run",
+                            task=state["goal"], actor="user")
 
 
 def forget(sites):

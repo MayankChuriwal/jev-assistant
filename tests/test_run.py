@@ -85,3 +85,16 @@ def test_run_warns_when_a_commit_may_be_in_progress(monkeypatch, capsys):
     worker, _ = fake_worker(monkeypatch, RuntimeError("HTTP 503"), commit={"label": "Pay ₹79", "checks": 1})
     assert server.main(["run", "x", "--url", "https://a.test"]) == 1
     assert "Pay ₹79 may already have gone through" in capsys.readouterr().out
+
+
+def test_jev_run_asks_in_the_terminal_whether_to_keep_what_it_learned(monkeypatch):
+    memory = store()
+    ids = memory.draft_notes("zeptonow.com", ["Search appears after the pop-up closes"])
+    found = {"host": "zeptonow.com", "habit": None, "notes": [(ids[0], "Search appears after the pop-up closes")],
+             "guesses": [{"text": "You prefer Diet Coke 300 ml", "tags": ["groceries"]}]}
+    monkeypatch.setattr("assistant.learn.after", lambda state, memory: found)
+    prompts = []
+    server.learn_in_terminal({"goal": "Order Diet Coke"}, memory, read=lambda prompt: prompts.append(prompt) or "y")
+    assert memory.notes("zeptonow.com") == ["Search appears after the pop-up closes"]
+    assert [f["text"] for f in memory.facts("preference")] == ["You prefer Diet Coke 300 ml"]
+    assert prompts[0].startswith("I learned about zeptonow.com:") and len(prompts) == 2

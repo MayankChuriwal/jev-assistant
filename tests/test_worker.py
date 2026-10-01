@@ -1096,3 +1096,21 @@ def test_a_confirmed_order_records_the_approved_cart_total_and_who_said_yes(tmp_
         w.command("tick")
     assert w.state["orders"] == [{"label": "Pay ₹79", "site": "shop.test", "total": "₹79", "by": "user",
                                   "cart": [{"item": "diet coke 300 ml", "qty": 1}]}]
+
+
+# ---- Plan 7 Task 6: what a habit is made from
+
+
+def test_history_keeps_the_page_title_and_the_start(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn(subgoals=[sub("deliver to home")]))
+    script_jev(monkeypatch, {"next": "CLICK", "click_target": "Home"})
+    jev_checks(monkeypatch)
+    w.command("tick")  # the plan
+    w.command("tick")  # Jev's click
+    last = w.state["history"][-1]
+    assert (last["action"], last["title"], last["relayed"]) == ("Home", "Shop", False)
+    assert w.state["start"] == "https://shop.test/checkout"
+    assert w.state["idle_ticks"] == 1  # the planning tick ran no step; the click tick did
+    w.count_idle(len(w.state["history"]), w.replies())  # a tick with no step and no reply
+    assert w.state["idle_ticks"] == 2

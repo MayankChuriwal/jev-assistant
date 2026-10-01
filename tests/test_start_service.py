@@ -40,7 +40,7 @@ def core(tmp_path, starts=()):
                           start=lambda goal: found.pop(0) if found else ("https://www.google.com/", goal, False),
                           intake=lambda message, kinds, several=True: {"several": "no", "skill": "groceries",
                                                                        "preauth": "no"},
-                          library={"skills": SKILLS, "sites": SITES}, poll=0.01)
+                          library={"skills": SKILLS, "sites": SITES}, poll=0.01, learn=lambda state, memory: None)
     return c, made, memory
 
 

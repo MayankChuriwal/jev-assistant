@@ -71,7 +71,7 @@ def hold(gate):
 @pytest.fixture
 def world(tmp_path):
     w = SimpleNamespace(scripts={}, hosts={}, agents={}, late={}, classified=[], intents=[], clock=Clock(), n=0,
-                        intakes={}, splits={}, made={})
+                        intakes={}, splits={}, made={}, learned=None)
     w.channel = WebChannel(tmp_path / "media")
 
     def make_worker(task, url, asker, notify):
@@ -93,7 +93,8 @@ def world(tmp_path):
         start=lambda goal: (f"https://{w.hosts.get(goal, 'shop.test')}/", goal, True), route=route, intake=intake,
         split=lambda message: w.splits.get(message, [message]), library=EMPTY,
         chat=lambda message, tasks: (f"About {len(tasks)} task(s).", {}),
-        remember=lambda question, answer: (f"Default choice: {answer}", {}), clock=w.clock, poll=0.01)
+        remember=lambda question, answer: (f"Default choice: {answer}", {}), clock=w.clock, poll=0.01,
+        learn=lambda state, memory: w.learned)
     return w
 
 
@@ -785,3 +786,37 @@ def test_no_offer_without_your_yes_a_readable_rupee_order_or_on_the_bench_or_twi
     bench = change.pop("bench", False)
     world.core.offer_rules(ended([{**ORDER, **change}], script=[] if bench else None))
     assert interactive(world) == []
+
+
+# ---- Plan 7 Task 6: what a task taught, offered after it
+
+
+def test_after_a_task_its_notes_and_guesses_are_offered_and_decided_once(world):
+    ids = world.core.memory.draft_notes("shop.test", ["Search appears after the pop-up closes"])
+    world.learned = {"host": "shop.test", "habit": None, "notes": [(ids[0], "Search appears after the pop-up closes")],
+                     "guesses": [{"text": "You prefer Diet Coke 300 ml", "tags": ["groceries", "shop.test"]}]}
+    world.scripts["Order Diet Coke"] = [tell("Ordered.")]
+    text(world, "Order Diet Coke")
+    assert until(lambda: len(interactive(world)) == 2)
+    assert interactive(world)[0]["interactive"]["body"]["text"] == ("I learned about shop.test:\n"
+                                                                    "• Search appears after the pop-up closes")
+    assert buttons(world) == ["guess:2:yes", "guess:2:no"]
+    assert bodies(world)[-1] == "Should I remember this? You prefer Diet Coke 300 ml"
+    tap(world, "note:1:save")
+    tap(world, "guess:2:yes")
+    tap(world, "note:1:skip")  # decided already
+    assert world.core.memory.notes("shop.test") == ["Search appears after the pop-up closes"]
+    saved = world.core.memory.facts("preference")[0]
+    assert saved["text"] == "You prefer Diet Coke 300 ml" and saved["tags"] == ["groceries", "shop.test"]
+
+
+def test_skip_and_no_keep_nothing(world):
+    ids = world.core.memory.draft_notes("shop.test", ["Search appears after the pop-up closes"])
+    world.learned = {"host": "shop.test", "habit": None, "notes": [(ids[0], "Search appears after the pop-up closes")],
+                     "guesses": [{"text": "You prefer Diet Coke 300 ml", "tags": []}]}
+    world.scripts["Order Diet Coke"] = [tell("Ordered.")]
+    text(world, "Order Diet Coke")
+    assert until(lambda: len(interactive(world)) == 2)
+    tap(world, "note:1:skip")
+    tap(world, "guess:2:no")
+    assert world.core.memory.notes("shop.test") == [] and world.core.memory.facts("preference") == []
