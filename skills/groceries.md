@@ -19,6 +19,7 @@ report: order number, arrival time, total
 9. Report the order number, arrival time, and total.
 An order needs all of steps 6 to 9: when you replan, the plan must still end with placing the order (the commit) and the report.
 ## Rules
+- A service that sells both food and groceries keeps them in separate sections with separate search boxes: search groceries only in the grocery section (the site's search address, when its note gives one), never in the restaurant search.
 - Keep the brand and product the user named. If that exact size isn't sold, take the closest size of the same product and say so; never switch brand or product without asking.
 - The cart may already hold the user's own items: never remove them unless the user says so.
 - Name any fee the user could avoid (a small-cart fee, a delivery fee under a free-delivery amount) and ASK whether to add items to drop it, with a concrete option, before the final step.
