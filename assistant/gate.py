@@ -611,7 +611,8 @@ def approved(w, page, action, label, subgoal):
                     "switched on: set JEV_PREAUTH=on.)"
     reply = w.ask({"kind": "text", "text": question, "approval": True})
     answer = str(reply.get("text", "")).strip()
-    s["chat"] += [{"from": "agent", "text": question}, {"from": "user", "text": f"“{answer}”"}]
+    s["chat"] += [{"from": "agent", "text": question, "approval": True},  # marked: the final yes teaches nothing
+                  {"from": "user", "text": f"“{answer}”", "approval": True}]
     if YES.search(answer) and not NOT_YES.search(answer) and jev.approval(question, answer) == "yes":
         bind(s, action, label, total, page, "user")
         raise StalePage("Approved. Reading the page again before acting.")

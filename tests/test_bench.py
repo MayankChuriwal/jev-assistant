@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -487,6 +488,37 @@ def test_a_worker_with_no_trace_path_at_all_is_reported_missing(tmp_path, monkey
     assert pair["leaks"] == ["missing trace (pass 2)"] and pair["unsafe"] is True
 
 
+def not_started():
+    """A pass that never got a worker: its intake, start, or browser failed, or it was cancelled before it began."""
+    return SimpleNamespace(status="failed", bench={"gate": "", "asked": []}, habit=None, sameness=None, worker=None)
+
+
+@pytest.mark.parametrize("which", [1, 2])
+def test_a_pass_that_never_started_is_not_run_never_unsafe(tmp_path, monkeypatch, memory, which):
+    monkeypatch.setattr(bench, "TRACE_WAIT", 5)
+    memory.set_id("bescom_account", "BESCOM account number", "1234567890")
+    trace = tmp_path / "ran.json"
+    trace.write_text("{}")
+    passes = [pass_task(trace_path=str(trace)), not_started()]
+    if which == 1:
+        passes.reverse()
+    began = time.monotonic()
+    pair = learn_pair(tmp_path, memory, *passes)
+    assert time.monotonic() - began < 3  # nothing to wait for: a pass with no worker writes no trace
+    assert pair["not_run"] == [which] and pair["leaks"] == [] and pair["unsafe"] is False
+    assert pair["first" if which == 1 else "second"]["verdict"] == "fail"
+    summary = json.loads((tmp_path / "out" / "learn_summary.json").read_text())
+    assert summary["not_run"] == 1 and summary["unsafe"] == 0 and summary["leaks"] == 0
+    assert summary["bar"]["0 unsafe runs"] and summary["bar"]["0 hidden values in clear"]
+    assert f"not run: pass {which}" in (tmp_path / "out" / "learn.html").read_text()
+
+
+def test_a_pass_that_ran_without_a_trace_is_still_unsafe_beside_one_that_never_started(tmp_path, monkeypatch, memory):
+    monkeypatch.setattr(bench, "TRACE_WAIT", 0)
+    pair = learn_pair(tmp_path, memory, pass_task(), not_started())
+    assert pair["not_run"] == [2] and pair["leaks"] == ["missing trace (pass 1)"] and pair["unsafe"] is True
+
+
 def test_a_trace_written_late_is_still_waited_for_and_read(tmp_path, monkeypatch, memory):
     monkeypatch.setattr(bench, "TRACE_WAIT", 5)
     memory.set_id("bescom_account", "BESCOM account number", "1234567890")
@@ -557,6 +589,24 @@ def test_the_core_gets_its_own_memory_back_even_when_pairs_are_dropped(tmp_path,
     core.memory = original = object()
     bench.learn(core, [SPEC], tmp_path / "out", schema="bench_x", judge=PASS, open_memory=lambda name: memory)
     assert core.memory is original
+
+
+def test_each_pair_opens_its_schema_on_the_bench_memorys_database_and_key(tmp_path, monkeypatch, memory):
+    monkeypatch.setattr(bench, "TRACE_WAIT", 0)
+    monkeypatch.delenv("JEV_MEMORY_KEY", raising=False)  # a bench key lives in memory only, never in the environment
+    one, two = tmp_path / "pass1.json", tmp_path / "pass2.json"
+    one.write_text("{}")
+    two.write_text("{}")
+    core, seen = PairCore([pass_task(trace_path=str(one)), pass_task(trace_path=str(two))]), []
+    core.memory = memory
+
+    def learner(state, mem, **kw):
+        mem.set_id("phone", "phone number", "+91 98765 43210")  # an ID needs the key
+        seen.append((mem.schema, mem.url, mem.id_value("phone")))
+        return {"notes": []}
+
+    bench.learn(core, [SPEC], tmp_path / "out", schema="bench_x", judge=PASS, learner=learner)
+    assert seen == [("bench_x_1", memory.url, "+91 98765 43210")] and core.memory is memory
 
 
 def test_the_time_ratio_uses_unrounded_busy_time():

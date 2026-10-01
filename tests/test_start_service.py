@@ -1,5 +1,6 @@
 """Which app: the one the goal names, the skill's saved default, or asked once and remembered. No models."""
 
+import pytest
 from fakes import store
 from helpers import until
 
@@ -188,3 +189,72 @@ def test_an_unsure_sameness_starts_the_habit_as_similar(tmp_path):
     c.new_task("order a diet coke")
     until(lambda: made)
     assert made[0][3:] == (habit, "similar")  # the planner writes the plan: no "same as last time"
+
+
+# ---- final fix wave: a habit recorded on the start page's host matches the site note's host
+
+
+def shipped_core(tmp_path, skill):
+    """A core on the shipped skills and site notes, whose intake picks `skill`."""
+    from assistant import skills
+
+    memory = store()
+    made = []
+
+    def make_worker(task, url, asker, notify):
+        made.append((url, task.goal, task.title, (task.habit or {}).get("id"), task.sameness))
+        return Done()
+
+    c = conversation.Core(WebChannel(tmp_path / "media"), memory=memory, make_worker=make_worker,
+                          start=lambda goal: ("https://www.google.com/", goal, False),
+                          intake=lambda message, kinds, several=True: {"several": "no", "skill": skill,
+                                                                       "preauth": "no"},
+                          library={"skills": skills.load(), "sites": skills.load_sites()}, poll=0.01,
+                          learn=lambda state, memory: None)
+    return c, made, memory
+
+
+def habit_on(memory, host, skill, start, cart=()):
+    return memory.record_habit({"host": host, "skill": skill, "title": f"{host} · usual", "goal": "the usual",
+                                "start": start, "plan": [], "steps": [], "cart": list(cart)})
+
+
+@pytest.mark.parametrize("host, skill, start, goal", [
+    ("book.olacabs.com", "rides", "https://book.olacabs.com/", "book an Ola to the office"),
+    ("in.bookmyshow.com", "tickets", "https://in.bookmyshow.com/explore/home/bengaluru",
+     "book two tickets for Dune on BookMyShow"),
+    ("google.com", "travel", "https://www.google.com/travel/flights", "find flights to Delhi on Google Flights"),
+    ("google.com", "travel", "https://www.google.com/travel/flights", "find me a flight to Delhi"),
+])
+def test_a_habit_saved_under_the_start_pages_host_matches_its_site_note(tmp_path, host, skill, start, goal):
+    c, made, memory = shipped_core(tmp_path, skill)
+    habit = habit_on(memory, host, skill, start)
+    asked = []
+    c.habit_job = lambda goal, habits: asked.append([h["id"] for h in habits]) or sure(habit)
+    c.new_task(goal)
+    until(lambda: made)
+    assert asked == [[habit]] and made[0][0] == start and made[0][3:] == (habit, "same")
+
+
+def test_a_look_alike_host_never_matches_a_site_note(tmp_path):
+    c, made, memory = shipped_core(tmp_path, "rides")
+    habit_on(memory, "evilolacabs.com", "rides", "https://evilolacabs.com/")
+    asked = []
+    c.habit_job = lambda goal, habits: asked.append([h["id"] for h in habits]) or sure(habits[0]["id"])
+    c.new_task("book an Ola to the office")
+    until(lambda: made)
+    assert asked == [] and made[0][0] == "https://book.olacabs.com" and made[0][3] is None
+
+
+def test_a_failed_habit_question_starts_the_task_without_a_habit(tmp_path):
+    c, made, memory = core(tmp_path)
+    saved_habit(memory)
+
+    def broken(goal, habits):
+        raise RuntimeError("Jev is down")
+
+    c.habit_job = broken
+    c.new_task("order a diet coke on Zepto")
+    until(lambda: made)
+    assert made[0][0] == "https://www.zeptonow.com" and made[0][3] is None
+    assert not any("Jev is down" in m["text"]["body"] for m in c.channel.since(0)[0] if m["type"] == "text")

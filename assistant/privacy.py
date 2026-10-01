@@ -10,7 +10,7 @@ from . import rules
 SECRETS = contextvars.ContextVar("jev_secrets", default=None)
 DIGIT_RUN = re.compile(r"\d(?:[\s-]?\d){12,18}")  # 13 to 19 digits, single spaces or dashes between them
 AADHAAR = re.compile(r"(?<!\d)[2-9]\d{3}[\s-]?\d{4}[\s-]?\d{4}(?!\d)")
-PAN = re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b")
+PAN = re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b", re.IGNORECASE)  # "abcpe1234f" too
 NAMED = re.compile(r"\b(aadhaa?r|pan (card|number|no\.?))\b", re.IGNORECASE)  # "pan pizza" is food
 VERHOEFF_D = ((0, 1, 2, 3, 4, 5, 6, 7, 8, 9), (1, 2, 3, 4, 0, 6, 7, 8, 9, 5), (2, 3, 4, 0, 1, 7, 8, 9, 5, 6),
               (3, 4, 0, 1, 2, 8, 9, 5, 6, 7), (4, 0, 1, 2, 3, 9, 5, 6, 7, 8), (5, 9, 8, 7, 6, 0, 4, 3, 2, 1),

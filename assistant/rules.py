@@ -127,7 +127,7 @@ def asks_for_secret(text):
 
 
 def secret_field(action):
-    """Whether a field takes a one-time code or a password: only the user or the Keychain knows its value."""
+    """Whether a field takes a one-time code or a password: only the user knows its value, never memory or a model."""
     limits = action.get("constraints") or {}
     return action.get("kind") == "fill" and bool(action.get("group") or SECRET_ASK.search(action.get("label", ""))
                                                  or limits.get("type") == "password"

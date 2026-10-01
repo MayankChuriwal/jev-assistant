@@ -990,6 +990,68 @@ def test_an_id_overwrite_says_updated_and_a_value_inside_a_fact_is_hidden(world)
     assert world.core.memory.id_value("bescom_account") == "5550001111"
 
 
+LOOKS_LIKE_AN_ID = ("That looks like an ID. Tell me what it is called (like “my BESCOM account number is …”) so I can "
+                    "keep it hidden.")
+
+
+@pytest.mark.parametrize("fact", [
+    {"kind": "fact", "label": "", "text": "BESCOM account number 1234567890", "tags": []},
+    {"kind": "preference", "label": "BESCOM 1234567890", "text": "pay the bill monthly", "tags": []},
+    {"kind": "fact", "label": "", "text": "my gym membership is GYM2024X", "tags": []}])
+def test_an_id_the_model_left_in_a_fact_is_refused_and_nothing_is_kept(world, fact):
+    office = {"kind": "address", "label": "Office", "text": "12 MG Road", "tags": []}
+    reply = tell_memory(world, f"remember {fact['label']} {fact['text']} and my office is 12 MG Road",
+                        said("remember", [office, fact]))
+    assert reply == LOOKS_LIKE_AN_ID
+    assert world.core.memory.facts() == [] and world.core.memory.ids() == []
+    rows = world.core.memory.run(lambda cur: cur.execute("SELECT to_jsonb(e)::text AS row FROM events e").fetchall())
+    assert rows == []
+
+
+def test_an_address_with_a_pincode_and_a_flat_number_is_kept(world):
+    home = {"kind": "address", "label": "Home", "text": "Flat 4B2, 12 MG Road, Bengaluru 560034", "tags": []}
+    assert tell_memory(world, "my home is Flat 4B2, 12 MG Road, Bengaluru 560034", said("remember", [home])) == \
+        "Saved: Home: Flat 4B2, 12 MG Road, Bengaluru 560034"
+    fact = world.core.memory.run(lambda cur: cur.execute("SELECT text, source FROM facts").fetchone())
+    assert fact == {"text": "Flat 4B2, 12 MG Road, Bengaluru 560034", "source": ""}  # the message never kept whole
+
+
+def test_a_message_without_an_id_keeps_its_words_as_the_source(world):
+    tea = {"kind": "preference", "label": "", "text": "likes masala chai", "tags": []}
+    tell_memory(world, "remember I like masala chai", said("remember", [tea]))
+    assert world.core.memory.run(lambda cur: cur.execute("SELECT source FROM facts").fetchone()["source"]) == \
+        "remember I like masala chai"
+
+
+def test_a_saved_id_already_hidden_in_a_fact_is_not_refused(world):
+    world.core.memory.set_id("bescom_account", "BESCOM account number", "1234567890")
+    fact = {"kind": "fact", "label": "", "text": "BESCOM account 1234567890 is for the flat", "tags": []}
+    reply = tell_memory(world, "remember BESCOM account 1234567890 is for the flat", said("remember", [fact]))
+    assert reply == "Saved: BESCOM account [profile:bescom_account] is for the flat"
+    assert world.core.memory.run(lambda cur: cur.execute("SELECT source FROM facts").fetchone()["source"]) == ""
+
+
+def test_a_standing_approval_in_words_memory_cannot_keep_is_refused(world):
+    world.core.library = ZEPTO
+    world.core.memory.record_habit({"host": "zeptonow.com", "skill": "groceries", "title": "Zepto · Diet Coke",
+                                    "goal": "Order Diet Coke on Zepto", "start": "https://www.zeptonow.com/",
+                                    "plan": [], "steps": [], "cart": [{"item": "diet coke", "qty": 1}]})
+    words = "always order my usual Zepto cart up to ₹300, pay with card 4111 1111 1111 1111"
+    assert tell_memory(world, words, said("approve", site="zeptonow.com")) == conversation.UNSTORABLE
+    assert world.core.memory.live_rules() == []
+
+
+def test_a_standing_approval_finds_the_cart_of_an_order_placed_on_a_subdomain(world):
+    from assistant import skills
+
+    world.core.library = {"skills": {}, "sites": skills.load_sites()}
+    world.core.memory.record_habit({"host": "book.olacabs.com", "skill": "rides", "title": "Ola · Office",
+                                    "goal": "Cab to office", "start": "https://book.olacabs.com/", "plan": [],
+                                    "steps": [], "cart": [{"item": "mini to office", "qty": 1}]})
+    reply = tell_memory(world, "always book my usual Ola ride, up to ₹300", said("approve", site="Ola"))
+    assert reply.startswith("Saved: olacabs.com · mini to office × 1 · up to ₹300")
+
+
 def test_a_model_reply_with_an_id_value_is_hidden(world):
     world.core.memory.set_id("phone", "phone number", "+91 98765 43210")
     reply = tell_memory(world, "remember nothing", said("none", reply="You said +91 98765 43210."))

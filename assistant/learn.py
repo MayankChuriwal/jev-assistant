@@ -80,8 +80,10 @@ def habit_from(state):
 
 def taught(state, ok, first):
     """Whether a run is worth one reflection call: the first run on its site, a run that wasn't verified, any
-    escalation, loop, idle tick, or replay fallback, or a new answer from the user (a hidden code is none)."""
-    answered = any(c["from"] == "user" and not c["text"].startswith("[secret:") for c in state["chat"])
+    escalation, loop, idle tick, or replay fallback, or a new answer from the user (a hidden code is none, and neither
+    is the reply to the final approval)."""
+    answered = any(c["from"] == "user" and not c["text"].startswith("[secret:") and not c.get("approval")
+                   for c in state["chat"])
     return bool(first or not ok or state["escalations"] or state["switched"] or state["loop_from"]
                 or state.get("idle_ticks") or (state.get("replay") or {}).get("fallbacks") or answered)
 

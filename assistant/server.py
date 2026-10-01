@@ -56,7 +56,8 @@ def home():
 
 def save_key(key, path=None):
     """Put JEV_MEMORY_KEY in .env, creating it. An empty `JEV_MEMORY_KEY=` placeholder line is filled in, never
-    duplicated. The file is made readable only by the user: a new one is created that way, never world-readable."""
+    duplicated; every other line stays as it was. The new file is written beside the old one, readable only by the
+    user, and renamed over it: a crash leaves the old .env or the new one, never half of one."""
     path = Path(path) if path else Path.cwd() / ".env"
     lines = path.read_text().splitlines() if path.exists() else []
     line, done, out = f"JEV_MEMORY_KEY={key}", False, []
@@ -69,18 +70,26 @@ def save_key(key, path=None):
             out.append(existing)
     if not done:
         out.append(line)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as file:
-        file.write("\n".join(out) + "\n")
-    path.chmod(0o600)  # an .env that already existed may have been looser
+    temp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")  # same folder: the rename is atomic
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w") as file:
+            file.write("\n".join(out) + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temp, path)  # the old file stands whole until the new one replaces it
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
 
 
 def open_memory(*, strict=True, bench=False, **options):
     """The user's memory, ready, or None after saying why not: Postgres reached, the key in place, and Phase A's
     profile.json imported once (never into a bench's schema). With no JEV_MEMORY_KEY and no ID stored yet, a key is
-    generated into .env. With IDs stored and no key, a strict open (the chat, `jev run`) refuses, because a new key
-    would lose them; `jev memory` still lists and forgets. An empty JEV_MEMORY_KEY counts as missing. Any failure
-    after the connection closes it and says one line. `options` (url, schema) go to Memory.open."""
+    generated into .env (for a bench's schema, held in memory only). With IDs stored and no key, a strict open (the
+    chat, `jev run`) refuses, because a new key would lose them; `jev memory` still lists and forgets. An empty
+    JEV_MEMORY_KEY counts as missing. Any failure after the connection closes it and says one line. `options` (url,
+    schema) go to Memory.open."""
     from cryptography.fernet import Fernet
 
     from .memory import Memory, StoreError
@@ -101,11 +110,12 @@ def open_memory(*, strict=True, bench=False, **options):
             else:
                 key = Fernet.generate_key().decode()
                 memory.unlock(key)
-                save_key(key)
-                os.environ["JEV_MEMORY_KEY"] = key
                 missing = False
-                print("jev: Generated JEV_MEMORY_KEY in .env. Keep it: without it, the IDs you save can't be read.",
-                      file=sys.stderr)
+                if not bench:  # a bench schema is thrown away: its key lives in memory only, never in .env
+                    save_key(key)
+                    os.environ["JEV_MEMORY_KEY"] = key
+                    print("jev: Generated JEV_MEMORY_KEY in .env. Keep it: without it, the IDs you save can't be "
+                          "read.", file=sys.stderr)
         if not bench and memory.fernet is not None and memory.import_profile(home() / "profile.json"):
             print("jev: Imported your old profile into memory (profile.json is now profile.json.imported).",
                   file=sys.stderr)

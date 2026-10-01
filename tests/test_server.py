@@ -4,6 +4,7 @@ import json
 import os
 import re
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -403,6 +404,42 @@ def test_a_bench_schema_never_imports_your_old_profile(tmp_path, monkeypatch, da
         assert memory.ids() == [] and (tmp_path / "profile.json").exists()
     finally:
         memory.drop()
+
+
+def test_a_bench_schema_makes_its_key_in_memory_only(tmp_path, monkeypatch, database_url, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JEV_DATABASE_URL", database_url)
+    monkeypatch.setenv("JEV_HOME", str(tmp_path))
+    monkeypatch.setattr(server, "save_key", lambda key, path=None: pytest.fail("a bench run wrote a key to .env"))
+    memory = server.open_memory(schema=f"t_{uuid.uuid4().hex[:12]}", bench=True)
+    try:
+        assert memory is not None and memory.fernet is not None and "JEV_MEMORY_KEY" not in os.environ
+        memory.set_id("phone", "phone number", "+91 98765 43210")
+        assert memory.id_value("phone") == "+91 98765 43210"
+        assert not (tmp_path / ".env").exists() and "Generated JEV_MEMORY_KEY" not in capsys.readouterr().err
+    finally:
+        memory.drop()
+
+
+def test_save_key_replaces_env_whole_or_not_at_all(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("ANTHROPIC_API_KEY=abc\n  # a comment  \nJEV_MEMORY_KEY=\n")
+    replaced = []
+    real_replace = os.replace
+    monkeypatch.setattr(server.os, "replace", lambda src, dst: replaced.append((Path(src).parent, Path(dst)))
+                        or real_replace(src, dst))
+    server.save_key("KEY1", env)
+    assert env.read_text() == "ANTHROPIC_API_KEY=abc\n  # a comment  \nJEV_MEMORY_KEY=KEY1\n"
+    assert replaced == [(tmp_path, env)] and sorted(p.name for p in tmp_path.iterdir()) == [".env"]
+
+    def broken(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(server.os, "replace", broken)
+    with pytest.raises(OSError, match="disk full"):
+        server.save_key("KEY2", env)
+    assert env.read_text().endswith("JEV_MEMORY_KEY=KEY1\n")  # the old file stands whole
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".env"]  # and no temporary file is left behind
 
 
 def test_learn_and_keep_need_bench(capsys):

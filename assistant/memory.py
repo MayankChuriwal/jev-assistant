@@ -35,6 +35,9 @@ CONNECT_TIMEOUT = 10
 FIX = "Start it (brew services start postgresql@18) or set JEV_DATABASE_URL."
 UNSTORABLE = "I don't keep that: card numbers, CVVs, OTPs, passwords, PINs, Aadhaar and PAN stay out of memory."
 GOAL_KEY = r"lower(btrim(regexp_replace(goal, '\s+', ' ', 'g')))"
+# a habit's host is one of the given hosts or a subdomain of one: compared as text, never as a LIKE pattern
+UNDER = "EXISTS (SELECT 1 FROM unnest(%s::text[]) AS h(host) WHERE habits.host = h.host " \
+        "OR right(habits.host, length(h.host) + 1) = '.' || h.host)"
 TABLES = {"fact": "facts", "note": "notes", "habit": "habits", "rule": "approvals"}
 COLUMNS = {
     "facts": ("kind", "label", "text", "tags", "data", "source", "task", "created_at", "superseded_by"),
@@ -172,6 +175,13 @@ class Memory:
         memory.purge()
         return memory
 
+    def sibling(self, schema):
+        """Another schema on this store's database, under this store's key: a bench pair's, whose key may live in
+        memory only."""
+        other = Memory.open(self.url, schema=schema, key="")
+        other.fernet = self.fernet
+        return other
+
     # ---- the connection
 
     def connect(self):
@@ -242,6 +252,8 @@ class Memory:
             cur.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self.schema)))
             cur.execute(sql.SQL("SET LOCAL search_path TO {}, public").format(sql.Identifier(self.schema)))
             cur.execute(DDL)
+            for column in ("undone", "purged"):  # an events table made before undo and purge had neither
+                cur.execute(f"ALTER TABLE events ADD COLUMN IF NOT EXISTS {column} boolean NOT NULL DEFAULT false")
             if cur.execute("SELECT count(*) AS n FROM schema_version").fetchone()["n"] == 0:
                 cur.execute("INSERT INTO schema_version (version) VALUES (%s)", (VERSION,))
 
@@ -539,10 +551,11 @@ class Memory:
         return self.run(work)
 
     def habits(self, skill=None, hosts=None, limit=50):
-        """Live habits, newest first: for one skill and these hosts, when given."""
+        """Live habits, newest first: for one skill and these hosts, when given. A habit kept under a host's subdomain
+        counts for the host (book.olacabs.com for olacabs.com), never a look-alike (evilolacabs.com)."""
         return self.run(lambda cur: cur.execute(
-            "SELECT * FROM habits WHERE retired_at IS NULL AND (%s::text IS NULL OR skill = %s) "
-            "AND (%s::text[] IS NULL OR host = ANY(%s)) ORDER BY updated_at DESC, id DESC LIMIT %s",
+            f"SELECT * FROM habits WHERE retired_at IS NULL AND (%s::text IS NULL OR skill = %s) "
+            f"AND (%s::text[] IS NULL OR {UNDER}) ORDER BY updated_at DESC, id DESC LIMIT %s",
             (skill, skill, hosts, hosts, limit)).fetchall())
 
     def habit(self, habit_id):
@@ -564,10 +577,11 @@ class Memory:
         self.run(work)
 
     def last_cart(self, site):
-        """The cart of the newest live habit on this site that recorded a confirmed order, or None."""
+        """The cart of the newest live habit on this site or a subdomain of it that recorded a confirmed order, or
+        None."""
         row = self.run(lambda cur: cur.execute(
-            "SELECT cart FROM habits WHERE host = %s AND retired_at IS NULL AND cart <> '[]'::jsonb "
-            "ORDER BY updated_at DESC, id DESC LIMIT 1", (site,)).fetchone())
+            f"SELECT cart FROM habits WHERE {UNDER} AND retired_at IS NULL AND cart <> '[]'::jsonb "
+            "ORDER BY updated_at DESC, id DESC LIMIT 1", ([site],)).fetchone())
         return row["cart"] if row else None
 
     # ---- forget, undo, purge

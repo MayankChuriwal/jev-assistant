@@ -83,6 +83,10 @@ def test_reflection_runs_only_when_the_run_taught_something():
         assert learn.taught(run_state(**changes), True, False), changes
     hidden = run_state(chat=[{"from": "user", "text": "[secret:answer1] (hidden answer)"}])
     assert not learn.taught(hidden, True, False)  # a code is no new answer
+    approval = run_state(chat=[{"from": "agent", "text": "I'll press “Pay ₹79”. Reply yes to go ahead, or tell me "
+                                                         "what to change.", "approval": True},
+                               {"from": "user", "text": "“yes”", "approval": True}])
+    assert not learn.taught(approval, True, False)  # the final approval's yes is no new answer either
 
 
 def test_lint_keeps_site_lines_and_drops_private_or_unsafe_ones():

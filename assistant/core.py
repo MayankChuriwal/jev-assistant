@@ -27,6 +27,9 @@ FIRST = {"secret", "confirm"}  # asked before anything older
 STOP_WORDS = {"cancel", "stop", "/cancel"}  # stop a task even at a hidden prompt, without any model
 ACTIVE = {"starting", "waiting", "running", "paused"}
 MAX_NOTES_SHOWN = 10  # learned site notes the chat lists
+LOOKS_LIKE_AN_ID = ("That looks like an ID. Tell me what it is called (like “my BESCOM account number is …”) so I "
+                    "can keep it hidden.")
+PLACEHOLDER = re.compile(r"\[(?:profile|secret):[\w.]+\]")
 
 
 def site(url):
@@ -69,6 +72,11 @@ def host_of(site):
     """The bare host in a site string a model wrote, with any scheme and path dropped."""
     text = site.strip().lower()
     return skills.bare(urlparse(text if "//" in text else "//" + text).hostname or "")
+
+
+def note_host(key):
+    """The bare host of a site note's key, its path dropped ("google.com/travel/flights" → "google.com")."""
+    return skills.bare(key.partition("/")[0].lower())
 
 
 def memory_text(listing):
@@ -445,10 +453,16 @@ class Core:
 
     def remember_words(self, out, text):
         """Save what the message gives. An ID's value is the one candidate code finds in the message, never a model's
-        words; with two candidates nothing is saved, and with none it is asked through the hidden field later."""
+        words; with two candidates nothing is saved, and with none it is asked through the hidden field later. With no
+        ID named, a fact (other than an address) holding something that can be an ID saves nothing: the user is
+        asked to name it. The message itself is kept as a fact's source only when nothing in it can be an ID."""
         key, label = out["id"]["key"].strip(), out["id"]["label"].strip()
         if not (storable(text) and storable(key) and storable(label)):  # a password, OTP, PIN, or card stays out of
             return UNSTORABLE  # memory, whatever the model made of the message
+        if not key and any(fact["kind"] != "address" and self.unnamed_id(f"{fact['label']} {fact['text']}")
+                           for fact in out["facts"]):
+            return LOOKS_LIKE_AN_ID
+        source = "" if id_candidates(text) else text
         said = []
         if key:
             if id_candidates(key) or id_candidates(label):  # a model must never carry a value in a name
@@ -466,15 +480,22 @@ class Core:
                             f"`jev memory set {key}` keeps an ID out of the chat entirely.")
         for fact in out["facts"]:  # after the ID: its value is hidden in every fact from here on
             label = fact["label"].strip()
-            self.memory.remember(fact["kind"], fact["text"], label=label, tags=fact["tags"], source=text,
+            self.memory.remember(fact["kind"], fact["text"], label=label, tags=fact["tags"], source=source,
                                  actor="user", supersede=bool(label))
             shown, shown_label = self.memory.hide(fact["text"]), self.memory.hide(label)
             said.append(f"Saved: {shown_label}: {shown}" if label else f"Saved: {shown}")
         return self.memory.hide(" ".join(said)) or "I didn't find anything to save."
 
+    def unnamed_id(self, text):
+        """Whether text holds something that can be an ID once the saved IDs are hidden."""
+        return bool(id_candidates(PLACEHOLDER.sub(" ", self.memory.hide(text))))
+
     def approve_words(self, site, text):
-        """A standing approval from the user's own words: the site they name, the cart of their latest order there,
-        and the cap their words set in rupees. The site a model names must be one the message names too."""
+        """A standing approval from the user's own words: the site they name, the cart of their latest order there
+        (or on a subdomain of it, where the order ran), and the cap their words set in rupees. The site a model names
+        must be one the message names too. Words memory never keeps (a card number, a PIN) save nothing."""
+        if not storable(text):
+            return UNSTORABLE
         note = skills.named(site, self.library["sites"]) if site.strip() else None
         host = note["host"].partition("/")[0] if note else host_of(site)
         mine = skills.named(text, self.library["sites"])
@@ -681,13 +702,20 @@ class Core:
 
     def match_habit(self, task):
         """(habit, sameness) when Jev is sure this goal repeats a saved habit: the skill's live habits on the site the
-        goal names, else on any of the skill's sites. None otherwise."""
+        goal names, else on any of the skill's sites; a habit kept under a site's subdomain (book.olacabs.com, where
+        the run started) counts for the site. None otherwise, and None when the habit question fails: the task starts
+        as if no habit were saved."""
         skill = self.library["skills"].get(task.skill) if task.skill else None
         if not skill:
             return None
         note = skills.named(task.goal, self.library["sites"])
-        habits = self.memory.habits(skill=task.skill, hosts=[note["host"]] if note else (skill["sites"] or None))
-        return replay.match(self.hidden(self.habit_job, task.goal, habits), habits) if habits else None
+        keys = [note["host"]] if note else skill["sites"]
+        hosts = list(dict.fromkeys(note_host(key) for key in keys)) or None
+        try:
+            habits = self.memory.habits(skill=task.skill, hosts=hosts)
+            return replay.match(self.hidden(self.habit_job, task.goal, habits), habits) if habits else None
+        except Exception:  # Jev or the store failed: Phase A, without a habit
+            return None
 
     def start_page(self, task):
         """(start URL, title): the site the goal names; else the one the start job finds when the goal names a site

@@ -213,6 +213,43 @@ def test_habits_keep_versions_count_replays_and_retire(memory):
     assert [h["id"] for h in memory.habits("groceries")] == [other]
 
 
+def test_a_site_reaches_the_habits_and_carts_kept_under_its_subdomains_only(memory):
+    ola = memory.record_habit({**HABIT, "host": "book.olacabs.com", "skill": "rides", "goal": "cab to office",
+                               "cart": [{"item": "mini to office", "qty": 1}]})
+    memory.record_habit({**HABIT, "host": "evilolacabs.com", "skill": "rides", "goal": "cab home",
+                         "cart": [{"item": "evil", "qty": 1}]})
+    memory.record_habit({**HABIT, "host": "a_b.com", "skill": "rides", "goal": "cab to gym"})
+    assert [h["id"] for h in memory.habits("rides", ["olacabs.com"])] == [ola]
+    assert [h["id"] for h in memory.habits("rides", ["book.olacabs.com"])] == [ola]
+    assert memory.last_cart("olacabs.com") == [{"item": "mini to office", "qty": 1}]
+    assert memory.last_cart("cabs.com") is None and memory.last_cart("acabs.com") is None
+    assert memory.last_cart("a%b.com") is None and memory.habits("rides", ["a%b.com"]) == []  # no LIKE wildcards
+
+
+def test_migrate_upgrades_an_events_table_made_before_undo_and_purge(database_url):
+    schema = f"t_{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        conn.execute(f"CREATE SCHEMA {schema}")
+        conn.execute(f"CREATE TABLE {schema}.events (id bigserial PRIMARY KEY, at timestamptz NOT NULL DEFAULT now(), "
+                     "actor text NOT NULL, action text NOT NULL, ref text NOT NULL, before jsonb, after jsonb)")
+        conn.execute(f"INSERT INTO {schema}.events (actor, action, ref) VALUES ('user', 'remember', 'facts:1')")
+    store = None
+    try:
+        store = Memory.open(database_url, schema=schema, key=TEST_KEY)  # purges at open: it needs both columns
+        columns = store.run(lambda cur: {r["column_name"] for r in cur.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = %s AND table_name = 'events'",
+            (schema,)).fetchall()})
+        assert {"undone", "purged"} <= columns
+        assert store.run(lambda cur: cur.execute("SELECT undone, purged FROM events").fetchall()) == [
+            {"undone": False, "purged": False}]
+        store.purge()
+    finally:
+        if store is not None:
+            store.close()
+        with psycopg.connect(database_url, autocommit=True) as conn:
+            conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+
+
 def test_listing_names_everything_but_never_an_id_value(memory):
     memory.set_id("phone", "phone number", "+91 98765 43210")
     memory.remember("preference", "I'm vegetarian", tags=["general"])

@@ -117,6 +117,7 @@ def test_a_clear_yes_binds_the_approval_and_reads_the_page_again(monkeypatch):
     assert question.startswith("Diet Coke 300 ml × 1\n• Total ₹79") and "I'll press “Pay ₹79” on shop.test" in question
     assert w.state["approval"]["amount"] == "₹79" and w.state["approval"]["target"] == (None, 11)
     assert gate.approved(w, page, PAY, "Pay ₹79", None) is True  # the same control, host, and amount
+    assert [c.get("approval") for c in w.state["chat"][-2:]] == [True, True]  # marked: never a new answer to learn
 
 
 def test_a_yes_with_a_change_commits_nothing(monkeypatch):

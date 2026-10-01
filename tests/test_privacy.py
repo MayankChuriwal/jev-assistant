@@ -121,7 +121,7 @@ def test_a_spaced_amount_stays_whole_for_every_space_like_character(gap):
 def test_card_numbers_aadhaar_pan_and_named_secrets_are_never_storable():
     for text in ("4111 1111 1111 1111", "card 4111-1111-1111-1111 exp", "2345 6789 0124", "ABCPE1234F",
                  "my OTP is 4829", "password hunter2", "CVV 123", "UPI PIN 1234", "my aadhaar is pending",
-                 "PAN card copy", "card number on file", "expiry date 12/29"):
+                 "PAN card copy", "card number on file", "expiry date 12/29", "abcpe1234f", "my id AbCpE1234F"):
         assert not privacy.storable(text), text
 
 
@@ -135,6 +135,7 @@ def test_everyday_facts_and_ids_are_storable():
 def test_the_checksums():
     assert privacy.luhn("4111111111111111") and not privacy.luhn("4111111111111112")
     assert privacy.secret_number("card 4111 1111 1111 1111") and privacy.secret_number("ABCPE1234F")
+    assert privacy.secret_number("abcpe1234f") and not privacy.secret_number("xabcpe1234f")  # any case, whole only
     assert not privacy.secret_number("Enter the OTP sent to [profile:phone]")  # naming a secret holds no number
     assert privacy.verhoeff("2363") and privacy.verhoeff("234567890124") and not privacy.verhoeff("919876543210")
 
