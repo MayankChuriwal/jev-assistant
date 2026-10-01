@@ -4,7 +4,8 @@ A chat assistant that does real web tasks in its own Chrome and asks only for wh
 System One model, chooses every browser step: the operation and its element, whether the subgoal is done, what
 blocks the page, and whether the last step worked. **GPT-4.1 mini** plans the subgoals, resolves the steps Jev is
 unsure about, and writes every word you read. Code guards the rest: nothing is paid, booked, or sent without your
-yes in chat (or your own "don't ask, under ₹N"), and codes, passwords, and profile details never reach a model.
+yes in chat (or, once you switch pre-approval on, your own "don't ask, under ₹N"), and codes, passwords, and profile
+details never reach a model.
 
 Task and site know-how lives in markdown skills (`skills/`), not in code. The browser layer comes from
 [jev-ultrafast](https://github.com/browser-use/jev-ultrafast).
@@ -15,7 +16,9 @@ Design: `docs/superpowers/specs/2026-10-01-system-one-agent-design.md`. Known is
 
     uv sync
     cp .env.example .env      # add TYPESAFE_API_KEY and OPENAI_API_KEY
+    uv run jev profile --name "…" --phone "…" --email "…"   # optional: details no model ever sees
     uv run jev probe          # optional: check sites for 403s and captchas
+    uv run jev forget swiggy.com uber.com                   # sign the agent Chrome out of sites
 
 ## Chat
 
@@ -26,10 +29,13 @@ Ask for anything, several things at once if you like ("milk from Zepto and a cab
 hidden Chrome and asks only for what it needs, in plain messages:
 
 - **Choices** come as a numbered list with prices.
-- **Hidden field:** codes, CVVs, and a phone number the profile lacks go in a hidden field.
+- **Hidden field:** codes, CVVs, and a phone number the profile lacks go in a hidden field. A question there that
+  lists options takes the option's number or its words too.
 - **Before paying, booking, or sending:** you see a summary read from the page, and it waits for your yes. The
-  exception is a message of your own that said not to ask and set a cap ("order it, don't ask, under ₹300").
-  Pre-approval is off by default: until you set `JEV_PREAUTH=on` in `.env`, the agent still asks and says why.
+  exception is a message of your own that said not to ask and set a cap ("order it, don't ask, under ₹300"), and
+  only when the page's payable total is within it. Without a cap, "don't ask" covers only a goal that buys nothing
+  (a form, a message) on a page that shows no money. Pre-approval is off by default: until you set
+  `JEV_PREAUTH=on` in `.env`, the agent still asks and says why.
 - **Which app:** a goal that names no app is asked once per kind of task and remembered.
 - **Several tasks:** up to three run at once, one per site.
 - **Messages mid-task** count as answers, changes, new tasks, cancellations, or status questions.
