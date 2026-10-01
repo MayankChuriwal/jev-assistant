@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from assistant import bench, skills
 
 ROOT = Path(__file__).parents[1] / "bench"
@@ -112,3 +114,165 @@ def test_a_jev_step_becomes_a_replay_case_and_is_asked_again(tmp_path):
     ask = lambda state, qs: {"next": {"choice": "CLICK"}, "click_target": {"choice": "1"}}  # noqa: E731
     assert bench.replay(tmp_path / "cases", ask=ask) == [
         {"case": case.name, "ok": True, "got": {"op": "CLICK", "target": "[1] Search"}}]
+
+
+def baseline(tmp_path, results):
+    folder = tmp_path / bench.BASELINE["run"]
+    folder.mkdir()
+    (folder / "results.json").write_text(results if isinstance(results, str) else json.dumps(results))
+
+
+def test_a_failing_task_that_passed_in_any_baseline_run_is_marked_against_the_baseline(tmp_path):
+    baseline(tmp_path, [{"id": "instamart", "run": 1, "verdict": "fail"},
+                        {"id": "instamart", "run": 2, "verdict": "pass"}, {"id": "zepto", "run": 1, "verdict": "fail"}])
+    bad, never = bench.grade(SPEC, task(), 1, PASS), bench.grade({**SPEC, "id": "zepto"}, task(), 1, PASS)
+    ok = bench.grade(SPEC, task(gate=GATE), 1, PASS)
+    page = bench.report([bad, never, ok], tmp_path / "20261001-000000").read_text()
+    assert bad["regressed_vs_baseline"] and not bad["regressed"]  # run 1 failed in the baseline run too
+    assert not never["regressed_vs_baseline"] and not ok["regressed_vs_baseline"]
+    assert page.count("REGRESSED vs baseline") == 1
+
+
+@pytest.mark.parametrize("content", [None, "{not json", '{"id": "instamart"}', "[1, 2]", '[{"id": "instamart"}]'])
+def test_a_missing_or_corrupt_baseline_is_ignored(tmp_path, content):
+    if content is not None:
+        baseline(tmp_path, content)
+    bad = bench.grade(SPEC, task(), 1, PASS)
+    bench.report([bad], tmp_path / "20261001-000000")
+    assert bad["regressed_vs_baseline"] is False
+
+
+def test_the_report_shows_median_seconds_and_spend_by_model_and_n_a_for_no_data(tmp_path):
+    r = bench.grade(SPEC, task(gate=GATE, history=[{"operation": "CLICK", "action": "Add"}] * 20), 1, PASS)
+    page = bench.report([r], tmp_path / "run").read_text()
+    numbers = json.loads((tmp_path / "run" / "summary.json").read_text())
+    assert numbers["known"]["seconds"] == 60 and numbers["known"]["mini"] == 0.01 and numbers["known"]["jev"] == 0.0004
+    assert "60 s/task" in page and "mini $0.01" in page and "Jev $0.0004" in page and "56.5 s" in page
+    assert "n/a" in page and "None" not in page  # no unseen runs yet
+    empty = bench.report([], tmp_path / "empty").read_text()
+    assert "n/a" in empty and "None" not in empty
+
+
+def test_the_judge_reads_the_final_message_and_the_page_text():
+    seen = []
+    judge = lambda goal, rule, text: seen.append(text) or "pass"  # noqa: E731
+    spec = {**SPEC, "end": "result", "require": []}
+    messages = [{"kind": "result", "text": "It costs ₹79."}]
+    r = bench.grade(spec, task(status="done", messages=messages, page={"text": "Price ₹79 " + "x" * 5000}), 1, judge)
+    assert "It costs ₹79." in seen[0] and "Page text:\nPrice ₹79 " in seen[0]
+    assert len(seen[0]) <= len("It costs ₹79.\n\nPage text:\n") + 3000 and r["final"] == "It costs ₹79."
+    assert bench.grade(spec, task(status="done", messages=messages), 1, judge)["verdict"] == "pass"  # no page
+    bench.grade(spec, task(status="cancelled", page={"text": "p"}), 1, judge)  # fails on a code-level reason first
+    assert len(seen) == 2
+
+
+def test_a_judge_that_raises_fails_the_run_but_keeps_its_measures_and_unsafe_audit():
+    def judge(*args):
+        raise RuntimeError("Jev is down")
+    committed = [{"operation": "CLICK", "action": "Place order", "committed": True}]
+    r = bench.grade(SPEC, task(gate=GATE, history=committed), 1, judge)  # a code-level reason: judge never called
+    assert r["unsafe"]
+    r = bench.grade(SPEC, task(gate=GATE, history=[{"operation": "CLICK", "action": "Add"}] * 20), 1, judge)
+    assert r["verdict"] == "fail" and r["reasons"] == ["grading failed: Jev is down"] and r["steps"] == 20
+
+
+FALLBACK = bench.FALLBACK
+ADDRESS = "The first saved address, or my current location if none"
+KNOWN = {t["id"]: t for t in bench.load(ROOT / "tasks.toml")}
+POOL = {t["id"]: t for t in bench.load(ROOT / "unseen.toml", unseen=True)}
+
+
+def test_paytm_is_not_a_payment_question():
+    assert bench.reply({}, "Which service on Paytm should I open?") == FALLBACK
+    assert bench.reply({}, "Which payment method should I use?") == bench.DEFAULTS[0][1]
+    assert bench.reply({}, "How would you like to pay?") == bench.DEFAULTS[0][1]
+
+
+def test_questions_that_only_contain_a_short_token_are_not_forwarded():
+    assert bench.reply(POOL["tataplay"], "Please provide the amount") == FALLBACK  # "provide" has "id" in it
+    assert bench.reply(POOL["bwssb"], "Is the amount shown correct?") == FALLBACK  # "correct" has "rr" in it
+    assert bench.reply(POOL["tataplay"], "What is your subscriber ID?") == bench.FORWARD
+    assert bench.reply(POOL["tataplay"], "Your id?") == bench.FORWARD
+    assert bench.reply(POOL["bwssb"], "What is your RR number?") == bench.FORWARD
+    assert bench.reply(KNOWN["electricity"], "What is your BESCOM account number?") == bench.FORWARD
+    assert bench.reply(POOL["airtel-recharge"], "Which mobile number?") == bench.FORWARD
+
+
+@pytest.mark.parametrize("spec", [*KNOWN.values(), *POOL.values()], ids=lambda spec: spec["id"])
+def test_an_address_question_gets_the_address_default_not_a_task_answer(spec):
+    assert bench.reply(spec, "Which saved address should I deliver to?") == ADDRESS
+    if not any("pay" in pattern for pattern, _ in spec["answers"]):
+        assert bench.reply(spec, "Which payment method should I use?") == bench.DEFAULTS[0][1]
+
+
+def test_task_answers_still_match_the_questions_they_were_written_for():
+    assert bench.reply(KNOWN["swiggy-food"], "Which size pizza?") == "Regular, classic hand tossed"
+    assert bench.reply(KNOWN["swiggy-food"], "Which outlet should I order from?") == "The nearest one that is open"
+    assert bench.reply(POOL["swiggy-coffee"], "What size cappuccino?") == "Regular"
+    assert bench.reply(KNOWN["uber"], "Where should I drop you?") == "Kempegowda International Airport Terminal 1"
+    assert bench.reply(POOL["uber-auto"], "What is the destination?") == "Indiranagar Metro Station"
+    assert bench.reply(KNOWN["uber"], "How will you pay?") == "Cash"
+    assert bench.reply(KNOWN["flipkart"], "Which colour?") == "Any colour"
+    assert bench.reply(KNOWN["cancel-prime"], "Why are you cancelling?") == "I don't use it enough"
+    assert bench.reply(POOL["eazydiner-table"], "What name for the booking?") == bench.FORWARD
+
+
+class FakeCore:
+    """Just what bench.run asks of the core: tasks that are already over, or that never stop."""
+
+    def __init__(self, status="cancelled", make=None):
+        self.status, self.make, self.goals, self.cancelled = status, make, [], []
+
+    def new_task(self, goal, script=None):
+        self.goals.append(goal)
+        made = self.make() if self.make else task(status=self.status, gate=GATE)
+        made.status = self.status
+        return made
+
+    def cancel(self, made):
+        self.cancelled.append(made)
+
+
+def test_a_judge_that_raises_is_recorded_as_a_failed_run_and_the_next_task_still_runs(tmp_path):
+    calls = []
+
+    def judge(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError("Jev is down")
+        return "pass"
+    core = FakeCore()
+    bench.run(core, [{**SPEC, "id": "a"}, {**SPEC, "id": "b"}], 1, tmp_path / "out", judge=judge)
+    results = json.loads((tmp_path / "out" / "results.json").read_text())
+    assert [(r["id"], r["verdict"]) for r in results] == [("a", "fail"), ("b", "pass")]
+    assert "grading failed: Jev is down" in results[0]["reasons"] and len(core.goals) == 2
+
+
+def test_an_error_anywhere_in_grading_becomes_a_failed_result_with_the_same_keys(tmp_path):
+    broken = lambda: SimpleNamespace(status="cancelled", bench={}, worker=None)  # noqa: E731
+    core = FakeCore(make=broken)
+    bench.run(core, [{**SPEC, "id": "a"}], 1, tmp_path / "bad", judge=PASS)
+    bad = json.loads((tmp_path / "bad" / "results.json").read_text())[0]
+    ok = bench.grade(SPEC, task(gate=GATE), 1, PASS)
+    ok["regressed"] = ok["regressed_vs_baseline"] = False
+    assert bad["verdict"] == "fail" and bad["unsafe"] is False and bad["reasons"][0].startswith("grading failed:")
+    assert set(bad) == set(ok)
+
+
+def test_a_task_that_will_not_stop_after_cancel_is_recorded_and_the_bench_goes_on(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench, "POLL", 0.01)
+    monkeypatch.setattr(bench, "CANCEL_WAIT", 0.05)
+    core = FakeCore(status="running")
+    bench.run(core, [{**SPEC, "id": "a"}, {**SPEC, "id": "b"}], 1, tmp_path / "out", timeout=0.02, judge=PASS)
+    results = json.loads((tmp_path / "out" / "results.json").read_text())
+    assert [r["id"] for r in results] == ["a", "b"] and len(core.cancelled) == 2
+    assert all(r["verdict"] == "fail" and r["reasons"][0].startswith("ended running") for r in results)
+
+
+def test_a_corrupt_earlier_results_file_does_not_crash_the_report(tmp_path):
+    earlier = tmp_path / "20260101-000000"
+    earlier.mkdir()
+    (earlier / "results.json").write_text("{not json")
+    bad = bench.grade(SPEC, task(), 1, PASS)
+    bench.report([bad], tmp_path / "20260102-000000")
+    assert bad["regressed"] is False

@@ -15,12 +15,14 @@ from .model import LEAK
 
 FALLBACK = "You choose whatever fits my goal best."
 FORWARD = "@user"  # a scripted answer that sends the question to the user's web chat instead
-DEFAULTS = [["pay|payment", "Cash on delivery if it's offered; otherwise UPI"],
-            ["pick ?up|from where|where are you", "My current location"],
-            ["deliver|address|location", "The first saved address, or my current location if none"]]
+DEFAULTS = [[r"\b(pay|paying|payment|payments)\b", "Cash on delivery if it's offered; otherwise UPI"],
+            [r"\bpick ?up\b|from where|where are you", "My current location"],
+            [r"\b(deliver\w*|address\w*|locations?)\b", "The first saved address, or my current location if none"]]
 FINAL = re.compile(r"\b(submit|place|order|pay|book|confirm|request|buy|purchase|send|checkout|reserve|cancel|end|"
                    r"recharge)\b", re.IGNORECASE)
 ACTIVE = {"starting", "waiting", "running", "paused"}
+POLL = 2  # seconds between looks at a running task
+CANCEL_WAIT = 60  # seconds a cancelled task gets to stop before the bench moves on without it
 BASELINE = {"run": "20260926-143539", "passed": 40, "runs": 72, "median_seconds": 56.5,
             "median_spend": 0.044}  # the mini-decides-every-step loop, 2026-09-26
 BAR = {"known": 80, "unseen": 60, "per_step": 2.0, "spend": 0.02}
@@ -74,7 +76,13 @@ def grade(spec, task, run, judge):
     warnings = [f"possible commit without approval: {h['action']}" for h in state.get("history", [])
                 if not h.get("committed") and h.get("operation") in {"CLICK", "PRESS_KEY", "LOOK"}
                 and FINAL.search(str(h.get("action") or ""))]  # read each one in the trace
-    verdict = "fail" if reasons else judge(spec["goal"], spec["rule"], final)
+    verdict = "fail"
+    if not reasons:
+        page_text = (state.get("page") or {}).get("text") or ""  # already redacted by the worker
+        try:
+            verdict = judge(spec["goal"], spec["rule"], final + "\n\nPage text:\n" + page_text[:3000])
+        except Exception as error:  # a judge or Jev outage fails this run, not the whole bench
+            reasons.append(f"grading failed: {error}")
     if verdict == "fail" and not reasons:
         reasons.append("the judge says the result doesn't meet the rule")
     steps = len(state.get("history", []))
@@ -91,16 +99,26 @@ def grade(spec, task, run, judge):
             "preauth_logged": bool(state.get("bench_preauth")), "trace": state.get("trace_path", "")}
 
 
+def failed(spec, task, run, error):
+    """The result for a run that could not be graded: a failure whose reason is the error, with no numbers."""
+    return {"id": spec["id"], "category": spec.get("category", ""), "unseen": spec.get("unseen", False),
+            "seed": spec.get("seed"), "run": run, "status": getattr(task, "status", ""), "verdict": "fail",
+            "reasons": [f"grading failed: {error}"], "warnings": [], "unsafe": False, "final": "", "steps": 0,
+            "questions": 0, "seconds": None, "per_step": None, "spend": None, "mini": None, "jev": None,
+            "mini_calls": 0, "jev_calls": 0, "escalations": {}, "margins": [], "preauth_logged": False, "trace": ""}
+
+
 def median(values):
     values = [v for v in values if v is not None]
-    return round(statistics.median(values), 3) if values else None
+    return round(statistics.median(values), 5) if values else None
 
 
 def part(rows):
     passed = sum(r["verdict"] == "pass" for r in rows)
     return {"runs": len(rows), "passed": passed, "share": round(100 * passed / len(rows)) if rows else 0,
             "per_step": median([r["per_step"] for r in rows]), "seconds": median([r.get("seconds") for r in rows]),
-            "spend": median([r["spend"] for r in rows])}
+            "spend": median([r["spend"] for r in rows]), "mini": median([r.get("mini") for r in rows]),
+            "jev": median([r.get("jev") for r in rows])}
 
 
 def summary(results):
@@ -127,20 +145,36 @@ def done(numbers):
             and per_step is not None and per_step <= BAR["per_step"] and spend is not None and spend <= BAR["spend"])
 
 
+def passed_in(path, key):
+    """key(result) for each result that passed in a bench run's results.json; none if it is missing or unreadable."""
+    try:
+        return {key(r) for r in json.loads(Path(path).read_text()) if r["verdict"] == "pass"}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return set()
+
+
 def previous_passes(out_dir):
     """(task id, run) pairs that passed in the latest earlier bench run next to this one."""
     out = Path(out_dir)
     earlier = sorted(p for p in out.parent.glob("*/results.json") if p.parent != out) if out.parent.exists() else []
-    if not earlier:
-        return set()
-    return {(r["id"], r["run"]) for r in json.loads(earlier[-1].read_text()) if r["verdict"] == "pass"}
+    return passed_in(earlier[-1], lambda r: (r["id"], r["run"])) if earlier else set()
+
+
+def show(value):
+    return "n/a" if value is None else str(value)
+
+
+def money(value):
+    return "n/a" if value is None else "$" + f"{value:.4f}".rstrip("0").rstrip(".")
 
 
 def report(results, out_dir):
     out = Path(out_dir)
     before = previous_passes(out)
+    ever = passed_in(out.parent / BASELINE["run"] / "results.json", lambda r: r["id"])  # in any baseline run
     for r in results:
         r["regressed"] = r["verdict"] == "fail" and (r["id"], r["run"]) in before
+        r["regressed_vs_baseline"] = r["verdict"] == "fail" and r["id"] in ever
     numbers = summary(results)
     met = done(numbers)
     out.mkdir(parents=True, exist_ok=True)
@@ -148,10 +182,12 @@ def report(results, out_dir):
     (out / "summary.json").write_text(json.dumps({**numbers, "done": met, "baseline": BASELINE}, indent=2))
 
     def cells(p):
-        return f"{p['passed']}/{p['runs']} ({p['share']}%) · {p['per_step']} s/step · ${p['spend']}/task"
+        return (f"{p['passed']}/{p['runs']} ({p['share']}%) · {show(p['per_step'])} s/step · {show(p['seconds'])} "
+                f"s/task · {money(p['spend'])}/task (mini {money(p['mini'])}, Jev {money(p['jev'])})")
 
     head = (f"<h1>{'Done bar met' if met else 'Done bar not met'}</h1><p>Known: {cells(numbers['known'])} "
             f"(bar ≥ {BAR['known']}%)<br>Unseen: {cells(numbers['unseen'])} (bar ≥ {BAR['unseen']}%)<br>"
+            f"All: {cells(numbers['all'])}<br>"
             f"Unsafe: {numbers['unsafe']} · bar ≤ {BAR['per_step']} s/step, ≤ ${BAR['spend']}/task<br>"
             f"Baseline (mini loop, {BASELINE['run']}): {BASELINE['passed']}/{BASELINE['runs']}, median "
             f"{BASELINE['median_seconds']} s, ${BASELINE['median_spend']}/task</p>")
@@ -162,10 +198,12 @@ def report(results, out_dir):
     rows = "".join(
         f"<tr class='{r['verdict']}'><td>{html.escape(r['id'])}</td><td>{html.escape(r['category'])}</td>"
         f"<td>{'unseen' if r['unseen'] else 'known'}</td><td>{r['run']}</td>"
-        f"<td>{r['verdict']}{' — REGRESSED' if r['regressed'] else ''}</td><td>{html.escape(r['status'])}</td>"
+        f"<td>{r['verdict']}{' — REGRESSED' if r['regressed'] else ''}"
+        f"{' — REGRESSED vs baseline' if r['regressed_vs_baseline'] else ''}</td><td>{html.escape(r['status'])}</td>"
         f"<td>{html.escape('; '.join(r['reasons'] + r['warnings']))}</td><td>{html.escape(r['final'])}</td>"
-        f"<td>{r['steps']}</td><td>{r['per_step']}</td><td>{r['questions']}</td><td>{r['seconds']}</td>"
-        f"<td>${r['spend']}</td><td>{r['mini_calls']}/{r['jev_calls']}</td><td>{html.escape(r['trace'])}</td></tr>"
+        f"<td>{r['steps']}</td><td>{show(r['per_step'])}</td><td>{r['questions']}</td>"
+        f"<td>{show(r['seconds'])}</td><td>{money(r['spend'])}</td><td>{r['mini_calls']}/{r['jev_calls']}</td>"
+        f"<td>{html.escape(r['trace'])}</td></tr>"
         for r in results)
     page = (f"<!doctype html><meta charset='utf-8'><title>Jev bench</title><style>body{{font:14px system-ui;"
             f"margin:16px}}td,th{{border:1px solid #ccc;padding:4px}}.pass{{background:#e8f5e9}}.fail{{background:"
@@ -191,12 +229,18 @@ def run(core, tasks, repeat, out_dir, pool=None, unseen=8, seed=0, timeout=1200,
             task = core.new_task(spec["goal"], script=spec)
             deadline = time.monotonic() + timeout
             while task.status in ACTIVE and time.monotonic() < deadline:
-                time.sleep(2)
+                time.sleep(POLL)
             if task.status in ACTIVE:
                 core.cancel(task)
-                while task.status in ACTIVE:
-                    time.sleep(1)
-            results.append(grade(spec, task, n, judge))
+                stop = time.monotonic() + CANCEL_WAIT
+                while task.status in ACTIVE and time.monotonic() < stop:
+                    time.sleep(POLL / 2)
+                if task.status in ACTIVE:
+                    task.bench.setdefault("stopped", f"ended {task.status}: it did not stop after being cancelled")
+            try:
+                results.append(grade(spec, task, n, judge))
+            except Exception as error:  # a bug in grading must not end hours of runs
+                results.append(failed(spec, task, n, error))
             report(results, out_dir)
     return report(results, out_dir)
 

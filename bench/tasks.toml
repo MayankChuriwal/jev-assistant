@@ -38,7 +38,7 @@ end = "gate"
 require = ["Margherita", "₹"]
 rule = "The approval summary is one Margherita pizza from Domino's on Swiggy with an address and total."
 answers = [["restaurant|order from|outlet", "The nearest one that is open"],
-           ["size|crust|which", "Regular, classic hand tossed"]]
+           ['\bsize|crust|which (size|crust|one|option|variant)', "Regular, classic hand tossed"]]
 
 [[task]]
 id = "zomato"
@@ -65,7 +65,7 @@ goal = "What is the price of the Apple iPhone 16 128 GB on Flipkart?"
 end = "result"
 require = ["₹"]
 rule = "The report gives Flipkart's price for an iPhone 16 128 GB."
-answers = [["colou?r|which", "Any colour"]]
+answers = [['colou?r|which (one|variant|model|storage)', "Any colour"]]
 
 [[task]]
 id = "uber"
@@ -74,9 +74,9 @@ goal = "Book an Uber from my current location to Kempegowda International Airpor
 end = "gate"
 require = ["Terminal 1", "₹"]
 rule = "The approval summary is an Uber ride to Kempegowda Airport Terminal 1 with a ride type and its fare."
-answers = [["drop|destination|where to|going", "Kempegowda International Airport Terminal 1"],
+answers = [['\bdrop|destination|where to|\bgoing\b', "Kempegowda International Airport Terminal 1"],
            ["which (ride|option|one)|ride type|type of ride|select a ride|ride option", "The cheapest one"],
-           ["pay|payment", "Cash"]]
+           ['\b(pay|paying|payment|payments)\b', "Cash"]]
 
 [[task]]
 id = "ola"
@@ -85,9 +85,9 @@ goal = "Book an Ola cab from my current location to Kempegowda International Air
 end = "gate"
 require = ["Terminal 1", "₹"]
 rule = "The approval summary is an Ola ride to Kempegowda Airport Terminal 1 with a cab type and its fare."
-answers = [["drop|destination|where to|going", "Kempegowda International Airport Terminal 1"],
+answers = [['\bdrop|destination|where to|\bgoing\b', "Kempegowda International Airport Terminal 1"],
            ["which (cab|ride|option|one)|cab type|ride type|type of (cab|ride)|variant", "The cheapest one"],
-           ["pay|payment", "Cash"]]
+           ['\b(pay|paying|payment|payments)\b', "Cash"]]
 
 [[task]]
 id = "rapido"
@@ -96,7 +96,8 @@ goal = "Book a Rapido bike from my current location to Indiranagar Metro Station
 end = "gate"
 require = ["Indiranagar", "₹"]
 rule = "The approval summary is a Rapido bike ride to Indiranagar Metro Station with its fare."
-answers = [["drop|destination|where to|going", "Indiranagar Metro Station"], ["pay|payment", "Cash"]]
+answers = [['\bdrop|destination|where to|\bgoing\b', "Indiranagar Metro Station"],
+           ['\b(pay|paying|payment|payments)\b', "Cash"]]
 
 [[task]]
 id = "bookmyshow"
@@ -106,7 +107,7 @@ end = "gate"
 require = ["2", "₹"]
 rule = "The approval summary is 2 tickets for a Hindi movie tomorrow evening at a PVR in Bengaluru with a total."
 answers = [["which (movie|film)", "The first one listed"], ["which (show|time)", "The first evening show"],
-           ["seat", "Any two seats together"], ["pay|payment", "The first option"]]
+           ['\bseat', "Any two seats together"], ['\b(pay|paying|payment|payments)\b', "The first option"]]
 
 [[task]]
 id = "flight"
@@ -140,7 +141,7 @@ goal = "Pay my BESCOM electricity bill on Amazon.in"
 end = "gate"
 require = ["BESCOM", "₹"]
 rule = "The approval summary is a BESCOM electricity bill payment on Amazon.in with the amount due."
-answers = [["account|consumer|customer id|rr number|number", "@user"]]
+answers = [['\b(account|consumer|customer id|rr number|number)\b', "@user"]]
 
 [[task]]
 id = "invoice"
@@ -164,7 +165,7 @@ goal = "Cancel my Amazon Prime membership"
 end = "gate|result"
 require = ["Prime"]
 rule = "Either the approval is for ending the Amazon Prime membership, or the report says there is no active Prime membership."
-answers = [["reason|why", "I don't use it enough"]]
+answers = [['\b(reason|why)\b', "I don't use it enough"]]
 
 [[task]]
 id = "form"
@@ -191,7 +192,7 @@ goal = "Compare the price of the Apple iPhone 16 128 GB on Flipkart and Amazon.i
 end = "result"
 require = ["₹"]
 rule = "The report gives both prices for the iPhone 16 128 GB and says which site is cheaper."
-answers = [["colou?r|which", "Any colour"]]
+answers = [['colou?r|which (one|variant|model|storage)', "Any colour"]]
 
 [[task]]
 id = "myntra"
@@ -200,7 +201,7 @@ goal = "Find the price of Nike Air Max shoes on Myntra and tell me the cheapest 
 end = "result"
 require = ["₹"]
 rule = "The report names a Nike Air Max shoe on Myntra and its price, the lowest among the results."
-answers = [["size|colou?r|which", "Any"]]
+answers = [['\bsize|colou?r|which (one|variant|pair|shoe)', "Any"]]
 
 [[task]]
 id = "restaurant"
