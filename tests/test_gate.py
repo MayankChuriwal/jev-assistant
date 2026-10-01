@@ -448,7 +448,7 @@ def cart(text, cap, url="https://shop.test/checkout", site="shop.test"):
 
 
 def test_numbers_read_commas_and_decimals():
-    assert gate.numbers("Total 1,499.00, 2,50,000 and 7 (19:05)") == [1499.0, 250000.0, 7.0, 19.0, 5.0]
+    assert gate.numbers("Total 1,499.00, 2,50,000 and 7 (19:05)") == [1499.0, 250000.0, 7.0]  # a clock is cut out
     assert gate.numbers("Customer name") == []
 
 
@@ -678,8 +678,8 @@ def test_a_ticking_line_does_not_change_the_snapshot_or_void_the_approval(monkey
     assert gate.approved(w, second, PAY, "Pay", None) is True and w.asked == []
 
 
-def test_a_ticking_line_with_a_price_on_it_still_counts():
-    assert gate.snapshot("Total ₹500 (offer ends 04:59)") != gate.snapshot("Total ₹500 (offer ends 04:58)")
+def test_a_countdown_inside_a_price_line_is_stripped_and_the_price_stays():
+    assert gate.snapshot("Total ₹500 (offer ends 04:59)") == gate.snapshot("Total ₹500 (offer ends 04:58)") == (500.0,)
 
 
 @pytest.mark.parametrize("text", [
@@ -712,3 +712,155 @@ def test_a_summary_may_copy_an_amount_the_page_splits_over_two_lines(monkeypatch
     assert "Total ₹79" in w.asked[0]["text"] and w.asked[0]["text"].count("₹79") == 1  # no duplicate total line
     assert w.state["approval"]["amount"] == "₹ 79"
     assert gate.approved(w, page, control("Pay", node=11), "Pay", None) is True and len(w.asked) == 1
+
+
+# Fix round 5: suffixes with a gap, ticking tokens (not whole lines), split remarks, and units only off money lines.
+
+@pytest.mark.parametrize("text", [
+    "Total ₹1.5 L", "To pay ₹15 K", "To pay Rs 1.5 L", "To pay ₹ 1.5 L", "To pay\n₹\n1.5\nL", "To pay ₹2.5 Mn",
+    "To pay ₹1 bn", "To pay ₹1 billion", "₹1 billion\nTo pay\n₹1 billion", "Grand Total: 1.5L (incl. ₹2,000 GST)",
+    "To pay ₹1.5 lakh", "To pay ₹2 Cr", "To pay ₹ 3 crore", "To pay ₹1.5L", "To pay ₹15k", "Total INR 1.5 L",
+    "Total ₹79\nTo pay\n₹\n1.5 lac"])
+def test_a_scaled_total_is_never_preauthorised_under_a_rupee_cap(text):
+    w, page = cart(text, 100.0)
+    assert gate.preauthorised(w.state, gate.facts(page, []), page) is False
+    assert gate.worst(text) > 100.0
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("₹1.5 L", [150000.0]), ("₹15 K", [15000.0]), ("Rs 1.5 L", [150000.0]), ("₹ 1.5 L", [150000.0]),
+    ("₹2.5 Mn", [2500000.0]), ("₹1 bn", [1000000000.0]), ("₹1 billion", [1000000000.0]), ("₹2 Cr", [20000000.0]),
+    ("Grand Total: 1.5L (incl. ₹2,000 GST)", [150000.0, 2000.0]), ("To pay 1.5 L", [150000.0]),
+    ("Total 1,299 L", [129900000.0]), ("Diet Coke 2 L ₹95", [2.0, 95.0]), ("Diet Coke 2L ₹95", [2.0, 95.0]),
+    ("Pizza 2 M ₹300", [2.0, 300.0]), ("₹95 Large", [95.0]), ("₹300 Min order", [300.0]), ("Diet Coke 2 L", [2.0])])
+def test_a_suffix_may_follow_a_gap_and_scales_where_it_means_money(text, expected):
+    assert gate.numbers(text) == expected
+
+
+def test_a_total_with_a_spaced_suffix_is_read_whole():
+    found = gate.facts(fake_page(text="Cart\nTo pay\n₹\n1.5\nL\nPay"), [])
+    assert found["total"] == "₹ 1.5 L" and gate.amount(found["total"]) == 150000.0
+    assert gate.amount("To pay Rs 1.5 L") == 150000.0 and gate.amount("₹ 2.5 Mn") == 2500000.0
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("1.5\nL", "1.5 L"), ("To pay\n₹\n1.5\nL", "To pay\n₹ 1.5 L"), ("₹ 1.5\nL", "₹ 1.5 L"), ("2\nMn", "2 Mn"),
+    ("2\nbn", "2 bn"), ("3\nCr", "3 Cr"), ("2\nlakh", "2 lakh"), ("2\ncrore", "2 crore"), ("2\nmillion", "2 million"),
+    ("2\nbillion", "2 billion"), ("Price 1,499\n/-", "Price 1,499 /-"), ("Size\nL", "Size\nL"),
+    ("Qty 2\nLarge", "Qty 2\nLarge"), ("L\n2", "L\n2")])
+def test_flat_joins_a_suffix_line_to_the_number_before_it(text, expected):
+    assert gate.flat(text) == expected and gate.flat(gate.flat(text)) == gate.flat(text)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Fare 249 · 4 mins away", [249.0]), ("To pay 1,299 · Arriving in 10 mins", [1299.0]),
+    ("Amount due 1,299 by 10:30", [1299.0]), ("Pay within 04:59", []), ("Time left 07:42", []),
+    ("Offer ends 04:59:12", []), ("Only 3 left", []), ("ETA 9 min", []), ("Delivery in 10 mins", []),
+    ("Expires in 12 mins", []), ("Ready in 2 hrs 5 secs", []), ("Total ₹500 (offer ends 04:59)", [500.0]),
+    ("Total ₹79 · delivery in 10 minutes", [79.0]), ("Total ₹79 expiring soon", [79.0]), ("Fare 249 by 8:30", [249.0])])
+def test_only_the_ticking_tokens_are_stripped_from_a_line(text, expected):
+    assert gate.numbers(text) == expected
+
+
+@pytest.mark.parametrize("text", [
+    "Fare 249 · 4 mins away", "To pay 1,299 · Arriving in 10 mins", "Amount due 1,299 by 10:30",
+    "Total ₹79\nTo pay 1,299 · delivery in 10 mins", "Total ₹79\nFare 249 · 4 mins away"])
+def test_a_price_beside_a_countdown_still_counts(text):
+    assert gate.shows_money(text) and gate.worst(text) >= 249.0
+    w, page = cart(text, 100.0)
+    assert gate.preauthorised(w.state, gate.facts(page, []), page) is False
+    nocap, nopage = cart(text, None)
+    assert gate.preauthorised(nocap.state, gate.facts(nopage, []), nopage) is False
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Total ₹79\nTo pay\n₹50 cashback applied\n₹1,299", "₹1,299"),
+    ("Total ₹79\nGrand total\n(₹50 cashback applied)\n₹1,299", "₹1,299"),
+    ("Total ₹79\nTo pay\nIncl. all taxes\n₹1,299", "₹1,299"),
+    ("Total ₹79\nTo pay\n₹1,299 cashback applied\n₹50", None),          # the turned-away price is the larger
+    ("Total ₹79\nGrand total · you saved\n(₹50)\n₹1,299", None),        # a turned-away line with no price of its own
+    ("To pay\nYou save ₹200", None), ("To pay\nPay now", None),
+    ("Total ₹79\nTo pay\nYou save ₹30\n₹49", "₹49")])
+def test_a_remark_between_a_payable_label_and_its_price_hides_nothing(text, expected):
+    assert gate.facts(fake_page(text=text), [])["total"] == expected
+
+
+def test_a_split_remark_page_is_not_preauthorised_on_the_smaller_total():
+    for text in ("Total ₹79\nTo pay\n₹50 cashback applied\n₹1,299",
+                 "Total ₹79\nGrand total\n(₹50 cashback applied)\n₹1,299",
+                 "Total ₹79\nTo pay\nIncl. all taxes\n₹1,299"):
+        w, page = cart(text, 100.0)
+        assert gate.preauthorised(w.state, gate.facts(page, []), page) is False
+
+
+@pytest.mark.parametrize("text", [
+    "Total ₹79\nTotal 1,299 pcs", "Total ₹79\nPrice 1,299 m", "Total ₹79\nAmount 1,299 L", "Total ₹79\nTotal 1.2 M",
+    "Total ₹79\nFee 1,299 ml", "Total ₹79\nCost 1,299 kg"])
+def test_a_unit_does_not_exempt_a_number_on_a_money_word_line(text):
+    assert gate.worst(text) > 100.0
+    w, page = cart(text, 100.0)
+    assert gate.preauthorised(w.state, gate.facts(page, []), page) is False
+
+
+@pytest.mark.parametrize("text", [
+    "Diet Coke 300 ml\nTotal ₹79", "Diet Coke 300 ml\nTotal ₹79\nPay ₹79", "Total ₹79\nDiet Coke 2 L",
+    "Diet Coke 2L ₹40\nTo pay ₹40", "Pepsi 500 g\nHandling fee ₹5\nTo pay ₹45"])
+def test_a_size_on_a_line_beside_the_total_does_not_block_a_small_order(text):
+    w, page = cart(text, 100.0)
+    assert gate.preauthorised(w.state, gate.facts(page, []), page) is True
+
+
+def test_fees_on_a_split_layout_are_not_invented():
+    split = fake_page(text="Cart\nHandling fee\n₹\n5\nTo pay\n₹\n79\nPay")
+    assert gate.facts(split, [])["fees"] == []
+    assert gate.facts(fake_page(text="Cart\nHandling fee ₹5\nTo pay ₹79\nPay"), [])["fees"] == ["Handling fee ₹5"]
+
+
+# Fix round 5, probes of its own work: split numbers, a price before "mins", thousand, "to be paid".
+
+@pytest.mark.parametrize("text, expected", [
+    ("₹\n1\n,\n299", "₹ 1,299"), ("₹\n1,299\n.\n00", "₹ 1,299.00"), ("1,\n299", "1,299"), ("1\n,299", "1,299"),
+    ("79.\n50", "79.50"), ("Qty 1\n,\nOff", "Qty 1\n,\nOff"), ("Total\n,", "Total\n,"), ("₹1 299", "₹1,299"),
+    ("a b", "a b"), ("Total 79.\n50 off", "Total 79.\n50 off"), ("Total\n1\n,", "Total\n1\n,")])
+def test_flat_puts_a_number_split_by_the_page_back_together(text, expected):
+    assert gate.flat(text) == expected and gate.flat(gate.flat(text)) == gate.flat(text)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("To pay ₹1,299 left", [1299.0]), ("₹1,299 mins", [1299.0]), ("₹4 mins", [4.0]), ("₹15 thousand", [15000.0]),
+    ("₹300 Min order", [300.0]), ("Total ₹79 · 2 hrs", [79.0]), ("₹1,299 hours left", [1299.0]),
+    ("Amount due 299 left", [299.0]), ("Only 3 left", []), ("Fare 249 · 4 mins away", [249.0])])
+def test_a_price_is_never_cut_out_as_a_countdown(text, expected):
+    assert gate.numbers(text) == expected
+
+
+def test_a_total_split_over_several_text_nodes_is_not_preauthorised_and_the_yes_still_holds(monkeypatch):
+    text = "Checkout\nNet payable\n₹\n1\n,\n299\nPay"
+    w, page = cart(text, 100.0)
+    assert gate.facts(page, [])["total"] == "₹ 1,299" and gate.worst(text) == 1299.0
+    assert gate.preauthorised(w.state, gate.facts(page, []), page) is False
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹1,299"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "yes"}])
+    with pytest.raises(StalePage):
+        gate.approved(w, page, control("Pay", node=11), "Pay", None)
+    assert w.state["approval"]["amount"] == ""  # the raw page spells the amount in parts: the snapshot guards it
+    assert gate.approved(w, page, control("Pay", node=11), "Pay", None) is True and len(w.asked) == 1
+    changed = fake_page(text="Checkout\nNet payable\n₹\n1\n,\n999\nPay")
+    w.replies.append({"text": "no"})
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹1,999"])
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, changed, control("Pay", node=11), "Pay", None)
+    assert len(w.asked) == 2
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Total ₹79\nAmount to be paid ₹1,299", "₹1,299"), ("Total ₹79\nYou will pay ₹1,299", "₹1,299"),
+    ("Total ₹79\nFinal amount ₹1,299", "₹1,299"), ("Net amount\n₹\n99", "₹ 99")])
+def test_more_ways_to_say_what_is_payable(text, expected):
+    assert gate.facts(fake_page(text=text), [])["total"] == expected
+
+
+def test_zero_width_characters_hide_no_price():
+    assert gate.flat("₹\u200b1,299") == "₹1,299"
+    assert gate.facts(fake_page(text="To pay ₹\u200b1,299"), [])["total"] == "₹1,299"

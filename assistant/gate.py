@@ -12,18 +12,22 @@ from .errors import Halt, Retry
 
 COMMIT_OPS = {"CLICK", "DOUBLE_CLICK", "PRESS_KEY", "ACCEPT_DIALOG", "LOOK"}
 CLICKS = {"CLICK", "DOUBLE_CLICK"}
-TOTAL = re.compile(r"\b(total|to pay|payable|amount due)\b", re.IGNORECASE)
-PAYABLE = re.compile(r"\b(to pay|grand total|order total|bill total|amount payable|total payable|net payable|"
-                     r"amount due)\b", re.IGNORECASE)
+TOTAL = re.compile(r"\b(total|to pay|to be paid|you pay|you will pay|payable|amount due|net amount|final amount)\b",
+                   re.IGNORECASE)
+PAYABLE = re.compile(r"\b(to pay|to be paid|you pay|you will pay|grand total|order total|bill total|amount payable|"
+                     r"total payable|net payable|payable amount|net amount|final amount|amount due)\b", re.IGNORECASE)
 # A line about what is saved, given back, or still to add is not the payable total.
-NOT_TOTAL = re.compile(r"\b(items? total|sub ?total|save|saving|savings|saved|cashback|reward|rewards|coupon|discount|"
-                       r"off|free)\b|\badd\b.{0,30}\bmore\b", re.IGNORECASE)
+REMARKS = r"\b(?:save|saving|savings|saved|cashback|rewards?|coupons?|discount|off|free)\b|\badd\b.{0,30}\bmore\b"
+REMARK_WORDS = re.compile(REMARKS, re.IGNORECASE)
+NOT_TOTAL = re.compile(r"\b(?:items? total|sub ?total)\b|" + REMARKS, re.IGNORECASE)
 ASIDE = re.compile(r"\([^()]*\)")
 REMARK = re.compile(NOT_TOTAL.pattern + r"|\bwas\b|\bmrp\b", re.IGNORECASE)  # "(you save ₹200)", "(was ₹1,499)"
 NUMBER = r"\d(?:[\d,]*\d)?(?:\.\d+)?"
 RUPEE = re.compile(r"(?:₹|\bRs\.?|\bINR\b)\s?(" + NUMBER + ")", re.IGNORECASE)
 SYMBOLS = "[" + re.escape("".join(c for c in map(chr, range(0x10000)) if unicodedata.category(c) == "Sc")) + "]"
-SUFFIX = r"(?:\s?(?:lakhs?|lacs?|crores?|cr|millions?)\b|[KLM](?![A-Za-z]))?"  # ₹1.5L · ₹15K · ₹2 crore
+# A suffix after a number: ₹1.5 L · ₹15 K · ₹2 crore
+TOKEN = r"(?:thousands?|lakhs?|lacs?|crores?|cr|millions?|billions?|mn|bn|[KLM])(?![A-Za-z])"
+SUFFIX = r"(?:\s*" + TOKEN + ")?"
 PRICES = re.compile("(?:" + rules.PRICE.pattern + r"|\bINR\s?" + NUMBER + ")" + SUFFIX, re.IGNORECASE)  # INR too
 WORDS = re.compile(r"\b(?:total|to pay|you pay|you will pay|pay|payable|bill|billed|charged|paid|fees?|fare|price|cost|"
                    r"charges?|rate|amount|due|grand)\b", re.IGNORECASE)  # words that put a price on their line
@@ -33,14 +37,18 @@ CURRENCY = re.compile(
     r"(?-i:\b(?!ETA\b)[A-Z]{3}\s*\d|\d\s*(?!ETA\b)[A-Z]{3}\b)|\d\s*/-", re.IGNORECASE)
 MARK_WORD = re.compile(r"Rs|INR|USD|EUR|GBP|AED|SGD|RM|Rp|rupees?|euros?|dollars?|रुपये|रुपया", re.IGNORECASE)
 MARK_END = re.compile("(?:" + SYMBOLS + r"|\b(?:Rs|INR|USD|EUR|GBP|AED|SGD|RM|Rp)\.?)\s?$", re.IGNORECASE)
-READING = re.compile(r"(\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:(\s?(?:lakhs?|lacs?|crores?|cr|millions?)\b)|"
-                     r"([KLM](?![A-Za-z])))?", re.IGNORECASE)
-SCALES = {"k": 1e3, "l": 1e5, "lakh": 1e5, "lakhs": 1e5, "lac": 1e5, "lacs": 1e5, "m": 1e6, "million": 1e6,
-          "millions": 1e6, "cr": 1e7, "crore": 1e7, "crores": 1e7}
-UNIT = re.compile(r"\s?(?:ml|ltrs?|litres?|liters?|l|gms?|grams?|kgs?|mg|pcs?|pieces?|packs?|units?|cm|mm|km|m|%)"
-                  r"(?![A-Za-z])", re.IGNORECASE)  # "300 ml" is a size, not an amount
-TICKING = re.compile(r"\b\d{1,2}:\d{2}\b|\b(?:min|mins|minutes?|sec|secs|seconds?|hr|hrs|hours?|left|expires?|"
-                     r"expiring|eta|arriv\w+)\b", re.IGNORECASE)  # a clock or countdown changes by itself
+AFTER_MARK = re.compile(r"\s*(?:INR|USD|EUR|GBP|AED|SGD|rupees?|euros?|dollars?|pounds?|pesos?|baht|riyals?|dirhams?|"
+                        r"रुपये|रुपया|/-)(?![A-Za-z])", re.IGNORECASE)  # a currency written after its number
+READING = re.compile(r"(\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s*(" + TOKEN + "))?", re.IGNORECASE)
+SCALES = {"k": 1e3, "thousand": 1e3, "thousands": 1e3, "l": 1e5, "lakh": 1e5, "lakhs": 1e5, "lac": 1e5, "lacs": 1e5,
+          "m": 1e6, "mn": 1e6, "million": 1e6, "millions": 1e6, "cr": 1e7, "crore": 1e7, "crores": 1e7, "bn": 1e9,
+          "billion": 1e9, "billions": 1e9}
+LETTERS = {"k", "l", "m"}  # the suffixes that can also be a unit: litres, metres
+UNIT = re.compile(r"\s?(?:ml|ltrs?|litres?|liters?|l|g|gms?|grams?|kgs?|mg|oz|lbs?|pcs?|pieces?|packs?|units?|cm|mm|"
+                  r"km|m|%)(?![A-Za-z])", re.IGNORECASE)  # "300 ml" is a size, not an amount
+TICKING = re.compile(  # a clock or a countdown changes by itself: these tokens, and their number, are not money
+    r"\b\d{1,2}:\d{2}(?::\d{2})?\b|\b(?<![\d,.])\d+(?:\.\d+)?\s*(?:mins?|minutes?|secs?|seconds?|hrs?|hours?|left)\b|"
+    r"\b(?:left|expires?|expiring|eta|arriv\w+|by)\b", re.IGNORECASE)
 EXEMPT = re.compile(r"\b(?:items? total|sub ?total|total (?:savings?|saved|discount|cashback|rewards?|coupons?))\b",
                     re.IGNORECASE)  # these lines name a part of the bill, not what is payable
 DELIVERING = re.compile(r"\b(?:delivering to|deliver to|delivery address)\s*:?\s*([^\n]{8,160})", re.IGNORECASE)
@@ -65,19 +73,27 @@ def cap(text):
 
 
 def readings(line):
-    """(value, quantity) for every number on the line. An attached K, L, M or Cr (or lakh, crore, million) scales it
-    where it means money: after a currency marker, or on a money-word line that has no currency marker, so "₹1.5L"
-    and "Total 1.5L" read 150000 while "Diet Coke 2L" reads 2. `quantity` marks a size ("300 ml") that is not
-    money."""
-    marked, worded = bool(CURRENCY.search(line)), bool(WORDS.search(line))
+    """(value, quantity) for every number on the line, after the ticking tokens (a clock, "4 mins", "left", "by")
+    are cut out. An attached suffix (lakh, crore, million, billion, Mn, bn, Cr, or K, L, M, with an optional gap
+    before it) scales the number. K, L and M also mean units, so they scale only when the number sits beside a
+    currency marker or the line is a money-word line: "₹1.5 L" and "Total 1.5L" read 150000, "Diet Coke 2L ₹95"
+    reads 2. `quantity` marks a size ("300 ml", "2 L") on a line that is not a money-word line."""
+    def cut(m):
+        if m[0][0].isdigit() and ":" not in m[0]:  # "<n> mins", "<n> left": a price keeps its number
+            if MARK_END.search(line[:m.start()]) or (m[0].lower().endswith("left") and WORDS.search(line)):
+                return m[0]  # "₹300 Min order", "Amount due 299 left"
+        return " "
+
+    line = TICKING.sub(cut, line)
+    worded = bool(WORDS.search(line))
     found = []
     for m in READING.finditer(line):
-        value, after = float(m[1].replace(",", "")), (m[2] or m[3] or "").strip().lower()
-        paid = bool(MARK_END.search(line[:m.start()]))
-        if m[2] or (m[3] and (paid or (worded and not marked))):
-            found.append((value * SCALES[after], False))
+        value, token = float(m[1].replace(",", "")), (m[2] or "").lower()
+        beside = bool(MARK_END.search(line[:m.start()]) or AFTER_MARK.match(line, m.end()))
+        if token and (token not in LETTERS or beside or worded):
+            found.append((value * SCALES[token], False))
         else:
-            found.append((value, bool(m[3] or (not paid and UNIT.match(line, m.end())))))
+            found.append((value, not worded and not beside and bool(token or UNIT.match(line, m.end()))))
     return found
 
 
@@ -116,19 +132,37 @@ def marker_only(line):
     return bool(token) and (symbols or MARK_WORD.fullmatch(token) is not None)
 
 
+SUFFIX_LINE = re.compile(TOKEN, re.IGNORECASE)
+
+
 def flat(text):
-    """The page text with a currency marker on a line of its own joined to the next line ("₹\\n1,299" → "₹ 1,299")
-    and a number joined to a following "/-" line: the snapshot writes every text node on a line of its own. Empty
-    lines go. Every money check reads this form."""
-    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-    joined, i = [], 0
-    while i < len(lines):
-        if re.fullmatch(r"\d[\d,]*(?:\.\d+)?", lines[i]) and i + 1 < len(lines) and lines[i + 1] == "/-":
-            joined.append(lines[i] + " /-")
-            i += 2
+    """The page text with a currency marker on a line of its own joined to the next line ("₹\\n1,299" → "₹ 1,299"),
+    a "/-" or a suffix (L, K, Cr, lakh...) joined to the number before it ("1.5\\nL" → "1.5 L"), and a number the
+    page split into parts ("1", ",", "299") put back together: the snapshot writes every text node on a line of its
+    own. Empty lines go. Every money check reads this form."""
+    text = re.sub("[\u200b-\u200d\u2060\ufeff]", "", text or "")  # zero-width characters hide nothing
+    text = re.sub(r"(?<=\d)[\u00a0\u2009\u202f](?=\d{3}(?!\d))", ",", text).replace("\u00a0", " ")
+    joined, sep = [], ""
+    for line in (line.strip() for line in text.splitlines() if line.strip()):
+        if sep and re.fullmatch(r"\d[\d,]*", line):
+            joined[-1] += sep + line  # "1", ",", "299" and "79", ".", "50": a number split into parts
+            sep = ""
+            continue
+        if sep:
+            joined.append(sep)  # a stray comma or dot stays on its own line
+            sep = ""
+        ends_in_digit = bool(joined) and bool(re.search(r"\d$", joined[-1]))
+        if ends_in_digit and line in {",", "."}:
+            sep = line
+        elif ends_in_digit and (line == "/-" or SUFFIX_LINE.fullmatch(line)):
+            joined[-1] += " " + line  # "1,499" then "/-", "1.5" then "L"
+        elif joined and re.search(r"\d[,.]$", joined[-1]) and re.fullmatch(r"\d+", line):
+            joined[-1] += line  # "1," then "299"
+        elif ends_in_digit and re.fullmatch(r"[,.]\d+", line):
+            joined[-1] += line  # "1" then ",299"
         else:
-            joined.append(lines[i])
-            i += 1
+            joined.append(line)
+    joined += [sep] if sep else []
     out, pending = [], []
     for line in joined:
         if marker_only(line):
@@ -151,16 +185,15 @@ def shown(figure, text):
 
 def money_lines(text):
     """The lines that can hold money, in page order: any line with a money word or a currency marker, and the
-    lines on either side of a money word ("Qty 2", "Total" then "1,499"). A clock or countdown line is left out
-    unless it carries a currency marker. One set for the snapshot, the worst number, and the money check."""
+    lines on either side of a money word ("Qty 2", "Total" then "1,499"). One set for the snapshot, the worst
+    number, and the money check; a clock or countdown is cut out of a line when its numbers are read."""
     lines, keep = flat(text).splitlines(), set()
     for i, line in enumerate(lines):
         if WORDS.search(line):
             keep |= {i - 1, i, i + 1}
         elif CURRENCY.search(line):
             keep.add(i)
-    return [lines[i] for i in sorted(keep) if 0 <= i < len(lines)
-            and (CURRENCY.search(lines[i]) or not TICKING.search(lines[i]))]
+    return [lines[i] for i in sorted(keep) if 0 <= i < len(lines)]
 
 
 def snapshot(text):
@@ -193,27 +226,32 @@ def unbracket(line):
 def payable(text):
     """The payable total a page shows: the last line that says what is payable (else the last plain total), and
     the largest price on it. A total line turned away for a remark (savings, cashback, free, add-more) hides
-    what is payable: its prices (own line and the next) are kept, and the answer is None when any is larger than
-    the total chosen, or when no line qualifies. An item total, subtotal or "total savings" line is no such hint.
-    A price may sit on the line after its label."""
+    what is payable: its prices (own line and the next; the next three when it has none) are kept, and the
+    answer is None when any is larger than the total chosen, or when no line qualifies. An item total, subtotal
+    or "total savings" line is no such hint. A label with no price takes the largest price among the next three
+    lines, except those that are remarks ("To pay", "₹50 cashback applied", "₹1,299"): their prices are kept the
+    same way."""
     lines = [unbracket(line) for line in flat(text).splitlines()]
     turned_away = []
     for i, line in enumerate(lines):
         rest = EXEMPT.sub(" ", line)
         if TOTAL.search(rest) and NOT_TOTAL.search(rest):
-            turned_away += PRICES.findall(line) + PRICES.findall(lines[i + 1] if i + 1 < len(lines) else "")
+            own = PRICES.findall(line)
+            turned_away += own + PRICES.findall(lines[i + 1] if i + 1 < len(lines) else "") if own else \
+                [price for near in lines[i + 1:i + 4] for price in PRICES.findall(near)]
     chosen = None
     for kind in (PAYABLE, TOTAL):  # "To pay" first; a plain "total" only when nothing says what is payable
         found = []
         for i, line in enumerate(lines):
             if not kind.search(line) or NOT_TOTAL.search(line):
                 continue
-            after = lines[i + 1] if i + 1 < len(lines) else ""
             prices = PRICES.findall(line)
-            if not prices and NOT_TOTAL.search(after):
-                turned_away += PRICES.findall(after)  # "To pay" then "₹1,299 you save ₹200"
-            elif not prices:
-                prices = PRICES.findall(after)
+            if not prices:
+                for near in lines[i + 1:i + 4]:
+                    if REMARK_WORDS.search(near):
+                        turned_away += PRICES.findall(near)
+                    else:
+                        prices += PRICES.findall(near)
             if prices:
                 found.append(max(prices, key=lambda price: number(price) or 0.0))
         if found:
@@ -364,6 +402,8 @@ def approved(w, page, action, label, subgoal):
         raise StalePage("The page changed while the approval was prepared. Choose again.")
     w.steady(page)
     total = found["total"] or ""  # never a fee from the summary: the snapshot guards what was shown
+    if total and not rules.amount_shown(total, page["text"]):
+        total = ""  # the raw page spells it differently (a number split in parts): approval_valid would void the yes
     if matched and preauthorised(s, found, page):
         if w.bench:
             s["bench_preauth"] = True  # a bench run logs what it would have done, then asks like any other
