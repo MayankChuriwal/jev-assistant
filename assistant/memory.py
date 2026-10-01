@@ -31,6 +31,7 @@ NOTES_PER_SITE = 30
 RULE_DAYS = 30
 UNDO_HOURS = 24
 RETIRE_AFTER = 3
+CONNECT_TIMEOUT = 10
 FIX = "Start it (brew services start postgresql@18) or set JEV_DATABASE_URL."
 UNSTORABLE = "I don't keep that: card numbers, CVVs, OTPs, passwords, PINs, Aadhaar and PAN stay out of memory."
 GOAL_KEY = r"lower(btrim(regexp_replace(goal, '\s+', ' ', 'g')))"
@@ -61,7 +62,7 @@ CREATE TABLE IF NOT EXISTS ids (
   label text NOT NULL,
   value bytea NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 CREATE TABLE IF NOT EXISTS approvals (
   id bigserial PRIMARY KEY,
@@ -113,7 +114,8 @@ CREATE TABLE IF NOT EXISTS events (
   ref text NOT NULL,
   before jsonb,
   after jsonb,
-  undone boolean NOT NULL DEFAULT false
+  undone boolean NOT NULL DEFAULT false,
+  purged boolean NOT NULL DEFAULT false
 );
 CREATE TABLE IF NOT EXISTS schema_version (version integer NOT NULL);
 """
@@ -174,14 +176,16 @@ class Memory:
 
     def connect(self):
         try:
-            self.conn = psycopg.connect(self.url, autocommit=True, row_factory=dict_row)
+            self.conn = psycopg.connect(self.url, autocommit=True, row_factory=dict_row,
+                                        connect_timeout=CONNECT_TIMEOUT)
         except psycopg.OperationalError as error:
-            if "does not exist" not in str(error):
+            if not ("database" in str(error) and "does not exist" in str(error)):
                 raise StoreError(f"Postgres isn't reachable at {shown(self.url)}: {first_line(error)}. {FIX}") \
                     from error
             self.create_database()  # another process may have made it meanwhile: connecting again settles that
             try:
-                self.conn = psycopg.connect(self.url, autocommit=True, row_factory=dict_row)
+                self.conn = psycopg.connect(self.url, autocommit=True, row_factory=dict_row,
+                                            connect_timeout=CONNECT_TIMEOUT)
             except psycopg.OperationalError as again:
                 raise StoreError(f"Postgres has no database at {shown(self.url)} and it couldn't be made: "
                                  f"{first_line(again)}. {FIX}") from again
@@ -208,6 +212,11 @@ class Memory:
                     with self.conn.transaction(), self.conn.cursor() as cur:
                         return work(cur)
                 except psycopg.OperationalError as error:
+                    if self.conn is not None:
+                        try:
+                            self.conn.close()
+                        except psycopg.Error:
+                            pass
                     self.conn = None
                     if attempt == 2:
                         raise StoreError(f"Postgres stopped answering: {first_line(error)}. {FIX}") from error
@@ -268,10 +277,12 @@ class Memory:
         once; with supersede, older live facts of the same kind and label give way to it."""
         if kind not in FACT_KINDS:
             raise ValueError(f"Unknown kind of fact: {kind}")
+        raw = f"{str(label or '').strip()} {str(text or '').strip()}"
         text, label, source = self.hide(text), self.hide(label), self.hide(source)
         if not text:
             raise ValueError("A fact needs words.")
-        if not privacy.storable(f"{label} {text}"):
+        # the raw words too: a short ID inside a card number would leave a placeholder where its digits were
+        if not (privacy.storable(raw) and privacy.storable(f"{label} {text}")):
             raise Unstorable(UNSTORABLE)
         source = source if privacy.storable(source) else ""
         tags = sorted({str(t).strip().lower() for t in tags if str(t).strip()})
@@ -358,7 +369,8 @@ class Memory:
         def work(cur):
             before = self.id_snapshot(cur, key)
             cur.execute("INSERT INTO ids (key, label, value) VALUES (%s, %s, %s) ON CONFLICT (key) DO UPDATE SET "
-                        "label = EXCLUDED.label, value = EXCLUDED.value, updated_at = now()", (key, label, token))
+                        "label = EXCLUDED.label, value = EXCLUDED.value, updated_at = clock_timestamp()",
+                        (key, label, token))
             self.log(cur, actor, "set_id", f"ids:{key}", before, self.id_snapshot(cur, key))
 
         self.run(work)
@@ -572,6 +584,9 @@ class Memory:
                 cur.execute("UPDATE approvals SET revoked_at = now() WHERE id = %s", (int(name),))
                 self.log(cur, actor, "revoke", f"approvals:{name}", before, self.snapshot(cur, table, int(name)))
                 return f"your standing approval on {before['site']}"
+            if table == "facts":  # facts this one superseded come back live: undo must put them back under it
+                before["revived"] = [r["id"] for r in cur.execute(
+                    "SELECT id FROM facts WHERE superseded_by = %s ORDER BY id", (int(name),)).fetchall()]
             cur.execute(sql.SQL("DELETE FROM {} WHERE id = %s").format(sql.Identifier(table)), (int(name),))
             self.log(cur, actor, "forget", f"{table}:{name}", before, None)
             if table == "facts":
@@ -589,7 +604,8 @@ class Memory:
                 cur.execute("DELETE FROM ids WHERE key = %s", (name,))
             else:
                 cur.execute("INSERT INTO ids (key, label, value) VALUES (%s, %s, decode(%s, 'base64')) ON CONFLICT "
-                            "(key) DO UPDATE SET label = EXCLUDED.label, value = EXCLUDED.value, updated_at = now()",
+                            "(key) DO UPDATE SET label = EXCLUDED.label, value = EXCLUDED.value, "
+                            "updated_at = clock_timestamp()",
                             (before["key"], before["label"], before["token"]))
             return
         ident, row_id = sql.Identifier(table), int(name)
@@ -603,6 +619,9 @@ class Memory:
         else:
             cur.execute(sql.SQL("INSERT INTO {t} SELECT * FROM jsonb_populate_record(NULL::{t}, %s)").format(t=ident),
                         (Jsonb(before),))
+        if table == "facts" and before.get("revived"):  # forgetting it revived older facts: they give way again
+            cur.execute("UPDATE facts SET superseded_by = %s WHERE id = ANY(%s) AND superseded_by IS NULL",
+                        (row_id, before["revived"]))
 
     def undo(self, actor="user"):
         """Revert the latest change you or the agent made (never a bench run's or the import's). Returns what was
@@ -612,7 +631,7 @@ class Memory:
                                 "AND action NOT IN ('undo', 'purge') ORDER BY id DESC LIMIT 1 FOR UPDATE").fetchone()
             if event is None:
                 raise KeyError("nothing to undo")
-            if event["action"] in {"forget", "note_drop"} and event["before"] is None:
+            if event["purged"]:  # its copies are gone: restoring from nothing would delete a live row
                 raise KeyError("that was forgotten more than a day ago")
             table, _, name = event["ref"].partition(":")
             self.restore(cur, table, name, event["before"])
@@ -625,11 +644,13 @@ class Memory:
         return done
 
     def purge(self):
-        """Forgotten means gone after UNDO_HOURS: every event about a row forgotten that long ago loses its copies."""
+        """Forgotten means gone after UNDO_HOURS: an event loses its copies (and is marked purged, so undo refuses it)
+        only when it is at or before a forget of the same row that stands and is that old."""
         self.run(lambda cur: cur.execute(
-            "UPDATE events SET before = NULL, after = NULL WHERE (before IS NOT NULL OR after IS NOT NULL) "
-            "AND ref IN (SELECT ref FROM events WHERE action IN ('forget', 'note_drop') "
-            "AND at < now() - make_interval(hours => %s))", (UNDO_HOURS,)))
+            "UPDATE events e SET before = NULL, after = NULL, purged = true "
+            "WHERE (e.before IS NOT NULL OR e.after IS NOT NULL) AND EXISTS (SELECT 1 FROM events f "
+            "WHERE f.ref = e.ref AND f.action IN ('forget', 'note_drop') AND NOT f.undone AND f.id >= e.id "
+            "AND f.at < now() - make_interval(hours => %s))", (UNDO_HOURS,)))
 
     # ---- views and the old profile
 
@@ -648,30 +669,37 @@ class Memory:
         }
 
     def import_profile(self, path):
-        """Phase A's profile.json, once: only while memory holds no facts and no IDs. The file is then renamed
-        profile.json.imported. True when it ran."""
+        """Phase A's profile.json, once: only while memory holds no facts and no IDs. An item memory refuses to keep
+        (a card number, say) is skipped; the file is then renamed profile.json.imported. True when it ran."""
         path = Path(path)
         if not path.exists() or self.has_ids() or self.facts():
             return False
         data = json.loads(path.read_text())
+
+        def keep(work):  # one item the store refuses is skipped, never the whole import
+            try:
+                work()
+            except (Unstorable, ValueError):
+                pass
+
         for key, label in LABELS.items():
             if data.get(key):
-                self.set_id(key, label, data[key], actor="import")
+                keep(lambda key=key, label=label: self.set_id(key, label, data[key], actor="import"))
         for address in data.get("addresses") or []:
             if address.get("text"):
-                self.remember("address", address["text"], label=address.get("label", ""), tags=["address"],
-                              data={k: address[k] for k in ("lat", "lng") if k in address}, actor="import")
+                keep(lambda address=address: self.remember(
+                    "address", address["text"], label=address.get("label", ""), tags=["address"],
+                    data={k: address[k] for k in ("lat", "lng") if k in address}, actor="import"))
         for preference in data.get("preferences") or []:
             text, task = preference.get("text", "").strip(), preference.get("from_task", "")
             default = re.fullmatch(r"default app for (.+?):\s*(.+)", text, re.IGNORECASE)
-            try:
-                if default:
-                    skill = default[1].strip().lower()
-                    self.remember("default_app", default[2].strip(), label=skill, tags=[skill], task=task,
-                                  actor="import", supersede=True)
-                elif text:
-                    self.remember("preference", text, tags=["general"], task=task, actor="import")
-            except Unstorable:
-                continue
+            if default:
+                skill = default[1].strip().lower()
+                keep(lambda default=default, skill=skill, task=task: self.remember(
+                    "default_app", default[2].strip(), label=skill, tags=[skill], task=task, actor="import",
+                    supersede=True))
+            elif text:
+                keep(lambda text=text, task=task: self.remember(
+                    "preference", text, tags=["general"], task=task, actor="import"))
         path.rename(path.with_name(path.name + ".imported"))
         return True

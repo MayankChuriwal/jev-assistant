@@ -102,9 +102,14 @@ def test_a_dropped_connection_is_opened_again_once(memory, database_url, monkeyp
 def test_two_stores_on_one_schema_keep_one_live_default_and_one_id(memory, database_url):
     other = Memory.open(database_url, schema=memory.schema, key=TEST_KEY)
 
+    errors = []
+
     def save(store, app):
-        store.remember("default_app", app, label="groceries", tags=["groceries"], supersede=True)
-        store.set_id("phone", "phone number", "+91 98765 43210")
+        try:
+            store.remember("default_app", app, label="groceries", tags=["groceries"], supersede=True)
+            store.set_id("phone", "phone number", "+91 98765 43210")
+        except Exception as error:  # a thread's failure must fail the test, not vanish with the thread
+            errors.append(error)
 
     try:
         threads = [threading.Thread(target=save, args=pair) for pair in ((memory, "Zepto"), (other, "Blinkit"))]
@@ -112,6 +117,7 @@ def test_two_stores_on_one_schema_keep_one_live_default_and_one_id(memory, datab
             thread.start()
         for thread in threads:
             thread.join()
+        assert errors == []
         assert len(memory.facts("default_app")) == 1 and len(memory.ids()) == 1
     finally:
         other.close()
@@ -254,3 +260,107 @@ def test_without_a_key_ids_are_refused_but_facts_work(database_url):
 def test_a_malformed_key_is_a_clear_error(database_url):
     with pytest.raises(StoreError, match="JEV_MEMORY_KEY"):
         Memory.open(database_url, schema="t_badkey", key="not-a-key")
+
+
+def age_events(store, hours=25):
+    store.run(lambda cur: cur.execute("UPDATE events SET at = now() - make_interval(hours => %s)", (hours,)))
+
+
+def test_an_undone_forget_never_lets_a_later_purge_turn_undo_into_a_delete(memory, database_url):
+    memory.set_id("phone", "phone number", "+91 98765 43210")
+    memory.forget("id:phone")
+    memory.undo()
+    age_events(memory)
+    memory.set_id("phone", "phone number", "+91 90000 00001")
+    again = Memory.open(database_url, schema=memory.schema, key=TEST_KEY)  # opening purges
+    try:
+        assert again.undo().startswith("set_id")
+        assert again.id_value("phone") == "+91 98765 43210"  # the old value is back, the ID is not deleted
+    finally:
+        again.close()
+
+
+def test_an_undone_forget_never_lets_a_later_purge_turn_undo_of_a_retire_into_a_delete(memory):
+    habit = memory.record_habit(HABIT)
+    memory.forget(f"habit:{habit}")
+    memory.undo()
+    habit = memory.habits()[0]["id"]
+    age_events(memory)
+    for _ in range(3):
+        memory.replayed(habit, clean=False, verified=False)
+    assert memory.habit(habit)["retired_at"] is not None
+    memory.purge()
+    memory.undo()
+    assert memory.habit(habit) is not None and memory.habit(habit)["retired_at"] is None
+
+
+def test_undo_refuses_an_event_whose_copies_were_purged(memory):
+    memory.set_id("phone", "phone number", "+91 98765 43210")
+    memory.forget("id:phone")
+    age_events(memory)
+    memory.purge()
+    memory.set_id("phone", "phone number", "+91 90000 00001")
+    memory.run(lambda cur: cur.execute("UPDATE events SET purged = true WHERE action = 'set_id' AND before IS NULL"))
+    with pytest.raises(KeyError, match="more than a day ago"):
+        memory.undo()  # the newest change has no copy left: refused, never turned into a delete
+    assert memory.id_value("phone") == "+91 90000 00001"
+
+
+def test_undoing_the_forget_of_a_superseding_fact_leaves_one_live_default(memory):
+    memory.remember("default_app", "Swiggy", label="food", tags=["food"], supersede=True)
+    zomato = memory.remember("default_app", "Zomato", label="food", tags=["food"], supersede=True)
+    memory.forget(str(zomato))
+    assert [f["text"] for f in memory.facts("default_app")] == ["Swiggy"]  # forgetting it brings the old one back
+    memory.undo()
+    assert [f["text"] for f in memory.facts("default_app")] == ["Zomato"]
+    assert memory.recall("food", "", "")["defaults"] == ["food: Zomato"]
+
+
+def test_undoing_a_forget_does_not_supersede_unrelated_facts_with_the_same_label(memory):
+    memory.remember("preference", "Window seats", tags=["travel"])
+    aisle = memory.remember("preference", "Aisle seats", tags=["travel"])
+    memory.forget(str(aisle))
+    memory.undo()
+    assert sorted(f["text"] for f in memory.facts("preference")) == ["Aisle seats", "Window seats"]
+
+
+def test_a_short_id_cannot_hide_a_card_number_from_the_check(memory):
+    memory.set_id("code", "code", "4111")
+    assert memory.hide("card 4111 1111 1111 1111") == "card [profile:code] 1111 1111 1111"  # the digits are split
+    with pytest.raises(Unstorable):
+        memory.remember("fact", "card 4111 1111 1111 1111")
+    assert memory.facts() == []
+
+
+def test_ids_are_stamped_with_the_clock_so_a_change_in_a_running_transaction_is_noticed(memory):
+    default = memory.run(lambda cur: cur.execute(
+        "SELECT column_default FROM information_schema.columns WHERE table_schema = %s AND table_name = 'ids' "
+        "AND column_name = 'updated_at'", (memory.schema,)).fetchone())
+    assert "clock_timestamp" in default["column_default"]
+
+
+def test_import_skips_what_memory_refuses_and_still_finishes(memory, tmp_path):
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps({
+        "phone": "919876543210", "upi_id": "123456",
+        "addresses": [{"label": "Card", "text": "Deliver to 4111 1111 1111 1111"},
+                      {"label": "Home", "text": "12 MG Road"}],
+        "preferences": [{"text": "My card is 4111 1111 1111 1111"}, {"text": "Window seats"}]}))
+    assert memory.import_profile(path) is True
+    assert not path.exists() and path.with_name("profile.json.imported").exists()
+    assert [f["text"] for f in memory.facts()] == ["Window seats", "12 MG Road"]
+    assert memory.id_value("phone") == "919876543210"
+
+
+def test_only_a_missing_database_is_created_and_connecting_has_a_timeout(database_url, monkeypatch):
+    seen, made = [], []
+
+    def refuse(*_args, **kwargs):
+        seen.append(kwargs.get("connect_timeout"))
+        raise psycopg.OperationalError('FATAL:  role "nobody" does not exist')
+
+    monkeypatch.setattr(memories.psycopg, "connect", refuse)
+    monkeypatch.setattr(Memory, "create_database", lambda self: made.append(1))
+    with pytest.raises(StoreError, match="isn't reachable"):
+        Memory.open(database_url, schema="t_norole", key=TEST_KEY)
+    assert made == [] and seen == [10]
