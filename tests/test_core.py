@@ -1,5 +1,6 @@
 """The conversation core with scripted agents: routing, one open question, limits, timers, files. No browser."""
 
+import json
 import threading
 from types import SimpleNamespace
 
@@ -71,7 +72,7 @@ def hold(gate):
 @pytest.fixture
 def world(tmp_path):
     w = SimpleNamespace(scripts={}, hosts={}, agents={}, late={}, classified=[], intents=[], clock=Clock(), n=0,
-                        intakes={}, splits={}, made={}, learned=None)
+                        intakes={}, splits={}, made={}, learned=None, known=[], memory_outs=[])
     w.channel = WebChannel(tmp_path / "media")
 
     def make_worker(task, url, asker, notify):
@@ -94,7 +95,8 @@ def world(tmp_path):
         split=lambda message: w.splits.get(message, [message]), library=EMPTY,
         chat=lambda message, tasks: (f"About {len(tasks)} task(s).", {}),
         remember=lambda question, answer: (f"Default choice: {answer}", {}), clock=w.clock, poll=0.01,
-        learn=lambda state, memory: w.learned)
+        learn=lambda state, memory: w.learned,
+        memory_job=lambda message, known: w.known.append(known) or w.memory_outs.pop(0))
     return w
 
 
@@ -820,3 +822,100 @@ def test_skip_and_no_keep_nothing(world):
     tap(world, "note:1:skip")
     tap(world, "guess:2:no")
     assert world.core.memory.notes("shop.test") == [] and world.core.memory.facts("preference") == []
+
+
+# ---- Plan 7 Task 7: memory by chat
+
+MEMORY = ("MEMORY", "none", {"MEMORY": 1.0})
+
+
+def said(op, facts=(), key="", label="", refs=(), site="", reply=""):
+    return {"op": op, "facts": list(facts), "id": {"key": key, "label": label}, "refs": list(refs), "site": site,
+            "reply": reply}
+
+
+def tell_memory(world, message, out):
+    world.intents.append(MEMORY)
+    world.memory_outs.append(out)
+    before = len(bodies(world))
+    text(world, message)
+    assert until(lambda: len(bodies(world)) > before)
+    return bodies(world)[-1]
+
+
+def test_you_can_tell_it_what_to_remember(world):
+    from assistant import jev
+
+    assert "MEMORY" in jev.INTENTS
+    office = {"kind": "address", "label": "Office", "text": "12 MG Road", "tags": ["address"]}
+    assert tell_memory(world, "remember my office is 12 MG Road", said("remember", [office])) == \
+        "Saved: Office: 12 MG Road"
+    assert world.core.memory.facts("address")[0]["text"] == "12 MG Road"
+    moved = {**office, "text": "80 Residency Road"}
+    tell_memory(world, "my office moved to 80 Residency Road", said("remember", [moved]))
+    assert [f["text"] for f in world.core.memory.facts("address")] == ["80 Residency Road"]  # a label is replaced
+
+
+def test_an_id_in_the_message_is_cut_by_code_and_kept_encrypted(world):
+    reply = tell_memory(world, "my BESCOM account number is 1234567890",
+                        said("remember", key="bescom_account", label="BESCOM account number"))
+    assert reply.startswith("Saved your BESCOM account number. The models never see it.")
+    assert "jev memory set bescom_account" in reply
+    assert world.core.memory.id_value("bescom_account") == "1234567890"
+
+
+def test_two_numbers_or_none_are_never_guessed(world):
+    out = said("remember", key="bescom_account", label="BESCOM account number")
+    assert tell_memory(world, "my BESCOM account is 1234567890, the old one 9876543210", out) == \
+        "I see more than one number there. Send your BESCOM account number on its own, please."
+    assert tell_memory(world, "remember my BESCOM account", out) == \
+        "I'll ask for your BESCOM account number through the hidden field the next time a task needs it."
+    with pytest.raises(KeyError):
+        world.core.memory.id_value("bescom_account")
+
+
+def test_a_card_number_is_never_kept(world):
+    card = {"kind": "fact", "label": "", "text": "My card is 4111 1111 1111 1111", "tags": []}
+    reply = tell_memory(world, "remember my card 4111 1111 1111 1111", said("remember", [card]))
+    assert reply.startswith("I don't keep that:") and world.core.memory.facts() == []
+
+
+def test_list_forget_and_undo_by_chat(world):
+    memory = world.core.memory
+    office = memory.remember("address", "12 MG Road", label="Office", tags=["address"])
+    memory.set_id("phone", "phone number", "+91 98765 43210")
+    listed = tell_memory(world, "what do you remember about me?", said("list"))
+    assert "Office: 12 MG Road" in listed and "phone number" in listed and "98765" not in listed
+    assert world.known[-1]["ids"] == [{"ref": "id:phone", "label": "phone number"}]
+    assert "98765" not in json.dumps(world.known, default=str)
+    assert tell_memory(world, "forget my office", said("forget", refs=[str(office), "999"])) == \
+        "Forgot Office: 12 MG Road."
+    assert tell_memory(world, "undo that", said("undo")) == "Undone the last change to what I remember."
+    assert memory.facts("address")[0]["text"] == "12 MG Road"
+    assert tell_memory(world, "forget my gym", said("forget", refs=["999"])).startswith("I couldn't find that")
+
+
+def test_a_standing_approval_from_your_words_needs_an_order_placed_once_and_a_rupee_cap(world):
+    memory = world.core.memory
+    out = said("approve", site="zeptonow.com")
+    words = "always order my usual Zepto cart without asking, up to ₹300"
+    assert tell_memory(world, words, out) == "Place this order with me once; then I can remember it."
+    memory.record_habit({"host": "zeptonow.com", "skill": "groceries", "title": "Zepto · Diet Coke",
+                         "goal": "Order Diet Coke on Zepto", "start": "https://www.zeptonow.com/", "plan": [],
+                         "steps": [], "cart": [{"item": "diet coke 300 ml", "qty": 1}]})
+    assert tell_memory(world, "always order my usual Zepto cart without asking", out) == \
+        "Tell me the most it may cost, like “up to ₹300”."
+    reply = tell_memory(world, words, out)
+    assert reply.startswith("Saved: zeptonow.com · diet coke 300 ml × 1 · up to ₹300 · until ")
+    assert "Pre-approval is off" in reply and memory.live_rules()[0]["words"] == words
+
+
+def test_a_message_memory_cannot_use_says_why(world):
+    assert tell_memory(world, "remember to be nice", said("none", reply="That isn't something I can keep.")) == \
+        "That isn't something I can keep."
+
+
+def test_id_candidates_are_emails_upi_ids_numbers_and_codes_with_digits():
+    text = "mail me@example.com or pay mayank@okicici, phone +91 98765 43210, ID AB12CD, pin 560034, 4th floor"
+    assert conversation.id_candidates(text) == ["me@example.com", "mayank@okicici", "+91 98765 43210", "560034",
+                                                "AB12CD"]

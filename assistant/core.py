@@ -4,6 +4,7 @@ its own thread — at most three at once and one per site."""
 import base64
 import itertools
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -12,7 +13,7 @@ from urllib.parse import urlparse
 from . import jev, messages, planner, rules, skills
 from . import learn as learning
 from .gate import cap, rule_cap, same_cart
-from .memory import RULE_DAYS, UNSTORABLE, Memory, Unstorable, rupees
+from .memory import LABELS, RULE_DAYS, UNSTORABLE, Memory, StoreError, Unstorable, rule_line, rupees
 from .privacy import SECRETS, Secrets
 from .worker import DELEGATE, STOPPED, Worker
 
@@ -32,6 +33,35 @@ def site(url):
     for prefix in ("www.", "m."):
         host = host.removeprefix(prefix)
     return host
+
+
+ID_CANDIDATES = (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)*"),  # an email address or a UPI ID
+                 re.compile(r"\+?\d(?:[\s-]?\d){5,}"),  # a number of six digits or more, spaced or not
+                 re.compile(r"\b(?=[A-Za-z]*\d)[A-Za-z0-9]{4,}\b"))  # four or more letters and digits, with a digit
+
+
+def id_candidates(text):
+    """The values in a message that can be an ID, each once: emails and UPI IDs, then numbers, then codes."""
+    found = []
+    for pattern in ID_CANDIDATES:
+        found += [match[0].strip() for match in pattern.finditer(text)]
+        text = pattern.sub(" ", text)
+    return list(dict.fromkeys(found))
+
+
+def memory_text(listing):
+    """What memory holds, for the chat: never an ID's value."""
+    lines = [f"• {f['label']}: {f['text']}" if f["label"] else f"• {f['text']}" for f in listing["facts"]]
+    lines = (["What I know:"] + lines) if lines else []
+    if listing["ids"]:
+        lines.append("IDs I keep hidden: " + ", ".join(i["label"] for i in listing["ids"]))
+    if listing["rules"]:
+        lines += ["Standing approvals:"] + [f"• {r['text']}" for r in listing["rules"]]
+    if listing["notes"]:
+        lines.append("Learned site notes: " + ", ".join(f"{host} ({n})" for host, n in listing["notes"].items()))
+    if listing["habits"]:
+        lines.append("Habits: " + ", ".join(h["title"] for h in listing["habits"]))
+    return "\n".join(lines) + "\nSay “forget …” to remove one." if lines else "I don't remember anything about you yet."
 
 
 class Question:
@@ -59,7 +89,8 @@ class Task:
 
 class Core:
     def __init__(self, channel, *, user="local", memory=None, make_worker=None, start=None, route=None, intake=None,
-                 split=None, chat=None, remember=None, learn=None, library=None, clock=time.monotonic, poll=1.0):
+                 split=None, chat=None, remember=None, learn=None, memory_job=None, library=None, clock=time.monotonic,
+                 poll=1.0):
         self.channel, self.user = channel, user
         self.memory = memory if memory is not None else Memory.open()
         self.make_worker = make_worker or self.worker_for
@@ -70,6 +101,7 @@ class Core:
         self.chat = chat or planner.chat
         self.remember_job = remember or planner.remember
         self.learn = learn or learning.after
+        self.memory_job = memory_job or planner.memory
         self.library = library if library is not None else {"skills": skills.load(), "sites": skills.load_sites()}
         self.clock, self.poll = clock, poll
         self.lock = threading.RLock()
@@ -184,6 +216,8 @@ class Core:
                     return self.which(event, text, active, intent, asked)
                 return self.cancel(task) if intent == "CANCEL" else self.amend(task, text)
             views = self.views()
+        if intent == "MEMORY":
+            return self.memory_message(text)  # outside the lock: a model call
         try:
             reply, _ = self.hidden(self.chat, text, views)  # STATUS, OTHER, or nothing to act on
         except Exception as error:
@@ -329,6 +363,98 @@ class Core:
         except Exception as error:
             return self.say(f"I couldn't save that: {error}")
         self.say(f"Saved for next time: {guess['text']}")
+
+    # ---- memory by chat
+
+    def memory_message(self, text):
+        """A message about what the agent remembers: remember, forget, list, approve, undo, or none. A model reads it;
+        code saves."""
+        listing = self.memory.listing()
+        known = {"facts": listing["facts"], "ids": listing["ids"], "rules": listing["rules"],
+                 "habits": [{"ref": h["ref"], "site": h["host"], "title": h["title"]} for h in listing["habits"]]}
+        try:
+            out = self.hidden(self.memory_job, text, known)
+        except Exception as error:  # a model or network failure is a chat message
+            return self.say(f"I couldn't read that: {error}")
+        try:
+            reply = self.memory_op(out, text, listing)
+        except Unstorable:
+            reply = UNSTORABLE
+        except (StoreError, ValueError) as error:
+            reply = f"I couldn't save that: {error}"
+        self.say(reply)
+
+    def memory_op(self, out, text, listing):
+        op = out["op"]
+        if op == "list":
+            return memory_text(listing)
+        if op == "undo":
+            try:
+                self.memory.undo(actor="user")
+            except KeyError:
+                return "There's nothing to undo."
+            return "Undone the last change to what I remember."
+        if op == "forget":
+            refs = {item["ref"] for group in ("facts", "ids", "rules", "habits") for item in listing[group]}
+            done = []
+            for ref in dict.fromkeys(out["refs"]):
+                if ref in refs:  # only what the listing showed: a model's other refs are ignored
+                    try:
+                        done.append(self.memory.forget(ref, actor="user"))
+                    except KeyError:  # it went between the listing and now
+                        continue
+            return f"Forgot {'; '.join(done)}." if done else \
+                "I couldn't find that in what I remember. Ask me what I remember to see the list."
+        if op == "approve":
+            return self.approve_words(out["site"], text)
+        if op == "remember":
+            return self.remember_words(out, text)
+        return out["reply"].strip() or "I didn't save anything."
+
+    def remember_words(self, out, text):
+        """Save what the message gives. An ID's value is the one candidate code finds in the message, never a model's
+        words; with two candidates nothing is saved, and with none it is asked through the hidden field later."""
+        said = []
+        key = out["id"]["key"].strip()
+        if key:
+            label = out["id"]["label"].strip() or LABELS.get(key) or key.replace("_", " ")
+            found = id_candidates(text)
+            if len(found) > 1:
+                return f"I see more than one number there. Send your {label} on its own, please."
+            if not found:
+                said.append(f"I'll ask for your {label} through the hidden field the next time a task needs it.")
+            else:
+                if found[0] in label:
+                    label = LABELS.get(key) or key.replace("_", " ")
+                self.memory.set_id(key, label, found[0], actor="user")
+                said.append(f"Saved your {label}. The models never see it. Next time, `jev memory set {key}` keeps an "
+                            "ID out of the chat entirely.")
+        for fact in out["facts"]:  # after the ID: its value is hidden in every fact from here on
+            label = fact["label"].strip()
+            self.memory.remember(fact["kind"], fact["text"], label=label, tags=fact["tags"], source=text,
+                                 actor="user", supersede=bool(label))
+            said.append(f"Saved: {label}: {fact['text'].strip()}" if label else f"Saved: {fact['text'].strip()}")
+        return " ".join(said) or "I didn't find anything to save."
+
+    def approve_words(self, site, text):
+        """A standing approval from the user's own words: the site they name, the cart of their latest order there,
+        and the cap their words set in rupees."""
+        note = skills.named(site, self.library["sites"]) if site.strip() else None
+        host = note["host"] if note else skills.bare(site.strip().lower())
+        if "." not in host:
+            return "Which site is that for? Name it, like “my usual Zepto order”."
+        items = self.memory.last_cart(host)
+        if not items:
+            return "Place this order with me once; then I can remember it."
+        limit = cap(text)
+        if limit is None:
+            return "Tell me the most it may cost, like “up to ₹300”."
+        self.memory.approve(host, items, limit, text, actor="user")
+        off = "" if os.environ.get("JEV_PREAUTH", "shadow") == "on" else (
+            " Pre-approval is off, so until JEV_PREAUTH=on I'll still ask, and tell you this rule would have covered "
+            "it.")
+        return (f"Saved: {rule_line(self.memory.rules_for(host)[0])}. I'll place this order without asking. Say “stop "
+                f"that rule” to end it.{off}")
 
     def offer_rules(self, task):
         """After an order you approved that the site confirmed, with its cart and rupee total read: offer to place the

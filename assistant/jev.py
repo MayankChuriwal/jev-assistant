@@ -115,6 +115,8 @@ INTENTS = {
     "NEW_TASK": "Asks for a new, separate task.",
     "CANCEL": "Stops or cancels an existing task.",
     "STATUS": "Asks how a task is going or what is happening.",
+    "MEMORY": "Tells the assistant something to remember about the user, asks it to forget something or stop a "
+              "standing approval, asks what it remembers, or asks to undo the last memory change.",
     "OTHER": "Anything else: thanks, greetings, small talk.",
 }
 INTENT_RULE = """Read the user's chat message in the context of their tasks and the open question, and choose what

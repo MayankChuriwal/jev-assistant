@@ -194,3 +194,13 @@ def test_split_keeps_every_errand_and_the_core_decides_how_many_start(monkeypatc
     goals = [f"Errand {n}" for n in range(1, 8)]
     monkeypatch.setattr(planner.model, "text_json", lambda *a, **k: ({"goals": goals}, {}))
     assert planner.split("seven errands") == goals
+
+
+def test_the_memory_job_reads_the_message_and_what_is_known(monkeypatch):
+    calls = []
+    out = {"op": "list", "facts": [], "id": {"key": "", "label": ""}, "refs": [], "site": "", "reply": ""}
+    monkeypatch.setattr(planner.model, "text_json",
+                        lambda system, payload, **k: calls.append((payload, k)) or (out, {}))
+    assert planner.memory("what do you know about me?", {"facts": []}) == out
+    assert calls[0][0] == {"message": "what do you know about me?", "known": {"facts": []}}
+    assert calls[0][1]["schema"] is planner.MEMORY_SCHEMA
