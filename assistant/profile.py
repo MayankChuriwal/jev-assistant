@@ -145,8 +145,11 @@ class Secrets:
             return
         digits = re.sub(r"[\s-]", "", value)
         if digits.isdigit() and len(digits) >= 3:  # card numbers, phones, codes, and CVVs, in any spacing
-            # (brackets, dots, dashes), but never inside a larger number: a CVV 499 is not "₹1,499" or "₹499.00"
-            pattern = r"(?<![\d.,])" + r"[\s().-]*".join(digits) + r"(?![.,]?\d)"
+            joined = r"[\s().-]*".join(digits)  # (brackets, dots, dashes)
+            if len(digits) <= 6:  # CVV, OTP, PIN: never part of a larger number ("₹1,499", "₹1 499", "₹499.00")
+                pattern = r"(?<![\d.,])(?<!\d[\s\u00a0\u2007\u2009\u202f])" + joined + r"(?![.,]?\d)"
+            else:  # phone, card: any neighbour but a digit ("Mob.9876543210", "Name,9876543210,City")
+                pattern = r"(?<!\d)" + joined + r"(?!\d)"
         else:
             pattern = r"(?<!\w)" + re.escape(value) + r"(?!\w)"
         self.values[value] = (re.compile(pattern, re.IGNORECASE), placeholder)

@@ -193,3 +193,53 @@ def test_a_long_digit_secret_keeps_its_spacing_tolerance_and_its_number_boundari
     s = Secrets([("482913", "[secret:otp]")])
     assert s.text("OTP 482 913.") == "OTP [secret:otp]." and s.text("OTP 482-913") == "OTP [secret:otp]"
     assert s.text("Order 1,482913") == "Order 1,482913" and s.text("₹482913.50") == "₹482913.50"
+
+
+# Micro-fix: a phone or card number is redacted next to "." and ","; a short secret never sits inside a number,
+# not even a space-grouped amount.
+
+@pytest.mark.parametrize("shown", ["Mob.9876543210", "Mayank,9876543210,Bengaluru", "9876543210,560001",
+                                   "Call:9876543210.", "+91 98765 43210", "+91-98765-43210", "(98765) 43210",
+                                   "98765.43210", "ph.98765 43210,x"])
+def test_a_phone_number_is_redacted_beside_a_dot_or_a_comma(shown):
+    s = Secrets([("9876543210", "[profile:phone]")])
+    assert s.leaks(shown) and "98765" not in s.text(shown) and "[profile:phone]" in s.text(shown), shown
+    assert not s.leaks(s.text(shown))
+
+
+def test_a_phone_number_is_still_not_part_of_a_longer_digit_run():
+    s = Secrets([("9876543210", "[profile:phone]")])
+    for text in ("order 19876543210", "98765432101", "ref 98765432100.5"):
+        assert not s.leaks(text), text
+
+
+@pytest.mark.parametrize("shown", ["Card.4111111111111111", "Card,4111111111111111,exp", "4111111111111111.",
+                                   "4111 1111 1111 1111,x"])
+def test_a_card_number_is_redacted_beside_a_dot_or_a_comma(shown):
+    s = Secrets([("4111111111111111", "[secret:card.number]")])
+    assert s.leaks(shown) and "4111" not in s.text(shown) and "[secret:card.number]" in s.text(shown), shown
+
+
+def test_a_cvv_is_not_part_of_a_price_but_is_a_standalone_code():
+    s = Secrets([("499", "[secret:answer1]")])
+    for text in ("₹1,499", "₹1499", "₹499.00", "₹1 499", "Rs 1 499", "₹1\u202f499"):
+        assert s.text(text) == text and not s.leaks(text), text
+    for text, shown in (("CVV 499", "CVV [secret:answer1]"), ("code: 499", "code: [secret:answer1]")):
+        assert s.text(text) == shown and s.leaks(text), text
+
+
+@pytest.mark.parametrize("gap", [" ", "\u202f", "\u2009", "\u2007", "\u00a0"])
+@pytest.mark.parametrize("prefix", ["To pay ₹1", "Rs 1", "Total ₹12"])
+def test_a_cvv_equal_to_the_last_group_of_a_space_grouped_amount_stays_in_the_amount(prefix, gap):
+    s = Secrets([("299", "[secret:answer1]")])
+    text = f"{prefix}{gap}299"
+    assert s.text(text) == text and not s.leaks(text), repr(text)
+    assert s.text("CVV 299") == "CVV [secret:answer1]" and s.text("299") == "[secret:answer1]"
+
+
+def test_a_four_digit_otp_follows_the_short_secret_rule():
+    s = Secrets([("4829", "[secret:otp]")])
+    for text in ("₹14,829", "₹4829.50", "₹1 4829", "Total 14.829"):
+        assert s.text(text) == text and not s.leaks(text), text
+    for text, shown in (("OTP 4829", "OTP [secret:otp]"), ("code: 4 8 2 9.", "code: [secret:otp].")):
+        assert s.text(text) == shown and s.leaks(text), text

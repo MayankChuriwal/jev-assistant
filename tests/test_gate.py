@@ -4,7 +4,7 @@ binding the yes, and watching the result. Jev and mini are scripted."""
 from unittest.mock import Mock
 
 import pytest
-from fakes import fake_page
+from fakes import fake_page, worker_with
 
 from assistant import gate
 from assistant.browser import StalePage
@@ -1119,3 +1119,15 @@ def test_an_emi_line_is_not_the_payable_total():
     w, page = cart(text, 500.0)
     assert gate.preauthorised(w.state, gate.facts(page, []), page) is False
     assert gate.money_lines(text)[2] == "Pay in 3 EMIs: you pay ₹433 now"  # still a money line
+
+
+def test_a_cvv_equal_to_a_spaced_price_group_never_makes_the_payable_pre_approved(monkeypatch, tmp_path):
+    monkeypatch.setenv("JEV_PREAUTH", "on")
+    w = worker_with(tmp_path)
+    w.secrets.add("299", "[secret:answer1]")  # a CVV the user typed: no model, trace, or message may carry it
+    page = w.clean(fake_page(text="To pay ₹1 299\nPay"))
+    assert "₹1 299" in page["text"] and "secret" not in page["text"]
+    found = gate.facts(page, [])
+    assert found["total"] in (None, "₹1,299", "₹1 299")
+    state = {**w.state, "preauth": True, "cap": 500.0, "site": "shop.test"}
+    assert gate.preauthorised(state, found, page) is False
