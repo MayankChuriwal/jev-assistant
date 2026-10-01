@@ -1,4 +1,5 @@
-"""Profile, vault, and redaction contracts. The vault test uses a throwaway keychain, never the login keychain."""
+"""Redaction, never-store rules, and (until Plan 7 Task 3) the old profile and vault.
+The vault test uses a throwaway keychain, never the login keychain."""
 
 import json
 import stat
@@ -108,7 +109,7 @@ def test_vault_notices_a_store_that_did_not_happen(tmp_path):
         Vault(tmp_path / "missing.keychain-db").set("card.hdfc.cvv", "123")
 
 
-from assistant.profile import Secrets  # noqa: E402
+from assistant.privacy import Secrets  # noqa: E402
 
 
 def test_digit_secrets_are_hidden_in_any_spacing():
@@ -171,7 +172,7 @@ def test_parallel_saves_never_collide(tmp_path):
 
 
 def test_redaction_reaches_dictionary_keys_and_a_leak_is_seen():
-    secrets = profiles.Secrets([("9876543210", "[profile:phone]")])
+    secrets = Secrets([("9876543210", "[profile:phone]")])
     body = {"Call 98765 43210": ["ok"], "shot": "data:image/png;base64,98765 43210"}
     assert secrets.leaks(body)
     clean = secrets.redact(body)
@@ -261,3 +262,37 @@ def test_a_spaced_amount_stays_whole_for_every_space_like_character(gap):
     s = Secrets([("299", "[secret:answer1]")])
     text = f"To pay ₹1{gap}299\nPay"
     assert s.text(text) == text and not s.leaks(text), repr(text)
+
+
+from assistant import privacy  # noqa: E402
+
+
+def test_card_numbers_aadhaar_pan_and_named_secrets_are_never_storable():
+    for text in ("4111 1111 1111 1111", "card 4111-1111-1111-1111 exp", "2345 6789 0124", "ABCPE1234F",
+                 "my OTP is 4829", "password hunter2", "CVV 123", "UPI PIN 1234", "my aadhaar is pending",
+                 "PAN card copy", "card number on file", "expiry date 12/29"):
+        assert not privacy.storable(text), text
+
+
+def test_everyday_facts_and_ids_are_storable():
+    for text in ("Home: 12, 4th Cross, Koramangala 560034", "I'm vegetarian", "Default app for groceries: Zepto",
+                 "BESCOM account 1234567890", "+91 98765 43210", "919876543210", "Pay by card on Amazon",
+                 "Pincode 560034", "I like pan pizza", "4111111111111112", ""):
+        assert privacy.storable(text), text
+
+
+def test_the_checksums():
+    assert privacy.luhn("4111111111111111") and not privacy.luhn("4111111111111112")
+    assert privacy.secret_number("card 4111 1111 1111 1111") and privacy.secret_number("ABCPE1234F")
+    assert not privacy.secret_number("Enter the OTP sent to [profile:phone]")  # naming a secret holds no number
+    assert privacy.verhoeff("2363") and privacy.verhoeff("234567890124") and not privacy.verhoeff("919876543210")
+
+
+def test_variants_cover_phone_formats_and_name_parts():
+    assert privacy.variants("phone", "+91 98765 43210") == [
+        ("+91 98765 43210", "[profile:phone]"), ("919876543210", "[profile:phone]"),
+        ("9876543210", "[profile:phone]"), ("09876543210", "[profile:phone]")]
+    assert privacy.variants("name", "Mayank Churiwal") == [
+        ("Mayank Churiwal", "[profile:name]"), ("Mayank", "[profile:name]"), ("Churiwal", "[profile:name]")]
+    assert privacy.variants("bescom_account", " 1234567890 ") == [("1234567890", "[profile:bescom_account]")]
+    assert privacy.variants("email", "") == [] and privacy.variants("email", None) == []

@@ -95,7 +95,7 @@ def test_missing_key_stops_before_guessing(monkeypatch):
 
 
 def test_every_model_request_is_redacted_for_the_current_task(monkeypatch):
-    from assistant.profile import SECRETS, Secrets
+    from assistant.privacy import SECRETS, Secrets
 
     sent = []
 
@@ -117,7 +117,7 @@ def test_every_model_request_is_redacted_for_the_current_task(monkeypatch):
 
 
 def test_text_model_payloads_are_redacted_before_they_are_encoded(monkeypatch):
-    from assistant.profile import SECRETS, Secrets
+    from assistant.privacy import SECRETS, Secrets
 
     post = reply('{"text": "ok"}')
     monkeypatch.setattr(model, "post_json", post)  # below the text model, above post_json's own redaction
@@ -154,7 +154,7 @@ def test_a_dropped_connection_is_tried_again(monkeypatch):
 
 
 def test_a_secret_that_survives_redaction_is_never_sent(monkeypatch):
-    from assistant.profile import SECRETS, Secrets
+    from assistant.privacy import SECRETS, Secrets
 
     class Broken(Secrets):
         def redact(self, obj):

@@ -161,7 +161,8 @@ def run(goal, url=None):
     from . import jev, planner, skills
     from . import worker as runtime
     from .gate import cap
-    from .profile import SECRETS, Profile, Secrets
+    from .privacy import SECRETS, Secrets
+    from .profile import Profile
 
     library = {"skills": skills.load(), "sites": skills.load_sites()}
     token = SECRETS.set(Secrets(Profile().hidden_values()))  # the goal may hold a phone number or an email

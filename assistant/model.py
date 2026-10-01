@@ -9,7 +9,7 @@ import time
 
 import httpx
 
-from .profile import SECRETS
+from .privacy import SECRETS
 
 CLIENT = httpx.Client(http2=True, timeout=25)
 TYPESAFE = "https://api.typesafe.ai/"

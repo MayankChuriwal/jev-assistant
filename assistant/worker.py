@@ -14,7 +14,8 @@ from . import executor, gate, jev, planner, rules, skills, views
 from .browser import Browser, ExecutionUncertain, StalePage, unique
 from .errors import Halt, Retry
 from .model import METER, action_space, new_meter, spent
-from .profile import HOME, SECRETS, Profile, Secrets
+from .privacy import SECRETS, Secrets
+from .profile import HOME, Profile
 
 STOPPED = {"done", "blocked", "failed", "cancelled"}
 PRIVATE = {"browser", "answers"}  # hold secret values

@@ -10,7 +10,8 @@ from urllib.parse import urlparse
 
 from . import jev, messages, planner, rules, skills
 from .gate import cap
-from .profile import SECRETS, Profile, Secrets
+from .privacy import SECRETS, Secrets
+from .profile import Profile
 from .worker import DELEGATE, STOPPED, Worker
 
 MAX_RUNNING = 3

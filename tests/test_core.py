@@ -721,7 +721,7 @@ def test_a_bench_question_scripted_for_the_user_goes_to_the_chat(tmp_path):
 
 
 def test_a_profile_value_learned_mid_session_is_hidden_from_the_concierges_next_model_call(tmp_path):
-    from assistant.profile import SECRETS
+    from assistant.privacy import SECRETS
 
     profile = Profile(tmp_path / "p.json")
     c = conversation.Core(WebChannel(tmp_path / "media"), profile=profile, make_worker=lambda *a: None,

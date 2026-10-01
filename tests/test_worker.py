@@ -870,7 +870,7 @@ def test_a_plain_choice_question_is_never_hidden(tmp_path, monkeypatch):
 
 def test_a_trivial_hidden_answer_is_kept_but_never_hides_words_on_later_pages(tmp_path, monkeypatch):
     from assistant import jev, model
-    from assistant.profile import SECRETS
+    from assistant.privacy import SECRETS
 
     w = worker_with(tmp_path, page=fake_page(text="Yes, deliver here\nPay ₹79"))
     for value in ("yes", "ok", "no", "Use the saved card"):

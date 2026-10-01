@@ -1,12 +1,12 @@
 """The user's profile (profile.json), secrets in the macOS Keychain, and per-task redaction of both."""
 
-import contextvars
 import json
 import os
-import re
 import subprocess
 import threading
 from pathlib import Path
+
+from .privacy import variants
 
 HOME = Path(os.environ.get("JEV_HOME") or Path.home() / ".jev")
 HIDDEN = ("name", "phone", "email", "upi_id")  # reach models only as [profile:<key>]
@@ -68,19 +68,7 @@ class Profile:
 
     def hidden_values(self):
         """(value, placeholder) pairs a task's redaction registry hides, with common reformattings."""
-        pairs = []
-        for key in HIDDEN:
-            value = str(self.data.get(key) or "").strip()
-            if not value:
-                continue
-            placeholder = f"[profile:{key}]"
-            pairs.append((value, placeholder))
-            if key == "phone":
-                digits = re.sub(r"\D", "", value)
-                pairs += [(digits, placeholder), (digits[-10:], placeholder), ("0" + digits[-10:], placeholder)]
-            if key == "name":
-                pairs += [(part, placeholder) for part in value.split() if len(part) >= 3]
-        return pairs
+        return [pair for key in HIDDEN for pair in variants(key, self.data.get(key))]
 
 
 def quote(text):
@@ -125,58 +113,3 @@ class Vault:
             stored = None
         if stored != value:
             raise RuntimeError(f"The Keychain did not store {key}.")
-
-
-SECRETS = contextvars.ContextVar("jev_secrets", default=None)
-
-
-class Secrets:
-    """One task's registry of values no model, log, or message may contain, and the fields that hold them."""
-
-    def __init__(self, pairs=()):
-        self.values = {}
-        self.nodes = set()  # (frame, node) of fields that received a secret
-        for value, placeholder in pairs:
-            self.add(value, placeholder)
-
-    def add(self, value, placeholder):
-        value = str(value or "").strip()
-        if len(value) < 3:
-            return
-        digits = re.sub(r"[\s-]", "", value)
-        if digits.isdigit() and len(digits) >= 3:  # card numbers, phones, codes, and CVVs, in any spacing
-            joined = r"[\s().-]*".join(digits)  # (brackets, dots, dashes)
-            if len(digits) <= 6:  # CVV, OTP, PIN: never part of a larger number ("₹1,499", "₹1 499", "₹499.00")
-                pattern = r"(?<![\d.,])(?<!\d[^\S\r\n])" + joined + r"(?![.,]?\d)"  # a space, never a line break
-            else:  # phone, card: any neighbour but a digit ("Mob.9876543210", "Name,9876543210,City")
-                pattern = r"(?<!\d)" + joined + r"(?!\d)"
-        else:
-            pattern = r"(?<!\w)" + re.escape(value) + r"(?!\w)"
-        self.values[value] = (re.compile(pattern, re.IGNORECASE), placeholder)
-
-    def text(self, s):
-        if s.startswith("data:image/"):
-            return s
-        for value in sorted(self.values, key=len, reverse=True):
-            regex, placeholder = self.values[value]
-            s = regex.sub(lambda _match: placeholder, s)
-        return s
-
-    def redact(self, obj):
-        if isinstance(obj, str):
-            return self.text(obj)
-        if isinstance(obj, list):
-            return [self.redact(item) for item in obj]
-        if isinstance(obj, dict):
-            return {self.redact(key): self.redact(value) for key, value in obj.items()}
-        return obj
-
-    def leaks(self, obj):
-        """Whether a registered value survives in `obj`: any string, dictionary keys included, images excepted."""
-        if isinstance(obj, str):
-            return not obj.startswith("data:image/") and any(regex.search(obj) for regex, _ in self.values.values())
-        if isinstance(obj, list):
-            return any(self.leaks(item) for item in obj)
-        if isinstance(obj, dict):
-            return any(self.leaks(key) or self.leaks(value) for key, value in obj.items())
-        return False
