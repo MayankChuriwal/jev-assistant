@@ -243,3 +243,21 @@ def test_a_four_digit_otp_follows_the_short_secret_rule():
         assert s.text(text) == text and not s.leaks(text), text
     for text, shown in (("OTP 4829", "OTP [secret:otp]"), ("code: 4 8 2 9.", "code: [secret:otp].")):
         assert s.text(text) == shown and s.leaks(text), text
+
+
+# A short secret on its own line is redacted even after a line that ends in a digit; a spaced amount still is not.
+
+def test_a_short_digit_secret_on_its_own_line_is_redacted_after_a_line_ending_in_a_digit():
+    s = Secrets([("299", "[secret:answer1]")])
+    for text, shown in (("Order 4521\n299", "Order 4521\n[secret:answer1]"),
+                        ("Order 4521\r\n299", "Order 4521\r\n[secret:answer1]"),
+                        ("Order ref\n299", "Order ref\n[secret:answer1]"),
+                        ("Order 4521\n\n299", "Order 4521\n\n[secret:answer1]")):
+        assert s.text(text) == text.replace("299", "[secret:answer1]") == shown and s.leaks(text), repr(text)
+
+
+@pytest.mark.parametrize("gap", [" ", " ", " ", " ", " "])
+def test_a_spaced_amount_stays_whole_for_every_space_like_character(gap):
+    s = Secrets([("299", "[secret:answer1]")])
+    text = f"To pay ₹1{gap}299\nPay"
+    assert s.text(text) == text and not s.leaks(text), repr(text)

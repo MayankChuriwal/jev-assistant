@@ -147,7 +147,7 @@ class Secrets:
         if digits.isdigit() and len(digits) >= 3:  # card numbers, phones, codes, and CVVs, in any spacing
             joined = r"[\s().-]*".join(digits)  # (brackets, dots, dashes)
             if len(digits) <= 6:  # CVV, OTP, PIN: never part of a larger number ("₹1,499", "₹1 499", "₹499.00")
-                pattern = r"(?<![\d.,])(?<!\d[\s\u00a0\u2007\u2009\u202f])" + joined + r"(?![.,]?\d)"
+                pattern = r"(?<![\d.,])(?<!\d[^\S\r\n])" + joined + r"(?![.,]?\d)"  # a space, never a line break
             else:  # phone, card: any neighbour but a digit ("Mob.9876543210", "Name,9876543210,City")
                 pattern = r"(?<!\d)" + joined + r"(?!\d)"
         else:
