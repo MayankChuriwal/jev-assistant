@@ -632,6 +632,22 @@ def test_a_bench_task_never_asks_for_card_details(tmp_path):
     assert replies == [{"cancel": True}] and task.cancelled and "card details" in task.bench["stopped"]
 
 
+@pytest.mark.parametrize("kind", ["text", "secret"])  # stuck() asks hidden when a code field is on the page
+def test_a_stuck_bench_task_stops_instead_of_taking_a_default_answer(tmp_path, kind):
+    c = conversation.Core(WebChannel(tmp_path / "media"), memory=store(),
+                          make_worker=lambda *a: None, start=lambda goal: ("https://x.test/", "x", True), library=EMPTY,
+                          poll=0.01)
+    task = conversation.Task("t9", "Book a bike")
+    task.script = {"answers": [], "fallback": "ok"}
+    question = ("I'm stuck on Rapido, trying to Clear the pickup textbox to prepare for correct location input. "
+                "What should I do?")  # round 2: the location default answered it, and the run circled
+    replies = []
+    threading.Thread(target=lambda: replies.append(c.ask(task, {"kind": kind, "text": question})), daemon=True).start()
+    until(lambda: replies or c.open is not None)
+    assert replies == [{"cancel": True}] and task.cancelled and c.open is None
+    assert task.bench["stopped"] == f"stuck: {question}" and task.bench["asked"] == []
+
+
 def test_a_bench_task_moves_on_when_no_sign_in_code_comes(world):
     world.scripts["Order a coke"] = [ask({"kind": "secret", "text": "Please send the 4-digit OTP."})]
     task = world.core.new_task("Order a coke", script={"answers": [], "fallback": "ok"})

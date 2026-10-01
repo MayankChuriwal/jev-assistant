@@ -473,3 +473,18 @@ def test_fields_that_share_a_label_are_told_apart(browser_at):
                "placeholder=\"Dropoff location\">')")
     fills = [a["label"] for a in b.observe()["actions"] if a["kind"] == "fill"]
     assert fills == ["Search for a location (Pickup location)", "Search for a location (Dropoff location)"]
+
+
+def test_style_and_script_words_never_join_a_controls_name(browser_at):
+    page = browser_at("/labels.html").observe()
+    names = [a["label"] for a in page["actions"] if "One-time purchase" in a["label"]]
+    assert names == ["One-time purchase"]  # no CSS, script, or noscript text in it
+
+
+def test_same_named_buttons_in_different_sections_carry_their_sections_heading(browser_at):
+    page = browser_at("/labels.html").observe()
+    shows = [a["label"] for a in page["actions"] if a["label"].startswith("Book 07:50 PM")]
+    assert len(shows) == 2 and "Drishyam The Conclusion" in shows[0] and "Jolly LLB 3" in shows[1]
+    adds = [a["label"] for a in page["actions"] if a["label"].startswith("ADD")]
+    assert len(adds) == 2 and "Margherita" in adds[0] and "Farmhouse" in adds[1]
+    assert "Margherita" not in adds[1]  # a heading in another card is never borrowed

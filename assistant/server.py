@@ -582,6 +582,7 @@ def serve(port=CHAT_PORT, bench=None):
     if bench:
         from . import bench as live
 
+        live.seed_place(memory)  # one neutral place, so sites can detect a location (each learn pair gets it too)
         tasks = [t for t in live.load(bench["path"]) if not bench["only"] or t["id"] in bench["only"].split(",")]
         pool = Path(bench["path"]).with_name("unseen.toml")
         pool = pool if pool.exists() and not bench["only"] and bench["unseen"] else None

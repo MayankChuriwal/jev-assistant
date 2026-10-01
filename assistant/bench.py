@@ -16,7 +16,9 @@ from .model import LEAK
 
 FALLBACK = "You choose whatever fits my goal best."
 FORWARD = "@user"  # a scripted answer that sends the question to the user's web chat instead
-DEFAULTS = [[r"\b(pay|paying|payment|payments)\b", "Cash on delivery if it's offered; otherwise UPI"],
+PAYMENT_METHOD = (r"\b(how|which|what)\b[^.?!]*\b(pay|paying)\b|\bpayment (method|option|mode)s?\b|"
+                  r"\bpay (by|with|using)\b|\b(cash|pay) on delivery\b|\bupi\b")  # how to pay, not whether to
+DEFAULTS = [[PAYMENT_METHOD, "Cash on delivery if it's offered; otherwise UPI"],
             [r"\bpick ?up\b|from where|where are you", "My current location"],
             [r"\b(deliver\w*|address\w*|locations?)\b", "The first saved address, or my current location if none"]]
 FINAL = re.compile(r"\b(submit|place|order|pay|book|confirm|request|buy|purchase|send|checkout|reserve|cancel|end|"
@@ -33,6 +35,10 @@ LEARN_BAR = {"time": 0.50, "spend": 0.30, "fixed": 30, "pairs": 10}  # spec Sect
 REPEAT = 0.5  # pg_trgm similarity at which a pass-2 question repeats a pass-1 one
 TRACE_WAIT = 10  # seconds to wait for a finished task's trace file
 SCANNED = ("facts", "notes", "habits", "approvals", "events")  # the tables the secret audit reads
+# A bench schema starts empty, so the agent's Chrome would have no location and no site could detect one. Every
+# bench schema gets this one address: a public neighbourhood centre, not anyone's address.
+BENCH_PLACE = {"kind": "address", "label": "Bench location", "text": "HSR Layout, Bengaluru, Karnataka 560102",
+               "data": {"lat": 12.9116, "lng": 77.6389}, "tags": ["address"]}
 
 
 def load(path, unseen=False):
@@ -45,6 +51,13 @@ def sample(path, n, seed):
     """n unseen tasks from the pool: the same n for the same seed."""
     pool = load(path, unseen=True)
     return [{**t, "seed": seed} for t in random.Random(seed).sample(pool, min(n, len(pool)))]
+
+
+def seed_place(memory):
+    """Give a bench schema its one neutral place, which the browser reports as its location (kept once)."""
+    place = BENCH_PLACE
+    memory.remember(place["kind"], place["text"], label=place["label"], tags=place["tags"], data=place["data"],
+                    actor="bench")
 
 
 def reply(spec, question):
@@ -421,6 +434,7 @@ def learn(core, tasks, out_dir, *, schema, pool=None, unseen=8, seed=0, keep=Fal
         for n, spec in enumerate(tasks + (sample(pool, unseen, seed + 1) if pool and unseen else []), 1):
             memory = core.memory = open_memory(f"{schema}_{n}")
             try:
+                seed_place(memory)
                 one, first = attempt(core, spec, 1, judge, timeout)
                 state = one.worker.state if one.worker else None
                 found, learner_error = {"notes": []}, None
@@ -431,7 +445,8 @@ def learn(core, tasks, out_dir, *, schema, pool=None, unseen=8, seed=0, keep=Fal
                         learner_error = f"{type(error).__name__}: {error}"
                     if first["verdict"] == "pass":
                         rule_from(state, memory)
-                known, saved = {i["key"] for i in memory.ids()}, (len(memory.facts()), len(memory.ids()))
+                learned = [f for f in memory.facts() if f["label"] != BENCH_PLACE["label"]]  # not the bench's place
+                known, saved = {i["key"] for i in memory.ids()}, (len(learned), len(memory.ids()))
                 two, second = attempt(core, spec, 2, judge, timeout)
                 unclosed = traced(one, two)
                 pairs.append({**pair(spec, one, first, two, second, found, memory, known, saved, unclosed),

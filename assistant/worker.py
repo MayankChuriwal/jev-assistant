@@ -24,6 +24,7 @@ MAX_MINUTES = 30
 MAX_SPEND = 0.25
 SUBGOAL_STEPS = 12
 STUCK_AT = 8
+STUCK = "I'm stuck on"  # how stuck() begins its question: a bench run stops there rather than answer it
 IDLE_HALT = 16  # ticks in a row with no browser step and no question to the user: ask at STUCK_AT, stop here
 CODE_ASKS = 3
 COMMIT_DROPS = 3  # an order's replan with no commit (none left in the old plan either): refused this often, then taken
@@ -1518,7 +1519,7 @@ class Worker:
         s = self.state
         sub = self.subgoal()
         title = s["page"]["title"] or rules.host(s["page"]["url"])
-        question = f"I'm stuck on {title}, trying to {sub['do'] if sub else s['goal']}. What should I do?"
+        question = f"{STUCK} {title}, trying to {sub['do'] if sub else s['goal']}. What should I do?"
         coded = any(secret_field(a) for a in s["page"]["actions"])  # the reply may be a code or card detail: hide it
         reply = self.ask({"kind": "secret" if coded else "text", "text": question})
         answer = str(reply.get("text", "")).strip()

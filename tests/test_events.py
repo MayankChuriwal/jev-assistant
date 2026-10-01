@@ -125,6 +125,19 @@ def test_history_reload_and_open_url(browser_at, site):
         b.act("OPEN_URL", find(page, "Open a web address", "open_url"), page, url="javascript:alert(1)")
 
 
+def test_back_on_a_single_page_site_does_not_wait_for_a_new_document(browser_at):
+    b = browser_at("/next.html")
+    b.evaluate("history.pushState({}, '', '/next.html?view=2'); 1")  # a single-page site's own navigation
+    page = b.observe()
+    started = time.monotonic()
+    b.act("GO_BACK", find(page, "Back to", "go_back"), page)
+    assert time.monotonic() - started < 5 and b.evaluate("location.search") == ""
+    page = b.observe()
+    started = time.monotonic()
+    b.act("GO_FORWARD", find(page, "Forward to", "go_forward"), page)
+    assert time.monotonic() - started < 5 and b.evaluate("location.search") == "?view=2"
+
+
 def test_sites_can_detect_the_location_but_nothing_else_prompts(browser_at):
     b = browser_at("/events.html")
     states = b.evaluate("Promise.all(['geolocation', 'notifications'].map(n => "

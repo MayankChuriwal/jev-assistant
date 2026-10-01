@@ -517,7 +517,7 @@ class Browser:
 
     def _navigation(self, method, **params):
         """Start a navigation. A leave-page prompt blocks the call: surface it as a dialog instead of waiting."""
-        previous = self._time_origin()
+        previous = self._where()
         self.mutated = True
         try:
             self.call(method, timeout=3.0, **params)
@@ -525,22 +525,25 @@ class Browser:
             PUMP.flush()  # no dialog: a slow server; the load wait below still applies
         self._wait_loaded(previous)
 
-    def _time_origin(self):
+    def _where(self):
+        """[document's timeOrigin, address]: where a navigation starts from. None when the page can't say."""
         try:
-            return self.evaluate("performance.timeOrigin")
+            where = self.evaluate("[performance.timeOrigin, location.href]")
         except (StalePage, RuntimeError, TimeoutError):
             return None
+        return where if isinstance(where, list) and len(where) == 2 else None
 
     def _wait_loaded(self, previous=None, timeout=15.0):
-        """Wait for a new, complete document. A slow page is observed as it is once the deadline passes."""
-        # ponytail: a same-document (hash) navigation waits the full deadline; add a URL check if that matters.
+        """Wait for a new, complete document, or a complete one at a new address: back and forward on a single-page
+        site keep their document. A slow page is observed as it is once the deadline passes."""
+        origin, url = previous or (None, None)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.dialogs.get(self.session):
                 return  # a dialog freezes the page; observe offers it
             try:
-                origin, state = self.evaluate("[performance.timeOrigin, document.readyState]")
-                if origin != previous and state == "complete":
+                now, state, href = self.evaluate("[performance.timeOrigin, document.readyState, location.href]")
+                if state == "complete" and (now != origin or (url is not None and href != url)):
                     return
             except (StalePage, RuntimeError, TimeoutError, TypeError, ValueError):
                 pass

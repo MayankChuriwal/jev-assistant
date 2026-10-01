@@ -468,3 +468,39 @@ def test_a_bench_run_that_cannot_start_drops_its_own_schema_unless_kept(monkeypa
     monkeypatch.setattr(server, "chrome", lambda: 1)  # Chrome won't start: serve stops before the chat
     spec = {"path": "x", "only": None, "repeat": 1, "unseen": 0, "seed": 1, "learn": False, "keep": keep}
     assert server.serve(bench=spec) == 1 and calls == dropped
+
+
+def test_a_bench_run_gives_its_memory_the_bench_place_before_any_task(monkeypatch, memory):
+    """The bench schema starts empty, so without its one neutral place no site could detect a location."""
+    from helpers import until
+
+    import assistant.bench as live
+    import assistant.core as conversation
+
+    seen = {}
+
+    class Chat:
+        server_port = 0
+
+        def __init__(self, core, channel, port=None):
+            self.core = core
+
+        def serve_forever(self):
+            until(lambda: "place" in seen)  # the bench thread has started its run
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(server, "open_memory", lambda **options: memory)
+    monkeypatch.setattr(server, "chrome", lambda: 0)
+    monkeypatch.setattr(server, "purge_daily", lambda store: None)
+    monkeypatch.setattr(server, "ChatServer", Chat)
+    monkeypatch.setattr(server.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(conversation, "Core", lambda channel, memory: SimpleNamespace(memory=memory,
+                                                                                      shutdown=lambda: None))
+    monkeypatch.setattr(live, "run", lambda core, *args, **options: seen.update(place=core.memory.geolocation()))
+    spec = {"path": str(Path(__file__).parents[1] / "bench" / "tasks.toml"), "only": "uber", "repeat": 1,
+            "unseen": 0, "seed": 1, "learn": False, "keep": True}
+    assert server.serve(bench=spec) == 0
+    assert seen["place"] == {"latitude": 12.9116, "longitude": 77.6389}

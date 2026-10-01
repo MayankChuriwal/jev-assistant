@@ -22,6 +22,7 @@
     e.getBoundingClientRect().width > 0 && e.getBoundingClientRect().height > 0;
   const reachable = e => rendered(e) || typedThrough(e);
   const byId = (e, id) => e.getRootNode().getElementById?.(id) || e.ownerDocument.getElementById(id);
+  const UNSHOWN = ['style', 'script', 'noscript', 'template'];  // their text is code, never a name
   const name = (e, seen = new Set()) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -31,7 +32,8 @@
       [...(e.labels || [])].map(l => name(l, seen)).filter(Boolean).join(' ') ||
       (['button', 'submit', 'reset'].includes(e.type) ? e.value : '') || e.getAttribute('alt') ||
       (e.tagName === 'INPUT' ? '' : [...e.childNodes].map(n => n.nodeType === 3 ? n.textContent :
-        n.nodeType === 1 && n.getAttribute('aria-hidden') !== 'true' ? name(n, seen) : '').join(' ').trim()) ||
+        n.nodeType === 1 && !UNSHOWN.includes(n.localName) && n.getAttribute('aria-hidden') !== 'true' ? name(n, seen) :
+        '').join(' ').trim()) ||
       e.getAttribute('title') || e.getAttribute('placeholder') || '';
   };
   const label = e => name(e).replace(/\s+/g, ' ').trim().slice(0, 160);
@@ -355,12 +357,31 @@
     }
     return null;
   };
+  // The heading of each one's own section ("Book 07:50 PM" under each movie's title): climb while each still has an
+  // ancestor of its own, none inside another's, to the first level where each holds a different h1–h4.
+  const sections = els => {
+    let at = els;
+    for (let n = 0; n < 12; n++) {
+      at = at.map(a => a?.parentElement);
+      if (!at.every(Boolean) || at.some((a, i) => at.some((b, j) => i !== j && a.contains(b)))) return null;
+      const heads = at.map((a, i) => {
+        const h = [...a.querySelectorAll('h1,h2,h3,h4,[role="heading"]')].find(h => !h.contains(els[i]));
+        return h ? label(h).slice(0, 60) : '';
+      });
+      if (heads.every(Boolean) && new Set(heads).size === heads.length) return heads;
+    }
+    return null;
+  };
+  const told = els => {
+    const texts = apart(els) || [], heads = sections(els);
+    return heads ? heads.map((h, i) => !texts[i] ? h : texts[i].includes(h) ? texts[i] : `${h}: ${texts[i]}`) : texts;
+  };
   const byLabel = {};
   for (const a of actions) if (a.kind === 'fill' || a.kind === 'click') (byLabel[a.kind + a.label] ||= []).push(a);
   for (const same of Object.values(byLabel)) {
     if (same.length < 2) continue;
     const els = same.map(a => cache.nodes.get(a.node));
-    const hints = same[0].kind === 'fill' ? els.map(e => e?.placeholder) : apart(els) || [];
+    const hints = same[0].kind === 'fill' ? els.map(e => e?.placeholder) : told(els);
     same.forEach((a, i) => {
       const hint = hints[i], unique = hints.indexOf(hint) === hints.lastIndexOf(hint);
       a.label += ` (${hint && unique && !a.label.includes(hint) ? hint : `${i + 1} of ${same.length}`})`;

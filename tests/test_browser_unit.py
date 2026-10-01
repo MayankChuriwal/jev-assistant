@@ -77,10 +77,28 @@ def test_interrupted_dropdown_cannot_be_retried_as_stale(response):
 
 def test_slow_page_is_observed_after_its_deadline():
     b = bare()
-    b.evaluate = Mock(return_value=[1.0, "loading"])
+    b.evaluate = Mock(return_value=[1.0, "loading", "https://a.test/next"])
     started = time.monotonic()
-    b._wait_loaded(previous=0.0, timeout=0.2)
+    b._wait_loaded(previous=[0.0, "https://a.test/"], timeout=0.2)
     assert time.monotonic() - started < 1.0
+
+
+def test_back_on_a_single_page_site_returns_once_the_address_changes():
+    b = bare()  # history.back() on a single-page site keeps its document: no new timeOrigin ever comes
+    b.evaluate = Mock(return_value=[1.0, "complete", "https://a.test/list"])
+    started = time.monotonic()
+    b._wait_loaded(previous=[1.0, "https://a.test/item"], timeout=5.0)
+    assert time.monotonic() - started < 1.0
+    b.evaluate = Mock(return_value=[1.0, "complete", "https://a.test/item"])  # nothing new yet: up to the deadline
+    started = time.monotonic()
+    b._wait_loaded(previous=[1.0, "https://a.test/item"], timeout=0.3)
+    assert time.monotonic() - started >= 0.3
+    b.evaluate = Mock(return_value=[2.0, "complete", "https://a.test/item"])  # a reload: a new document, same address
+    started = time.monotonic()
+    b._wait_loaded(previous=[1.0, "https://a.test/item"], timeout=5.0)
+    assert time.monotonic() - started < 1.0
+    b.evaluate = Mock(return_value=None)  # a page that can't say where it is: any complete document will do
+    assert b._where() is None
 
 
 def test_blocked_input_reports_an_open_dialog_instead_of_hanging(monkeypatch):

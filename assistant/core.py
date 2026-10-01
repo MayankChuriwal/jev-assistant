@@ -15,7 +15,7 @@ from . import learn as learning
 from .gate import cap, rule_cap, same_cart
 from .memory import LABELS, RULE_DAYS, UNSTORABLE, Memory, StoreError, Unstorable, rule_line, rupees
 from .privacy import SECRETS, Secrets, storable
-from .worker import DELEGATE, STOPPED, Worker
+from .worker import DELEGATE, STOPPED, STUCK, Worker
 
 MAX_RUNNING = 3
 MAX_ERRANDS = 5  # tasks one message may start
@@ -805,9 +805,14 @@ class Core:
 
     def ask(self, task, message):
         """The agent's asker: queue the question and wait for its answer, pausing and finally cancelling."""
+        stop = None
         if task.script is not None and message["kind"] == "secret" and rules.CARD_DETAIL.search(message["text"]):
-            task.bench["stopped"] = f"asked for card details: {message['text']}"  # a bench run never uses a card
-            self.say(f"(bench) Stopped: {task.bench['stopped']}", task)
+            stop = f"asked for card details: {message['text']}"  # a bench run never uses a card
+        elif task.script is not None and message["text"].startswith(STUCK):
+            stop = f"stuck: {message['text']}"  # no scripted default can unstick it: a default answer only circles
+        if stop:
+            task.bench["stopped"] = stop
+            self.say(f"(bench) Stopped: {stop}", task)
             task.cancelled = True
             return {"cancel": True}
         if task.script is not None and message["kind"] not in {"secret", "image", "file"}:

@@ -648,3 +648,48 @@ def test_the_secret_audit_reads_every_stored_table_and_json_escaped_values(tmp_p
     trace = tmp_path / "t.json"
     trace.write_text(json.dumps({"chat": ['ab"cd\\ef']}))
     assert bench.secret_audit(memory, [trace]) == ["notes", "t.json"]
+
+
+# ---- the bench's own place, and only payment-method questions get the payment default
+
+PLACE = {"latitude": 12.9116, "longitude": 77.6389}
+
+
+def test_a_bench_memory_gets_one_neutral_place_the_browser_reports_as_its_location(memory):
+    assert memory.geolocation() is None  # a bench schema starts empty: no site could detect a location
+    bench.seed_place(memory)
+    bench.seed_place(memory)  # seeding again keeps one fact
+    assert memory.geolocation() == PLACE
+    assert [(f["label"], f["text"], f["tags"]) for f in memory.facts("address")] == [
+        ("Bench location", "HSR Layout, Bengaluru, Karnataka 560102", ["address"])]
+    actors = memory.run(lambda cur: cur.execute("SELECT actor FROM events").fetchall())
+    assert [a["actor"] for a in actors] == ["bench"]  # never the user's or the agent's, so never undone as theirs
+
+
+def test_each_learning_pair_starts_with_the_bench_place_and_never_counts_it_as_learned(tmp_path, monkeypatch, memory):
+    monkeypatch.setattr(bench, "TRACE_WAIT", 0)
+    places = []
+
+    class Seen(PairCore):
+        def new_task(self, goal, script=None):
+            places.append(self.memory.geolocation())  # what the pass's browser would be told
+            return super().new_task(goal, script)
+
+    bench.learn(Seen([pass_task(), pass_task()]), [SPEC], tmp_path / "out", schema="bench_x", judge=PASS, keep=True,
+                learner=lambda state, mem, **kw: {"notes": []}, open_memory=lambda name: memory)
+    assert places == [PLACE, PLACE]
+    assert json.loads((tmp_path / "out" / "pairs.json").read_text())[0]["facts"] == 0
+
+
+ELECTRICITY = ("BESCOM is not found in the billers list on Amazon.in. Do you have a direct link or another way to pay "
+               "this bill through Amazon?")  # round 2: answered "Cash on delivery…", and the run circled
+
+
+def test_only_a_question_about_how_to_pay_gets_the_payment_default():
+    method = bench.DEFAULTS[0][1]
+    assert bench.reply(KNOWN["electricity"], ELECTRICITY) == FALLBACK
+    assert bench.reply({}, "Do you want me to pay this bill now?") == FALLBACK
+    for question in ("How should I pay?", "How would you like to pay?", "Which payment method should I use?",
+                     "Please choose a payment option.", "What payment mode do you prefer?",
+                     "Should I pay with UPI or a card?", "Is Cash on Delivery available for this order?"):
+        assert bench.reply({}, question) == method, question
