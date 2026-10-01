@@ -3,12 +3,23 @@
 import re
 from urllib.parse import urlparse
 
-COMMIT = re.compile(
+COMMIT = re.compile(  # outright: Jev can never clear these
     r"\b(pay|place (your )?order|buy|purchase|book now|confirm (order|booking|ride|payment|purchase)"
-    r"|request (ride|uber\w*|trip)|cancel (order|booking|subscription|ride)|delete"
-    r"|submit (complaint|dispute|claim|request))\b",
+    r"|request (ride|uber\w*|trip)|cancel (my )?(order|booking|subscription|ride|membership)|delete"
+    r"|submit (complaint|dispute|claim|request)|book (a )?(ride|cab|bike|auto|table|tickets?|room|hotel|flight)"
+    r"|end (my )?(membership|subscription)|submit (the )?order|order now|recharge now|make (a )?payment"
+    r"|complete (the )?(payment|order|booking|purchase))\b",
     re.IGNORECASE,
 )
+# Words that may commit ("Book Ola Mini", "Confirm UberGo", "Submit", "Proceed to Pay"): Jev's final check clears
+# one only when it is sure (step ≥ 0.8) that the control is a step on the way.
+MAYBE = re.compile(r"\b(book|confirm|request|reserve|submit|transfer|recharge|subscribe|(end|cancel)\s+\w+"
+                   r"|continue to cancel|proceed to (pay|payment|buy|checkout|recharge)|make\b.{0,30}\bpayment"
+                   r"|complete|place|pay)\b", re.IGNORECASE)
+SEND = re.compile(r"\bsend\b", re.IGNORECASE)
+SENDS_A_CODE = re.compile(r"\b(code|otp|one[- ]?time|verification|passcode)\b", re.IGNORECASE)  # "Send OTP"
+REDACTED = re.compile(r"\[(secret|profile):", re.IGNORECASE)  # a hidden value may hide the commit word itself
+PROCEED_STEP = re.compile(r"\bproceed to (buy|checkout|pay)\b", re.IGNORECASE)
 APPROVAL_STEPS = 20
 SECRET_ASK = re.compile(r"\b(otp|one[- ]?time (pass(word|code)?|code)|verification code|security code|passcode|"
                         r"password|cvv|cvc|pin(?! ?code)|\d[- ]?digit code|"
@@ -28,25 +39,52 @@ def host(url):
     return urlparse(url).netloc
 
 
-def commit_label(operation, action, page, key=None, focused=""):
-    """The words that make this action a commit, or None. `focused` names the control a page-level key reaches."""
+def control_words(operation, action, page, key=None, focused=""):
+    """(label, words shown on it) of the control an operation presses, or None when the operation presses none.
+    `focused` names the control a page-level key reaches."""
     if operation in {"CLICK", "DOUBLE_CLICK"}:  # its own name: context added to tell controls apart isn't what it does
-        label = action.get("name", action.get("label", ""))
-    elif operation == "LOOK":  # found by sight: its name, the words on it, and whether clicking it commits
-        label = action.get("label", "")
-        if action.get("commits") or COMMIT.search(action.get("text") or ""):
-            return label or action.get("text") or "the control found on screen"
-    elif operation == "PRESS_KEY" and key in {"Enter", "Space"}:
+        return action.get("name", action.get("label", "")) or "", ""
+    if operation == "LOOK":  # found by sight: its name and the words on it
+        return action.get("label", "") or "", action.get("text") or ""
+    if operation == "PRESS_KEY" and key in {"Enter", "Space"}:
         # Enter submits the field's form; on the page, Enter or Space presses whatever has focus.
         label = (action.get("submit", "") if key == "Enter" else "") or (focused if action.get("node") is None else "")
-    elif operation == "ACCEPT_DIALOG":
-        label = page.get("text", "")
-    else:
+        return label or "", ""
+    if operation == "ACCEPT_DIALOG":
+        return page.get("text", "") or "", ""
+    return None
+
+
+def commit_label(operation, action, page, key=None, focused=""):
+    """The words that make this action an outright commit, or None."""
+    words = control_words(operation, action, page, key, focused)
+    if words is None:
         return None
-    rest = re.sub(r"\bproceed to (buy|checkout|pay)\b", "", label or "", flags=re.IGNORECASE)
-    if operation in {"CLICK", "DOUBLE_CLICK"} and rest != (label or "") and not COMMIT.search(rest):
-        return None  # these open the checkout page; the order is placed later
-    return label if COMMIT.search(label or "") else None
+    label, shown = words
+    if operation == "LOOK" and (action.get("commits") or COMMIT.search(shown)):
+        return label or shown or "the control found on screen"
+    rest = PROCEED_STEP.sub("", label)
+    if operation in {"CLICK", "DOUBLE_CLICK"} and rest != label and not COMMIT.search(rest):
+        return None  # these open the checkout page: a maybe-commit, for Jev's final check
+    return label if COMMIT.search(label) else None
+
+
+def maybe_commits(words):
+    """Whether these words may commit: a maybe word, a send that is not a code's, or a value the redactor hid."""
+    words = words or ""
+    sends = SEND.search(words) and not SENDS_A_CODE.search(words)
+    return bool(MAYBE.search(words) or REDACTED.search(words) or sends)
+
+
+def maybe_commit_label(operation, action, page, key=None, focused=""):
+    """The words of a control that may commit (the maybe tier), or None: read like `commit_label` reads them."""
+    words = control_words(operation, action, page, key, focused)
+    if words is None:
+        return None
+    label, shown = words
+    if operation == "LOOK" and maybe_commits(shown):
+        return label or shown
+    return label if maybe_commits(label) else None
 
 
 STOP_WORDS = {"the", "your", "and", "for", "now", "with", "this", "all", "you"}

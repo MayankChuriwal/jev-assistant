@@ -742,3 +742,44 @@ def test_only_an_error_page_behind_a_deep_link_is_reopened_from_the_home_page(tm
     w, browser = cold_start(tmp_path, url, fake_page(text=text, url=url))
     browser.navigate.assert_not_called()
     assert browser.observe.call_count == 1 and w.state["page"]["text"] == text
+
+
+# ---- final review, Group A: a final control is a commit on every path, and Jev's clearances are kept for the audit
+
+RIDES = [{"id": f"r{n}", "kind": "click", "label": label, "role": "button", "node": n + 1}
+         for n, label in enumerate(["Bike ₹45", "Book Bike", "Book Ola Mini"])]
+
+
+def test_a_planner_pick_of_a_final_control_in_an_act_subgoal_asks_first(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text="Bike ₹45\nTotal ₹79\nBook Bike", actions=RIDES),
+                    replies=[{"text": "no"}], goal="Book a bike to Indiranagar")
+    script_planner(monkeypatch, turn(subgoals=[sub("choose Bike")]), turn("PICK", pick=1))
+    script_jev(monkeypatch, {"next": ("CLICK", 0.4), "click_target": "Book Bike"})
+    jev_checks(monkeypatch, final=("step", 0.6))
+    for _ in range(2):
+        w.command("tick")
+    assert w.asked and w.asked[0]["approval"] and "I'll press “Book Bike”" in w.asked[0]["text"]
+    w.browser.act.assert_not_called()
+
+
+def test_a_maybe_commit_jev_clears_runs_and_is_recorded_for_the_bench(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text="Ola Mini ₹120\nTotal ₹79\nBook Ola Mini", actions=RIDES),
+                    replies=[{"text": "no"}], goal="Book a bike to Indiranagar")
+    script_planner(monkeypatch, turn(subgoals=[sub("open the Ola Mini details")]))
+    script_jev(monkeypatch, {"next": "CLICK", "click_target": "Book Ola Mini"})
+    jev_checks(monkeypatch, final=("step", 0.9))
+    w.command("tick")
+    w.command("tick")
+    assert w.browser.act.call_count == 1 and w.state["cleared_maybe"] == ["Book Ola Mini"]
+    assert not w.state["history"][-1]["committed"] and w.asked == []
+    jev_checks(monkeypatch, final=("step", 0.7))  # not sure enough: the same control now needs a yes
+    w.state["candidates"] = [{"n": 1, "op": "CLICK", "operation": "CLICK", "element": "Book Ola Mini", "p": 0.5,
+                              "action": RIDES[2]}]
+    with pytest.raises(Retry, match="did not approve"):
+        w.do({"op": "PICK", "pick": "1", "text": ""}, w.state["page"])
+    assert w.browser.act.call_count == 1 and w.state["cleared_maybe"] == ["Book Ola Mini"]
+
+
+def test_a_captcha_square_that_may_commit_is_not_pressed_either(tmp_path):
+    w = captcha_relay(tmp_path, "2", ["Tile 1", "Book Ola Mini", "Tile 3"])
+    assert pressed(w) == [] and any("would commit" in note for note in w.state["notes"])

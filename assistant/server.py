@@ -166,7 +166,7 @@ def run(goal, url=None):
     library = {"skills": skills.load(), "sites": skills.load_sites()}
     token = SECRETS.set(Secrets(Profile().hidden_values()))  # the goal may hold a phone number or an email
     try:
-        info = jev.intake(goal, [], skills.kinds(library["skills"]), several=False)
+        info = jev.intake(goal, skills.kinds(library["skills"]), several=False)
         skill = info["skill"] if info["skill"] in library["skills"] else None
         site = skills.named(goal, library["sites"])
         url = url or (skills.start(site, skill) if site else planner.start(goal)[0])

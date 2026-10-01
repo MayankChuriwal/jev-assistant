@@ -382,8 +382,7 @@ class Core:
         """Before a task starts: its skill, pre-authorisation, cap, and start page. A message with several errands
         becomes several tasks; this one keeps the first."""
         kinds = skills.kinds(self.library["skills"])
-        recent = [] if task.single else self.log[-7:-1]  # a split errand or a bench goal has no chat before it
-        info = self.hidden(self.intake, task.goal, recent, kinds, not task.single)
+        info = self.hidden(self.intake, task.goal, kinds, not task.single)  # the user's own words only
         if info.get("several") == "yes":
             goals = self.hidden(self.split, task.goal)
             if len(goals) > 1:
@@ -392,7 +391,7 @@ class Core:
                 with self.lock:  # other threads iterate self.tasks under the lock
                     for goal in goals[1:]:
                         self.new_task(goal, single=True)
-                info = self.hidden(self.intake, task.goal, [], kinds, False)
+                info = self.hidden(self.intake, task.goal, kinds, False)
         task.skill = info["skill"] if info["skill"] in self.library["skills"] else None
         task.preauth, task.cap = info["preauth"] == "yes", cap(task.goal)
         task.url, task.title = self.start_page(task)

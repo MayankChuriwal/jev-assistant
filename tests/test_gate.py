@@ -151,6 +151,7 @@ def test_an_order_that_doesnt_match_is_fixed_twice_then_asked(monkeypatch):
 
 
 def test_preauthorised_within_the_cap_runs_and_says_so(monkeypatch):
+    monkeypatch.setenv("JEV_PREAUTH", "on")
     page = fake_page()
     summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
     checks(monkeypatch)
@@ -171,13 +172,20 @@ def test_preauthorised_over_the_cap_or_without_one_still_asks(monkeypatch, cap):
     assert len(w.asked) == 1
 
 
-def test_preauthorised_without_a_cap_submits_a_form_with_no_amount(monkeypatch):
+def test_preauthorised_without_a_cap_submits_a_form_with_no_amount_only_for_a_goal_that_buys_nothing(monkeypatch):
+    monkeypatch.setenv("JEV_PREAUTH", "on")
     page = fake_page(text="Pizza order\nCustomer name\nSubmit order", url="https://httpbin.org/forms/post")
     submit = {"id": "s", "kind": "click", "label": "Submit order", "role": "button", "node": 50}
     summary(monkeypatch, ["Medium pizza with bacon", "Test User at 19:00"])
     checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no"}], preauth=True)
+    w.state["site"] = "httpbin.org"  # the bench's pizza form: "order" makes it a commerce goal, so it still asks
+    w.state["goal"] = "Fill the pizza order form at https://httpbin.org/forms/post and submit it, don't ask"
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, submit, "Submit order", None)
+    assert len(w.asked) == 1
     w = Fake(page, preauth=True)
-    w.state["site"] = "httpbin.org"
+    w.state["site"], w.state["goal"] = "httpbin.org", "Fill the feedback form on httpbin and submit it, don't ask"
     assert gate.approved(w, page, submit, "Submit order", None) is True
 
 
@@ -898,3 +906,132 @@ def test_a_spot_found_by_sight_matches_only_its_own_point_and_a_listed_control_o
     assert not gate.matches(approval, PAY, "Pay ₹79")  # the page's own button with the same label
     gate.bind(state, PAY, "Pay ₹79", "₹79", page, "user")
     assert gate.matches(state["approval"], PAY, "Pay ₹79") and not gate.matches(state["approval"], spot, "Pay ₹79")
+
+
+# Final review, Group A: two tiers of commit words, the pre-authorisation switch, and its scope.
+
+ACT = {"do": "choose the ride", "kind": "act"}
+FINAL_LABELS = [  # the bench sites' final controls: (label, matched outright)
+    ("Book Bike", True), ("Book Ride", True), ("Book Cab", True), ("Book Auto", True), ("Book Ola Mini", False),
+    ("Confirm UberGo", False), ("Request Uber Go AC", True), ("End membership", True), ("Cancel Membership", True),
+    ("Continue to cancel", False), ("Make Payment", True), ("Submit", False), ("Submit order", True),
+    ("Send message", False), ("Reserve", False), ("Recharge Now", True), ("Proceed to Recharge", False),
+    ("Order Now", True), ("Proceed to Pay", False), ("Pay ₹79", True), ("Place order", True),
+    ("[secret:answer1] ₹79", False)]
+
+
+def jev_says(monkeypatch, verdict):
+    calls = []
+    monkeypatch.setattr(gate.jev, "final", lambda page, label, goal: calls.append(label) or verdict)
+    return calls
+
+
+@pytest.mark.parametrize("label, outright", FINAL_LABELS)
+def test_a_final_control_commits_in_an_act_subgoal_unless_jev_is_sure_a_maybe_one_is_a_step(monkeypatch, label,
+                                                                                         outright):
+    page = fake_page(text="Bike ₹45 · 3 min\nAuto ₹80")
+    for verdict in [("final", 0.9), ("final", 0.5), ("step", 0.5), ("step", 0.79)]:
+        jev_says(monkeypatch, verdict)
+        w = Fake(page)
+        assert gate.commit_label(w, "CLICK", control(label), page, subgoal=ACT) == label, verdict
+        assert w.state.get("cleared") is None
+    calls = jev_says(monkeypatch, ("step", 0.8))
+    w = Fake(page)
+    assert gate.commit_label(w, "CLICK", control(label), page, subgoal=ACT) == (label if outright else None)
+    assert w.state.get("cleared") == (None if outright else label)  # kept for the bench's audit
+    assert calls == ([] if outright else [label])  # Jev is never asked about an outright commit
+
+
+@pytest.mark.parametrize("label", ["Add to cart", "Search", "Continue", "Verify", "Send OTP"])
+def test_ordinary_controls_are_not_commits_and_jev_is_not_asked(monkeypatch, label):
+    page = fake_page()
+    calls = jev_says(monkeypatch, ("final", 1.0))
+    assert gate.commit_label(Fake(page), "CLICK", control(label), page, subgoal=ACT) is None and calls == []
+
+
+def test_double_click_enter_and_a_dialog_use_the_same_two_tiers(monkeypatch):
+    message = {"id": "m", "kind": "fill", "label": "Message", "role": "textbox", "value": "", "node": 30,
+               "submit": "Send message"}
+    page = fake_page(text="Chat with the host\nMessage", actions=[message, control("Book Ola Mini")])
+    page_key = {"id": "key", "kind": "key", "node": None, "label": "The page"}
+    dialog = fake_page(text="Browser confirm dialog: Confirm UberGo for ₹212?")
+    ok = {"id": "accept_dialog", "kind": "accept_dialog", "node": None, "label": "OK"}
+    for verdict, committed in [(("step", 0.5), True), (("final", 0.9), True), (("step", 0.9), False)]:
+        jev_says(monkeypatch, verdict)
+        w = Fake(page)
+        w.state["browser"].focused_label = Mock(return_value="Message")
+        assert gate.commit_label(w, "DOUBLE_CLICK", control("Book Ola Mini"), page, subgoal=ACT) == \
+            ("Book Ola Mini" if committed else None)
+        assert gate.commit_label(w, "PRESS_KEY", message, page, key="Enter", subgoal=ACT) == \
+            ("Send message" if committed else None)
+        assert gate.commit_label(w, "PRESS_KEY", page_key, page, key="Enter", subgoal=ACT) == \
+            ("Send message" if committed else None)  # Enter on the page submits the focused field's form
+        assert gate.commit_label(Fake(dialog), "ACCEPT_DIALOG", ok, dialog, subgoal=ACT) == \
+            (dialog["text"] if committed else None)
+    jev_says(monkeypatch, ("step", 1.0))  # an outright commit is never cleared, whatever the operation
+    assert gate.commit_label(Fake(page), "DOUBLE_CLICK", control("Book Bike"), page) == "Book Bike"
+    pay = fake_page(text="Browser confirm dialog: Pay ₹212 now?")
+    assert gate.commit_label(Fake(pay), "ACCEPT_DIALOG", ok, pay) == pay["text"]
+
+
+def test_a_commit_subgoal_still_confirms_a_control_no_rule_names(monkeypatch):
+    page = fake_page()
+    jev_says(monkeypatch, ("final", 0.5))
+    assert gate.commit_label(Fake(page), "CLICK", control("Go"), page, subgoal={"do": "x", "kind": "commit"}) == "Go"
+    assert gate.commit_label(Fake(page), "CLICK", control("Go"), page, subgoal=ACT) is None
+
+
+@pytest.fixture
+def shadow(monkeypatch):
+    monkeypatch.delenv("JEV_PREAUTH", raising=False)
+
+
+def test_preauthorisation_is_only_shadowed_until_it_is_switched_on(monkeypatch, shadow):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no"}], preauth=True, cap=100.0)
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert len(w.asked) == 1 and w.said == [] and w.state["preauth_shadow"] is True
+    assert w.asked[0]["text"].endswith("\n(You said not to ask. I'm asking anyway until pre-approval is switched on: "
+                                       "set JEV_PREAUTH=on.)")
+    plain = Fake(page, replies=[{"text": "no"}], preauth=True, cap=50.0)  # over the cap: an ordinary question
+    with pytest.raises(Retry):
+        gate.approved(plain, page, PAY, "Pay ₹79", None)
+    assert "JEV_PREAUTH" not in plain.asked[0]["text"] and "preauth_shadow" not in plain.state
+    monkeypatch.setenv("JEV_PREAUTH", "on")
+    on = Fake(page, preauth=True, cap=100.0)
+    assert gate.approved(on, page, PAY, "Pay ₹79", None) is True and on.asked == []
+
+
+def test_a_bench_run_asks_even_with_preauthorisation_switched_on(monkeypatch):
+    monkeypatch.setenv("JEV_PREAUTH", "on")
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no"}], preauth=True, cap=100.0)
+    w.bench = True
+    with pytest.raises(Retry):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert w.state["bench_preauth"] is True and len(w.asked) == 1 and "JEV_PREAUTH" not in w.asked[0]["text"]
+
+
+@pytest.mark.parametrize("text", ["Checkout\nTo pay\nIncl. all taxes\n1,299\nPlace order", "Pizza order\nSubmit order"])
+def test_a_commerce_goal_with_no_cap_is_never_preauthorised(text):
+    page = fake_page(text=text)
+    state = {**Fake(page).state, "preauth": True, "cap": None, "goal": "Order a medium pizza, don't ask"}
+    assert gate.preauthorised(state, gate.facts(page, []), page) is False
+    if text == "Pizza order\nSubmit order":  # a goal that buys nothing: a form with no money needs no cap
+        form = {**state, "goal": "Send the feedback form on shop.test with my comments, don't ask"}
+        assert gate.preauthorised(form, gate.facts(page, []), page) is True
+
+
+def test_a_checkout_step_beside_a_payment_method_is_not_cleared_as_an_outright_commit(monkeypatch):
+    """The checkout-step exception lives in the maybe tier now; the outright tier keeps only the payment-method one."""
+    page = fake_page()
+    jev_says(monkeypatch, ("step", 1.0))
+    for label in ["Amazon Pay ₹79 · proceed to checkout", "Amazon Pay · proceed to pay"]:
+        assert gate.commit_label(Fake(page), "CLICK", control(label), page, subgoal=ACT) == label
+    assert gate.commit_label(Fake(page), "CLICK", control("Amazon Pay"), page, subgoal=ACT) is None  # a method
+    assert gate.commit_label(Fake(page), "CLICK", control("Proceed to Pay"), page, subgoal=ACT) is None  # a step

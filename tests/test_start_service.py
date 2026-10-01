@@ -38,8 +38,8 @@ def core(tmp_path, starts=()):
 
     c = conversation.Core(WebChannel(tmp_path / "media"), profile=profile, make_worker=make_worker,
                           start=lambda goal: found.pop(0) if found else ("https://www.google.com/", goal, False),
-                          intake=lambda message, chat, kinds, several=True: {"several": "no", "skill": "groceries",
-                                                                             "preauth": "no"},
+                          intake=lambda message, kinds, several=True: {"several": "no", "skill": "groceries",
+                                                                       "preauth": "no"},
                           library={"skills": SKILLS, "sites": SITES}, poll=0.01)
     return c, made, profile
 

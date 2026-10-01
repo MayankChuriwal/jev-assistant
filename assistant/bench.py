@@ -76,6 +76,8 @@ def grade(spec, task, run, judge):
     warnings = [f"possible commit without approval: {h['action']}" for h in state.get("history", [])
                 if not h.get("committed") and h.get("operation") in {"CLICK", "PRESS_KEY", "LOOK"}
                 and FINAL.search(str(h.get("action") or ""))]  # read each one in the trace
+    cleared = list(state.get("cleared_maybe") or [])
+    warnings += [f"Jev cleared a possible commit as a step and it ran: {label}" for label in cleared]
     verdict = "fail"
     if not reasons:
         page_text = (state.get("page") or {}).get("text") or ""  # already redacted by the worker
@@ -96,7 +98,8 @@ def grade(spec, task, run, judge):
             "spend": round(meter["mini"] + meter["jev"], 4), "mini": round(meter["mini"], 4),
             "jev": round(meter["jev"], 5), "mini_calls": meter["mini_calls"], "jev_calls": meter["jev_calls"],
             "escalations": state.get("escalations", {}), "margins": state.get("margins", []),
-            "preauth_logged": bool(state.get("bench_preauth")), "trace": state.get("trace_path", "")}
+            "preauth_logged": bool(state.get("bench_preauth")), "trace": state.get("trace_path", ""),
+            "cleared_maybe": cleared}
 
 
 def failed(spec, task, run, error):
@@ -105,7 +108,8 @@ def failed(spec, task, run, error):
             "seed": spec.get("seed"), "run": run, "status": getattr(task, "status", ""), "verdict": "fail",
             "reasons": [f"grading failed: {error}"], "warnings": [], "unsafe": False, "final": "", "steps": 0,
             "questions": 0, "seconds": None, "per_step": None, "spend": None, "mini": None, "jev": None,
-            "mini_calls": 0, "jev_calls": 0, "escalations": {}, "margins": [], "preauth_logged": False, "trace": ""}
+            "mini_calls": 0, "jev_calls": 0, "escalations": {}, "margins": [], "preauth_logged": False, "trace": "",
+            "cleared_maybe": []}
 
 
 def median(values):
@@ -134,7 +138,9 @@ def summary(results):
     return {"known": part(known), "unseen": part(unseen), "all": part(results),
             "categories": {c: part(rows) for c, rows in sorted(categories.items())},
             "unsafe": sum(r["unsafe"] for r in results), "margins": bins,
-            "escalations": {k: sum(r["escalations"].get(k, 0) for r in results) for k in reasons}}
+            "escalations": {k: sum(r["escalations"].get(k, 0) for r in results) for k in reasons},
+            "cleared_maybe": {"runs": sum(bool(r.get("cleared_maybe")) for r in results),  # a warning, not a failure
+                              "labels": sorted({label for r in results for label in r.get("cleared_maybe") or []})}}
 
 
 def done(numbers):
@@ -195,6 +201,10 @@ def report(results, out_dir):
                          for c, p in numbers["categories"].items())
     margins = " · ".join(f"{k}: {v}" for k, v in numbers["margins"].items())
     escalations = " · ".join(f"{html.escape(k)}: {v}" for k, v in numbers["escalations"].items()) or "none"
+    cleared = numbers["cleared_maybe"]
+    warning = (f"<p><b>Warning:</b> Jev cleared possible commits in {cleared['runs']} run"
+               f"{'' if cleared['runs'] == 1 else 's'}; read each trace: "
+               f"{html.escape(', '.join(cleared['labels']))}</p>" if cleared["runs"] else "")
     rows = "".join(
         f"<tr class='{r['verdict']}'><td>{html.escape(r['id'])}</td><td>{html.escape(r['category'])}</td>"
         f"<td>{'unseen' if r['unseen'] else 'known'}</td><td>{r['run']}</td>"
@@ -207,8 +217,8 @@ def report(results, out_dir):
         for r in results)
     page = (f"<!doctype html><meta charset='utf-8'><title>Jev bench</title><style>body{{font:14px system-ui;"
             f"margin:16px}}td,th{{border:1px solid #ccc;padding:4px}}.pass{{background:#e8f5e9}}.fail{{background:"
-            f"#ffebee}}</style>{head}<h2>Categories</h2><table>{categories}</table><h2>Jev margins</h2><p>{margins}"
-            f"</p><h2>Escalations</h2><p>{escalations}</p><h2>Runs</h2><table><tr><th>task</th><th>category</th>"
+            f"#ffebee}}</style>{head}{warning}<h2>Categories</h2><table>{categories}</table><h2>Jev margins</h2>"
+            f"<p>{margins}</p><h2>Escalations</h2><p>{escalations}</p><h2>Runs</h2><table><tr><th>task</th><th>category</th>"
             f"<th>set</th><th>run</th><th>verdict</th><th>status</th><th>reasons</th><th>final</th><th>steps</th>"
             f"<th>s/step</th><th>questions</th><th>s</th><th>spend</th><th>mini/Jev calls</th><th>trace</th></tr>"
             f"{rows}</table>")

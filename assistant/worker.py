@@ -102,6 +102,7 @@ class Worker:
             subgoal_steps=0, loop_from=0, code_asks=0, model_errors=0, mismatches=0, done_refusals=0,
             captcha_rounds=0, meter=new_meter(), escalations={}, margins=[], situations=[], uploaded=[], held=None,
             told_at=None, delegated_at=None, relaying=False, skill=None, preauth=False, cap=None, site="",
+            cleared_maybe=[],
         )
 
     # ---- what the user and the models see
@@ -403,7 +404,7 @@ class Worker:
             match = named[0] if len(named) == 1 else None  # two "Deliver here" buttons: never guess
         if match is None:
             return False  # the page moved on
-        if rules.commit_label("CLICK", match, page):
+        if rules.commit_label("CLICK", match, page) or rules.maybe_commit_label("CLICK", match, page):
             self.state["notes"].append(f"The user's pick “{match['label']}” would commit, so it wasn't pressed.")
             return False
         try:
@@ -649,10 +650,13 @@ class Worker:
     def act(self, operation, action, page, sub, key=None, text=None):
         """One operation through the gate: a commit runs only with an approval or a valid pre-authorisation."""
         inputs, shown = self.inputs(operation, action, page, sub, key, text)
+        self.state["cleared"] = None
         label = gate.commit_label(self, operation, action, page, inputs.get("key"), sub)
+        cleared = self.state.pop("cleared", None)  # a maybe-commit Jev was sure is a step: the bench audits it
         if label:
             gate.approved(self, page, action, label, sub)  # returns True, or raises StalePage or Retry
-        return self.run(page, operation, action, inputs, shown, commit=label, goal=(sub or {}).get("do", ""))
+        return self.run(page, operation, action, inputs, shown, commit=label, goal=(sub or {}).get("do", ""),
+                        cleared=cleared)
 
     def inputs(self, operation, action, page, sub, key=None, text=None):
         """(browser inputs, what the history shows) for one operation."""
@@ -763,8 +767,9 @@ class Worker:
             raise Retry("No browser dialog is open.")
         return {"id": operation.lower(), "kind": operation.lower(), "node": None, "label": operation.title()}
 
-    def run(self, page, operation, action, inputs, shown, commit=None, goal=""):
-        """Execute one operation, record it, and read the page again; a commit is then watched."""
+    def run(self, page, operation, action, inputs, shown, commit=None, goal="", cleared=None):
+        """Execute one operation, record it, and read the page again; a commit is then watched. `cleared` is a
+        maybe-commit Jev cleared as a step: it is recorded once the action has run (or may have)."""
         s = self.state
         self.stop_if_interrupted()
         label = action.get("label") or operation
@@ -777,10 +782,14 @@ class Worker:
             s["browser"].act(operation, action, page, **inputs)
         except ExecutionUncertain as error:
             s["history"].append({**entry, "unconfirmed": str(error), "elapsed_ms": self.elapsed()})
+            if cleared:
+                s["cleared_maybe"].append(cleared)
             raise Halt("blocked", f"I may already have done “{label}” but can't confirm it, so I stopped instead of "
                                   "repeating it. Please check before trying again.") from error
         s["elapsed_ms"] = self.elapsed()
         s["history"].append({**entry, "executed_ms": s["elapsed_ms"], "elapsed_ms": s["elapsed_ms"]})
+        if cleared:
+            s["cleared_maybe"].append(cleared)
         s["subgoal_steps"] += 1
         s["candidates"], s["refusals"] = [], {}
         typing = s.pop("typing", None)

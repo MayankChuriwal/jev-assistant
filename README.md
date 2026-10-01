@@ -29,6 +29,7 @@ hidden Chrome and asks only for what it needs, in plain messages:
 - **Hidden field:** codes, CVVs, and a phone number the profile lacks go in a hidden field.
 - **Before paying, booking, or sending:** you see a summary read from the page, and it waits for your yes. The
   exception is a message of your own that said not to ask and set a cap ("order it, don't ask, under ₹300").
+  Pre-approval is off by default: until you set `JEV_PREAUTH=on` in `.env`, the agent still asks and says why.
 - **Which app:** a goal that names no app is asked once per kind of task and remembered.
 - **Several tasks:** up to three run at once, one per site.
 - **Messages mid-task** count as answers, changes, new tasks, cancellations, or status questions.

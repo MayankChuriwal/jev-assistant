@@ -2,6 +2,7 @@
 the yes to its control, and watching what the site does next. The facts come from the page by code; Jev only
 confirms, and it can never clear a control the commit rule matches outright."""
 
+import os
 import re
 import time
 import unicodedata
@@ -55,7 +56,6 @@ DELIVERING = re.compile(r"\b(?:delivering to|deliver to|delivery address)\s*:?\s
 FEE = re.compile(r"^[^\n₹]{0,20}?((?:small cart|delivery|handling|platform|packaging|convenience|surge|late night|"
                  r"rain|service)\s+(?:fee|charges?)[^\n₹]{0,10}₹\s?[\d,]+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
 ITEMS = re.compile(r"\b(\d+) items?\b", re.IGNORECASE)
-PROCEED = re.compile(r"\bproceed to (pay|checkout|buy)\b|\bgo to (payment|checkout)\b", re.IGNORECASE)
 YES = re.compile(r"\b(yes|yeah|yep|yup|ok|okay|sure|go ahead|book it|confirm|do it|proceed|haan)\b", re.IGNORECASE)
 NOT_YES = re.compile(r"\?|\b(no|not|don'?t|wait|but|instead|cheaper|change|stop|cancel|hold)\b", re.IGNORECASE)
 CAP_WORD = r"\b(?:under|below|max(?:imum)?|up ?to|within|budget|less than|not more than)\s*(?:of\s*)?"
@@ -267,30 +267,50 @@ def own_words(action):
     return " ".join(filter(None, [action.get("name", action.get("label") or ""), action.get("shown")]))
 
 
+def form_submit(page, focused, commits):
+    """The submit label of the form a page-level Enter submits (the focused field's, else the first) when `commits`
+    says it may commit, else None."""
+    forms = [a for a in page["actions"] if a.get("submit") and commits(a["submit"])]
+    field = next((a for a in forms if a["label"] == focused), forms[0] if forms else None)
+    return field["submit"] if field else None
+
+
+def cleared(w, page, label, goal):
+    """Whether Jev is sure (step ≥ 0.8) that pressing this control is only a step on the way. A cleared label is
+    kept (state "cleared") so the bench can audit what ran without a yes."""
+    verdict, sure = jev.final(page, label, goal)
+    if verdict == "step" and sure >= 0.8:
+        w.state["cleared"] = label
+        return True
+    return False
+
+
 def commit_label(w, operation, action, page, key=None, subgoal=None):
-    """The words the approval names when this action commits, else None. The commit rule decides; Jev's final-step
-    check clears only an ambiguous match (a checkout step, a payment method named “…Pay”) and, inside a commit
-    subgoal, confirms a control the rule missed."""
+    """The words the approval names when this action commits, else None. Two tiers: a control the commit rule
+    matches outright always commits (Jev clears only an ambiguous match: a payment method named “…Pay” with no
+    price); a control whose words may commit ("Book Ola Mini", "Submit", "Proceed to Pay", a label the redactor
+    changed) commits unless Jev's final check is sure it is a step. Inside a commit subgoal, Jev's final check also
+    confirms a control neither tier names."""
     if operation not in COMMIT_OPS or (operation == "PRESS_KEY" and key not in {"Enter", "Space"}) or \
             action.get("hover"):
         return None
-    focused = w.state["browser"].focused_label() if operation == "PRESS_KEY" and action.get("node") is None else ""
+    page_key = operation == "PRESS_KEY" and action.get("node") is None
+    focused = w.state["browser"].focused_label() if page_key else ""
     label = rules.commit_label(operation, action, page, key, focused)
-    if not label and operation == "PRESS_KEY" and key == "Enter" and action.get("node") is None:
-        forms = [a for a in page["actions"] if a.get("submit") and rules.COMMIT.search(a["submit"])]
-        field = next((a for a in forms if a["label"] == focused), forms[0] if forms else None)
-        label = field["submit"] if field else None  # Enter submits the focused field's form
+    if not label and page_key and key == "Enter":
+        label = form_submit(page, focused, rules.COMMIT.search)  # Enter submits the focused field's form
     goal = (subgoal or {}).get("do") or w.state["goal"]
-    if label:
+    if label:  # a checkout step ("Proceed to Pay") is not matched outright: it is a maybe-commit below
         words = own_words(action) or label
-        rest = rules.METHOD.sub("", PROCEED.sub("", words))  # a real commit word left over is never ambiguous
-        ambiguous = operation in CLICKS and not rules.COMMIT.search(rest) and (
-            PROCEED.search(words) or (rules.METHOD.search(words) and not rules.PRICE.search(words)))
-        if ambiguous:
-            verdict, sure = jev.final(page, label, goal)
-            if verdict == "step" and sure >= 0.8:
-                return None
-        return label
+        rest = rules.METHOD.sub("", words)  # a real commit word left over is never ambiguous
+        ambiguous = operation in CLICKS and not rules.COMMIT.search(rest) and rules.METHOD.search(words) and \
+            not rules.PRICE.search(words)
+        return None if ambiguous and cleared(w, page, label, goal) else label
+    maybe = rules.maybe_commit_label(operation, action, page, key, focused)
+    if not maybe and page_key and key == "Enter":
+        maybe = form_submit(page, focused, rules.maybe_commits)
+    if maybe:
+        return None if cleared(w, page, maybe, goal) else maybe
     if (subgoal or {}).get("kind") == "commit":
         name = action.get("label") or action.get("text") or operation.title()
         verdict, sure = jev.final(page, name, goal)
@@ -369,8 +389,8 @@ def preauthorised(state, found, page):
     here, site = skills.bare(rules.host(page["url"]).lower()), state["site"]
     if not state["preauth"] or not site or not (here == site or here.endswith("." + site)):
         return False
-    if found["total"] is None:
-        return not shows_money(page["text"])
+    if found["total"] is None:  # no cap is needed only to buy nothing: a form or a message on a goal that buys nothing
+        return not rules.commerce_goal(state["goal"]) and not shows_money(page["text"])
     value = amount(found["total"])
     return (value is not None and state["cap"] is not None and value <= state["cap"]
             and worst(page["text"]) <= state["cap"])
@@ -404,9 +424,12 @@ def approved(w, page, action, label, subgoal):
     total = found["total"] or ""  # never a fee from the summary: the snapshot guards what was shown
     if total and not rules.amount_shown(total, page["text"]):
         total = ""  # the raw page spells it differently (a number split in parts): approval_valid would void the yes
+    shadow = False
     if matched and preauthorised(s, found, page):
         if w.bench:
             s["bench_preauth"] = True  # a bench run logs what it would have done, then asks like any other
+        elif os.environ.get("JEV_PREAUTH", "shadow") != "on":
+            s["preauth_shadow"] = shadow = True  # pre-approval is off until the user switches it on: asked anyway
         else:
             w.say("Placing: " + " · ".join(lines))
             bind(s, action, label, total, page, "preauth")
@@ -414,6 +437,8 @@ def approved(w, page, action, label, subgoal):
     host = rules.host(page["url"]).removeprefix("www.")
     question = "\n".join([lines[0], *(f"• {line}" for line in lines[1:])]) + \
         f"\n\nI'll press “{label}” on {host}. Reply yes to go ahead, or tell me what to change."
+    if shadow:
+        question += "\n(You said not to ask. I'm asking anyway until pre-approval is switched on: set JEV_PREAUTH=on.)"
     reply = w.ask({"kind": "text", "text": question, "approval": True})
     answer = str(reply.get("text", "")).strip()
     s["chat"] += [{"from": "agent", "text": question}, {"from": "user", "text": f"“{answer}”"}]

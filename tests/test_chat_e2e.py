@@ -32,8 +32,8 @@ def test_an_order_is_planned_approved_in_chat_and_reported(tmp_path, monkeypatch
     routes = [("NEW_TASK", "none", {"NEW_TASK": 1.0}, {"none": 1.0}), ("ANSWER", "t1", {"ANSWER": 1.0}, {"t1": 1.0})]
     chat = conversation.Core(channel, profile=profile, make_worker=make_worker, poll=0.01,
                              route=lambda text, tasks, recent: routes.pop(0),
-                             intake=lambda message, recent, kinds, several=True: {"several": "no", "skill": "general",
-                                                                                  "preauth": "no"},
+                             intake=lambda message, kinds, several=True: {"several": "no", "skill": "general",
+                                                                          "preauth": "no"},
                              start=lambda goal: ("https://shop.test/checkout", "Shop · Diet Coke", True))
     chat.receive({"from": "local", "id": "m1", "type": "text", "text": "Order Diet Coke", "context": None})
     assert until(lambda: chat.open is not None, timeout=5)

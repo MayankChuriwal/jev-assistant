@@ -42,6 +42,13 @@ def no_real_models(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def preauth_shadowed(monkeypatch):
+    """Pre-authorisation is shadowed unless JEV_PREAUTH=on: a test that needs it on sets it itself, so a developer's
+    own environment never changes what a test sees."""
+    monkeypatch.delenv("JEV_PREAUTH", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def no_settling_wait(monkeypatch):
     """Fakes never change on their own, so waiting before asking the user, between looks at a commit the site is
     still processing, or for a click to show its effect would only slow the tests down."""

@@ -84,7 +84,7 @@ def world(tmp_path):
         entry = w.intents.pop(0) if w.intents else ("NEW_TASK", "none", {"NEW_TASK": 1.0})
         return (*entry, {entry[1]: 1.0})[:4]  # the task pick is certain unless a test says otherwise
 
-    def intake(message, chat, kinds, several=True):
+    def intake(message, kinds, several=True):
         info = {"several": "no", "skill": "general", "preauth": "no", **w.intakes.get(message, {})}
         return info if several else {**info, "several": "no"}
 
@@ -589,8 +589,8 @@ def test_a_bench_task_answers_from_its_script_and_says_no_at_approval(tmp_path):
 
     c = conversation.Core(channel, profile=Profile(tmp_path / "p.json"), make_worker=make_worker, library=EMPTY,
                           start=lambda goal: ("https://m.uber.com/", "Uber", True), poll=0.01,
-                          intake=lambda message, chat, kinds, several=True: {"several": "no", "skill": "general",
-                                                                             "preauth": "no"})
+                          intake=lambda message, kinds, several=True: {"several": "no", "skill": "general",
+                                                                       "preauth": "no"})
     task = c.new_task("Book an Uber", script={"answers": [["where to", "Terminal 1"]], "fallback": "ok"})
     until(lambda: len(asked) == 2)
     assert asked == [{"text": "Terminal 1"}, {"cancel": True}]
@@ -667,30 +667,30 @@ def test_preauthorisation_and_its_cap_reach_the_task(world):
     assert world.made[goal].preauth and world.made[goal].cap == 300.0
 
 
-def test_errands_split_from_one_message_and_bench_tasks_see_no_chat_history(world):
+def test_errands_split_from_one_message_each_get_their_own_intake_from_their_own_words(world):
     message = "Buy milk on Zepto, don't ask me, under 300 rupees. And book a cab home, ask me first."
     goals = ["Buy milk on Zepto, don't ask me, under 300 rupees", "Book a cab home, ask me first"]
     world.intakes[message] = {"several": "yes"}
     world.splits[message] = goals
     calls, real = [], world.core.intake
-    world.core.intake = lambda m, chat, kinds, several=True: calls.append((m, list(chat), several)) or real(
-        m, chat, kinds, several)
-    world.core.log.extend([{"from": "user", "text": "earlier"}, {"from": "agent", "text": "hi"}])
+    world.core.intake = lambda m, kinds, several=True: calls.append((m, several)) or real(m, kinds, several)
+    world.core.log.extend([{"from": "user", "text": "just order it, don't ask"}, {"from": "agent", "text": "hi"}])
     text(world, message)
     assert until(lambda: set(goals) <= set(world.agents))
-    assert [chat for m, chat, _ in calls if m in goals] == [[], []]  # one intake call for each split goal
-    first = next(c for c in calls if c[0] == message)
-    assert first[1] == [{"from": "user", "text": "earlier"}, {"from": "agent", "text": "hi"}] and first[2] is True
+    assert sorted(calls) == sorted([(message, True), (goals[0], False), (goals[1], False)])
 
 
-def test_a_bench_task_reads_no_chat_history_for_its_intake(world):
+def test_intake_reads_only_the_users_message_never_the_chat_before_it(world):
+    """A "don't ask" for an earlier errand must not pre-authorise a later one: intake takes no chat at all."""
     calls, real = [], world.core.intake
-    world.core.intake = lambda m, chat, kinds, several=True: calls.append((m, list(chat), several)) or real(
-        m, chat, kinds, several)
-    world.core.log.extend([{"from": "user", "text": "earlier"}, {"from": "agent", "text": "hi"}])
+    world.core.intake = lambda m, kinds, several=True: calls.append((m, several)) or real(m, kinds, several)
+    world.core.log.extend([{"from": "user", "text": "order it, don't ask"}, {"from": "agent", "text": "hi"}])
     world.core.new_task("Book a cab home", script={"answers": [], "fallback": "ok"})
     assert until(lambda: "Book a cab home" in world.agents)
-    assert calls == [("Book a cab home", [], False)]
+    assert calls == [("Book a cab home", False)]
+    text(world, "Order Diet Coke")
+    assert until(lambda: "Order Diet Coke" in world.agents)
+    assert calls[-1] == ("Order Diet Coke", True) and not world.made["Order Diet Coke"].preauth
 
 
 def test_new_task_takes_the_core_lock_so_the_bench_thread_cannot_race_the_chat(world):

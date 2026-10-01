@@ -117,8 +117,57 @@ def test_codes_are_secret_but_a_phone_number_for_a_code_is_not():
 def test_checkout_steps_are_not_commits_but_final_buttons_are():
     page = {"text": ""}
     click = lambda label: rules.commit_label("CLICK", {"label": label}, page)  # noqa: E731
+    maybe = lambda label: rules.maybe_commit_label("CLICK", {"label": label}, page)  # noqa: E731
     assert click("Proceed to Buy (1 item)") is None and click("Proceed to Pay") is None
+    # not outright commits, but maybe ones: Jev's final check decides (spec 8.1), and only "step" ≥ 0.8 clears them
+    assert maybe("Proceed to Buy (1 item)") and maybe("Proceed to Pay") and maybe("Proceed to checkout")
     assert click("Place your order") and click("Pay ₹79") and click("Complete purchase") and click("Buy Now")
+
+
+# The final controls of the bench sites: a commit word the rule matches outright, which Jev can never clear.
+OUTRIGHT = ["Book Bike", "Book Ride", "Book Cab", "Book Auto", "Book a table", "Book tickets", "End membership",
+            "End my subscription", "Cancel Membership", "Cancel my membership", "Make Payment", "Make a payment",
+            "Submit order", "Submit the order", "Order Now", "Recharge Now", "Complete payment",
+            "Complete the booking", "Request Uber Go AC", "Pay ₹79", "Place order", "Pay now"]
+# Words that may commit: Jev's final check clears them only at "step" ≥ 0.8.
+MAYBE = ["Book Ola Mini", "Confirm UberGo", "Continue to cancel", "Submit", "Send message", "Send", "Reserve",
+         "Transfer ₹500", "Recharge", "Subscribe", "End trip", "Cancel request", "Proceed to Recharge",
+         "Proceed to Pay", "Proceed to payment", "Make the final payment", "Complete", "Place bid",
+         "Request a ride", "[secret:answer1] ₹79", "Hi [profile:name]"]
+NEITHER = ["Add to cart", "Search", "Continue", "Verify", "Send OTP", "Send code", "Resend", "Resend OTP",
+           "Send verification code", "Home", "Cancel", "Payment options"]
+
+
+@pytest.mark.parametrize("label", OUTRIGHT)
+def test_final_controls_of_the_bench_sites_are_outright_commits(label):
+    assert rules.commit_label("CLICK", {"label": label}, {}) == label
+
+
+@pytest.mark.parametrize("label", MAYBE)
+def test_words_that_may_commit_are_maybe_commits_not_outright_ones(label):
+    assert rules.commit_label("CLICK", {"label": label}, {}) is None
+    assert rules.maybe_commit_label("CLICK", {"label": label}, {}) == label
+
+
+@pytest.mark.parametrize("label", NEITHER)
+def test_ordinary_controls_and_code_sends_are_neither(label):
+    assert rules.commit_label("CLICK", {"label": label}, {}) is None
+    assert rules.maybe_commit_label("CLICK", {"label": label}, {}) is None
+
+
+def test_maybe_commits_read_the_same_words_as_commits_for_each_operation():
+    assert rules.maybe_commit_label("DOUBLE_CLICK", {"label": "Reserve"}, {}) == "Reserve"
+    field = {"kind": "fill", "label": "Message", "node": 4, "submit": "Send message"}
+    assert rules.maybe_commit_label("PRESS_KEY", field, {}, key="Enter") == "Send message"
+    assert rules.maybe_commit_label("PRESS_KEY", field, {}, key="Tab") is None
+    page_key = {"kind": "key", "node": None, "label": "The page"}
+    confirm = rules.maybe_commit_label("PRESS_KEY", page_key, {}, key="Space", focused="Confirm UberGo")
+    assert confirm == "Confirm UberGo"
+    dialog = {"text": "Browser confirm dialog: Confirm UberGo for ₹212?"}
+    assert rules.maybe_commit_label("ACCEPT_DIALOG", {"label": "OK"}, dialog) == dialog["text"]
+    spot = {"label": "Green button", "text": "Book Ola Mini"}
+    assert rules.maybe_commit_label("LOOK", spot, {}) == "Green button"
+    assert rules.maybe_commit_label("TYPE_TEXT", {"label": "Send a note"}, {}) is None
 
 
 @pytest.mark.parametrize("label", ["CVV", "card number", "Card Number", "card no", "Card No.", "card details",

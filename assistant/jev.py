@@ -140,8 +140,9 @@ PREAUTH = {"yes": "The user explicitly says to go ahead without asking or confir
            "no": "The user doesn't say to skip confirming."}
 
 
-def intake(message, chat, kinds, several=True):
-    """How a new request starts: {"several": "yes"|"no", "skill": a kind or "general", "preauth": "yes"|"no"}."""
+def intake(message, kinds, several=True):
+    """How a new request starts: {"several": "yes"|"no", "skill": a kind or "general", "preauth": "yes"|"no"}. Only
+    the user's own message is read: a "don't ask" said for an earlier errand never pre-authorises this one."""
     questions = {
         "skill": {"options": {**kinds, "general": GENERAL},
                   "instructions": {"message": message, "rules": "Choose the kind of task the message asks for."}},
@@ -151,7 +152,7 @@ def intake(message, chat, kinds, several=True):
     if several:
         questions["several"] = {"options": SEVERAL,
                                 "instructions": {"message": message, "rules": "Count the separate errands."}}
-    answers = request({"message": message, "recent_chat": chat[-6:]}, questions)
+    answers = request({"message": message}, questions)
     return {"several": "no", **{name: a["choice"] for name, a in answers.items()}}
 
 

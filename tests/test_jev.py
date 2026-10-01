@@ -55,15 +55,17 @@ def test_intake_reads_kind_several_and_preauth_in_one_request(typesafe):
     replies.append(lambda q: {"skill": answer(q["skill"]["criteria"], "rides"),
                               "preauth": answer(q["preauth"]["criteria"], "yes"),
                               "several": answer(q["several"]["criteria"], "no")})
-    got = jev.intake("book me a cab home, don't ask", [], {"rides": "Book a ride", "groceries": "Buy groceries"})
+    got = jev.intake("book me a cab home, don't ask", {"rides": "Book a ride", "groceries": "Buy groceries"})
     assert got == {"several": "no", "skill": "rides", "preauth": "yes"}
     assert "general" in sent[0]["questions"]["skill"]["criteria"] and len(sent) == 1
+    # only the user's own message: a "don't ask" said earlier in the chat never pre-authorises this task
+    assert sent[0]["state"] == {"message": "book me a cab home, don't ask"}
 
 
 def test_a_split_goal_is_never_asked_about_several(typesafe):
     sent, replies = typesafe
     replies.append(lambda q: {n: answer(q[n]["criteria"], next(iter(q[n]["criteria"]))) for n in q})
-    assert jev.intake("milk from Zepto", [], {"groceries": "Buy groceries"}, several=False)["several"] == "no"
+    assert jev.intake("milk from Zepto", {"groceries": "Buy groceries"}, several=False)["several"] == "no"
     assert "several" not in sent[0]["questions"]
 
 
