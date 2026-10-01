@@ -22,7 +22,7 @@ REDACTED = re.compile(r"\[(secret|profile):", re.IGNORECASE)  # a hidden value m
 PROCEED_STEP = re.compile(r"\bproceed to (buy|checkout|pay)\b", re.IGNORECASE)
 APPROVAL_STEPS = 20
 SECRET_ASK = re.compile(r"\b(otp|one[- ]?time (pass(word|code)?|code)|verification code|security code|passcode|"
-                        r"password|cvv|cvc|pin(?! ?code)|\d[- ]?digit code|"
+                        r"password|cvv|cvc|pin(?![\s-]?code)|\d[- ]?digit code|"
                         r"code (we |that was |you )?(sent|received))\b", re.IGNORECASE)
 TO_RECEIVE = re.compile(r"\b(phone|mobile|e-?mail)\b.*\b(to|for) (receive|get)\b", re.IGNORECASE)
 CHALLENGE = re.compile(r"i'?m not a robot|select all (the )?(images|squares)|click verify once|"

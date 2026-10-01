@@ -250,3 +250,15 @@ def test_criteria_carries_each_options_state_and_current_value():
               "selected": False, "expanded": False, "popup": "menu", "current": "step"},
         "2": {"element": "[2] Size → 300 ml", "current_value": "600 ml", "role": "combobox"},
         "page_scroll_down": {"element": "Page", "current_value": "", "role": "page"}}
+
+
+def test_a_reply_whose_usage_numbers_are_null_is_charged_as_zero():
+    meter = model.new_meter()
+    token = model.METER.set(meter)
+    try:
+        model.charge({}, {"prompt_tokens": None, "completion_tokens": None,
+                          "prompt_tokens_details": {"cached_tokens": None}}, jev=False)
+        model.charge({"x": "y" * 400}, {"input_tokens": None, "prompt_tokens": None}, jev=True)
+    finally:
+        model.METER.reset(token)
+    assert meter["mini"] == 0.0 and meter["mini_calls"] == 1 and meter["jev_calls"] == 1 and meter["jev"] > 0

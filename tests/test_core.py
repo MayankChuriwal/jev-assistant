@@ -728,3 +728,16 @@ def test_a_profile_value_learned_mid_session_is_hidden_from_the_concierges_next_
                           start=lambda goal: ("https://x.test/", "x", True), library=EMPTY, poll=0.01)
     profile.data["phone"] = "9876543210"  # what a task's Worker.learn does while the chat runs
     assert c.hidden(lambda: SECRETS.get().text("recharge 9876543210")) == "recharge [profile:phone]"
+
+
+def test_a_message_with_more_than_five_errands_starts_five_and_says_so(world):
+    message = "seven errands"
+    goals = [f"Errand {n}" for n in range(1, 8)]
+    world.intakes[message] = {"several": "yes"}
+    world.splits[message] = goals
+    for n, goal in enumerate(goals):
+        world.hosts[goal] = f"site{n}.test"
+    text(world, message)
+    assert until(lambda: set(goals[:5]) <= set(world.agents))
+    assert "On it: 5 tasks. I'll start with the first five; ask again for the rest." in bodies(world)
+    assert not set(goals[5:]) & set(world.agents)

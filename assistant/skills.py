@@ -26,11 +26,19 @@ def parse(text):
     return meta, match[2].strip()
 
 
+def read(path):
+    """(frontmatter, body) of one file; a parse error names the file."""
+    try:
+        return parse(path.read_text())
+    except ValueError as error:
+        raise ValueError(f"{path.name}: {error}") from error
+
+
 def load(folder=FOLDER):
     """{name: skill} for every skill file: its frontmatter, "body", and whether it is a situation skill."""
     found = {}
     for path in sorted(Path(folder).glob("*.md")):
-        meta, body = parse(path.read_text())
+        meta, body = read(path)
         name = meta.get("name") or path.stem
         found[name] = {"inputs": [], "sites": [], "uses": [], "summary": [], "report": [], **meta, "name": name,
                        "body": body, "situation": name in SITUATIONS}
@@ -41,7 +49,9 @@ def load_sites(folder=FOLDER / "sites"):
     """{host: site note}; a host may carry a path ("google.com/travel/flights")."""
     found = {}
     for path in sorted(Path(folder).glob("*.md")):
-        meta, body = parse(path.read_text())
+        meta, body = read(path)
+        if not meta.get("host"):
+            raise ValueError(f"{path.name}: a site note needs a host: line.")
         found[meta["host"]] = {"aliases": [], **meta, "body": body}
     return found
 

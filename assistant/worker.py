@@ -23,6 +23,7 @@ MAX_MINUTES = 30
 MAX_SPEND = 0.25
 SUBGOAL_STEPS = 12
 STUCK_AT = 8
+IDLE_HALT = 16  # ticks in a row with no browser step and no question to the user: ask at STUCK_AT, stop here
 CODE_ASKS = 3
 CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QUIET = {"WAIT", "SCROLL_UP", "SCROLL_DOWN"}  # repeating these is not going in circles
@@ -30,7 +31,8 @@ TALKING = {"ASK", "TELL", "DONE", "STOP"}
 TRACE_STEP = ("step", "subgoal", "operation", "action", "text", "key", "files", "page_changed", "url", "changed",
               "effect", "committed", "approved", "elapsed_ms", "unconfirmed")
 PLACEHOLDER = re.compile(r"\[(profile|secret):([\w.]+)\]")
-CODE_WORDS = re.compile(r"\b(code|otp|pin|passcode|password|cvv)\b", re.IGNORECASE)
+CODE_WORDS = re.compile(r"\b(otp|passcode|password|cvv|pin(?![\s-]?code)|"  # a PIN code or promo code is no secret
+                        r"(?<!pin )(?<!pin-)(?<!promo )(?<!zip )(?<!postal )code)\b", re.IGNORECASE)
 DELEGATE = re.compile(r"\b(you (choose|decide|pick)|whatever (you|fits|works|is)|any (one|of them|is fine|will do)|"
                       r"up to you|your (choice|call)|doesn'?t matter)\b", re.IGNORECASE)
 PLACE = re.compile(r"\b(address|deliver(y)? (to|location|address)|where (should|do you want|to deliver|are you)|"
@@ -117,7 +119,7 @@ class Worker:
             subgoal_steps=0, loop_from=0, code_asks=0, model_errors=0, mismatches=0, done_refusals=0,
             captcha_rounds=0, meter=new_meter(), escalations={}, margins=[], situations=[], uploaded=[], held=None,
             told_at=None, delegated_at=None, relaying=False, skill=None, preauth=False, cap=None, site="",
-            cleared_maybe=[],
+            cleared_maybe=[], idle=0,
         )
 
     # ---- what the user and the models see
@@ -212,6 +214,8 @@ class Worker:
     def command(self, name):
         if name != "tick":
             raise ValueError("Unknown command")
+        if self.state["status"] in STOPPED:
+            return self.snapshot()  # a stopped task is never driven again
         for value, placeholder in self.profile.hidden_values():  # a value another task learned is hidden here too
             self.secrets.add(value, placeholder)
         secrets, meter = SECRETS.set(self.secrets), METER.set(self.state["meter"])
@@ -229,7 +233,7 @@ class Worker:
         s = self.state
         if s["started_at"] is None:
             s["started_at"] = time.perf_counter()
-        before = len(s["history"])
+        before, replies = len(s["history"]), self.replies()
         try:
             self.step()
             s["model_errors"] = 0
@@ -244,18 +248,39 @@ class Worker:
             s["errors"].append({"step": len(s["history"]), "error": str(error)})
             s["model_errors"] += 1
             if s["model_errors"] >= 5:
-                pending = (f" {s['commit']['label']} may already have gone through; check it before trying again."
-                           if s["commit"] else "")
-                raise Halt("failed", f"The models stopped answering, so I stopped: {error}.{pending}") from error
+                raise Halt("failed", f"The models stopped answering, so I stopped: {error}.{self.pending()}") \
+                    from error
             if len(s["history"]) > before:  # the action itself ran; only reading its result failed
                 s["feedback"].append(f"The last action already ran, but checking its result failed ({error}). "
                                      "Look at the page before repeating it.")
             else:
                 s["feedback"].append(f"The last step failed ({error}); nothing was done. Decide again.")
             s["reason"] = s["reason"] or "unsure"
+        self.count_idle(before, replies)
         s["elapsed_ms"] = self.elapsed()
         self.checkpoint()
         return self.snapshot()
+
+    def replies(self):
+        return sum(m["from"] == "user" for m in self.state["messages"])
+
+    def count_idle(self, before, replies):
+        """A tick that ran no browser step and asked the user nothing (the planner and Jev handing the step back and
+        forth): the user is asked at STUCK_AT such ticks in a row, and the task stops at IDLE_HALT."""
+        s = self.state
+        if len(s["history"]) > before or self.replies() > replies or s["status"] in STOPPED:
+            return
+        s["idle"] += 1
+        if s["idle"] >= IDLE_HALT:
+            raise Halt("blocked", f"I'm going in circles on {rules.host(s['page']['url'])} and stopped. Tell me "
+                                  f"more about what you want, or check the site yourself.{self.pending()}")
+        if s["idle"] == STUCK_AT:
+            self.stuck()
+
+    def pending(self):
+        """The warning a stop carries while a commit's outcome is unknown."""
+        commit = self.state["commit"]
+        return f" {commit['label']} may already have gone through; check it before trying again." if commit else ""
 
     def checkpoint(self):
         """Write the trace after every step, to the same file, so a stop at any moment keeps it."""
@@ -265,20 +290,24 @@ class Worker:
             pass
 
     def check_caps(self):
+        """The task's limits: actions, the agent's own time (time the user took to answer doesn't count), and spend."""
         s = self.state
+        reason = None
         if len(s["history"]) >= MAX_ACTIONS:
-            raise Halt("blocked", f"Stopped at the {MAX_ACTIONS}-action limit.")
-        if self.elapsed() > MAX_MINUTES * 60000:
-            raise Halt("blocked", f"Stopped after {MAX_MINUTES} minutes.")
-        if spent(s["meter"]) > MAX_SPEND:
-            raise Halt("blocked", f"Stopped at the ${MAX_SPEND:.2f} model-spend limit.")
+            reason = f"Stopped at the {MAX_ACTIONS}-action limit."
+        elif self.elapsed() - s["waited_ms"] > MAX_MINUTES * 60000:
+            reason = f"Stopped after {MAX_MINUTES} minutes."
+        elif spent(s["meter"]) > MAX_SPEND:
+            reason = f"Stopped at the ${MAX_SPEND:.2f} model-spend limit."
+        if reason:
+            raise Halt("blocked", reason + self.pending())
 
     def step(self):
         s = self.state
-        self.check_caps()
-        if s["commit"]:  # a watch cut short: the outcome is known before Jev or the planner act on this page
+        if s["commit"]:  # a watch cut short: its outcome is known before any cap, Jev, or the planner acts
             gate.watch(self, s["commit"]["label"], s["commit"].get("goal") or s["goal"])
             return None
+        self.check_caps()
         s.pop("typing", None)  # a code counts as an attempt only once it is typed
         page = s["page"] if s["browser"].fresh(s["page"]) else self.observe()
         if not s["recent"] or s["recent"][-1] != page["text"]:
@@ -353,7 +382,12 @@ class Worker:
         chosen = step["targets"].get("type_text_target")
         fields = [a for a in action_space(page["actions"])[1].get("type_text_target", {}).values()
                   if secret_field(a)]
-        field = chosen if chosen is not None and secret_field(chosen) else (fields[0] if fields else None)
+        empty = [a for a in fields if a.get("value") != "[secret]"]  # fields still waiting for their value
+        if chosen is not None and secret_field(chosen) and chosen.get("value") != "[secret]":
+            field = chosen
+        else:  # Jev chose a field already typed into: the first one still empty, else that one
+            field = empty[0] if empty else chosen if chosen is not None and secret_field(chosen) else \
+                (fields[0] if fields else None)
         if field is None or field.get("value") == "[secret]":  # none, or a code typed that the site hasn't rejected
             return self.escalate("blocker:code", page)
         card = bool(rules.CARD_DETAIL.search(field["label"]))
@@ -812,7 +846,7 @@ class Worker:
         if cleared:
             s["cleared_maybe"].append(cleared)
         s["subgoal_steps"] += 1
-        s["candidates"], s["refusals"] = [], {}
+        s["candidates"], s["refusals"], s["idle"] = [], {}, 0
         typing = s.pop("typing", None)
         if typing:
             s["typed"][typing[0]] = typing[1]

@@ -38,9 +38,9 @@ def charge(body, usage, jev):
         meter["jev"] += tokens * JEV_INPUT
         meter["jev_calls"] += 1
         return
-    cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
-    meter["mini"] += ((usage.get("prompt_tokens", 0) - cached) * MINI["input"] + cached * MINI["cached"]
-                      + usage.get("completion_tokens", 0) * MINI["output"])
+    cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0  # a null count is none
+    meter["mini"] += (((usage.get("prompt_tokens") or 0) - cached) * MINI["input"] + cached * MINI["cached"]
+                      + (usage.get("completion_tokens") or 0) * MINI["output"])
     meter["mini_calls"] += 1
 
 

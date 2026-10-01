@@ -63,3 +63,15 @@ def test_a_search_address_keeps_its_site():
     assert skills.template_host("https://www.amazon.in/s?k=boat+airdopes", site)
     assert not skills.template_host("https://evil.test/s?k=boat", site)
     assert skills.template_host("https://www.flipkart.com/search?q=x", site)  # not built from Amazon's template
+
+
+def test_a_broken_skill_or_site_file_is_named_in_the_error(tmp_path):
+    (tmp_path / "rides.md").write_text("---\nname: rides\n---\nok")
+    (tmp_path / "broken.md").write_text("no frontmatter here")
+    with pytest.raises(ValueError, match="broken.md"):
+        skills.load(tmp_path)
+    sites = tmp_path / "sites"
+    sites.mkdir()
+    (sites / "nohost.md").write_text("---\nname: Shop\n---\nok")
+    with pytest.raises(ValueError, match="nohost.md"):
+        skills.load_sites(sites)

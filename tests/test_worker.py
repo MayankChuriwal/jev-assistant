@@ -520,7 +520,9 @@ def code_page(value):
 
 
 def test_a_code_already_typed_is_not_asked_for_again(tmp_path, monkeypatch):
-    w = worker_with(tmp_path, page=code_page("[secret]"), replies=[{"text": "481516"}])
+    page = code_page("[secret]")
+    page["actions"] = [a for a in page["actions"] if a["id"] != "e3"]  # no other secret field waits (no CVV)
+    w = worker_with(tmp_path, page=page, replies=[{"text": "481516"}])
     seen = script_planner(monkeypatch, turn(subgoals=[sub("sign in")]))
     script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Code", "blocker": "code"})
     jev_checks(monkeypatch)
@@ -898,3 +900,107 @@ def test_profile_values_learned_by_one_task_are_hidden_from_the_next_model_call_
     script_planner(monkeypatch, turn("STOP", message="Done here."))
     second.command("tick")
     assert second.secrets.text("mail me@example.com") == "mail [profile:email]"
+
+
+# ---- final review, Group C: caps count only the agent's own time, loops are bounded by ticks, stopped means stopped
+
+def test_time_the_user_took_to_answer_does_not_count_toward_the_30_minutes(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn(subgoals=[sub("choose Office")]))
+    jev_checks(monkeypatch)
+    w.state["started_at"] = time.perf_counter() - 31 * 60
+    w.state["waited_ms"] = 25 * 60 * 1000  # the user answered a question after 25 minutes
+    w.command("tick")
+    assert w.state["status"] not in STOPPED and not any("30 minutes" in m["text"] for m in w.told)
+    w.state["waited_ms"] = 0
+    w.command("tick")
+    assert w.state["status"] == "blocked" and "Stopped after 30 minutes" in w.told[-1]["text"]
+
+
+def test_a_pending_commit_is_watched_before_the_caps_and_a_cap_with_one_pending_warns(tmp_path, monkeypatch):
+    from assistant.errors import Halt
+
+    w = worker_with(tmp_path)
+    w.state["commit"] = {"label": "Pay ₹79", "since": 0, "goal": "Order Diet Coke"}
+    w.state["meter"]["mini"] = 0.26  # over the spend cap while the outcome of a commit is unknown
+    monkeypatch.setattr(jev, "after_commit", lambda *a: "confirmed")
+    w.command("tick")
+    assert w.state["done"] == ["Pay ₹79"] and w.state["commit"] is None and w.state["status"] not in STOPPED
+    w.command("tick")
+    assert w.state["status"] == "blocked" and "model-spend limit" in w.told[-1]["text"]
+    w.state["commit"] = {"label": "Pay ₹79", "since": 0, "goal": "Order Diet Coke"}
+    with pytest.raises(Halt, match="Pay ₹79 may already have gone through; check it before trying again."):
+        w.check_caps()
+
+
+def test_the_planner_saying_continue_to_a_jev_that_thinks_is_bounded_by_ticks(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, replies=[{"text": "keep trying"}])
+    script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]), turn())
+    script_jev(monkeypatch, {"next": "THINK"})
+    jev_checks(monkeypatch)
+    ticks = 0
+    while w.state["status"] not in STOPPED and ticks < 40:
+        w.command("tick")
+        ticks += 1
+        if ticks == 7:
+            assert w.asked == []
+        if ticks == 8:
+            assert len(w.asked) == 1 and "I'm stuck" in w.asked[0]["text"]
+    assert ticks == 16 and w.state["status"] == "blocked" and len(w.asked) == 1
+    assert "going in circles on shop.test" in w.told[-1]["text"] and not w.browser.act.called
+
+
+def test_an_executed_step_resets_the_count_of_idle_ticks(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]), turn())
+    script_jev(monkeypatch, *([{"next": "THINK"}] * 6), {"next": "CLICK", "click_target": "Office"},
+               {"next": "THINK"})
+    jev_checks(monkeypatch)
+    for _ in range(14):
+        w.command("tick")
+    assert w.browser.act.call_count == 1 and w.asked == [] and w.state["status"] not in STOPPED
+
+
+def test_the_code_question_asks_for_the_field_still_empty(tmp_path, monkeypatch):
+    page = code_page("[secret]")  # the code was typed; the CVV is still empty
+    w = worker_with(tmp_path, page=page, replies=[{"text": "123"}])
+    script_planner(monkeypatch, turn(subgoals=[sub("pay")]))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Code", "blocker": "code"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert len(w.asked) == 1 and "card's CVV" in w.asked[0]["text"]
+    operation, action = w.browser.act.call_args.args[:2]
+    assert (operation, action["label"]) == ("TYPE_TEXT", "CVV") and w.browser.act.call_args.kwargs["text"] == "123"
+
+
+def test_a_stopped_task_does_nothing_when_ticked_again(tmp_path, monkeypatch):
+    w = office_click(tmp_path, monkeypatch)
+    w.browser.act.side_effect = ExecutionUncertain("the click may have landed")
+    w.command("tick")
+    assert w.state["status"] == "blocked" and w.browser.act.call_count == 1
+    monkeypatch.setattr(planner, "turn", Mock(side_effect=AssertionError("the planner was asked")))
+    monkeypatch.setattr(jev, "request", Mock(side_effect=AssertionError("Jev was asked")))
+    told = len(w.told)
+    assert w.command("tick")["status"] == "blocked"
+    assert w.browser.act.call_count == 1 and len(w.told) == told
+
+
+@pytest.mark.parametrize("text", ["What's your pin code?", "Do you have a promo code?", "Which zip code?",
+                                  "Your postal code, please", "Enter the PIN-code of the address"])
+def test_a_pin_code_or_promo_code_is_not_a_secret_ask(tmp_path, monkeypatch, text):
+    from assistant.worker import CODE_WORDS
+
+    assert not CODE_WORDS.search(text)
+    w = worker_with(tmp_path, replies=[{"text": "560001"}])  # the page has a code field
+    script_planner(monkeypatch, turn("ASK", message=text))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.asked[0]["kind"] == "text" and "560001" in w.state["chat"][-1]["text"]
+
+
+@pytest.mark.parametrize("text", ["Enter the code", "What's the OTP?", "Your PIN, please", "Enter your passcode"])
+def test_a_code_otp_or_pin_is_still_a_secret_ask(text):
+    from assistant.worker import CODE_WORDS
+
+    assert CODE_WORDS.search(text)

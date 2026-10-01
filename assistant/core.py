@@ -14,6 +14,7 @@ from .profile import SECRETS, Profile, Secrets
 from .worker import DELEGATE, STOPPED, Worker
 
 MAX_RUNNING = 3
+MAX_ERRANDS = 5  # tasks one message may start
 PAUSE_AFTER = 15 * 60
 CANCEL_AFTER = 24 * 3600
 BENCH_CODE_WAIT = 5 * 60  # a bench run skips a site whose sign-in code doesn't come
@@ -386,7 +387,10 @@ class Core:
         if info.get("several") == "yes":
             goals = self.hidden(self.split, task.goal)
             if len(goals) > 1:
-                self.say(f"On it: {len(goals)} tasks.")
+                more = len(goals) > MAX_ERRANDS
+                goals = goals[:MAX_ERRANDS]
+                self.say(f"On it: {len(goals)} tasks." +
+                         (" I'll start with the first five; ask again for the rest." if more else ""))
                 task.goal, task.title = goals[0], goals[0][:60]
                 with self.lock:  # other threads iterate self.tasks under the lock
                     for goal in goals[1:]:

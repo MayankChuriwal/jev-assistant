@@ -102,9 +102,9 @@ SPLIT_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["g
 
 
 def split(message):
-    """The errands in one message, at most five; the message itself when it holds only one."""
+    """Every errand in one message (the core starts at most five); the message itself when it holds only one."""
     out, _ = model.text_json(SPLIT, {"message": message}, max_tokens=400, schema=SPLIT_SCHEMA, schema_name="split")
-    return [g.strip() for g in out["goals"] if g.strip()][:5] or [message]
+    return [g.strip() for g in out["goals"] if g.strip()] or [message]
 
 
 START = """Return JSON {"start_url": "https://...", "title": "...", "service_named": true|false}: the official website
