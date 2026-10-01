@@ -15,8 +15,9 @@ COMMIT_OPS = {"CLICK", "DOUBLE_CLICK", "PRESS_KEY", "ACCEPT_DIALOG", "LOOK"}
 CLICKS = {"CLICK", "DOUBLE_CLICK"}
 TOTAL = re.compile(r"\b(total|to pay|to be paid|you pay|you will pay|payable|amount due|net amount|final amount)\b",
                    re.IGNORECASE)
-PAYABLE = re.compile(r"\b(to pay|to be paid|you pay|you will pay|grand total|order total|bill total|amount payable|"
-                     r"total payable|net payable|payable amount|net amount|final amount|amount due)\b", re.IGNORECASE)
+# "you pay", "you will pay", and "to be paid" can name a part (an EMI): they stay plain totals and money words.
+PAYABLE = re.compile(r"\b(to pay|grand total|order total|bill total|amount payable|total payable|net payable|"
+                     r"payable amount|net amount|final amount|amount due)\b", re.IGNORECASE)
 # A line about what is saved, given back, or still to add is not the payable total.
 REMARKS = r"\b(?:save|saving|savings|saved|cashback|rewards?|coupons?|discount|off|free)\b|\badd\b.{0,30}\bmore\b"
 REMARK_WORDS = re.compile(REMARKS, re.IGNORECASE)
@@ -56,6 +57,7 @@ DELIVERING = re.compile(r"\b(?:delivering to|deliver to|delivery address)\s*:?\s
 FEE = re.compile(r"^[^\n₹]{0,20}?((?:small cart|delivery|handling|platform|packaging|convenience|surge|late night|"
                  r"rain|service)\s+(?:fee|charges?)[^\n₹]{0,10}₹\s?[\d,]+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
 ITEMS = re.compile(r"\b(\d+) items?\b", re.IGNORECASE)
+BARE = re.compile(NUMBER + SUFFIX, re.IGNORECASE)  # a line that is only a number ("1,299", "1.5 L")
 YES = re.compile(r"\b(yes|yeah|yep|yup|ok|okay|sure|go ahead|book it|confirm|do it|proceed|haan)\b", re.IGNORECASE)
 NOT_YES = re.compile(r"\?|\b(no|not|don'?t|wait|but|instead|cheaper|change|stop|cancel|hold)\b", re.IGNORECASE)
 CAP_WORD = r"\b(?:under|below|max(?:imum)?|up ?to|within|budget|less than|not more than)\s*(?:of\s*)?"
@@ -72,12 +74,13 @@ def cap(text):
     return float(first[1].replace(",", "")) if first else None
 
 
-def readings(line):
+def readings(line, worded=False):
     """(value, quantity) for every number on the line, after the ticking tokens (a clock, "4 mins", "left", "by")
     are cut out. An attached suffix (lakh, crore, million, billion, Mn, bn, Cr, or K, L, M, with an optional gap
     before it) scales the number. K, L and M also mean units, so they scale only when the number sits beside a
-    currency marker or the line is a money-word line: "₹1.5 L" and "Total 1.5L" read 150000, "Diet Coke 2L ₹95"
-    reads 2. `quantity` marks a size ("300 ml", "2 L") on a line that is not a money-word line."""
+    currency marker or the line is a money-word line (or `worded`: the line right under a bare money word): "₹1.5 L"
+    and "Total 1.5L" read 150000, "Diet Coke 2L ₹95" reads 2. `quantity` marks a size ("300 ml", "2 L") on a line
+    that is not a money-word line."""
     def cut(m):
         if m[0][0].isdigit() and ":" not in m[0]:  # "<n> mins", "<n> left": a price keeps its number
             if MARK_END.search(line[:m.start()]) or (m[0].lower().endswith("left") and WORDS.search(line)):
@@ -85,7 +88,7 @@ def readings(line):
         return " "
 
     line = TICKING.sub(cut, line)
-    worded = bool(WORDS.search(line))
+    worded = worded or bool(WORDS.search(line))
     found = []
     for m in READING.finditer(line):
         value, token = float(m[1].replace(",", "")), (m[2] or "").lower()
@@ -97,14 +100,14 @@ def readings(line):
     return found
 
 
-def numbers(line):
+def numbers(line, worded=False):
     """Every number on the line: 1,499.00 → 1499.0, ₹1.5L → 150000.0."""
-    return [value for value, _ in readings(line)]
+    return [value for value, _ in readings(line, worded)]
 
 
-def amounts(line):
+def amounts(line, worded=False):
     """The numbers on the line that can be money: not a size or quantity with a unit."""
-    return [value for value, quantity in readings(line) if not quantity]
+    return [value for value, quantity in readings(line, worded) if not quantity]
 
 
 def amount(text):
@@ -133,6 +136,20 @@ def marker_only(line):
 
 
 SUFFIX_LINE = re.compile(TOKEN, re.IGNORECASE)
+SPACED = re.compile(r"((?:₹|\bRs\.?|\bINR)\s?\d{1,3}) (?=\d{3}(?!\d))", re.IGNORECASE)  # "₹1 299", "Rs 1 299"
+GROUPED = re.compile(r"\d{1,3}(?:,\d{3})*|\d{1,2}(?:,\d{2})+(?:,\d{3})?")  # 1,299 · 12,345 · 2,50,000 (and 2,50)
+
+
+def continues(before, sep, digits):
+    """Whether `digits` on the next text node continue the number `before` ends with, across `sep`: after "." one or
+    two digits (paise), after "," groups a number can have (three digits, or two in Indian grouping after a first
+    group of one or two). "₹79." then "1299" stays two numbers: 79 and 1299."""
+    head = re.search(r"[\d.,]*\d$", before)
+    if head is None or "." in head[0]:
+        return False
+    if sep == ".":
+        return bool(re.fullmatch(r"\d{1,2}", digits)) and bool(GROUPED.fullmatch(head[0]))
+    return bool(GROUPED.fullmatch(head[0] + "," + digits))
 
 
 def flat(text):
@@ -141,24 +158,26 @@ def flat(text):
     page split into parts ("1", ",", "299") put back together: the snapshot writes every text node on a line of its
     own. Empty lines go. Every money check reads this form."""
     text = re.sub("[\u200b-\u200d\u2060\ufeff]", "", text or "")  # zero-width characters hide nothing
-    text = re.sub(r"(?<=\d)[\u00a0\u2009\u202f](?=\d{3}(?!\d))", ",", text).replace("\u00a0", " ")
+    text = re.sub(r"(?<=\d)[\u00a0\u2007\u2009\u202f](?=\d{3}(?!\d))", ",", text).replace("\u00a0", " ")
+    text = SPACED.sub(r"\1,", text)  # "₹1 299": thousands spaced after a currency marker
     joined, sep = [], ""
     for line in (line.strip() for line in text.splitlines() if line.strip()):
-        if sep and re.fullmatch(r"\d[\d,]*", line):
+        if sep and re.fullmatch(r"\d[\d,]*", line) and continues(joined[-1], sep, line):
             joined[-1] += sep + line  # "1", ",", "299" and "79", ".", "50": a number split into parts
             sep = ""
             continue
-        if sep:
-            joined.append(sep)  # a stray comma or dot stays on its own line
-            sep = ""
+        if sep and not re.match(r"\d", line):
+            joined.append(sep)  # a stray comma or dot stays on its own line; between two numbers it goes
+        sep = ""
         ends_in_digit = bool(joined) and bool(re.search(r"\d$", joined[-1]))
         if ends_in_digit and line in {",", "."}:
             sep = line
         elif ends_in_digit and (line == "/-" or SUFFIX_LINE.fullmatch(line)):
             joined[-1] += " " + line  # "1,499" then "/-", "1.5" then "L"
-        elif joined and re.search(r"\d[,.]$", joined[-1]) and re.fullmatch(r"\d+", line):
+        elif joined and re.search(r"\d[,.]$", joined[-1]) and re.fullmatch(r"\d+", line) and \
+                continues(joined[-1][:-1], joined[-1][-1], line):
             joined[-1] += line  # "1," then "299"
-        elif ends_in_digit and re.fullmatch(r"[,.]\d+", line):
+        elif ends_in_digit and re.fullmatch(r"[,.]\d[\d,]*", line) and continues(joined[-1], line[0], line[1:]):
             joined[-1] += line  # "1" then ",299"
         else:
             joined.append(line)
@@ -183,27 +202,37 @@ def shown(figure, text):
     return rules.amount_shown(figure, text) or rules.amount_shown(tight(figure), tight(text))
 
 
-def money_lines(text):
-    """The lines that can hold money, in page order: any line with a money word or a currency marker, and the
-    lines on either side of a money word ("Qty 2", "Total" then "1,499"). One set for the snapshot, the worst
-    number, and the money check; a clock or countdown is cut out of a line when its numbers are read."""
-    lines, keep = flat(text).splitlines(), set()
+def money_parts(text):
+    """(line, worded) for the lines that can hold money, in page order: any line with a money word or a currency
+    marker, the lines on either side of a money word ("Qty 2", "Total" then "1,499"), and the next three lines
+    under a money word with no number of its own ("To pay", "Incl. all taxes", "1,299"). `worded` marks the first
+    of those three: it is read as a money-word line, so "To pay" then "1.5 L" reads 150000."""
+    lines, keep, worded = flat(text).splitlines(), set(), set()
     for i, line in enumerate(lines):
         if WORDS.search(line):
             keep |= {i - 1, i, i + 1}
+            if not numbers(line):
+                keep |= {i + 2, i + 3}
+                worded.add(i + 1)
         elif CURRENCY.search(line):
             keep.add(i)
-    return [lines[i] for i in sorted(keep) if 0 <= i < len(lines)]
+    return [(lines[i], i in worded) for i in sorted(keep) if 0 <= i < len(lines)]
+
+
+def money_lines(text):
+    """The lines that can hold money (`money_parts`). One set for the snapshot, the worst number, and the money
+    check; a clock or countdown is cut out of a line when its numbers are read."""
+    return [line for line, _ in money_parts(text)]
 
 
 def snapshot(text):
     """Every number on the money lines, in page order: an approval holds only while it is unchanged."""
-    return tuple(n for line in money_lines(text) for n in numbers(line))
+    return tuple(n for line, worded in money_parts(text) for n in numbers(line, worded))
 
 
 def worst(text):
     """The largest amount on the money lines, brackets included; 0.0 when there is none."""
-    return max((n for line in money_lines(text) for n in amounts(line)), default=0.0)
+    return max((n for line, worded in money_parts(text) for n in amounts(line, worded)), default=0.0)
 
 
 def shows_money(text):
@@ -232,7 +261,7 @@ def payable(text):
     lines, except those that are remarks ("To pay", "₹50 cashback applied", "₹1,299"): their prices are kept the
     same way."""
     lines = [unbracket(line) for line in flat(text).splitlines()]
-    turned_away = []
+    turned_away, bare = [], []
     for i, line in enumerate(lines):
         rest = EXEMPT.sub(" ", line)
         if TOTAL.search(rest) and NOT_TOTAL.search(rest):
@@ -252,12 +281,16 @@ def payable(text):
                         turned_away += PRICES.findall(near)
                     else:
                         prices += PRICES.findall(near)
+                        if BARE.fullmatch(near):  # "To pay" then "1,299": a payable number with no marker
+                            bare += amounts(near, worded=True)
             if prices:
                 found.append(max(prices, key=lambda price: number(price) or 0.0))
         if found:
             chosen = found[-1]
             break
-    if chosen is None or any((number(price) or 0.0) > (number(chosen) or 0.0) for price in turned_away):
+    largest = number(chosen) or 0.0 if chosen is not None else 0.0
+    if chosen is None or any((number(price) or 0.0) > largest for price in turned_away) or \
+            any(value > largest for value in bare):
         return None
     return chosen
 

@@ -1045,3 +1045,77 @@ def test_an_amount_the_redactor_hid_still_counts_as_money():
         state = {**Fake(page).state, "preauth": True, "cap": None, "goal": "Renew my plan, don't ask"}
         assert gate.preauthorised(state, gate.facts(page, []), page) is False
     assert not gate.shows_money("Hi [profile:name]\nYour plan\nRenew")
+
+
+# Final review, Group D: the window below a bare money word, digit groups when rejoining, spaced thousands, EMIs.
+
+@pytest.mark.parametrize("text, cap", [
+    ("Checkout\nTo pay\nIncl. all taxes\n1,299\nPlace order", 100.0),
+    ("Checkout\nTo pay\nIncl. all taxes\n1,299\nPlace order", None),
+    ("Checkout\nTotal ₹79\nTo pay\n₹50 cashback applied\n1,299\nPlace order", 100.0),
+    ("Checkout\nTotal ₹79\nTo pay\n1.5 L\nPlace order", 100.0),
+    ("Checkout\nTotal ₹79\nTo pay\n1.5 L\nPlace order", None)])
+def test_a_number_up_to_three_lines_below_a_bare_money_word_is_money(text, cap):
+    assert gate.shows_money(text) and gate.worst(text) >= 1299.0
+    w, page = cart(text, cap)
+    w.state["goal"] = "Renew my plan, don't ask"  # no commerce word: only the money check can stop it
+    assert gate.preauthorised(w.state, gate.facts(page, []), page) is False
+
+
+def test_the_window_below_a_bare_money_word_is_three_lines_and_its_first_line_scales_suffixes():
+    assert gate.money_lines("Cart\nTo pay\nIncl. all taxes\n1,299\nPlace order\nThanks\nBye") == \
+        ["Cart", "To pay", "Incl. all taxes", "1,299", "Place order"]
+    assert gate.worst("Total ₹79\nTo pay\n1.5 L") == 150000.0  # "1.5 L" right under "To pay" is money
+    assert gate.worst("Total ₹79\nTo pay\nDiet Coke\n2 L") == 79.0  # a size two lines down is still a size
+    assert gate.money_lines("Total ₹79\nDiet Coke\nBrand\nSize\nThanks") == ["Total ₹79", "Diet Coke"]
+
+
+@pytest.mark.parametrize("text", ["Checkout\nTotal ₹79\nTo pay\n₹50 cashback applied\n1,299\nPlace order",
+                                  "Checkout\nTotal ₹79\nTo pay\n1.5 L\nPlace order"])
+def test_a_bare_number_below_a_payable_label_that_is_larger_than_the_total_leaves_the_total_unknown(text):
+    assert gate.facts(fake_page(text=text), [])["total"] is None
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Total ₹79.\n1299", "Total ₹79.\n1299"), ("Total ₹79\n.\n1,299", "Total ₹79\n1,299"),  # a stray dot goes
+    ("Total ₹79\n.\n1299", "Total ₹79\n1299"), ("Save ₹20.\n499\nTo pay", "Save ₹20.\n499\nTo pay"),
+    ("Total ₹79\n,\n1299", "Total ₹79\n1299"), ("₹799\n,\n29", "₹799\n29"), ("₹79\n.5\n0", "₹79.5\n0"),
+    ("Qty 1\n,\nOff", "Qty 1\n,\nOff"),
+    ("₹\n2\n,\n50\n,\n000", "₹ 2,50,000"), ("₹2\n,50,000", "₹2,50,000"), ("₹1,299\n.\n00", "₹1,299.00"),
+    ("₹79.\n50", "₹79.50"), ("₹1,\n299", "₹1,299")])
+def test_flat_rejoins_only_digit_groups_a_number_can_have(text, expected):
+    assert gate.flat(text) == expected and gate.flat(gate.flat(text)) == gate.flat(text)
+
+
+@pytest.mark.parametrize("text", ["Checkout\nTotal ₹79.\n1299\nPlace order",
+                                  "Checkout\nTotal ₹79\n.\n1,299\nPlace order", "Checkout\nSave ₹20.\n499\nTo pay"])
+def test_a_dot_never_makes_a_large_number_into_decimals(text):
+    assert gate.worst(text) >= 499.0
+    w, page = cart(text, 100.0)
+    assert gate.preauthorised(w.state, gate.facts(page, []), page) is False
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("To pay ₹1 299", "To pay ₹1,299"), ("To pay Rs 1 299", "To pay Rs 1,299"),
+    ("To pay Rs. 1 299", "To pay Rs. 1,299"),
+    ("To pay INR 12 345", "To pay INR 12,345"), ("To pay ₹1\u2007299", "To pay ₹1,299"),
+    ("To pay 1\u2007299", "To pay 1,299"), ("Qty 2 300 ml", "Qty 2 300 ml"), ("₹1 2999", "₹1 2999")])
+def test_thousands_spaced_after_a_currency_marker_or_by_a_figure_space_are_one_number(text, expected):
+    assert gate.flat(text) == expected
+
+
+@pytest.mark.parametrize("text", ["Checkout\nTo pay ₹1 299\nPlace order", "Checkout\nTo pay Rs 1 299\nPlace order",
+                                  "Checkout\nTo pay ₹1\u2007299\nPlace order"])
+def test_a_spaced_1299_order_is_not_preauthorised_under_500(text):
+    w, page = cart(text, 500.0)
+    found = gate.facts(page, [])
+    assert gate.amount(found["total"]) == 1299.0 and gate.worst(text) == 1299.0
+    assert gate.preauthorised(w.state, found, page) is False
+
+
+def test_an_emi_line_is_not_the_payable_total():
+    text = "Checkout\nGrand total ₹1,299\nPay in 3 EMIs: you pay ₹433 now\nPlace order"
+    assert gate.facts(fake_page(text=text), [])["total"] == "₹1,299"
+    w, page = cart(text, 500.0)
+    assert gate.preauthorised(w.state, gate.facts(page, []), page) is False
+    assert gate.money_lines(text)[2] == "Pay in 3 EMIs: you pay ₹433 now"  # still a money line
