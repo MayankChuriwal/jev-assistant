@@ -3,14 +3,15 @@ its own thread — at most three at once and one per site."""
 
 import base64
 import itertools
+import os
 import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
 
 from . import jev, messages, planner, rules, skills
-from .gate import cap
-from .memory import UNSTORABLE, Memory, Unstorable
+from .gate import cap, rule_cap, same_cart
+from .memory import RULE_DAYS, UNSTORABLE, Memory, Unstorable, rupees
 from .privacy import SECRETS, Secrets
 from .worker import DELEGATE, STOPPED, Worker
 
@@ -73,6 +74,7 @@ class Core:
         self.slots = threading.Condition(self.lock)
         self.tasks, self.queue, self.open, self.log = {}, [], None, []
         self.remembering, self.routes = {}, {}
+        self.offers, self.offer_ids = {}, itertools.count(1)  # buttons offered after a task, by key
         self.task_ids, self.question_ids = itertools.count(1), itertools.count(1)
 
     def worker_for(self, task, url, asker, notify):
@@ -220,6 +222,8 @@ class Core:
             if intent is None and asked is not None and self.open is asked and asked.task is task:
                 return self.answer(asked, {"type": "text", "text": text})  # still the question it was sent to
             return self.amend(task, text)
+        if kind == "rule":
+            return self.decide_rule(rest)
         question = next((q for q in self.queue if q.sent and event["reply_id"].startswith(f"q{q.id}:")), None)
         if question and messages.reply_for(question.id, question.message.get("options") or [], event) is not None:
             return self.answer(question, event)  # any question on screen, even one a code request moved aside
@@ -267,6 +271,40 @@ class Core:
             except Exception as error:
                 return self.say(f"I couldn't save that: {error}")
             self.say(f"Saved for next time: {preference}")
+
+    def offer_rules(self, task):
+        """After an order you approved that the site confirmed, with its cart and rupee total read: offer to place the
+        same order next time without asking, up to the total and a fifth. Never on a bench run, and never twice."""
+        if task.script is not None or not task.worker:
+            return
+        for order in task.worker.state.get("orders", []):
+            limit = rule_cap(order["total"])
+            if order["by"] != "user" or not order["cart"] or limit is None or any(
+                    same_cart(rule["cart"], order["cart"]) for rule in self.memory.rules_for(order["site"])):
+                continue
+            key = f"rule:{next(self.offer_ids)}"
+            self.offers[key] = (order["site"], order["cart"], limit)
+            off = "" if os.environ.get("JEV_PREAUTH", "shadow") == "on" else (
+                "\n(Pre-approval is off, so until JEV_PREAUTH=on I'd still ask, and tell you the rule would have "
+                "covered it.)")
+            self.buttons(f"Next time, place this same order on {order['site']} without asking, up to "
+                         f"{rupees(limit)}?{off}",
+                         [(f"{key}:yes", "Don't ask next time"), (f"{key}:no", "Keep asking")])
+
+    def decide_rule(self, rest):
+        number, _, choice = rest.partition(":")
+        offer = self.offers.pop(f"rule:{number}", None)
+        if offer is None:
+            return None  # decided already
+        if choice != "yes":
+            return self.say("OK. I'll keep asking before placing it.")
+        site, items, limit = offer
+        try:
+            self.memory.approve(site, items, limit, "Don't ask next time", actor="user")
+        except Exception as error:
+            return self.say(f"I couldn't save that: {error}")
+        self.say(f"Saved: your standing approval for this order on {site}, up to {rupees(limit)}, for {RULE_DAYS} "
+                 "days. Say “stop that rule” to end it.")
 
     def show_next(self):
         """Open the next question. A code or password request opens at once, moving an ordinary question aside
@@ -381,6 +419,10 @@ class Core:
                     task.worker.close()
                 except Exception:
                     pass
+                try:
+                    self.offer_rules(task)
+                except Exception as error:  # never stops the slot release below
+                    self.say(f"I couldn't offer to remember that order: {error}", task)
             with self.slots:
                 self.slots.notify_all()
             self.update_typing()

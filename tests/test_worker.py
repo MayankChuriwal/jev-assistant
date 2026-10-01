@@ -1081,3 +1081,18 @@ def test_a_label_taken_from_the_page_is_cleaned_and_capped(tmp_path):
     w.profile_value("shop_code", {"label": "Your\nshop\tcode " + "x" * 100})
     assert len(w.asked[0]["text"].split("What's your ")[1].split("? It stays")[0]) == 60
     assert "\n" not in w.asked[0]["text"] and "\t" not in w.asked[0]["text"]
+
+
+# ---- Plan 7 Task 5: the commit carries what was approved
+
+
+def test_a_confirmed_order_records_the_approved_cart_total_and_who_said_yes(tmp_path, monkeypatch):
+    page = fake_page(text="Checkout\nDiet Coke 300 ml × 1 — ₹40\nDelivery ₹39\nTotal ₹79\nPay ₹79")
+    w = worker_with(tmp_path, replies=[{"text": "yes"}], page=page)
+    script_planner(monkeypatch, turn(subgoals=[sub("place the order", kind="commit")]), turn())
+    script_jev(monkeypatch, {"next": "CLICK", "click_target": "Pay"})
+    jev_checks(monkeypatch)
+    for _ in range(3):  # plan; ask and bind the yes; place the order and see it confirmed
+        w.command("tick")
+    assert w.state["orders"] == [{"label": "Pay ₹79", "site": "shop.test", "total": "₹79", "by": "user",
+                                  "cart": [{"item": "diet coke 300 ml", "qty": 1}]}]

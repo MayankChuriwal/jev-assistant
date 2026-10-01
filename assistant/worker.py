@@ -119,7 +119,7 @@ class Worker:
             subgoal_steps=0, loop_from=0, code_asks=0, model_errors=0, mismatches=0, done_refusals=0,
             captcha_rounds=0, meter=new_meter(), escalations={}, margins=[], situations=[], uploaded=[], held=None,
             told_at=None, delegated_at=None, relaying=False, skill=None, preauth=False, cap=None, site="",
-            cleared_maybe=[], idle=0,
+            cleared_maybe=[], idle=0, orders=[], checkout=None,
         )
 
     # ---- what the user and the models see
@@ -874,8 +874,12 @@ class Worker:
         if typing:
             s["typed"][typing[0]] = typing[1]
         if commit:
+            approval = s["approval"] or {}
             s["approval"] = None
-            s["commit"] = {"label": commit, "since": s["elapsed_ms"], "goal": goal or s["goal"]}
+            s["commit"] = {"label": commit, "since": s["elapsed_ms"], "goal": goal or s["goal"],
+                           "site": skills.bare(approval.get("host", rules.host(page["url"])).lower()),
+                           "cart": approval.get("cart") or [], "total": approval.get("amount") or "",
+                           "by": approval.get("by")}
         if shown and str(shown).startswith("[secret:"):
             for node in action.get("group") or [action.get("node")]:
                 self.secrets.nodes.add((action.get("frame"), node))

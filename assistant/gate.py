@@ -2,6 +2,7 @@
 the yes to its control, and watching what the site does next. The facts come from the page by code; Jev only
 confirms, and it can never clear a control the commit rule matches outright."""
 
+import math
 import os
 import re
 import time
@@ -10,6 +11,7 @@ import unicodedata
 from . import jev, planner, rules, skills
 from .browser import StalePage
 from .errors import Halt, Retry
+from .memory import rupees
 
 COMMIT_OPS = {"CLICK", "DOUBLE_CLICK", "PRESS_KEY", "ACCEPT_DIALOG", "LOOK"}
 CLICKS = {"CLICK", "DOUBLE_CLICK"}
@@ -48,6 +50,10 @@ SCALES = {"k": 1e3, "thousand": 1e3, "thousands": 1e3, "l": 1e5, "lakh": 1e5, "l
 LETTERS = {"k", "l", "m"}  # the suffixes that can also be a unit: litres, metres
 UNIT = re.compile(r"\s?(?:ml|ltrs?|litres?|liters?|l|g|gms?|grams?|kgs?|mg|oz|lbs?|pcs?|pieces?|packs?|units?|cm|mm|"
                   r"km|m|%)(?![A-Za-z])", re.IGNORECASE)  # "300 ml" is a size, not an amount
+ITEM_AFTER = re.compile(r"^(?P<item>.*?[^\W\d_].*?)\s*(?:×|(?<=\s)[xX])\s*(?P<qty>\d{1,3})(?![\d.,])(?!" +
+                        UNIT.pattern + ")", re.IGNORECASE)  # "Diet Coke 300 ml × 2"; never "Box x 200ml"
+ITEM_BEFORE = re.compile(r"^(?P<qty>\d{1,3})\s*(?:×|[xX](?=\s))\s*(?P<item>.*[^\W\d_].*)$", re.IGNORECASE)  # "2 x Atta"
+QTY_LINE = re.compile(r"^(?:qty|quantity)\s*:?\s*(?P<qty>\d{1,3})$", re.IGNORECASE)  # "Qty 2" under the item's line
 TICKING = re.compile(  # a clock or a countdown changes by itself: these tokens, and their number, are not money
     r"\b\d{1,2}:\d{2}(?::\d{2})?\b|\b(?<![\d,.])\d+(?:\.\d+)?\s*(?:mins?|minutes?|secs?|seconds?|hrs?|hours?|left)\b|"
     r"\b(?:left|expires?|expiring|eta|arriv\w+|by)\b", re.IGNORECASE)
@@ -295,6 +301,41 @@ def payable(text):
     return chosen
 
 
+def item_name(text):
+    """An item as a cart line names it: lowercased, without prices, ₹, or separators."""
+    text = rules.PRICE.sub(" ", text).replace("₹", " ")
+    return " ".join(re.sub(r"[—–|:,]+|\s-\s", " ", text).lower().split()).strip(" -")
+
+
+def cart(text):
+    """The cart lines the page shows, as items and quantities: "Diet Coke 300 ml × 2", "2 x Atta 1 kg", or "Qty 2"
+    under the item's own line. Each item once; [] when none can be read, and then no standing approval applies."""
+    lines = flat(text).splitlines()
+    found = []
+    for i, line in enumerate(lines):
+        if m := QTY_LINE.match(line):
+            item = item_name(lines[i - 1]) if i else ""
+        elif m := ITEM_BEFORE.match(line) or ITEM_AFTER.match(line):
+            item = item_name(m["item"])
+        else:
+            continue
+        if item and int(m["qty"]):
+            found.append((item, int(m["qty"])))
+    return [{"item": item, "qty": qty} for item, qty in dict.fromkeys(found)]
+
+
+def same_cart(one, other):
+    """The same items and quantities, in any order."""
+    return sorted((i["item"], int(i["qty"])) for i in one) == sorted((i["item"], int(i["qty"])) for i in other)
+
+
+def rule_cap(total):
+    """A standing approval's cap for an order of this total: a fifth more, rounded up to the next ₹10. None when the
+    total isn't a rupee amount."""
+    value = amount(total or "")
+    return math.ceil(round(value * 1.2 / 10, 6)) * 10.0 if value else None
+
+
 def own_words(action):
     """A control's own name and the words it shows, without the context added to tell it apart from others."""
     return " ".join(filter(None, [action.get("name", action.get("label") or ""), action.get("shown")]))
@@ -409,7 +450,7 @@ def bind(state, action, label, total, page, by):
     target = (action.get("frame"), action["node"]) if action.get("node") is not None else None
     state["approval"] = {"action_label": label, "amount": total or "", "host": rules.host(page["url"]),
                          "step": len(state["history"]), "target": target, "by": by,
-                         "snapshot": snapshot(page["text"])}
+                         "cart": cart(page["text"]), "snapshot": snapshot(page["text"])}
     if action.get("point"):
         state["approval"]["look"] = {"point": action["point"]}
 
@@ -427,6 +468,23 @@ def preauthorised(state, found, page):
     value = amount(found["total"])
     return (value is not None and state["cap"] is not None and value <= state["cap"]
             and worst(page["text"]) <= state["cap"])
+
+
+def standing(w, found, page):
+    """The live standing approval that covers this checkout, or None: a rule for this site whose cart is the page's
+    cart, with the payable total and every money line within its cap."""
+    if w.memory is None or found["total"] is None:
+        return None
+    value, items = amount(found["total"]), cart(page["text"])
+    if value is None or not items:
+        return None
+    here = skills.bare(rules.host(page["url"]).lower())
+    try:
+        live = w.memory.rules_for(here)
+    except Exception:
+        return None  # memory unreachable: no rule can be checked, so ask
+    return next((rule for rule in live if same_cart(rule["cart"], items)
+                 and value <= rule["cap"] and worst(page["text"]) <= rule["cap"]), None)
 
 
 def approved(w, page, action, label, subgoal):
@@ -457,7 +515,7 @@ def approved(w, page, action, label, subgoal):
     total = found["total"] or ""  # never a fee from the summary: the snapshot guards what was shown
     if total and not rules.amount_shown(total, page["text"]):
         total = ""  # the raw page spells it differently (a number split in parts): approval_valid would void the yes
-    shadow = False
+    shadow = covered = False
     if matched and preauthorised(s, found, page):
         if w.bench:
             s["bench_preauth"] = True  # a bench run logs what it would have done, then asks like any other
@@ -467,11 +525,32 @@ def approved(w, page, action, label, subgoal):
             w.say("Placing: " + " · ".join(lines))
             bind(s, action, label, total, page, "preauth")
             return True
+    elif matched and s["cap"] is None and (rule := standing(w, found, page)):  # the user's own cap always wins
+        if w.bench:
+            s["bench_standing"] = True  # logged: a bench run never uses a standing approval
+        elif os.environ.get("JEV_PREAUTH", "shadow") != "on":
+            s["standing_shadow"] = covered = True  # asked anyway until pre-approval is switched on
+        else:
+            try:
+                w.memory.used(rule["id"])
+            except Exception:
+                rule = None  # a use that can't be recorded is not a use: ask
+            if rule:
+                w.say(f"Placing your usual {rule['site']} order ({tight(found['total'])}) under your "
+                      f"{rupees(rule['cap'])} rule (until {rule['expires_at']:%d %b}). Say “stop that rule” to end it.")
+                bind(s, action, label, total, page, "standing")
+                s["approval"]["rule"] = rule["id"]
+                return True
+    s["checkout"] = {"site": skills.bare(rules.host(page["url"]).lower()), "cart": cart(page["text"]),
+                     "total": found["total"]}  # what this question shows: the bench's would-a-rule-have-fired check
     host = rules.host(page["url"]).removeprefix("www.")
     question = "\n".join([lines[0], *(f"• {line}" for line in lines[1:])]) + \
         f"\n\nI'll press “{label}” on {host}. Reply yes to go ahead, or tell me what to change."
     if shadow:
         question += "\n(You said not to ask. I'm asking anyway until pre-approval is switched on: set JEV_PREAUTH=on.)"
+    if covered:
+        question += "\n(Your standing approval for this order would have covered it. It applies once pre-approval is " \
+                    "switched on: set JEV_PREAUTH=on.)"
     reply = w.ask({"kind": "text", "text": question, "approval": True})
     answer = str(reply.get("text", "")).strip()
     s["chat"] += [{"from": "agent", "text": question}, {"from": "user", "text": f"“{answer}”"}]
@@ -485,7 +564,8 @@ def approved(w, page, action, label, subgoal):
 def watch(w, label, goal):
     """After a commit: wait (no planner) while the site works; the outcome becomes a note for the planner."""
     s = w.state
-    since, told, unclear = s["commit"]["since"], False, 0
+    commit = s["commit"]
+    since, told, unclear = commit["since"], False, 0
     while True:
         verdict = jev.after_commit(s["page"], goal, label)
         if verdict == "processing":
@@ -510,6 +590,8 @@ def watch(w, label, goal):
                           "own approval.")
     elif verdict == "confirmed":
         s["done"].append(label)
+        s["orders"].append({"label": label, "site": commit.get("site") or s["site"], "cart": commit.get("cart") or [],
+                            "total": commit.get("total") or "", "by": commit.get("by")})
         s["notes"].append(f"Done: {label}, confirmed by the site. Report every detail the page shows.")
     elif verdict == "failed":
         s["notes"].append(f"{label} failed; trying again needs a new approval.")

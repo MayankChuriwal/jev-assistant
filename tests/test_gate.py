@@ -16,12 +16,12 @@ PAY = next(a for a in fake_page()["actions"] if a["label"] == "Pay ₹79")
 class Fake:
     """What the gate uses of a worker."""
 
-    bench, processing_ms, outcome_pause = False, 300000, 0
+    bench, processing_ms, outcome_pause, memory = False, 300000, 0, None
 
     def __init__(self, page, replies=(), preauth=False, cap=None):
         self.state = {"goal": "Order one Diet Coke", "chat": [], "recent": [page["text"]], "history": [],
                       "approval": None, "commit": None, "preauth": preauth, "cap": cap, "site": "shop.test",
-                      "notes": [], "done": [], "mismatches": 0, "page": page, "reason": None,
+                      "notes": [], "done": [], "orders": [], "mismatches": 0, "page": page, "reason": None,
                       "browser": Mock(fresh=Mock(return_value=True), focused_label=Mock(return_value=""))}
         self.replies, self.asked, self.said = list(replies), [], []
 
@@ -1131,3 +1131,113 @@ def test_a_cvv_equal_to_a_spaced_price_group_never_makes_the_payable_pre_approve
     assert found["total"] in (None, "₹1,299", "₹1 299")
     state = {**w.state, "preauth": True, "cap": 500.0, "site": "shop.test"}
     assert gate.preauthorised(state, found, page) is False
+
+
+# ---- Plan 7 Task 5: cart lines and standing approvals
+
+SHOP = "Checkout\nDiet Coke 300 ml × 1 — ₹40\nDelivery ₹39\nTotal ₹79\nPay ₹79"
+COKE = [{"item": "diet coke 300 ml", "qty": 1}]
+
+
+def test_cart_reads_items_and_quantities():
+    text = ("Checkout\nDiet Coke 300 ml × 2 — ₹80\n2 x Atta 1 kg ₹60\nAmul Taaza 500 ml\nQty: 1\nBox x 200ml\nClose ×\n"
+            "Delivery ₹39\nTotal ₹179\nDiet Coke 300 ml × 2 — ₹80\nLux Soap x2")
+    assert gate.cart(text) == [{"item": "diet coke 300 ml", "qty": 2}, {"item": "atta 1 kg", "qty": 2},
+                               {"item": "amul taaza 500 ml", "qty": 1}, {"item": "lux soap", "qty": 2}]
+    assert gate.cart(fake_page()["text"]) == []  # no quantities shown: no cart, so no rule can apply
+    assert gate.same_cart(COKE + [{"item": "atta 1 kg", "qty": 2}], [{"item": "atta 1 kg", "qty": 2}] + COKE)
+    assert not gate.same_cart(COKE, [{"item": "diet coke 300 ml", "qty": 2}])
+
+
+def test_a_standing_approvals_cap_is_the_total_and_a_fifth_rounded_up_to_ten_rupees():
+    assert (gate.rule_cap("₹79"), gate.rule_cap("₹245"), gate.rule_cap("₹125"), gate.rule_cap("$79")) == \
+        (100.0, 300.0, 150.0, None)
+
+
+def with_rule(monkeypatch, memory, *, text=SHOP, site="shop.test", qty=1, limit=100, days=30, mode="on", **fake):
+    monkeypatch.setenv("JEV_PREAUTH", mode)
+    rule = memory.approve(site, [{"item": "diet coke 300 ml", "qty": qty}], limit, "Don't ask next time", days=days)
+    page = fake_page(text=text)
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no"}], **fake)
+    w.memory = memory
+    return w, page, rule
+
+
+def test_a_standing_approval_places_the_usual_order_and_says_so(monkeypatch, memory):
+    w, page, rule = with_rule(monkeypatch, memory)
+    assert gate.approved(w, page, PAY, "Pay ₹79", None) is True
+    said = w.said[0]
+    assert said.startswith("Placing your usual shop.test order (₹79) under your ₹100 rule (until ")
+    assert said.endswith("Say “stop that rule” to end it.") and w.asked == []
+    assert w.state["approval"]["by"] == "standing" and w.state["approval"]["rule"] == rule
+    assert w.state["approval"]["cart"] == COKE and memory.live_rules()[0]["uses"] == 1
+
+
+@pytest.mark.parametrize("change", ["another site", "another cart", "over the cap", "a money line over the cap",
+                                    "expired", "revoked", "Jev says it doesn't match"])
+def test_a_standing_approval_covers_only_its_own_site_cart_and_cap_while_it_is_live(monkeypatch, memory, change):
+    options = {"another site": {"site": "other.test"}, "another cart": {"qty": 2}, "over the cap": {"limit": 78},
+               "a money line over the cap": {"text": SHOP + "\nConvenience fee ₹150"}, "expired": {"days": 0}}
+    w, page, rule = with_rule(monkeypatch, memory, **options.get(change, {}))
+    if change == "revoked":
+        memory.forget(f"rule:{rule}")
+    if change == "Jev says it doesn't match":
+        checks(monkeypatch, matches="no")
+        w.state["mismatches"] = 2  # the summary goes to the user after two mismatches
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert len(w.asked) == 1 and not any(line.startswith("Placing") for line in w.said)
+
+
+def test_a_bench_run_only_logs_a_standing_approval(monkeypatch, memory):
+    w, page, _ = with_rule(monkeypatch, memory)
+    w.bench = True
+    with pytest.raises(Retry):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert w.state["bench_standing"] is True and len(w.asked) == 1 and memory.live_rules()[0]["uses"] == 0
+
+
+def test_with_pre_approval_off_a_standing_approval_is_only_reported(monkeypatch, memory):
+    w, page, _ = with_rule(monkeypatch, memory, mode="shadow")
+    with pytest.raises(Retry):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert "Your standing approval for this order would have covered it." in w.asked[0]["text"]
+    assert w.state["standing_shadow"] is True and memory.live_rules()[0]["uses"] == 0
+    assert w.state["checkout"] == {"site": "shop.test", "cart": COKE, "total": "₹79"}
+
+
+def test_your_own_words_come_before_a_standing_approval(monkeypatch, memory):
+    w, page, _ = with_rule(monkeypatch, memory, preauth=True, cap=100.0)
+    assert gate.approved(w, page, PAY, "Pay ₹79", None) is True
+    assert w.state["approval"]["by"] == "preauth" and memory.live_rules()[0]["uses"] == 0
+
+
+def test_a_confirmed_order_keeps_its_site_cart_total_and_who_approved_it(monkeypatch):
+    w = Fake(fake_page(text=SHOP))
+    w.state["commit"] = {"label": "Pay ₹79", "since": 0, "goal": "Order a coke", "site": "shop.test", "cart": COKE,
+                         "total": "₹79", "by": "user"}
+    monkeypatch.setattr(gate.jev, "after_commit", lambda *a: "confirmed")
+    gate.watch(w, "Pay ₹79", "Order a coke")
+    assert w.state["orders"] == [{"label": "Pay ₹79", "site": "shop.test", "cart": COKE, "total": "₹79", "by": "user"}]
+
+
+def test_a_cap_in_your_own_words_is_never_raised_by_a_standing_approval(monkeypatch, memory):
+    w, page, _ = with_rule(monkeypatch, memory, preauth=True, cap=50.0)  # you said "under ₹50"; the rule allows ₹100
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert len(w.asked) == 1 and memory.live_rules()[0]["uses"] == 0 and w.state["approval"] is None
+
+
+@pytest.mark.parametrize("broken", ["rules_for", "used"])
+def test_a_standing_approval_that_cannot_be_read_or_recorded_is_not_used(monkeypatch, memory, broken):
+    w, page, _ = with_rule(monkeypatch, memory)
+
+    def fail(*args):
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(memory, broken, fail)
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert len(w.asked) == 1 and not any(line.startswith("Placing") for line in w.said)

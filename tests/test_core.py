@@ -741,3 +741,47 @@ def test_a_message_with_more_than_five_errands_starts_five_and_says_so(world):
     assert until(lambda: set(goals[:5]) <= set(world.agents))
     assert "On it: 5 tasks. I'll start with the first five; ask again for the rest." in bodies(world)
     assert not set(goals[5:]) & set(world.agents)
+
+
+# ---- Plan 7 Task 5: the standing-approval offer
+
+ORDER = {"label": "Pay ₹79", "site": "shop.test", "cart": [{"item": "diet coke 300 ml", "qty": 1}], "total": "₹79",
+         "by": "user"}
+
+
+def ended(orders, script=None):
+    return SimpleNamespace(script=script, worker=SimpleNamespace(state={"orders": orders}))
+
+
+def test_an_order_you_approved_and_the_site_confirmed_offers_a_standing_approval(world, monkeypatch):
+    monkeypatch.setenv("JEV_PREAUTH", "on")
+    world.scripts["Order Diet Coke"] = [lambda agent: agent.state.update(orders=[dict(ORDER)]), tell("Ordered.")]
+    text(world, "Order Diet Coke")
+    assert until(lambda: interactive(world))
+    assert bodies(world)[-1] == "Next time, place this same order on shop.test without asking, up to ₹100?"
+    assert buttons(world) == ["rule:1:yes", "rule:1:no"]
+    tap(world, "rule:1:yes")
+    rule = world.core.memory.live_rules()[0]
+    assert (rule["site"], rule["cart"], rule["cap"]) == ("shop.test", ORDER["cart"], 100.0)
+    assert bodies(world)[-1].startswith("Saved: your standing approval for this order on shop.test, up to ₹100, for 30 "
+                                        "days.")
+
+
+def test_keep_asking_saves_nothing_and_the_offer_says_when_pre_approval_is_off(world):
+    world.core.offer_rules(ended([dict(ORDER)]))
+    assert "Pre-approval is off" in bodies(world)[-1]
+    tap(world, "rule:1:no")
+    assert world.core.memory.live_rules() == [] and bodies(world)[-1] == "OK. I'll keep asking before placing it."
+    tap(world, "rule:1:yes")  # an offer is decided once
+    assert world.core.memory.live_rules() == []
+
+
+@pytest.mark.parametrize("change", [{"by": "preauth"}, {"by": "standing"}, {"cart": []}, {"total": ""},
+                                    {"total": "$79"}, {"bench": True}, {"ruled": True}])
+def test_no_offer_without_your_yes_a_readable_rupee_order_or_on_the_bench_or_twice(world, change):
+    change = dict(change)
+    if change.pop("ruled", False):  # a live rule already covers this order
+        world.core.memory.approve("shop.test", ORDER["cart"], 100, "Don't ask next time")
+    bench = change.pop("bench", False)
+    world.core.offer_rules(ended([{**ORDER, **change}], script=[] if bench else None))
+    assert interactive(world) == []
