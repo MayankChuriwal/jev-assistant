@@ -20,6 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+import psycopg
+
 PORT = 9333
 CHAT_PORT = 8766
 MAX_WEBHOOK = 64 * 1024
@@ -53,25 +55,41 @@ def home():
 
 
 def save_key(key, path=None):
-    """Append JEV_MEMORY_KEY to .env (creating it), readable only by the user."""
+    """Put JEV_MEMORY_KEY in .env, creating it. An empty `JEV_MEMORY_KEY=` placeholder line is filled in, never
+    duplicated. The file is made readable only by the user: a new one is created that way, never world-readable."""
     path = Path(path) if path else Path.cwd() / ".env"
-    text = path.read_text() if path.exists() else ""
-    path.write_text(text + ("\n" if text and not text.endswith("\n") else "") + f"JEV_MEMORY_KEY={key}\n")
-    path.chmod(0o600)
+    lines = path.read_text().splitlines() if path.exists() else []
+    line, done, out = f"JEV_MEMORY_KEY={key}", False, []
+    for existing in lines:
+        if re.fullmatch(r"\s*JEV_MEMORY_KEY\s*=\s*", existing):
+            if not done:
+                out.append(line)
+            done = True
+        else:
+            out.append(existing)
+    if not done:
+        out.append(line)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as file:
+        file.write("\n".join(out) + "\n")
+    path.chmod(0o600)  # an .env that already existed may have been looser
 
 
 def open_memory(*, strict=True, **options):
     """The user's memory, ready, or None after saying why not: Postgres reached, the key in place, and Phase A's
     profile.json imported once. With no JEV_MEMORY_KEY and no ID stored yet, a key is generated into .env. With IDs
     stored and no key, a strict open (the chat, `jev run`) refuses, because a new key would lose them; `jev memory`
-    still lists and forgets. `options` (url, schema) go to Memory.open."""
+    still lists and forgets. An empty JEV_MEMORY_KEY counts as missing. Any failure after the connection closes it
+    and says one line. `options` (url, schema) go to Memory.open."""
     from cryptography.fernet import Fernet
 
     from .memory import Memory, StoreError
 
+    memory = None
     try:
         memory = Memory.open(**options)
-        if not os.environ.get("JEV_MEMORY_KEY"):
+        missing = not os.environ.get("JEV_MEMORY_KEY")
+        if missing:
             if memory.has_ids():
                 if strict:
                     memory.close()
@@ -79,22 +97,26 @@ def open_memory(*, strict=True, **options):
                           "your .env (or the host's secrets), or forget them with `jev memory forget id:<key>`.",
                           file=sys.stderr)
                     return None
+                print("jev: JEV_MEMORY_KEY is missing: saved IDs are hidden from this list.", file=sys.stderr)
             else:
                 key = Fernet.generate_key().decode()
+                memory.unlock(key)
                 save_key(key)
                 os.environ["JEV_MEMORY_KEY"] = key
-                memory.unlock(key)
+                missing = False
                 print("jev: Generated JEV_MEMORY_KEY in .env. Keep it: without it, the IDs you save can't be read.",
                       file=sys.stderr)
         if memory.fernet is not None and memory.import_profile(home() / "profile.json"):
             print("jev: Imported your old profile into memory (profile.json is now profile.json.imported).",
                   file=sys.stderr)
         memory.refresh()
-        if memory.unreadable:
+        if memory.unreadable and not missing:
             print(f"jev: Saved IDs this JEV_MEMORY_KEY can't open: {', '.join(memory.unreadable)}. I'll ask for them "
                   "again when a task needs them.", file=sys.stderr)
         return memory
-    except StoreError as error:
+    except (StoreError, psycopg.Error, OSError, ValueError) as error:  # ValueError: a malformed profile.json
+        if memory is not None:
+            memory.close()
         print(f"jev: {error}", file=sys.stderr)
         return None
 
@@ -119,50 +141,64 @@ def memory_command(action="list", rest=()):
     """`jev memory`: what the agent keeps (never an ID's value); set an ID, typed hidden; forget; undo; notes."""
     from .memory import LABELS, StoreError, Unstorable
 
+    if action == "set" and not rest:
+        print("Usage: jev memory set <key> [label]", file=sys.stderr)
+        return 2
+    if action == "forget" and not rest:
+        print("Usage: jev memory forget <ref> (refs come from `jev memory`)", file=sys.stderr)
+        return 2
     memory = open_memory(strict=False)
     if memory is None:
         return 1
+    failed = False
     try:
         if action == "list":
             print_listing(memory.listing())
         elif action == "set":
-            if not rest:
-                print("Usage: jev memory set <key> [label]", file=sys.stderr)
-                return 2
+            if memory.fernet is None:
+                print("jev: JEV_MEMORY_KEY is missing, so IDs can't be kept.", file=sys.stderr)
+                return 1
             key, label = rest[0], " ".join(rest[1:])
             memory.set_id(key, label, getpass.getpass(f"{label or key} (hidden): "), actor="user")
             print(f"Saved your {label or LABELS.get(key) or key.replace('_', ' ')}. The models never see it.")
         elif action == "forget":
-            if not rest:
-                print("Usage: jev memory forget <ref> (refs come from `jev memory`)", file=sys.stderr)
-                return 2
-            for ref in rest:
-                print(f"Forgot {memory.forget(ref)}.")
+            for ref in rest:  # every ref is tried; one that fails doesn't stop the others
+                try:
+                    print(f"Forgot {memory.forget(ref)}.")
+                except KeyError:
+                    print(f"jev: nothing matches {ref}", file=sys.stderr)
+                    failed = True
+                except (StoreError, Unstorable, ValueError) as error:
+                    print(f"jev: {ref}: {error}", file=sys.stderr)
+                    failed = True
         elif action == "undo":
             print(f"Undone: {memory.undo()}.")
         else:  # notes
             learned = memory.learned()
             for host in ([rest[0]] if rest else sorted(learned)):
                 print(host + "".join(f"\n  • {line}" for line in learned.get(host, [])))
-    except KeyError as error:
-        print(f"jev: nothing matches {error.args[0] if error.args else ''}", file=sys.stderr)
+    except KeyError as error:  # undo: its message says what's wrong ("nothing to undo")
+        print(f"jev: {error.args[0] if error.args else 'nothing matches'}", file=sys.stderr)
         return 1
     except (StoreError, Unstorable, ValueError) as error:
         print(f"jev: {error}", file=sys.stderr)
         return 1
     finally:
         memory.close()
-    return 0
+    return 1 if failed else 0
 
 
 def purge_daily(memory, every=3600):
-    """While jev runs: once an hour, clear the copies of anything forgotten more than a day ago."""
+    """While jev runs: once an hour, clear the copies of anything forgotten more than a day ago. Only a database
+    problem is waited out; any other error is a bug and ends the thread loudly."""
+    from .memory import StoreError
+
     while True:
         time.sleep(every)
         try:
             memory.purge()
-        except Exception:  # Postgres away for a moment: the next hour tries again
-            pass
+        except (StoreError, psycopg.Error) as error:  # Postgres away for a moment: the next hour tries again
+            print(f"jev: couldn't clear forgotten copies: {error}", file=sys.stderr)
 
 
 def chrome_command():

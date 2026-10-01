@@ -190,3 +190,162 @@ def test_jev_memory_lists_sets_forgets_and_undoes(monkeypatch, capsys):
     capsys.readouterr()
     assert server.main(["memory", "notes"]) == 0
     assert "zeptonow.com\n  • Search appears after the location pop-up closes" in capsys.readouterr().out
+
+
+# ---- Plan 7 Task 4 fixes: the purge loop, .env handling, failures at start-up, `jev memory` edge cases
+
+
+def test_purge_daily_waits_out_a_database_problem_but_not_a_bug(capsys):
+    from assistant.memory import StoreError
+
+    class Flaky:
+        calls = 0
+
+        def purge(self):
+            self.calls += 1
+            if self.calls < 3:
+                raise StoreError("Postgres isn't reachable")
+            raise RuntimeError("a programming error")
+
+    flaky = Flaky()
+    with pytest.raises(RuntimeError):  # the bug is not swallowed; in the daemon thread it ends it loudly
+        server.purge_daily(flaky, every=0.001)
+    assert flaky.calls == 3
+    assert capsys.readouterr().err.count("couldn't clear forgotten copies: Postgres isn't reachable") == 2
+
+
+def test_save_key_fills_an_empty_placeholder_and_appends_when_absent(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("ANTHROPIC_API_KEY=abc\nJEV_MEMORY_KEY=\nBU_NAME=jev\n")
+    env.chmod(0o644)
+    server.save_key("KEY1", env)
+    assert env.read_text() == "ANTHROPIC_API_KEY=abc\nJEV_MEMORY_KEY=KEY1\nBU_NAME=jev\n"
+    assert env.stat().st_mode & 0o777 == 0o600
+    other = tmp_path / "other.env"
+    other.write_text("ANTHROPIC_API_KEY=abc")  # no trailing newline
+    server.save_key("KEY2", other)
+    assert other.read_text() == "ANTHROPIC_API_KEY=abc\nJEV_MEMORY_KEY=KEY2\n"
+
+
+def test_an_empty_key_in_env_is_generated_over_and_survives_the_next_start(tmp_path, monkeypatch, database_url):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JEV_DATABASE_URL", database_url)
+    monkeypatch.setenv("JEV_HOME", str(tmp_path))
+    (tmp_path / ".env").write_text("BU_NAME=jev\nJEV_MEMORY_KEY=\n")
+    monkeypatch.setenv("JEV_MEMORY_KEY", "")  # what load_environment leaves for an empty line
+    schema = f"t_{uuid.uuid4().hex[:12]}"
+    memory = server.open_memory(schema=schema)
+    try:
+        text = (tmp_path / ".env").read_text()
+        assert text.count("JEV_MEMORY_KEY=") == 1 and text.startswith("BU_NAME=jev\n")
+        key = text.split("JEV_MEMORY_KEY=")[1].strip()
+        assert key and os.environ["JEV_MEMORY_KEY"] == key
+        memory.set_id("phone", "phone number", "+91 98765 43210")
+        monkeypatch.delenv("JEV_MEMORY_KEY")
+        server.load_environment(tmp_path / ".env")  # the next start reads the key back from .env
+        again = server.open_memory(schema=schema)
+        assert again is not None and again.id_value("phone") == "+91 98765 43210"
+        again.close()
+    finally:
+        memory.drop()
+
+
+def test_new_env_file_is_never_world_readable(tmp_path, monkeypatch):
+    seen = {}
+    real_open = os.open
+
+    def spy(path, flags, mode=0o777, **kwargs):
+        seen["mode"] = mode
+        return real_open(path, flags, mode, **kwargs)
+
+    monkeypatch.setattr(server.os, "open", spy)
+    server.save_key("KEY", tmp_path / ".env")
+    assert seen["mode"] == 0o600
+
+
+def test_a_malformed_profile_stops_the_start_with_one_line_and_closes_memory(tmp_path, monkeypatch, database_url,
+                                                                           capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JEV_DATABASE_URL", database_url)
+    monkeypatch.setenv("JEV_HOME", str(tmp_path))
+    (tmp_path / "profile.json").write_text("{not json")
+    schema = f"t_{uuid.uuid4().hex[:12]}"
+    closed = []
+    from assistant.memory import Memory
+
+    real_close = Memory.close
+    monkeypatch.setattr(Memory, "close", lambda self: (closed.append(1), real_close(self))[1])
+    assert server.open_memory(schema=schema) is None
+    err = capsys.readouterr().err
+    assert err.startswith("jev: ") and "Traceback" not in err and closed
+    cleanup = Memory.open(database_url, schema=schema, key="")
+    cleanup.drop()
+
+
+def test_a_key_that_cannot_be_saved_stops_the_start_with_one_line(tmp_path, monkeypatch, database_url, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JEV_DATABASE_URL", database_url)
+    monkeypatch.delenv("JEV_MEMORY_KEY", raising=False)
+    monkeypatch.setattr(server, "save_key", lambda key, path=None: (_ for _ in ()).throw(OSError("read-only disk")))
+    schema = f"t_{uuid.uuid4().hex[:12]}"
+    assert server.open_memory(schema=schema) is None
+    assert "jev: read-only disk" in capsys.readouterr().err
+    from assistant.memory import Memory
+
+    Memory.open(database_url, schema=schema, key="").drop()
+    assert "JEV_MEMORY_KEY" not in os.environ
+
+
+def test_listing_without_the_key_says_ids_are_hidden_not_that_the_key_cannot_open_them(tmp_path, monkeypatch,
+                                                                                      database_url, capsys):
+    from conftest import TEST_KEY
+
+    from assistant.memory import Memory
+
+    schema = f"t_{uuid.uuid4().hex[:12]}"
+    seeded = Memory.open(database_url, schema=schema, key=TEST_KEY)
+    seeded.set_id("phone", "phone number", "+91 98765 43210")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JEV_DATABASE_URL", database_url)
+    monkeypatch.delenv("JEV_MEMORY_KEY", raising=False)
+    try:
+        listed = server.open_memory(strict=False, schema=schema)
+        err = capsys.readouterr().err
+        assert "JEV_MEMORY_KEY is missing: saved IDs are hidden from this list" in err and "can't open" not in err
+        listed.close()
+    finally:
+        seeded.drop()
+
+
+def test_memory_undo_says_what_is_wrong_as_is(monkeypatch, capsys):
+    memory = store()
+    monkeypatch.setattr(server, "open_memory", lambda **options: memory)
+    assert server.main(["memory", "undo"]) == 1
+    err = capsys.readouterr().err
+    assert err.strip() == "jev: nothing to undo"
+
+
+def test_memory_forget_tries_every_ref_and_fails_if_any_did(monkeypatch, capsys):
+    memory = store()
+    monkeypatch.setattr(server, "open_memory", lambda **options: memory)
+    first = memory.remember("preference", "likes tea", tags=["general"])
+    second = memory.remember("preference", "likes rice", tags=["general"])
+    assert server.main(["memory", "forget", str(first), "habit:999", str(second)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out.count("Forgot") == 2 and "nothing matches habit:999" in captured.err
+    assert memory.facts() == []
+
+
+def test_memory_set_checks_usage_and_the_key_before_prompting(monkeypatch, capsys):
+    opened = []
+    memory = store()
+    monkeypatch.setattr(server, "open_memory", lambda **options: opened.append(1) or memory)
+
+    def never(prompt):
+        raise AssertionError("prompted for a value that could not be kept")
+
+    monkeypatch.setattr(server.getpass, "getpass", never)
+    assert server.main(["memory", "set"]) == 2 and not opened
+    memory.fernet = None
+    assert server.main(["memory", "set", "phone"]) == 1
+    assert "JEV_MEMORY_KEY is missing, so IDs can't be kept." in capsys.readouterr().err
