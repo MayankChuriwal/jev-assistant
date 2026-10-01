@@ -35,6 +35,8 @@ CIRCLE_ASK = 5  # …and once its runs and the planner's refused tries reach thi
 LOOP_ASKS = 2  # questions about one loop: the next time it comes round, the task stops
 FRUITLESS = 6  # steps in a row Jev judged failed on one page: the planner hears it, once a streak
 BLANK_WAITS = 3  # reads of a blank page before the planner hears it is blank
+FILE_REFUSALS = 3  # a download's DONE refused this often with no file saved: the next one stops the task
+DOWNLOAD_WAIT = 5.0  # seconds a DONE waits for downloads still in flight
 TYPED = {"TYPE_TEXT", "OPEN_URL"}  # what these typed or opened is part of the action
 CONTAINERS = {"", "generic", "group", "region", "main", "document", "presentation", "none", "section", "article",
               "application"}
@@ -212,6 +214,7 @@ class Worker:
             told_at=None, delegated_at=None, relaying=False, skill=None, preauth=False, cap=None, site="",
             cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None, closed=False,
             commit_drops=0, idle_asked=0, circled={}, loops={}, fruitless=None, blank_waits=0, coded=[],
+            file_refusals=0,
         )
 
     # ---- what the user and the models see
@@ -841,6 +844,7 @@ class Worker:
             "memory": self.memory.recall(s["skill"], skills.bare(rules.host(page["url"]).lower()), s["goal"]),
             "steps": self.recent_steps(8),
             "committed_and_waiting": s["commit"]["label"] if s["commit"] else None,
+            "files_saved": [self.file_name(f) for f in s["files"]],
             "page": views.view(page, previous),
             "candidates": [{"n": c["n"], "op": c["op"], "element": c["element"], "p": round(c["p"], 2)}
                            for c in s["candidates"]],
@@ -872,7 +876,8 @@ class Worker:
             parts = urlparse(url)
             if parts.scheme not in {"http", "https"} or not parts.netloc:
                 raise Retry("OPEN_URL needs a full http(s) address in text.")
-            if not skills.template_host(url, skills.site_for(page["url"], self.library["sites"])):
+            if not skills.template_host(url, skills.site_for(page["url"], self.library["sites"]),
+                                        here=urlparse(page["url"]).netloc):
                 raise Retry("A search address built from the site's template must stay on that site.")
             control = self.control(page, "OPEN_URL")
             if self.guard("OPEN_URL", control.get("label") or "OPEN_URL", page, url):
@@ -966,6 +971,8 @@ class Worker:
             s["chat"].append({"from": "user", "text": f"[secret:{name}] (hidden answer; type it as this placeholder)"})
         else:
             s["chat"].append({"from": "user", "text": self.read(message, options, answer)})
+        if (self.subgoal() or {}).get("kind") == "ask":
+            self.advance()  # the plan's question is answered: the next subgoal is current, so CONTINUE can carry on
         s["reason"] = "reply"
         return None
 
@@ -992,8 +999,22 @@ class Worker:
         s = self.state
         if s["commit"]:
             raise Retry("A committed action is still being checked; WAIT first.")
+        missing = ""  # a download that never came, said in the report of a task that committed something first
+        if rules.download_goal(s["goal"]) and not s["files"]:
+            self.settle(DOWNLOAD_WAIT)  # a download still in flight arrives first
+        if rules.download_goal(s["goal"]) and not s["files"]:
+            s["file_refusals"] += 1
+            nothing = "it may have opened in the browser, but no file was saved, so nothing reached you"
+            if s["file_refusals"] <= FILE_REFUSALS:
+                raise Retry("No file has been saved yet, and this goal needs the file itself: press the document's "
+                            "download link or button (one shown in the browser is saved by itself), then DONE once "
+                            "files_saved lists it.")
+            if not any(h.get("committed") for h in s["history"]):
+                raise Halt("blocked", f"The document didn't download from {rules.host(page['url'])}: {nothing}. "
+                                      "Please save it from the agent's Chrome window, or ask me again.")
+            missing = f" The document didn't download, though: {nothing}."
         quote = self.evidence(act["text"].strip(), message, [page["text"], *reversed(s["recent"])])
-        report = message or "Done."
+        report = (message or "Done.") + missing
         # a lookup may read its answer across pages (a comparison of two sites): Jev also sees the last two before
         before = [t for t in s["recent"] if t != page["text"]][-2:] if rules.lookup_goal(s["goal"], s["skill"]) \
             else []

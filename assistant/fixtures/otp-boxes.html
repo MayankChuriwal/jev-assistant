@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Verify your number</title>
+  <style>
+    .boxes { display: flex; gap: 8px; }
+    .boxes input { width: 40px; height: 40px; text-align: center; }
+    .wide input { width: 200px; }
+    .qty input { width: 40px; }
+  </style>
+</head>
+<body>
+  <p>Enter the code sent to your phone</p>
+  <!-- A site's code boxes with no names, no maxlength, and no "1 of 6" labels of their own. -->
+  <form id="verify" onsubmit="event.preventDefault()">
+    <div class="boxes"><input type="number"><input type="number"><input type="number"><input type="number"><input type="number"><input type="number"></div>
+    <button>Verify</button>
+  </form>
+  <!-- Never a code: wide unnamed fields, small named number fields, and little unnamed boxes one under another. -->
+  <div class="wide"><input type="text"><input type="text"><input type="text"><input type="text"></div>
+  <div class="qty">
+    <input type="number" aria-label="Quantity of tea"><input type="number" aria-label="Quantity of coffee"><input type="number" aria-label="Quantity of milk"><input type="number" aria-label="Quantity of sugar">
+  </div>
+  <ul class="qty"><li><input type="text" value="1"></li><li><input type="text" value="2"></li><li><input type="text" value="1"></li><li><input type="text" value="1"></li></ul>
+</body>
+</html>

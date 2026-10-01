@@ -188,6 +188,17 @@ def lookup_goal(goal, skill=None):
     return skill == "lookup" or bool(LOOKS.match(goal))  # never by a "?" alone: "Can you get me a coffee?" orders
 
 
+DOWNLOAD = re.compile(r"\bdownload|\b(?:save|export)\b(?:\s+[\w.'’-]+){0,6}?\s+(?:files?|invoices?|receipts?|"
+                      r"statements?|pdfs?|documents?|bills?|tickets?|certificates?|copy|copies)\b", re.IGNORECASE)
+HOW_TO = re.compile(r"^\W*(?:how|what|why|where|when|which|who)\b", re.IGNORECASE)  # a question about downloading
+
+
+def download_goal(goal):
+    """Whether the goal is done only once a file reaches the user: it downloads, saves, or exports a document."""
+    goal = goal or ""
+    return bool(DOWNLOAD.search(goal)) and not HOW_TO.match(goal)
+
+
 def attempt_limit(key):
     return 2 if key and key.endswith(".cvv") else 3
 

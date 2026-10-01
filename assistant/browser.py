@@ -29,6 +29,7 @@ INCOMING = HOME / "downloads" / ".incoming"
 READ_STATE = Path(__file__).with_name("snapshot.js").read_text()
 MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})()"
 VIEWPORT = {"width": 1120, "height": 780}
+MAX_SHOWN_PDF = 25 * 1024 * 1024  # a PDF Chrome shows in its viewer (no download) is kept up to this size
 DATE_TYPES = {"date", "time", "datetime-local", "month", "week"}
 KEYS = {  # name: (key, code, keyCode, text, modifiers)
     "Enter": ("Enter", "Enter", 13, "\r", 0),
@@ -345,7 +346,8 @@ class Browser:
             watch_popups()
         self.tabs, self.opener, self.frames, self.dialogs, self.titles = {}, {}, {}, {}, {}
         self.alerts, self.downloads, self.pending_downloads = [], [], {}
-        self.chooser = self.intercepted = self.after_input = self.active = None
+        self.chooser = self.intercepted = self.after_input = self.active = self.top = None
+        self.shown_pdfs = set()  # addresses of PDFs already kept from Chrome's viewer
         self.downloads_dir = Path(downloads) if downloads else HOME / "downloads"
         self.geolocation = geolocation
         INCOMING.mkdir(parents=True, exist_ok=True)
@@ -485,6 +487,31 @@ class Browser:
         source.rename(target)
         return str(target)
 
+    def _keep_shown_pdf(self):
+        """A PDF that Chrome shows in its own viewer (an invoice link without an attachment header) starts no download:
+        keep the bytes the tab already loaded, once per address, as a download. Nothing is fetched again, so no request
+        goes anywhere the page didn't; names and the size cap are a download's."""
+        frame = self.top or {}
+        url = frame.get("url", "")
+        if frame.get("mimeType") != "application/pdf" or url in self.shown_pdfs:
+            return
+        self.shown_pdfs.add(url)
+        try:
+            found = self.call("Page.getResourceContent", frameId=frame["id"], url=url, timeout=30.0)
+        except (RuntimeError, TimeoutError, KeyError):
+            return  # gone, or not kept by Chrome: the planner still sees the viewer and its own Download button
+        content = found.get("content") or ""
+        if not found.get("base64Encoded") or len(content) * 3 // 4 > MAX_SHOWN_PDF:
+            return
+        data = base64.b64decode(content)
+        if not data.startswith(b"%PDF"):
+            return
+        name = safe_name(Path(urlparse(url).path).name or "document")
+        self.downloads_dir.mkdir(parents=True, exist_ok=True)
+        path = unique(self.downloads_dir / (name if name.lower().endswith(".pdf") else name + ".pdf"))
+        path.write_bytes(data)
+        self.downloads.append(str(path))
+
     def navigate(self, url):
         self._navigation("Page.navigate", url=url)
 
@@ -537,8 +564,8 @@ class Browser:
         if not self.dialogs.get(self.session):  # an open dialog freezes the page, Page.getFrameTree included
             self._sync_frames(infos)
 
-    def _frame_ids(self, session):
-        ids, stack = [], [self.call("Page.getFrameTree", session)["frameTree"]]
+    def _frame_ids(self, session, tree=None):
+        ids, stack = [], [tree or self.call("Page.getFrameTree", session)["frameTree"]]
         while stack:
             node = stack.pop()
             ids.append(node["frame"]["id"])
@@ -547,7 +574,9 @@ class Browser:
 
     def _sync_frames(self, infos):
         """Attach the active tab's cross-origin frames. Each frame's owner session holds its <iframe> element."""
-        owners = {fid: (self.session, None) for fid in self._frame_ids(self.session)}
+        tree = self.call("Page.getFrameTree")["frameTree"]
+        self.top = tree["frame"]  # the active tab's own document: its address and type
+        owners = {fid: (self.session, None) for fid in self._frame_ids(self.session, tree)}
         seen, progress = set(), True
         frames = [t for t in infos if t["type"] == "iframe"]
         while progress:  # parents are found before children, whatever order Chrome lists them in
@@ -627,6 +656,7 @@ class Browser:
         self._sync()
         page = None
         if not self.dialogs.get(self.session):
+            self._keep_shown_pdf()
             self._settle()
             try:
                 page = self._read_settled()

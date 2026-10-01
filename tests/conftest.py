@@ -115,8 +115,12 @@ def lazy_memory(request, monkeypatch):
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 
+PDF = (b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+       b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n")
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
-    """Static fixtures plus a 403 page and attachment downloads."""
+    """Static fixtures plus a 403 page, attachment downloads, and documents shown inline (a PDF in the browser)."""
 
     def do_GET(self):
         if self.path == "/forbidden":
@@ -125,6 +129,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             name = urllib.parse.unquote(self.path.removeprefix("/download/"))
             return self.reply(200, b"Invoice 123", "text/plain",
                               {"Content-Disposition": f'attachment; filename="{name}"'})
+        if self.path.startswith("/documents/"):  # no attachment header: Chrome shows it in its PDF viewer
+            return self.reply(200, PDF, "application/pdf")
         return super().do_GET()
 
     def reply(self, status, body, mime, headers=None):

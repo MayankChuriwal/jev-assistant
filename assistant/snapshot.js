@@ -205,10 +205,21 @@
     return dirs;
   };
   const ofCount = e => /\b\d+\s*of\s*\d+\s*$/i.test(label(e));  // "Code 1 of 4": one box of a code
-  const otpGroup = e => {
-    for (let p = e.parentElement, i = 0; p && i < 3; p = p.parentElement, i++) {
-      const boxes = [...p.querySelectorAll('input')].filter(b => (b.maxLength === 1 || ofCount(b)) && visible(b));
-      if (boxes.length >= 4 && boxes.length <= 8) return boxes;
+  const codeBox = b => b.maxLength === 1 || ofCount(b);
+  // A little unnamed box holding at most one character: a code's box on a site that sets no maxlength and no name.
+  const bareBox = b => ['number', 'tel', 'text'].includes(b.type) && b.value.length <= 1 && label(b).length <= 1 &&
+    (b.maxLength > 0 ? b.maxLength <= 2 : b.getBoundingClientRect().width > 0 && b.getBoundingClientRect().width <= 72);
+  const inRow = boxes => {  // side by side, as a code's boxes are; a cart's quantity boxes stand one under another
+    const middles = boxes.map(b => { const r = b.getBoundingClientRect(); return r.y + r.height / 2; });
+    return Math.max(...middles) - Math.min(...middles) < 8;
+  };
+  const otpGroup = e => {  // 4 to 8 boxes of one kind in the same container are one code
+    for (const kind of [codeBox, bareBox]) {
+      if (!kind(e)) continue;
+      for (let p = e.parentElement, i = 0; p && i < 3; p = p.parentElement, i++) {
+        const boxes = [...p.querySelectorAll('input')].filter(b => kind(b) && visible(b));
+        if (boxes.length >= 4 && boxes.length <= 8 && (kind === codeBox || inRow(boxes))) return boxes;
+      }
     }
     return null;
   };
@@ -299,7 +310,7 @@
           e.isContentEditable || rname === 'combobox' ? e.innerText.trim() : ''});
         continue;
       }
-      const group = e.tagName === 'INPUT' && (e.maxLength === 1 || ofCount(e)) ? otpGroup(e) : null;
+      const group = e.tagName === 'INPUT' ? otpGroup(e) : null;
       if (group && group[0] !== e) continue;  // one action for a whole one-time-code group
       const fill = {...base, kind: 'fill', constraints: constraints(e),
         value: e.type === 'password' ? (e.value ? '[filled]' : '') : 'value' in e ? String(e.value) : e.innerText.trim()};

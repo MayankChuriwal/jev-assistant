@@ -294,6 +294,19 @@ def test_code_boxes_labelled_one_of_four_are_one_field(browser_at):
     assert len(fills) == 1 and len(fills[0]["group"]) == 4 and fills[0]["label"] == "Enter an OTP Code"
 
 
+def test_unnamed_little_number_boxes_in_a_row_are_one_code_field(browser_at):
+    b = browser_at("/otp-boxes.html")
+    page = b.observe()
+    code = [a for a in page["actions"] if a.get("group")]
+    assert len(code) == 1 and len(code[0]["group"]) == 6 and code[0]["label"] == "One-time code"
+    assert rules.secret_field(code[0]) and code[0]["submit"] == "Verify"
+    fills = [a for a in page["actions"] if a["kind"] == "fill" and not a.get("group")]
+    assert len(fills) == 12  # wide unnamed fields, named boxes, and boxes in a column stay fields of their own
+    b.act("TYPE_TEXT", code[0], page, text="482913")
+    assert b.evaluate("[...document.querySelectorAll('#verify input')].map(i => i.value).join('')") == "482913"
+    assert [a for a in b.observe()["actions"] if a.get("group")][0]["value"] == "482913"  # still one field, typed
+
+
 
 def test_a_new_code_replaces_the_digits_a_rejected_one_left_in_the_boxes(browser_at):
     b = browser_at("/next.html")

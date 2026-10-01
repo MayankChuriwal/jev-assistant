@@ -183,3 +183,17 @@ def test_downloads_that_open_in_a_new_tab_reach_the_task(browser_at, tmp_path):
     files = until(lambda: first.observe()["downloads"], timeout=6)
     assert [Path(f).name for f in files] == ["popup-invoice.txt"] and Path(files[0]).parent == tmp_path / "first"
     assert second.observe()["downloads"] == []
+
+
+@pytest.mark.parametrize("target", ["", ' target="_blank"'])
+def test_a_pdf_shown_in_the_browser_is_saved_like_a_download(browser_at, tmp_path, target):
+    from conftest import PDF
+
+    b = browser_at("/events.html", downloads=tmp_path)
+    link = f'<a href="/documents/download/7f3a/invoice.pdf"{target}>View invoice</a>'.replace('"', '\\"')
+    b.evaluate(f"document.body.insertAdjacentHTML('afterbegin', '{link}')")
+    page = b.observe()
+    b.act("CLICK", find(page, "View invoice"), page)
+    files = until(lambda: b.observe()["downloads"], timeout=6)  # Chrome's viewer shows it: no download event
+    assert [Path(f).name for f in files] == ["invoice.pdf"] and Path(files[0]).read_bytes() == PDF
+    assert Path(files[0]).parent == tmp_path and b.observe()["downloads"] == []  # saved once, however often read

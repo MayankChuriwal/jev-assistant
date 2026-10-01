@@ -302,3 +302,11 @@ def test_an_error_page_by_its_opening_words_must_be_shorter_than_1500_characters
     long = opening + "x" * 1600
     assert len(long) > 1500 and not rules.error_page({"title": "Shop", "text": long})
     assert rules.error_page({"title": "404 not found", "text": long})  # the title still says so
+
+
+@pytest.mark.parametrize("goal, wanted", [
+    ("Download the invoice for my latest Amazon.in order", True), ("Save my BESCOM bill receipt as a PDF", True),
+    ("Export my bank statement from HDFC", True), ("Where is my latest Flipkart order?", False),
+    ("Save my address as Home on Swiggy", False), ("How do I download my Aadhaar card?", False)])
+def test_a_goal_that_downloads_or_saves_a_document_needs_a_file(goal, wanted):
+    assert rules.download_goal(goal) is wanted

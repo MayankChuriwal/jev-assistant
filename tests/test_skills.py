@@ -42,6 +42,28 @@ def test_a_url_finds_the_longest_matching_note():
     assert skills.site_for("https://www.google.com/search?q=x", sites) is None
 
 
+def test_a_site_that_moved_to_another_address_finds_its_note_by_name():
+    sites = skills.load_sites()
+    assert sites["zeptonow.com"]["name"] == "Zepto"  # the note's host is where the site used to live
+    for url in ("https://www.zepto.com/search?query=milk", "https://zepto.com/", "https://m.zepto.co.in/cart"):
+        assert skills.site_for(url, sites)["host"] == "zeptonow.com", url
+    rendered = skills.render(None, [], skills.site_for("https://www.zepto.com/", sites))
+    assert "Search address: https://www.zeptonow.com/search?query={query}" in rendered
+    assert skills.site_for("https://www.zeptofoods.com/", sites) is None
+    assert skills.site_for("https://www.google.com/search?q=x", sites) is None  # "Google Flights" has a path
+    twins = {"a.test": {"host": "a.test", "name": "Shop", "aliases": []},
+             "b.test": {"host": "b.test", "name": "Shop", "aliases": []}}
+    assert skills.site_for("https://www.shop.in/", twins) is None  # two notes fit: neither is guessed
+
+
+def test_lines_learned_on_a_sites_new_address_join_its_shipped_note():
+    sites = skills.load_sites()
+    out = skills.learned(sites, {"zepto.com": ["The cart opens from the top right."]})
+    assert "zepto.com" not in out and out["zeptonow.com"]["search"] == sites["zeptonow.com"]["search"]
+    assert out["zeptonow.com"]["body"].endswith("## Learned\n- The cart opens from the top right.")
+    assert skills.site_for("https://www.zepto.com/", out) is out["zeptonow.com"]
+
+
 def test_a_goal_names_its_site_and_the_skill_picks_the_start():
     sites = skills.load_sites()
     site = skills.named("Order one Diet Coke on Swiggy Instamart", sites)
@@ -63,6 +85,9 @@ def test_a_search_address_keeps_its_site():
     assert skills.template_host("https://www.amazon.in/s?k=boat+airdopes", site)
     assert not skills.template_host("https://evil.test/s?k=boat", site)
     assert skills.template_host("https://www.flipkart.com/search?q=x", site)  # not built from Amazon's template
+    zepto = skills.load_sites()["zeptonow.com"]  # the site moved: its search runs on the host the page is on
+    assert skills.template_host("https://www.zepto.com/search?query=milk", zepto, here="www.zepto.com")
+    assert not skills.template_host("https://evil.test/search?query=milk", zepto, here="www.zepto.com")
 
 
 def test_a_broken_skill_or_site_file_is_named_in_the_error(tmp_path):

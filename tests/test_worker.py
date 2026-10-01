@@ -1974,6 +1974,89 @@ def test_a_lookup_is_judged_done_with_the_pages_read_just_before(tmp_path, monke
     assert seen[-1] == []  # an order is judged on the page that shows it done
 
 
+# ---- live bench C: answered asks move on, files before a download is done, moved sites keep their notes
+
+
+def test_an_answered_ask_subgoal_is_done_and_continue_hands_the_next_one_to_jev(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, replies=[{"text": "The cheapest one"}], goal="Book an Uber to the airport")
+    plan = [sub("choose the ride type", kind="ask"), sub("request the ride", kind="commit"),
+            sub("report the ride", kind="report")]
+    seen = script_planner(monkeypatch, turn("ASK", message="Which ride type would you like?",
+                                            options=["Uber Go · ₹904", "Premier · ₹1,210"]), turn())
+    script_jev(monkeypatch, {"next": "THINK"})
+    jev_checks(monkeypatch)
+    w.state.update(plan=plan, reason="next")
+    w.command("tick")
+    assert len(w.asked) == 1 and w.state["current"] == 1 and w.state["reason"] == "reply"
+    w.command("tick")  # the planner hears the reply and lets Jev request the ride
+    assert seen[-1]["reason"] == "reply" and not any("CONTINUE does nothing" in f for f in w.state["feedback"])
+    assert len(w.asked) == 1 and w.state["current"] == 1
+
+
+def test_an_ask_off_the_plan_keeps_the_current_subgoal(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, replies=[{"text": "Home"}])
+    script_planner(monkeypatch, turn("ASK", message="Which address should I deliver to?"))
+    jev_checks(monkeypatch)
+    w.state.update(plan=[sub("set the delivery address"), sub("place the order", kind="commit")], reason="unsure")
+    w.command("tick")
+    assert len(w.asked) == 1 and w.state["current"] == 0
+
+
+INVOICE = "Download the invoice for my latest Amazon.in order"
+ORDER_PAGE = fake_page(text="Your Orders\nOrder # 408-3590147-1050742\nInvoice", url="https://www.amazon.in/orders")
+
+
+def test_a_download_is_not_done_until_a_file_arrived_and_the_planner_sees_the_files(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=ORDER_PAGE, goal=INVOICE)
+    seen = script_planner(monkeypatch, turn("DONE", message="Your invoice for order # 408-3590147-1050742 is saved.",
+                                            text="Order # 408-3590147-1050742"))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.state["status"] != "done" and "No file has been saved yet" in w.state["feedback"][-1]
+    assert seen[0]["files_saved"] == []
+    w.state["files"].append(str(tmp_path / "invoice.pdf"))
+    w.command("tick")
+    assert seen[-1]["files_saved"] == ["invoice.pdf"] and w.state["status"] == "done"
+
+
+def test_a_file_that_arrives_as_the_download_is_reported_done_counts(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=ORDER_PAGE, goal=INVOICE)
+    script_planner(monkeypatch, turn("DONE", message="Your invoice is saved.", text="Order # 408-3590147-1050742"))
+    jev_checks(monkeypatch)
+    w.browser.downloads.append(str(tmp_path / "invoice.pdf"))  # finished, not read into the task yet
+    w.command("tick")
+    assert w.state["status"] == "done" and w.state["files"] == [str(tmp_path / "invoice.pdf")]
+
+
+def test_a_download_that_never_arrives_stops_honestly_or_is_named_in_a_paid_tasks_report(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=ORDER_PAGE, goal=INVOICE)
+    script_planner(monkeypatch, turn("DONE", message="Your invoice is downloaded.", text="Order # 408-3590147-1050742"))
+    jev_checks(monkeypatch)
+    for _ in range(3):
+        w.command("tick")
+        assert w.state["status"] not in STOPPED
+    w.command("tick")
+    assert w.state["status"] == "blocked" and "no file was saved" in w.told[-1]["text"]
+    assert not any(m.get("kind") == "result" for m in w.told)
+    paid = worker_with(tmp_path, page=fake_page(text="Payment successful\nReceipt"),
+                       goal="Pay my BESCOM bill and download the receipt")
+    paid.state["history"].append({"step": 1, "operation": "CLICK", "action": "Pay ₹79", "committed": True})
+    script_planner(monkeypatch, turn("DONE", message="Your bill is paid.", text="Payment successful"))
+    for _ in range(4):
+        paid.command("tick")
+    assert paid.state["status"] == "done"  # the payment went through: reported, with the missing file said
+    assert paid.told[-1]["text"].startswith("Your bill is paid. The document didn't download")
+
+
+def test_a_search_address_on_the_host_a_moved_site_now_lives_on_is_opened(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(url="https://www.zepto.com/"), goal="Order Amul milk on Zepto")
+    seen = script_planner(monkeypatch, turn("OPEN_URL", text="https://www.zepto.com/search?query=amul+milk"))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert "Search address: https://www.zeptonow.com/search" in seen[0]["skill"]  # its note, found by name
+    assert w.browser.act.call_args.args[0] == "OPEN_URL" and w.state["feedback"] == []
+
+
 def test_time_spent_waiting_for_the_user_never_exceeds_the_time_recorded(tmp_path, monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(time, "perf_counter", lambda: clock[0])
