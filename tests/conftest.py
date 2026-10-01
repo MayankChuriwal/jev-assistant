@@ -17,6 +17,7 @@ import threading  # noqa: E402
 import time  # noqa: E402
 import urllib.parse  # noqa: E402
 import urllib.request  # noqa: E402
+import uuid  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 import pytest  # noqa: E402
@@ -57,6 +58,49 @@ def no_settling_wait(monkeypatch):
     monkeypatch.setattr(worker.Worker, "steady_ms", 0)
     monkeypatch.setattr(worker.Worker, "outcome_pause", 0)
     monkeypatch.setattr(worker.Worker, "quiet_wait", 0)
+
+
+TEST_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="  # a fixed Fernet key: tests never see a real one
+
+
+@pytest.fixture(scope="session")
+def database_url():
+    """A throwaway database on the local Postgres for this test session, dropped at the end. The run stops at once,
+    with the fix, when Postgres can't be reached."""
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import make_conninfo
+
+    base = os.environ.get("JEV_TEST_DATABASE_URL", "postgresql:///postgres")
+    name = f"jev_test_{os.getpid()}"
+    try:
+        with psycopg.connect(base, autocommit=True) as admin:
+            admin.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
+            admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    except psycopg.OperationalError as error:
+        pytest.exit("Postgres isn't running: brew services start postgresql@18 (or set JEV_TEST_DATABASE_URL). "
+                    f"({str(error).strip().splitlines()[0] if str(error).strip() else 'no answer'})", returncode=1)
+    yield make_conninfo(base, dbname=name)
+    with psycopg.connect(base, autocommit=True) as admin:
+        admin.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
+
+
+@pytest.fixture
+def memory(database_url):
+    """This test's own Memory: a fresh schema in the session's database, dropped afterwards."""
+    from assistant.memory import Memory
+
+    store = Memory.open(database_url, schema=f"t_{uuid.uuid4().hex[:12]}", key=TEST_KEY)
+    yield store
+    store.drop()
+
+
+@pytest.fixture(autouse=True)
+def lazy_memory(request, monkeypatch):
+    """fakes.store() hands a test its own Memory on first use: tests that never touch memory never touch Postgres."""
+    import fakes
+
+    monkeypatch.setattr(fakes, "MEMORY", lambda: request.getfixturevalue("memory"))
 
 
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"

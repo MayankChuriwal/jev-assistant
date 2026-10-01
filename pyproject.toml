@@ -5,7 +5,12 @@ description = "A chat assistant that completes real web tasks; Jev chooses every
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
-dependencies = ["browser-harness==0.1.13", "httpx[http2]>=0.28,<1"]
+dependencies = [
+    "browser-harness==0.1.13",
+    "cryptography>=43,<47",
+    "httpx[http2]>=0.28,<1",
+    "psycopg[binary]>=3.2,<4",
+]
 
 [project.scripts]
 jev = "assistant.server:main"

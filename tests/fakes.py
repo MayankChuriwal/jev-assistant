@@ -6,6 +6,13 @@ from unittest.mock import Mock
 from assistant.browser import fingerprint
 from assistant.profile import Profile
 
+MEMORY = None  # conftest sets this for each test: calling it returns the test's own Memory, made on first use
+
+
+def store():
+    """This test's Memory: a fresh Postgres schema of its own."""
+    return MEMORY()
+
 
 def fake_page(text="Checkout\nDiet Coke 300 ml\nTotal ₹79\nPay ₹79", url="https://shop.test/checkout", actions=None):
     page = {"url": url, "title": "Shop", "text": text, "scroll": {}, "frames": {}, "actions": actions or [
