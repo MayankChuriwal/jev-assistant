@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import uuid
 
 import pytest
@@ -48,7 +49,8 @@ def test_no_command_serves_the_chat(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "serve", lambda bench=None: calls.append(bench) or 0)
     assert server.main([]) == 0 and calls == [None]
     assert server.main(["--bench", "--only", "uber", "--repeat", "1"]) == 0
-    assert calls[-1] == ("bench/tasks.toml", "uber", 1, 8, None)
+    assert calls[-1] == {"path": "bench/tasks.toml", "only": "uber", "repeat": 1, "unseen": 8, "seed": None,
+                         "learn": False, "keep": False}
 
 
 @pytest.mark.browser
@@ -349,3 +351,34 @@ def test_memory_set_checks_usage_and_the_key_before_prompting(monkeypatch, capsy
     memory.fernet = None
     assert server.main(["memory", "set", "phone"]) == 1
     assert "JEV_MEMORY_KEY is missing, so IDs can't be kept." in capsys.readouterr().err
+
+
+# ---- Plan 7 Task 9: the bench's own memory
+
+
+def test_bench_flags_reach_serve(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(server, "serve", lambda bench=None: seen.update(bench=bench) or 0)
+    assert server.main(["--bench", "--learn", "--keep", "--only", "a,b"]) == 0
+    assert seen["bench"] == {"path": "bench/tasks.toml", "only": "a,b", "repeat": 2, "unseen": 8, "seed": None,
+                             "learn": True, "keep": True}
+
+
+def test_a_bench_run_opens_its_own_schema_never_your_memory(monkeypatch):
+    opened = []
+    monkeypatch.setattr(server, "open_memory", lambda **options: opened.append(options))  # None: serve stops here
+    spec = {"path": "x", "only": None, "repeat": 1, "unseen": 0, "seed": 1, "learn": False, "keep": False}
+    assert server.serve(bench=spec) == 1
+    assert opened[0]["bench"] is True and re.fullmatch(r"bench_\d{8}_\d{6}", opened[0]["schema"])
+
+
+def test_a_bench_schema_never_imports_your_old_profile(tmp_path, monkeypatch, database_url):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JEV_DATABASE_URL", database_url)
+    monkeypatch.setenv("JEV_HOME", str(tmp_path))
+    (tmp_path / "profile.json").write_text(json.dumps({"phone": "+91 98765 43210"}))
+    memory = server.open_memory(schema=f"t_{uuid.uuid4().hex[:12]}", bench=True)
+    try:
+        assert memory.ids() == [] and (tmp_path / "profile.json").exists()
+    finally:
+        memory.drop()

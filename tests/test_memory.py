@@ -387,3 +387,9 @@ def test_a_standing_approval_is_counted_only_while_it_is_live(memory):
     other = memory.approve("swiggy.com", [{"item": "atta 1 kg", "qty": 1}], 100, "Don't ask next time")
     memory.forget(f"rule:{other}")
     assert memory.used(other) is False and memory.used(10**6) is False
+
+
+def test_a_memory_on_the_default_schema_refuses_to_drop_it():
+    never = Memory("postgresql://never-the-real-memory@127.0.0.1:1/none", memories.SCHEMA, None)  # never connects
+    with pytest.raises(ValueError, match="Refusing"):
+        never.drop()

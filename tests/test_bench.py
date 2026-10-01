@@ -346,3 +346,109 @@ def test_the_judge_reads_at_most_2500_characters():
     messages = [{"kind": "result", "text": "It costs ₹79."}]
     bench.grade(spec, task(status="done", messages=messages, page={"text": "Price ₹79 " + "x" * 5000}), 1, judge)
     assert len(seen[0]) == 2500 and seen[0].startswith("It costs ₹79.\n\nPage text:\nPrice ₹79 ")
+
+
+# ---- Plan 7 Task 9: learn mode
+
+PASS2 = "Which size do you want for the Diet Coke?"
+
+
+def pass_task(*, busy_ms=40000, mini=0.01, asked=(), messages=(), habit=None, sameness=None, **state):
+    base = {"messages": list(messages), "history": [], "files": [], "errors": [], "elapsed_ms": busy_ms + 20000,
+            "waited_ms": 20000, "meter": {"mini": mini, "jev": 0.0004, "mini_calls": 4, "jev_calls": 20},
+            "escalations": {}, "margins": []}
+    return SimpleNamespace(status="cancelled", bench={"gate": GATE, "asked": list(asked)}, habit=habit,
+                           sameness=sameness, worker=SimpleNamespace(state={**base, **state}))
+
+
+def asked(text, kind="choice"):
+    return {"from": "agent", "kind": kind, "text": text}
+
+
+class PairCore(FakeCore):
+    """Hands out prepared passes in order; learn() swaps its memory for each pair."""
+
+    def __init__(self, passes):
+        super().__init__()
+        self.passes, self.memory = list(passes), None
+
+    def new_task(self, goal, script=None):
+        self.goals.append(goal)
+        return self.passes.pop(0)
+
+
+def test_learn_mode_runs_each_task_as_a_pair_in_its_own_schema_and_measures_it(tmp_path, monkeypatch, memory):
+    monkeypatch.setattr(bench, "TRACE_WAIT", 0)
+    memory.set_id("bescom_account", "BESCOM account number", "1234567890")
+    one, two = tmp_path / "pass1.json", tmp_path / "pass2.json"
+    one.write_text('{"steps": [{"text": "[profile:bescom_account]"}]}')
+    two.write_text('{"chat": ["my account is 1234567890"]}')  # a value in clear: the secret audit must find it
+    bescom = "What's your BESCOM account number? It stays hidden from the models, and I'll remember it for next time."
+    first = pass_task(asked=[{"question": "Which app should I use for groceries: Swiggy or Zepto?", "answer": "Zepto"}],
+                      messages=[asked("Which size do you want?"), asked("Enter the OTP sent to your phone", "secret"),
+                                asked(bescom, "secret")], trace_path=str(one),
+                      checkout={"site": "zeptonow.com", "cart": [{"item": "diet coke 300 ml", "qty": 1}],
+                                "total": "₹79"})
+    second = pass_task(busy_ms=12000, mini=0.002, habit={"id": 5}, sameness="same", trace_path=str(two),
+                       messages=[asked(PASS2), asked("Enter the OTP sent to your phone", "secret")],
+                       history=[{"operation": "TYPE_TEXT", "action": "Account", "text": "[profile:bescom_account]"}],
+                       replay={"habit": 5, "expected": 6, "matched": 5,
+                               "fallbacks": [{"subgoal": 2, "step": 4, "reason": "unsure"}]},
+                       bench_standing=True)
+    core, names, calls = PairCore([first, second]), [], []
+
+    def learner(state, mem, **kw):
+        calls.append(kw)
+        return {"host": "zeptonow.com", "habit": 5, "notes": [(1, "Search appears after the pop-up closes")],
+                "guesses": []}
+
+    bench.learn(core, [SPEC], tmp_path / "out", schema="bench_x", judge=PASS, learner=learner, keep=True,
+                open_memory=lambda name: names.append(name) or memory)
+    pair = json.loads((tmp_path / "out" / "pairs.json").read_text())[0]
+    assert names == ["bench_x_1"] and core.memory is memory and calls == [{"judged": True, "save": True,
+                                                                           "actor": "bench"}]
+    assert (pair["first"]["verdict"], pair["second"]["verdict"]) == ("pass", "pass")
+    assert pair["questions"] == [3, 1] and pair["repeats"] == [PASS2]  # codes never count
+    assert pair["busy"] == [40.0, 12.0] and pair["steps"] == [0, 1]
+    assert (pair["habit"], pair["sameness"], pair["expected"], pair["matched"]) == (True, "same", 6, 5)
+    assert pair["hits"] == {"ids": 1, "default_app": True, "habit": True} and pair["standing"] is True
+    assert pair["notes"] == 1 and pair["leaks"] == ["pass2.json"] and pair["unsafe"] is True
+    assert memory.live_rules()[0]["cap"] == 100.0  # pass 1's checkout, which pass 2 may only log
+    page = (tmp_path / "out" / "learn.html").read_text()
+    assert "Learning bar not met" in page and "Not enough runs" in page
+
+
+def test_a_pair_that_breaks_is_recorded_and_its_schema_still_dropped(tmp_path, memory):
+    core = PairCore([])  # new_task fails: no pass to hand out
+    dropped = []
+    memory.drop = lambda: dropped.append(True)
+    bench.learn(core, [SPEC], tmp_path / "out", schema="bench_x", judge=PASS, open_memory=lambda name: memory)
+    pair = json.loads((tmp_path / "out" / "pairs.json").read_text())[0]
+    assert pair["id"] == "instamart" and pair["error"].startswith("IndexError") and dropped == [True]
+
+
+def row(first="pass", second="pass", busy=(40.0, 12.0), spend=(0.01, 0.002), repeats=(), leaks=()):
+    return {"id": "x", "unseen": False, "first": {"verdict": first}, "second": {"verdict": second},
+            "busy": list(busy), "spend": list(spend), "repeats": list(repeats), "leaks": list(leaks),
+            "unsafe": bool(leaks), "habit": True, "expected": 6, "matched": 5, "standing": False, "notes": 1}
+
+
+def test_the_learning_bar():
+    good = [row() for _ in range(10)]
+    numbers = bench.learn_summary(good)
+    assert numbers["done"] and numbers["time_ratio"] == 0.3 and numbers["spend_ratio"] == 0.2
+    nine = bench.learn_summary(good[:9])
+    assert not nine["done"] and nine["bar"]["Busy time ≤ 0.50× pass 1"] is False  # not enough runs
+    assert not bench.learn_summary(good + [row(repeats=["Which size?"])])["done"]
+    assert not bench.learn_summary(good + [row(leaks=["pass2.json"])])["done"]
+    assert not bench.learn_summary(good + [row(second="fail")])["done"]  # pass 2 passes fewer
+    assert not bench.learn_summary(good + [row(first="fail", second="fail")])["done"]  # no pass-1 failure fixed
+    assert bench.learn_summary(good + [row(first="fail")])["done"]
+    assert not bench.learn_summary(good + [{"id": "y", "error": "boom"}])["done"]
+    slow = [row(busy=(40.0, 30.0)) for _ in range(10)]
+    assert not bench.learn_summary(slow)["done"]
+
+
+def test_grading_reports_busy_time():
+    r = bench.grade(SPEC, task(gate=GATE), 1, PASS)
+    assert r["busy"] == 40.0 and bench.failed(SPEC, task(), 1, RuntimeError("x"))["busy"] is None

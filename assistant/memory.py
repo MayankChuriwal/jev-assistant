@@ -228,7 +228,9 @@ class Memory:
                 self.conn = None
 
     def drop(self):
-        """Remove this schema and everything in it (a bench run's or a test's), then close."""
+        """Remove this schema and everything in it (a bench run's or a test's), then close. Never the user's own."""
+        if self.schema == SCHEMA:
+            raise ValueError(f"Refusing to drop the schema {SCHEMA!r}: it is the user's own memory.")
         self.run(lambda cur: cur.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
             sql.Identifier(self.schema))))
         self.close()

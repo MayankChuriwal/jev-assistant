@@ -75,12 +75,12 @@ def save_key(key, path=None):
     path.chmod(0o600)  # an .env that already existed may have been looser
 
 
-def open_memory(*, strict=True, **options):
+def open_memory(*, strict=True, bench=False, **options):
     """The user's memory, ready, or None after saying why not: Postgres reached, the key in place, and Phase A's
-    profile.json imported once. With no JEV_MEMORY_KEY and no ID stored yet, a key is generated into .env. With IDs
-    stored and no key, a strict open (the chat, `jev run`) refuses, because a new key would lose them; `jev memory`
-    still lists and forgets. An empty JEV_MEMORY_KEY counts as missing. Any failure after the connection closes it
-    and says one line. `options` (url, schema) go to Memory.open."""
+    profile.json imported once (never into a bench's schema). With no JEV_MEMORY_KEY and no ID stored yet, a key is
+    generated into .env. With IDs stored and no key, a strict open (the chat, `jev run`) refuses, because a new key
+    would lose them; `jev memory` still lists and forgets. An empty JEV_MEMORY_KEY counts as missing. Any failure
+    after the connection closes it and says one line. `options` (url, schema) go to Memory.open."""
     from cryptography.fernet import Fernet
 
     from .memory import Memory, StoreError
@@ -106,7 +106,7 @@ def open_memory(*, strict=True, **options):
                 missing = False
                 print("jev: Generated JEV_MEMORY_KEY in .env. Keep it: without it, the IDs you save can't be read.",
                       file=sys.stderr)
-        if memory.fernet is not None and memory.import_profile(home() / "profile.json"):
+        if not bench and memory.fernet is not None and memory.import_profile(home() / "profile.json"):
             print("jev: Imported your old profile into memory (profile.json is now profile.json.imported).",
                   file=sys.stderr)
         memory.refresh()
@@ -543,12 +543,20 @@ def serve(port=CHAT_PORT, bench=None):
     from .channel_web import WebChannel
     from .core import Core
 
-    memory = open_memory()
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    schema = "bench_" + stamp.replace("-", "_")  # a bench run starts from an empty memory, never yours
+    memory = open_memory(schema=schema, bench=True) if bench else open_memory()
     if memory is None:
         return 1
+
+    def release(code):
+        if bench and not bench["keep"]:
+            memory.drop()  # the bench's own schema, dropped when the server stops: never your memory
+        return code
+
     threading.Thread(target=purge_daily, args=(memory,), daemon=True).start()  # forgotten means gone after a day
     if chrome():
-        return 1
+        return release(1)
     channel = WebChannel(home() / "media")
     try:
         core = Core(channel, memory=memory)
@@ -558,22 +566,27 @@ def serve(port=CHAT_PORT, bench=None):
             raise
         print(f"Another jev is already serving the chat on port {port}. Stop it first (Ctrl+C in its terminal), "
               "then run jev again.", file=sys.stderr)
-        return 1
+        return release(1)
     print(f"Chat: http://127.0.0.1:{httpd.server_port}/  (Ctrl+C stops)", flush=True)
     if bench:
         from . import bench as live
 
-        path, only, repeat, unseen, seed = bench
-        tasks = [t for t in live.load(path) if not only or t["id"] in only.split(",")]
-        pool = Path(path).with_name("unseen.toml")
-        pool = pool if pool.exists() and not only and unseen else None
-        seed = seed if seed is not None else int(time.time()) % 100000
-        out = home() / "bench" / time.strftime("%Y%m%d-%H%M%S")
-        print(f"Bench: {len(tasks)} known × {repeat}" + (f", {unseen} unseen per run, seed {seed}" if pool else ""),
-              flush=True)
-        threading.Thread(target=lambda: print("Bench report:", live.run(core, tasks, repeat, out, pool=pool,
-                                                                        unseen=unseen, seed=seed), flush=True),
-                         daemon=True).start()
+        tasks = [t for t in live.load(bench["path"]) if not bench["only"] or t["id"] in bench["only"].split(",")]
+        pool = Path(bench["path"]).with_name("unseen.toml")
+        pool = pool if pool.exists() and not bench["only"] and bench["unseen"] else None
+        seed = bench["seed"] if bench["seed"] is not None else int(time.time()) % 100000
+        out = home() / "bench" / stamp
+        if bench["learn"]:
+            print(f"Learning bench: {len(tasks)} known" + (f" + {bench['unseen']} unseen, seed {seed}" if pool else "")
+                  + ", each as a pair", flush=True)
+            work = lambda: live.learn(core, tasks, out, schema=schema, pool=pool,  # noqa: E731
+                                      unseen=bench["unseen"], seed=seed, keep=bench["keep"])
+        else:
+            print(f"Bench: {len(tasks)} known × {bench['repeat']}" +
+                  (f", {bench['unseen']} unseen per run, seed {seed}" if pool else ""), flush=True)
+            work = lambda: live.run(core, tasks, bench["repeat"], out, pool=pool, unseen=bench["unseen"],  # noqa: E731
+                                    seed=seed)
+        threading.Thread(target=lambda: print("Bench report:", work(), flush=True), daemon=True).start()
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))  # stop like Ctrl+C
     try:
         httpd.serve_forever()
@@ -582,6 +595,7 @@ def serve(port=CHAT_PORT, bench=None):
     finally:
         core.shutdown()  # running tasks are cancelled and write their traces
         httpd.server_close()
+        release(0)
     return 0
 
 
@@ -613,6 +627,8 @@ def main(argv=None):
     parser.add_argument("--repeat", type=int, default=2)
     parser.add_argument("--unseen", type=int, default=8, help="unseen bench tasks sampled per run")
     parser.add_argument("--seed", type=int, help="seed for sampling unseen tasks (default: from the clock)")
+    parser.add_argument("--learn", action="store_true", help="with --bench: run each task twice and measure the gain")
+    parser.add_argument("--keep", action="store_true", help="with --bench: keep the bench's memory schemas")
     args = parser.parse_args(argv)
     if args.command == "chrome":
         return chrome()
@@ -638,4 +654,6 @@ def main(argv=None):
         for r in results:
             print(("ok   " if r["ok"] else "FAIL ") + r["case"] + ("" if r["ok"] else f"  got {r['got']}"))
         return 0 if all(r["ok"] for r in results) else 1
-    return serve(bench=args.bench and (args.bench, args.only, args.repeat, args.unseen, args.seed))
+    return serve(bench=args.bench and {"path": args.bench, "only": args.only, "repeat": args.repeat,
+                                       "unseen": args.unseen, "seed": args.seed, "learn": args.learn,
+                                       "keep": args.keep})
