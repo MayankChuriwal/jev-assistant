@@ -57,14 +57,20 @@ def load_sites(folder=FOLDER / "sites"):
 
 
 def learned(sites, lines):
-    """The site notes with each site's saved learned lines under "## Learned": hints from earlier runs. A site with
-    learned lines and no shipped note gets a note of its own. The shipped notes are never changed."""
-    out = dict(sites)
+    """The site notes with each site's saved learned lines under "## Learned": hints from earlier runs. Lines saved for
+    a host join the shipped note of that host or of its parent (the longest key whose host, without its path, the saved
+    host is or sits under), so a shipped note's start and search addresses stay; a host no note covers gets a
+    learned-only note of its own. The shipped notes are never changed."""
+    gathered = {}
     for host, found in lines.items():
-        note = dict(out.get(host) or {"host": host, "name": host, "aliases": [], "body": "",
-                                      "start": f"https://{host}/"})
+        covering = [key for key in sites if host == key.partition("/")[0] or host.endswith("." + key.partition("/")[0])]
+        key = max(covering, key=lambda k: (len(k.partition("/")[0]), len(k)), default=host)
+        gathered.setdefault(key, []).extend(found)
+    out = dict(sites)
+    for key, found in gathered.items():
+        note = dict(out.get(key) or {"host": key, "name": key, "aliases": [], "body": "", "start": f"https://{key}/"})
         note["body"] = (note["body"].rstrip() + "\n\n## Learned\n" + "\n".join(f"- {line}" for line in found)).strip()
-        out[host] = note
+        out[key] = note
     return out
 
 

@@ -1111,6 +1111,8 @@ def test_history_keeps_the_page_title_and_the_start(tmp_path, monkeypatch):
     last = w.state["history"][-1]
     assert (last["action"], last["title"], last["relayed"]) == ("Home", "Shop", False)
     assert w.state["start"] == "https://shop.test/checkout"
-    assert w.state["idle_ticks"] == 1  # the planning tick ran no step; the click tick did
-    w.count_idle(len(w.state["history"]), w.replies())  # a tick with no step and no reply
-    assert w.state["idle_ticks"] == 2
+    assert w.state["idle_ticks"] == 0  # the planning tick runs no step in every run: that is not idle
+    w.count_idle(len(w.state["history"]), w.replies())  # a first tick with no step and no reply
+    assert w.state["idle_ticks"] == 0
+    w.count_idle(len(w.state["history"]), w.replies())  # a second one in a row
+    assert w.state["idle_ticks"] == 1 and w.state["idle"] == 2

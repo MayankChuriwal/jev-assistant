@@ -285,6 +285,7 @@ class Memory:
         if not (privacy.storable(raw) and privacy.storable(f"{label} {text}")):
             raise Unstorable(UNSTORABLE)
         source = source if privacy.storable(source) else ""
+        task = task if privacy.storable(task) else ""  # a goal holding a card number is never kept, even as a label
         tags = sorted({str(t).strip().lower() for t in tags if str(t).strip()})
 
         def work(cur):
@@ -460,6 +461,7 @@ class Memory:
 
     def draft_notes(self, host, lines, task=""):
         task, lines = self.hide(task)[:200], [self.hide(line) for line in lines]
+        task = task if privacy.storable(task) else ""  # a goal holding a card number is never kept, even as a label
 
         def work(cur):
             return [cur.execute("INSERT INTO notes (host, text, status, task) VALUES (%s, %s, 'draft', %s) "
@@ -508,6 +510,7 @@ class Memory:
         """Keep a verified run. The same live site, skill, and goal (case and spaces aside) becomes a new version of
         it; an empty cart never replaces a known one. Returns the habit's id."""
         habit = {**habit, "goal": self.hide(habit["goal"]), "title": self.hide(habit["title"])}
+        habit = {**habit, **{k: "" for k in ("goal", "title") if not privacy.storable(habit[k])}}  # never a card number
         key = " ".join(habit["goal"].lower().split())
         values = (habit["title"][:80], habit["goal"], habit["start"], Jsonb(habit["plan"]), Jsonb(habit["steps"]))
         cart = Jsonb(habit.get("cart") or [])

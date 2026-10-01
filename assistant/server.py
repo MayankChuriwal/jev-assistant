@@ -357,22 +357,29 @@ def learn_in_terminal(state, memory, *, read=input):
     from . import learn
     from .privacy import SECRETS, Secrets
 
-    token = SECRETS.set(Secrets(memory.hidden_values()))
+    token = None
     try:
+        token = SECRETS.set(Secrets(memory.hidden_values()))
         found = learn.after(state, memory)
     except Exception as error:  # learning never fails a task that ran
         print(f"Couldn't learn from this run: {error}")
         return
     finally:
-        SECRETS.reset(token)
-    if found["notes"]:
-        lines = "\n".join(f"  • {line}" for _, line in found["notes"])
-        keep = read(f"I learned about {found['host']}:\n{lines}\nSave these notes? [y/N] ").strip().lower()
-        memory.decide_notes([note_id for note_id, _ in found["notes"]], save=keep.startswith("y"), actor="user")
-    for guess in found["guesses"]:
-        if read(f"Remember “{guess['text']}”? [y/N] ").strip().lower().startswith("y"):
-            memory.remember("preference", guess["text"], tags=guess["tags"], source="learned from a run",
-                            task=state["goal"], actor="user")
+        if token is not None:
+            SECRETS.reset(token)
+    try:
+        if found["notes"]:
+            lines = "\n".join(f"  • {line}" for _, line in found["notes"])
+            keep = read(f"I learned about {found['host']}:\n{lines}\nSave these notes? [y/N] ").strip().lower()
+            memory.decide_notes([note_id for note_id, _ in found["notes"]], save=keep.startswith("y"), actor="user")
+        for guess in found["guesses"]:
+            if read(f"Remember “{guess['text']}”? [y/N] ").strip().lower().startswith("y"):
+                memory.remember("preference", guess["text"], tags=guess["tags"], source="learned from a run",
+                                task=state["goal"], actor="user")
+    except (EOFError, KeyboardInterrupt):
+        print("\nSkipped what I learned: nothing more was kept.")
+    except Exception as error:  # a finished run never ends in a traceback
+        print(f"Couldn't keep what I learned: {error}")
 
 
 def forget(sites):

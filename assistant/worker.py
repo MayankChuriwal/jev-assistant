@@ -272,7 +272,8 @@ class Worker:
         if len(s["history"]) > before or self.replies() > replies or s["status"] in STOPPED:
             return
         s["idle"] += 1
-        s["idle_ticks"] += 1  # never reset: learning reads it
+        if s["idle"] > 1:  # the planning tick of every run runs no step; only a second one in a row is idle
+            s["idle_ticks"] += 1  # never reset: learning reads it
         if s["idle"] >= IDLE_HALT:
             raise Halt("blocked", f"I'm going in circles on {rules.host(s['page']['url'])} and stopped. Tell me "
                                   f"more about what you want, or check the site yourself.{self.pending()}")

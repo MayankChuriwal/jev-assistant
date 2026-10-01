@@ -98,3 +98,25 @@ def test_jev_run_asks_in_the_terminal_whether_to_keep_what_it_learned(monkeypatc
     assert memory.notes("zeptonow.com") == ["Search appears after the pop-up closes"]
     assert [f["text"] for f in memory.facts("preference")] == ["You prefer Diet Coke 300 ml"]
     assert prompts[0].startswith("I learned about zeptonow.com:") and len(prompts) == 2
+
+
+def test_jev_run_never_ends_in_a_traceback_when_the_questions_cannot_be_answered(monkeypatch, capsys):
+    memory = store()
+    ids = memory.draft_notes("zeptonow.com", ["Search appears after the pop-up closes"])
+    found = {"host": "zeptonow.com", "habit": None, "notes": [(ids[0], "Search appears after the pop-up closes")],
+             "guesses": []}
+    monkeypatch.setattr("assistant.learn.after", lambda state, memory: found)
+
+    def eof(prompt):
+        raise EOFError
+
+    def interrupted(prompt):
+        raise KeyboardInterrupt
+
+    server.learn_in_terminal({"goal": "Order Diet Coke"}, memory, read=eof)
+    server.learn_in_terminal({"goal": "Order Diet Coke"}, memory, read=interrupted)
+    assert capsys.readouterr().out.count("Skipped what I learned") == 2 and memory.notes("zeptonow.com") == []
+    broken = Mock(hidden_values=Mock(return_value=[]),
+                  decide_notes=Mock(side_effect=RuntimeError("Postgres stopped answering")))
+    server.learn_in_terminal({"goal": "g"}, broken, read=lambda prompt: "y")
+    assert "Couldn't keep what I learned: Postgres stopped answering" in capsys.readouterr().out

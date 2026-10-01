@@ -11,9 +11,11 @@ QUIET = {"WAIT", "SCROLL_UP", "SCROLL_DOWN"}  # incidental: never part of a habi
 COUNTS = re.compile(r"\(\s*\d+\s*\)|\b\d+\s*(?:items?|left|in stock)\b", re.IGNORECASE)
 MAX_LINE = 140
 UNSAFE = re.compile(r"approv|payments?\b|\bpa(?:y|id)\b|\botp\b|\bcodes?\b|passwords?|\bpins?\b|\bcards?\b|\bcvv\b|"
-                    r"\bskip\w*\b.{0,30}\b(?:checks?|confirm\w*|approv\w*|verif\w*)|without (?:asking|confirm\w*)",
-                    re.IGNORECASE)
-LINK = re.compile(r"(?:https?://|\bwww\.)([^/\s]+)", re.IGNORECASE)
+                    r"\bskip\w*\b.{0,30}\b(?:checks?|confirm\w*|approv\w*|verif\w*)|without (?:asking|confirm\w*)|"
+                    r"no need to (?:confirm|check|verif|approv)\w*|\bupi\b|net[\s-]?banking|\bwallets?\b|\bcod\b|"
+                    r"cash on delivery", re.IGNORECASE)
+TLDS = "com|in|io|net|org|co|app|dev|shop|store|xyz|info|me|ly|bike|online|site|link|to|ai|gg|tv|biz|us|uk"
+LINK = re.compile(rf"(?:https?://|\bwww\.)([^/\s]+)|\b((?:[a-z0-9-]+\.)+(?:{TLDS}))\b", re.IGNORECASE)
 HELD = re.compile(r"\[(?:profile|secret):", re.IGNORECASE)
 
 
@@ -39,22 +41,23 @@ def where(url):
 def habit_from(state):
     """The habit a verified run records, or None without a skill and a site: its plan, the steps that moved each
     subgoal forward, the confirmed order's cart, and the start page. A failed step, one that changed nothing, one a
-    BACK undid (and the BACK), the same step again, an unconfirmed step, a captcha square, a wait, and a scroll are
-    left out. A step keeps its control's label and the name of the subgoal value it typed, never the text."""
+    BACK undid (and the BACK; a BACK right after a BACK undoes the kept step before it), the same step again, an
+    unconfirmed step, a captcha square, a wait, and a scroll are left out. A step keeps its control's label and
+    the name of the subgoal value it typed, never the text."""
     if not state.get("skill") or not state.get("site"):
         return None
     plan = [{"do": g["do"], "done_when": g["done_when"], "kind": g["kind"], "values": g["values"]}
             for g in state["plan"]]
-    steps, at, kept = [], state.get("start") or "", False
+    steps, at, undoable = [], state.get("start") or "", False
     for entry in state["history"]:
         before, at = at, entry.get("url") or at
         op = entry["operation"]
         if op == "GO_BACK":
-            if kept:
-                steps.pop()  # the step it undid
-            kept = False
+            if undoable:
+                steps.pop()  # the kept step just before it, or the one before that after another BACK
+            undoable = bool(undoable and steps)
             continue
-        kept = False
+        undoable = False
         if (entry.get("unconfirmed") or entry.get("effect") == "failed" or entry.get("page_changed") is False
                 or entry.get("relayed") or op in QUIET or entry["subgoal"] >= len(plan)):
             continue
@@ -69,7 +72,7 @@ def habit_from(state):
                 {k: v for k, v in step.items() if k != "title"}:
             continue  # the same step again: a loop's repeat
         steps.append(step)
-        kept = True
+        undoable = True
     cart = next((o["cart"] for o in reversed(state.get("orders") or []) if o.get("cart")), [])
     return {"host": state["site"], "skill": state["skill"], "title": state["title"], "goal": state["goal"],
             "start": state.get("start") or "", "plan": plan, "steps": steps, "cart": cart}
@@ -107,7 +110,7 @@ def note_ok(line, site, private):
     """A learned site note: short, holding nothing of the user's (no placeholder, no run of 4 digits, no word of
     their IDs or addresses), nothing about approvals, payments, codes, passwords, PINs, or cards, no skipped check,
     and no link off the site."""
-    hosts = [skills.bare(found.lower()) for found in LINK.findall(line)]
+    hosts = [skills.bare((url or bare).lower().rstrip(".,;:)!?")) for url, bare in LINK.findall(line)]
     return (0 < len(line) <= MAX_LINE and not HELD.search(line) and not re.search(r"\d{4}", line)
             and not set(re.findall(r"[a-z0-9]+", line.lower())) & private and not UNSAFE.search(line)
             and all(host == site or host.endswith("." + site) for host in hosts))
