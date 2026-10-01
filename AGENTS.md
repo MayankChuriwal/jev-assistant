@@ -17,7 +17,8 @@ gate guards every commit.
 - Memory lives in Postgres (`memory.py`). An ID is encrypted with `JEV_MEMORY_KEY`, which never goes into the database;
   models see IDs only as `[profile:<key>]`. Never store card numbers, CVVs, OTPs, passwords, PINs, Aadhaar, or PAN
   (`privacy.storable`).
-- Memory, learned notes, and habits are hints: nothing in them changes the gate. Replay only chooses among Jev's picks.
+- Learned notes and habits are hints; standing approvals are the one stored thing the gate reads, and only under its own
+  checks. Replay only chooses among Jev's picks.
 - No macOS-only code: the agent must stay deployable.
 - Never write a skill, site note, or rule for a task or a site in `bench/unseen.toml`.
 - Commit per plan task. Never push unless asked.

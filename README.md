@@ -5,7 +5,8 @@ System One model, chooses every browser step: the operation and its element, whe
 blocks the page, and whether the last step worked. **GPT-4.1 mini** plans the subgoals, resolves the steps Jev is
 unsure about, and writes every word you read. Code guards the rest: nothing is paid, booked, or sent without your
 yes in chat (or, once you switch pre-approval on, your own "don't ask, under ₹N" or a standing approval), and codes,
-passwords, and your IDs never reach a model.
+passwords, and your IDs never reach a model. One known limit: an ID typed into plain chat is seen once by the router and
+the memory job before it is saved; `jev memory set <key>` (typed hidden) avoids that.
 
 It remembers you, in Postgres: your IDs (encrypted), addresses, default apps and preferences, standing approvals, the
 site notes it learned and you saved, and habits: verified runs that a repeat errand follows, with Jev checking each
@@ -20,7 +21,7 @@ Design: `docs/superpowers/specs/2026-10-01-system-one-agent-design.md` (Phase A)
 
 ## Setup
 
-    brew install postgresql@18 && brew services start postgresql@18   # or any Postgres ≥ 16: JEV_DATABASE_URL
+    brew install postgresql@18 && brew services start postgresql@18   # or any Postgres ≥ 16 with pg_trgm: JEV_DATABASE_URL
     uv sync
     cp .env.example .env      # add TYPESAFE_API_KEY and OPENAI_API_KEY
     uv run jev memory set phone "phone number"              # optional: typed hidden; no model ever sees it
@@ -30,8 +31,10 @@ Design: `docs/superpowers/specs/2026-10-01-system-one-agent-design.md` (Phase A)
 The first start makes the `jev` database if it is missing, and, while no ID is stored yet, writes a new
 `JEV_MEMORY_KEY` into `.env` (an empty `JEV_MEMORY_KEY=` line there is filled in, not duplicated). Keep that key: your
 saved IDs are encrypted with it. If IDs are stored and the key is missing, the chat and `jev run` refuse to start
-(a new key would lose them); put the key back, or `uv run jev memory forget id:<key>`. A `~/.jev/profile.json` from
-before is imported once.
+(a new key would lose them); put the key back, or `uv run jev memory forget id:<key>` (with the key lost, `jev memory`
+hides IDs, so you need the key name, e.g. `id:phone`). A wrong key instead makes those IDs unreadable, and they are asked
+for again. A `~/.jev/profile.json` from before is imported once. Memory needs the `pg_trgm` extension (in Postgres's
+contrib set): the first start runs `CREATE EXTENSION`, so the database user needs the right to create it.
 
 ## Chat
 
@@ -88,7 +91,7 @@ a model, and kept encrypted. Or use the terminal:
     uv run jev memory undo                  # the latest change; a forgotten item can be undone for a day
     uv run jev memory notes zeptonow.com    # saved learned notes: one host, or every host without one
 
-`set` needs a key of lowercase letters, digits, and underscores (`bescom_account`) and an optional label; its value is
+`set` needs a key that starts with a letter and has 2–40 lowercase letters, digits, or underscores (`bescom_account`) and an optional label; its value is
 typed at a hidden prompt. `forget` takes one or more refs, and a ref that fails doesn't stop the others. Without the
 key, `jev memory` still lists and forgets, but IDs are hidden and `set` is refused.
 
@@ -144,7 +147,7 @@ writes `learn.html`, `pairs.json`, and `learn_summary.json` beside the report. F
   approval and resembles a pass-1 one; an ID asked again counts);
 - busy time, spend and steps;
 - the habit match, matched steps and fallbacks;
-- notes, memory hits, and the standing approvals that would have fired;
+- notes · facts/IDs saved, and the standing approvals that would have fired (memory hits are in `pairs.json`);
 - the secret audit.
 
 Its bar:

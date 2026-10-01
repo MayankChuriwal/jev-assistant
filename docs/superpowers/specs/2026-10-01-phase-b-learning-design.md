@@ -197,9 +197,10 @@ CREATE TABLE schema_version (version integer NOT NULL);
   key sits next to the data.
   - Missing at start, and no ID is stored yet: `jev` generates a key, appends it to `.env` (creating the file if needed),
     sets the file to mode 0600, and says so once.
-  - Missing at start, and IDs are stored: `jev` refuses to start ("JEV_MEMORY_KEY is missing: the saved IDs can't be
-    read without it").
-  - A key that can't open a stored ID: that ID counts as missing and is asked for again, with one notice.
+  - Missing at start, and IDs are stored: `jev` and `jev run` refuse to start ("JEV_MEMORY_KEY is missing: the saved IDs
+    can't be read without it…"). `jev memory` still lists and forgets (`jev memory forget id:<key>`; it hides the IDs, so
+    the key name must be known), after which a key can be generated again on the next start.
+  - A wrong key that can't open a stored ID: that ID counts as unreadable and is asked for again, with one notice.
 - Decrypted values are cached per process. `hidden_values()` reads the IDs again whenever `max(updated_at)` changes,
   which costs one query per step. So an ID that another task or process saved is redacted here too.
 - Redaction variants are the same as Phase A: the value itself; a phone number's digits, its last 10 digits, and the
@@ -607,7 +608,7 @@ The summary lists each Section 2 bar item as met or not met.
 | A hostile page plants a note | Notes need your Save; code lint; notes are hints in prompts; the gate is code |
 | Memory gets noisy | Recall is capped at 12 facts and 1,500 characters; forget and undo; guesses need a tap |
 | An ID leaks | Encrypted at rest; placeholders in prompts; leak scan at send time; secret audit on the bench |
-| `JEV_MEMORY_KEY` is lost | The IDs become missing and are asked for again; facts, notes and habits are unaffected |
+| `JEV_MEMORY_KEY` is lost | With IDs stored, `jev` and `jev run` refuse to start ("JEV_MEMORY_KEY is missing…"); `jev memory` still lists and forgets (`jev memory forget id:<key>`), after which the key can be generated again. A wrong key makes those IDs unreadable and they are asked for again. Facts, notes and habits are unaffected |
 | Postgres is not running | `jev` and the tests stop with the fix in one line |
 | The time bar is missed | The report shows where the time goes; crystallised replay (code acting on exact matches after repeated clean replays) is the next speed step |
 
