@@ -420,6 +420,12 @@ def only_a_step(operation, action, label, page):
         and not shows_money(page["text"])
 
 
+def accordion(operation, action, label):
+    """Whether a click opens or closes a section of the page (a header with an expanded state, such as Amazon's
+    "One-time purchase" panel) and names no price: at most a maybe-commit, for Jev's final check."""
+    return operation in CLICKS and "expanded" in action and not priced(own_words(action) or label)
+
+
 def lookup(w, label, sure):
     """A goal that only finds or compares never asks to commit: the planner hears to read and report instead. A
     sign-in step Jev is unsure of ("Request OTP", "Verify code") is still asked about, as before."""
@@ -448,6 +454,8 @@ def commit_label(w, operation, action, page, key=None, subgoal=None):
         label = form_submit(page, focused, rules.COMMIT.search)  # Enter submits the focused field's form
     goal = (subgoal or {}).get("do") or w.state["goal"]
     if label:  # a checkout step ("Proceed to Pay") is not matched outright: it is a maybe-commit below
+        if accordion(operation, action, label):
+            return None if cleared(w, page, label, goal) else lookup(w, label, sure=False)
         if only_a_step(operation, action, label, page) and cleared(w, page, label, goal):
             return None
         return lookup(w, label, sure=True)
@@ -485,20 +493,58 @@ def facts(page, recent):
             "items": next((int(n) for n in ITEMS.findall(text)), 0), "typed": list(dict.fromkeys(typed))}
 
 
+def drafted(payload):
+    """The summary model's lines: nothing has happened until the user says yes, and a line that only says the page
+    gave no fact goes (a price stays)."""
+    lines = [re.sub(r"^(ordered|booked|placed|paid|requested)\s+", "", line, flags=re.IGNORECASE)
+             for line in planner.summary(payload)]
+    return [line for line in lines if not PLACEHOLDER.search(line) or rules.PRICE.search(line)]
+
+
+def unshown(lines, text):
+    """The amounts on these lines that the page text doesn't show, each once."""
+    return list(dict.fromkeys(x for x in rules.PRICE.findall(" ".join(lines)) if not shown(x, text)))
+
+
+def without(line, text):
+    """The line with every amount the page doesn't show cut out, or None when nothing but bill words would be left (a
+    "Total" with a wrong amount): the page's own total and fees are added from its facts instead."""
+    wrong = [x for x in rules.PRICE.findall(line) if not shown(x, text)]
+    if not wrong:
+        return line
+    for figure in wrong:
+        line = re.sub(re.escape(figure) + r"(?![\d.,]*\d)", " ", line)
+    line = " ".join(line.split()).strip(" ·•:,;|-–—")
+    return None if not has_words(line) or TOTAL.search(line) or bill_line(line) else line
+
+
+def remark_only(figure, text):
+    """Whether every line of the page text that shows this amount is a remark: cashback, rewards, savings, a coupon,
+    an offer. Such an amount is never what is payable."""
+    found = [line for line in text.splitlines() if shown(figure, line)]
+    return bool(found) and all(REMARK_WORDS.search(line) for line in found)
+
+
 def summary(w, page, found):
-    """The approval's lines: the planner's one line per skill field, then every fact it left out, from the page."""
+    """The approval's lines: the summary model's one line per skill field, then every fact it left out, from the
+    page. An amount the page doesn't show goes back to the summary model once, named; one still wrong is left out
+    (the turn planner never wrote these lines, so it can't fix them). With no payable total read from the page, a
+    "Total" whose amount the page shows only on remark lines ("Cashback Rewards ₹100") is left out too."""
     s = w.state
     skill = w.skill()
     text = flat(page["text"])
     payload = {"goal": s["goal"], "fields": (skill or {}).get("summary") or FIELDS, "chat": s["chat"][-10:],
                "facts": found, "page": {"url": page["url"], "title": page["title"], "text": text[:3000]},
                "pages_before": [flat(t)[:1500] for t in s["recent"][-3:]]}
-    lines = [re.sub(r"^(ordered|booked|placed|paid|requested)\s+", "", line, flags=re.IGNORECASE)
-             for line in planner.summary(payload)]  # nothing has happened until the user says yes
-    lines = [line for line in lines if not PLACEHOLDER.search(line) or rules.PRICE.search(line)]  # a price stays
-    missing = [x for x in rules.PRICE.findall(" ".join(lines)) if not shown(x, text)]
+    lines = drafted(payload)
+    missing = unshown(lines, text)
     if missing:
-        raise Retry(f"The page doesn't show {', '.join(missing)}. Copy amounts exactly as the page shows them.")
+        lines = drafted({**payload, "feedback": f"The page doesn't show {', '.join(missing)}. Copy amounts exactly "
+                                                "as the page shows them, or leave them out."})
+        lines = [kept for line in lines if (kept := without(line, text)) is not None]
+    if found["total"] is None:
+        lines = [line for line in lines if not (TOTAL.search(line) and any(
+            remark_only(figure, text) for figure in rules.PRICE.findall(line)))]
     joined = " ".join(lines).lower()
     extra = []
     if found["total"] and not shown(found["total"], " ".join(lines)):

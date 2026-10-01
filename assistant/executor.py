@@ -18,6 +18,7 @@ OPTIONS = 250  # targets per question: Jev takes at most 255 options
 RECENT = 6  # steps Jev reads
 WINDOW = 20  # steps the loop guards look back over
 SCROLLS = {"SCROLL_UP", "SCROLL_DOWN"}
+QUIET = {"WAIT", *SCROLLS}  # steps that are not going in circles by themselves
 TARGETED = {"CLICK": ("CLICK", "click_target"), "TYPE": ("TYPE_TEXT", "type_text_target"),
             "SELECT": ("SELECT", "select_target"), "KEY": ("PRESS_KEY", "press_key_target"),
             "SCROLL_UP": ("SCROLL_UP", "scroll_up_target"), "SCROLL_DOWN": ("SCROLL_DOWN", "scroll_down_target"),
@@ -178,3 +179,23 @@ def scrolls(history, url):
             break
         run += 1
     return run
+
+
+def visits(history, spot):
+    """How many steps in `history` ran from the page `spot` names (views.signature: its URL path and its controls),
+    however far apart: a page come back to again and again, whatever was done there. Waits and scrolls aside, and a
+    captcha square the user picked never counts."""
+    return sum(1 for h in history if spot and h.get("spot") == spot and h.get("operation") not in QUIET
+               and not h.get("relayed"))
+
+
+def undos(history):
+    """How often a step ran again from the page it ran from two steps before, with a step from another page in
+    between (A→B→A, the same step each time from A): a control pressed and unpressed, a panel opened and closed.
+    Opening the next item from a list is no undo: that is another step. Waits, scrolls, and the user's captcha
+    picks aside."""
+    steps = [h for h in history if h.get("operation") not in QUIET and not h.get("relayed")]
+    return sum(1 for a, b, c in zip(steps, steps[1:], steps[2:])
+               if a.get("spot") and a.get("spot") == c.get("spot") != b.get("spot")
+               and (a.get("operation"), a.get("action"), a.get("text")) ==
+               (c.get("operation"), c.get("action"), c.get("text")))

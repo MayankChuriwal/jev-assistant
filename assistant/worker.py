@@ -28,11 +28,15 @@ IDLE_HALT = 16  # ticks in a row with no browser step and no question to the use
 CODE_ASKS = 3
 COMMIT_DROPS = 3  # an order's replan with no commit (none left in the old plan either): refused this often, then taken
 CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
-QUIET = {"WAIT", "SCROLL_UP", "SCROLL_DOWN"}  # repeating these is not going in circles…
+QUIET = executor.QUIET  # waits and scrolls: repeating these is not going in circles…
 SCROLLS = 8  # …until this many scrolls in a row on one page: then scrolling has stopped finding anything
 CIRCLE_AT = 3  # one action run this often from the same page (its path and controls) is not run from it again…
 CIRCLE_ASK = 5  # …and once its runs and the planner's refused tries reach this, the user decides
 LOOP_ASKS = 2  # questions about one loop: the next time it comes round, the task stops
+VISITS = 6  # steps from one page state (views.signature), however far apart: the user is asked
+UNDOS = 3  # a step undone and done again (A→B→A) this often: the user is asked
+PATH_ASK = 30  # steps on one page address (host and path): the user is asked once…
+PATH_HALT = 45  # …and here the task stops; an answer in between never resets the count
 FRUITLESS = 6  # steps in a row Jev judged failed on one page: the planner hears it, once a streak
 BLANK_WAITS = 3  # reads of a blank page before the planner hears it is blank
 FILE_REFUSALS = 3  # a download's DONE refused this often with no file saved: the next one stops the task
@@ -42,7 +46,7 @@ CONTAINERS = {"", "generic", "group", "region", "main", "document", "presentatio
               "application"}
 TALKING = {"ASK", "TELL", "DONE", "STOP"}
 TRACE_STEP = ("step", "subgoal", "operation", "action", "title", "text", "key", "files", "page_changed", "url",
-              "changed", "effect", "committed", "approved", "elapsed_ms", "unconfirmed", "spot")
+              "changed", "effect", "committed", "approved", "elapsed_ms", "unconfirmed", "spot", "typed_ok")
 PLACEHOLDER = re.compile(r"\[(profile|secret):([\w.]+)\]")
 CODE_WORDS = re.compile(r"\b(otp|passcode|password|cvv|pin(?![\s-]?code)|"  # a PIN code or promo code is no secret
                         r"(?<!pin )(?<!pin-)(?<!promo )(?<!zip )(?<!postal )code)\b", re.IGNORECASE)
@@ -54,7 +58,13 @@ FILLER = {"a", "an", "the", "and", "or", "to", "of", "for", "in", "on", "at", "b
           "it", "its", "if", "then", "that", "this", "s", "your", "my", "user", "users"}
 PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGNORECASE),
                 "email": re.compile(r"\b(your e-?mail|e-?mail (address|id))\b", re.IGNORECASE),
+                "name": re.compile(r"\b(your (full )?name|full name)\b", re.IGNORECASE),
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
+PAYS = re.compile(r"\bpay", re.IGNORECASE)  # a question about paying: pay, payment, paying
+DOWNLOADS = re.compile(r"download|invoice|receipt|statement|\bpdf\b|\.pdf\b|\bprint\b|\bexport\b",
+                       re.IGNORECASE)  # a step that may have opened the document
+CLEARING = ("TYPE needs the text to type. A field is never cleared first: typing replaces what it holds. PICK the "
+            "field to only focus it.")
 
 
 def secret_field(action):
@@ -126,14 +136,14 @@ def unchanged(subgoals, rest):
 def with_commit(subgoals, rest):
     """A replan that left the commit out, repaired: the new subgoals, then the old plan's `rest` from its first commit
     subgoal on (the commit, the report). The new plan's closing reports move after the commit, or go when the old tail
-    has its own; a step written in both is kept once, and as the commit when the old tail has it as one. A replan that
-    is shorter than the old rest and has no step resembling any act or ask step the old plan still had before the
-    commit dropped those steps rather than replaced them: they come back, in their old order, before the commit."""
+    has its own; a step written in both is kept once, and as the commit when the old tail has it as one. Each act or
+    ask step the old plan still had before the commit is judged on its own: one that no new subgoal rewrites (sharing
+    at least half the words of the longer of the two) was dropped rather than replaced, and comes back, in its old
+    order, before the commit. A new question that shares a word or two with one old step never takes the others."""
     first = next(i for i, g in enumerate(rest) if g["kind"] == "commit")
     tail = rest[first:]
-    middle = [g for g in rest[:first] if g["kind"] in {"act", "ask"}]
-    if len(subgoals) >= len(rest) or any(shares(new["do"], old["do"]) for new in subgoals for old in middle):
-        middle = []
+    middle = [g for g in rest[:first] if g["kind"] in {"act", "ask"}
+              and not any(shares(new["do"], g["do"], by=max) for new in subgoals)]
     end = len(subgoals)
     while end and subgoals[end - 1]["kind"] == "report":
         end -= 1
@@ -214,7 +224,7 @@ class Worker:
             told_at=None, delegated_at=None, relaying=False, skill=None, preauth=False, cap=None, site="",
             cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None, closed=False,
             commit_drops=0, idle_asked=0, circled={}, loops={}, fruitless=None, blank_waits=0, coded=[],
-            file_refusals=0,
+            file_refusals=0, path_steps={}, path_asked=[],
         )
 
     # ---- what the user and the models see
@@ -737,7 +747,7 @@ class Worker:
         if out["note"].strip():
             s["notes"].append(out["note"].strip())
         subgoals = [{"do": g["do"].strip(), "done_when": g["done_when"].strip(), "kind": g["kind"],
-                     "values": [v for v in g["values"] if v["field"].strip()]}
+                     "values": [v for v in g["values"] if v["field"].strip() and str(v["text"]).strip()]}
                     for g in out["subgoals"] if g["do"].strip()][:10]
         if unchanged(subgoals, s["plan"][s["current"]:]):
             subgoals = []  # the rest of the plan sent again as it was: the plan is kept, as for []
@@ -839,8 +849,10 @@ class Worker:
         return {
             "skill": skills.render(skill, situations, skills.site_for(page["url"], self.library["sites"])),
             "goal": s["goal"], "today": time.strftime("%A, %d %B %Y"), "dates": planner.dates(s["goal"]),
+            "sites": [{"name": site["name"], "start": site.get("start"), "search": site.get("search")}
+                      for site in skills.named_all(s["goal"], self.library["sites"])],  # a comparison opens each
             "plan": [{"n": n, **g, "current": n - 1 == s["current"]} for n, g in enumerate(s["plan"], 1)],
-            "notes": s["notes"][-15:], "chat": s["chat"][-20:],
+            "notes": list(reversed(dict.fromkeys(reversed(s["notes"]))))[-15:], "chat": s["chat"][-20:],
             "memory": self.memory.recall(s["skill"], skills.bare(rules.host(page["url"]).lower()), s["goal"]),
             "steps": self.recent_steps(8),
             "committed_and_waiting": s["commit"]["label"] if s["commit"] else None,
@@ -854,23 +866,30 @@ class Worker:
         }
 
     def do(self, act, page):
-        """The planner's browser actions: one of Jev's candidates, an address, WAIT, BACK, or a look."""
+        """The planner's browser actions: one of Jev's candidates or a page element by its number, an address,
+        WAIT, BACK, or a look."""
         s, op = self.state, act["op"]
         if op in {"PICK", "TYPE"}:
-            chosen = next((c for c in s["candidates"] if str(c["n"]) == act["pick"].strip()), None)
-            if chosen is None:
-                listed = ", ".join(f"{c['n']} {c['element']}" for c in s["candidates"]) or "none"
-                raise Retry(f"{op} names one of Jev's candidates by its number; there are {len(s['candidates'])} "
-                            f"(candidates: {listed}).")
-            if op == "TYPE" and chosen["operation"] != "TYPE_TEXT":
-                raise Retry(f"Candidate {chosen['n']} is not a field to type into.")
-            operation, text = chosen["operation"], act["text"] if op == "TYPE" else None
-            if op == "PICK" and operation == "TYPE_TEXT":  # a field picked with no text: the subgoal's, else focus it
-                text = self.subgoal_value(chosen["action"], self.subgoal())
-                operation = "TYPE_TEXT" if text is not None else "CLICK"  # focused, the site may offer its own options
-            if self.guard(operation, chosen["action"].get("label") or operation, page, text):
+            number = re.match(r"\s*\[(\d+)\]", act["pick"])
+            if number:  # a control Jev didn't rank, by the number the page view gives it
+                operation, action, text = self.element(op, number[1], act["text"], page)
+                key = None
+            else:
+                chosen = next((c for c in s["candidates"] if str(c["n"]) == act["pick"].strip()), None)
+                if chosen is None:
+                    raise Retry(f"{op} names one of Jev's candidates by its number; there are "
+                                f"{len(s['candidates'])} ({self.listed()}). To act on another control, use its "
+                                "element number in brackets, like [12].")
+                if op == "TYPE" and chosen["operation"] != "TYPE_TEXT":
+                    raise Retry(f"Candidate {chosen['n']} is not a field to type into.")
+                operation, action, key = chosen["operation"], chosen["action"], chosen.get("key")
+                text = act["text"] if op == "TYPE" else None
+                if op == "PICK" and operation == "TYPE_TEXT":  # a field picked with no text: the subgoal's, else focus
+                    text = self.subgoal_value(action, self.subgoal())
+                    operation = "TYPE_TEXT" if text is not None else "CLICK"  # focused, the site may offer options
+            if self.guard(operation, action.get("label") or operation, page, text):
                 return None
-            return self.act(operation, chosen["action"], page, self.subgoal(), key=chosen.get("key"), text=text)
+            return self.act(operation, action, page, self.subgoal(), key=key, text=text)
         if op == "OPEN_URL":
             url = act["text"].strip()
             parts = urlparse(url)
@@ -900,6 +919,44 @@ class Worker:
         if spot is None:
             raise Retry("Looking at the screen found nothing that fits. Try another way.")
         return self.act("LOOK", {**self.control(page, "LOOK"), **spot}, page, self.subgoal())
+
+    def listed(self):
+        """Jev's candidates as a refusal names them: "candidates: 1 [2] Continue, 2 …"."""
+        return "candidates: " + (", ".join(f"{c['n']} {c['element']}" for c in self.state["candidates"]) or "none")
+
+    def element(self, op, index, text, page):
+        """(operation, action, text) for the page element the planner names by its number in the page view ("[12]")
+        when the control isn't one of Jev's candidates: a field to type into (PICK types the subgoal's value, else
+        only focuses it), a control to click, or a dropdown's option (TYPE with the option's words). The gates that
+        hold every action still hold it. Refused when the page has no such element or it can't take the step."""
+        elements, heads, _ = action_space(page["actions"])
+        fill = heads.get("type_text_target", {}).get(index)
+        click = heads.get("click_target", {}).get(index)
+        options = [a for i, a in heads.get("select_target", {}).items() if i.split(":")[0] == index]
+        names = ", ".join(f"“{a['label'].split(' → ', 1)[-1]}”" for a in options)
+        if int(index) > views.ELEMENTS or not any(e["index"] == index for e in elements):
+            raise Retry(f"The page has no element [{index}]. Use the number of an element the page lists, or one of "
+                        f"Jev's candidates ({self.listed()}).")
+        if op == "TYPE" and fill:
+            return "TYPE_TEXT", fill, text
+        if op == "TYPE" and options:
+            wanted = " ".join(str(text).split()).casefold()
+            option = next((a for a in options if wanted in {a["label"].split(" → ", 1)[-1].strip().casefold(),
+                                                            str(a.get("value", "")).casefold()}), None)
+            if option is None:
+                raise Retry(f"[{index}] is a dropdown: TYPE [{index}] with the words of one of its options ({names}).")
+            return "SELECT", option, None
+        if op == "TYPE":
+            raise Retry(f"[{index}] is not a field to type into.")
+        if fill:  # picked with no text: the subgoal's, else only focused (the site may offer its own options)
+            value = self.subgoal_value(fill, self.subgoal())
+            return ("TYPE_TEXT" if value is not None else "CLICK"), fill, value
+        if click:
+            return "CLICK", click, None
+        if options:
+            raise Retry(f"[{index}] is a dropdown: TYPE [{index}] with the words of the option to choose ({names}).")
+        raise Retry(f"[{index}] can't be clicked, typed into, or chosen from. Use another element, or one of Jev's "
+                    f"candidates ({self.listed()}).")
 
     def talk(self, out, page):
         """ASK, TELL, DONE, or STOP from the planner, its words checked against the universal rules first."""
@@ -936,6 +993,10 @@ class Worker:
             raise Retry("The system asks for codes only when a code field is on the page: don't ask the user for a "
                         "code the site hasn't asked for. Do the step that makes the site send one, then wait for its "
                         "field.")
+        if rules.CARD_DETAIL.search(message) and not self.method_question(message, options) and \
+                not self.method_chosen():
+            raise Retry("ASK which payment method first, listing every method the page shows; a pre-selected saved "
+                        "card is not the user's pick.")
         # A question that asks for (or mentions) a code, password, or card detail goes through the hidden field,
         # options included: a reply typed in the open would reach the models. A picked option is read by code below.
         secret = (rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
@@ -946,6 +1007,11 @@ class Worker:
                  and rules.words(label) <= rules.words(message)]
         if not secret and held:
             raise Retry(f"Memory has it: use [profile:{held[0]}] as the value instead of asking.")
+        unknown = [k for k, pattern in PROFILE_ASKS.items() if k not in saved and k not in s["ids"]
+                   and pattern.search(message)]
+        if not secret and unknown:
+            raise Retry(f"TYPE [profile:{unknown[0]}] into the field instead: the system asks the user for it hidden "
+                        "and remembers it.")
         if s["delegated_at"] == len(s["history"]):
             raise Retry("The user just left this choice to you: pick the option that best fits the goal, TELL them "
                         "which one, and act on it.")
@@ -976,6 +1042,20 @@ class Worker:
         s["reason"] = "reply"
         return None
 
+    @staticmethod
+    def method_question(message, options=()):
+        """Whether a question asks how to pay: it lists two or more payment methods, or asks about paying without
+        asking for a card detail."""
+        text = "\n".join([message, *options])
+        methods = {m.casefold() for m in rules.METHOD.findall(text)}
+        return len(methods) >= 2 or bool(PAYS.search(text) and not rules.CARD_DETAIL.search(text))
+
+    def method_chosen(self):
+        """Whether the chat holds the user's answer to a question about how to pay (never an approval's yes)."""
+        chat = self.state["chat"]
+        return any(q["from"] == "agent" and r["from"] == "user" and not q.get("approval")
+                   and self.method_question(q["text"]) for q, r in zip(chat, chat[1:]))
+
     def read(self, message, options, answer):
         """The user's reply as the chat keeps it: their words, and the option Jev reads them as."""
         s = self.state
@@ -1004,11 +1084,16 @@ class Worker:
             self.settle(DOWNLOAD_WAIT)  # a download still in flight arrives first
         if rules.download_goal(s["goal"]) and not s["files"]:
             s["file_refusals"] += 1
-            nothing = "it may have opened in the browser, but no file was saved, so nothing reached you"
+            opened = any(DOWNLOADS.search(f"{h.get('action') or ''} {h.get('text') or ''}") for h in s["history"]
+                         if h.get("operation") in {"CLICK", "DOUBLE_CLICK", "LOOK", "PRESS_KEY", "OPEN_URL"})
+            nothing = ("it may have opened in the browser, but no file was saved, so nothing reached you" if opened
+                       else "no file was saved, because the document's download link was never opened")
             if s["file_refusals"] <= FILE_REFUSALS:
-                raise Retry("No file has been saved yet, and this goal needs the file itself: press the document's "
-                            "download link or button (one shown in the browser is saved by itself), then DONE once "
-                            "files_saved lists it.")
+                raise Retry("No file has been saved yet, and this goal needs the file itself: "
+                            + ("press the document's download link or button" if opened else
+                               "open the document's download link first")
+                            + " (one shown in the browser is saved by itself), then DONE once files_saved lists it. "
+                              "If the page shows there is no such document, STOP and say so.")
             if not any(h.get("committed") for h in s["history"]):
                 raise Halt("blocked", f"The document didn't download from {rules.host(page['url'])}: {nothing}. "
                                       "Please save it from the agent's Chrome window, or ask me again.")
@@ -1101,8 +1186,8 @@ class Worker:
         """({"text": what to type}, what logs show). Placeholders become the user's values here, after every model
         call. A code, password, or CVV field takes only the user's hidden answer, once, within the attempt limit."""
         s = self.state
-        if not text:
-            raise Retry("TYPE needs the text to type.")
+        if not str(text or "").strip():
+            raise Retry(CLEARING)
         if secret_field(action):
             found = re.fullmatch(r"\s*\[secret:(answer\d+)\]\s*", text)
             if not found or found[1] not in s["answers"]:
@@ -1141,7 +1226,22 @@ class Worker:
             raise Retry(f"“{action['label']}” takes at most {limit} characters, so “{text}” would be cut short: type "
                         "a shorter text that still names what the site needs (the area or a landmark), or use another "
                         "field.")
+        problem = None if PLACEHOLDER.search(text) else self.misfit(typed, action)  # the user's own values stand
+        if problem:
+            raise Retry(f"“{action['label']}” can't take “{text}”: {problem} Type what this field asks for, or use "
+                        "another field.")
         return {"text": typed}, text
+
+    @staticmethod
+    def misfit(text, action):
+        """Why text the planner wrote can't go into this field, or None: its format (a phone, email, date, number,
+        or pattern field), or a field named for a phone number that the text is no phone number for."""
+        problem = rules.format_error(text, action)
+        label = action.get("label") or ""
+        if problem is None and PROFILE_ASKS["phone"].search(label) and not re.search(r"e-?mail", label, re.I) \
+                and not re.fullmatch(r"[\d\s+()-]{6,}", text):
+            problem = "That doesn't look like a phone number."
+        return problem
 
     def profile_value(self, key, action=None):
         """An ID for a placeholder: from this task or memory, else asked once through the hidden field and kept,
@@ -1253,27 +1353,77 @@ class Worker:
             time.sleep(self.quiet_wait / 3)
             after = self.observe()
         last = s["history"][-1]
-        last.update(page_changed=after["fingerprint"] != page["fingerprint"], url=after["url"],
-                    changed=views.change(page, after))
+        changed = views.change(page, after)
+        if operation == "OPEN_URL" and inputs.get("url") and not self.landed(inputs["url"], after["url"]):
+            moved = f"OPEN_URL to {inputs['url']} ended at {after['url']} (redirected)"
+            changed = f"{moved}; {changed}"
+            s["notes"].append(moved)
+        last.update(page_changed=after["fingerprint"] != page["fingerprint"], url=after["url"], changed=changed,
+                    after_spot=views.signature(after))
+        if operation == "TYPE_TEXT" and self.reads_back(action, after, inputs.get("text"), shown):
+            last.update(effect="worked", typed_ok=True)  # the field shows it: Jev's later look can't undo that
         s["status"] = "ready"
         if s["commit"]:
             return gate.watch(self, s["commit"]["label"], s["commit"].get("goal") or s["goal"])
         return self.track_loop(last)
 
+    @staticmethod
+    def landed(wanted, url):
+        """Whether an address opened ended where it was meant to: the same host and path (a "www." or a closing
+        slash aside)."""
+        def place(address):
+            parts = urlparse(address)
+            return skills.bare(parts.netloc.lower()), parts.path.rstrip("/")
+
+        return place(wanted) == place(url)
+
+    @staticmethod
+    def reads_back(action, after, typed, shown):
+        """Whether the field typed into (the same frame and node, read again) now holds what was typed."""
+        same = (action.get("frame"), action.get("node"))
+        field = next((a for a in after["actions"] if a.get("kind") == "fill" and a.get("node") is not None
+                      and (a.get("frame"), a.get("node")) == same), None)
+        value = str((field or {}).get("value") or "").strip()
+        return bool(value) and value in {str(typed or "").strip(), str(shown or "").strip()}
+
     def track_loop(self, last):
-        """The same step going round: run CIRCLE_ASK times from the same page (whatever each run changed), or
-        STUCK_AT times on one path changing nothing. The user is asked (loop_stuck)."""
+        """The same step going round: run CIRCLE_ASK times from the same page (whatever each run changed), STUCK_AT
+        times on one path changing nothing, VISITS steps from one page state however far apart, or a step undone and
+        done again UNDOS times (A→B→A). The user is asked (loop_stuck). Every step also spends its page address's
+        budget (path_budget), waits and scrolls included."""
         s = self.state
-        if last["operation"] in QUIET or s["relaying"]:
+        if s["relaying"]:
+            return None
+        self.path_budget(last)
+        if last["operation"] in QUIET:
             return None
         history = s["history"][s["loop_from"]:]
         text = last.get("text") if last["operation"] in TYPED else None
-        if executor.circles(history, last["operation"], last["action"], last.get("spot"), text) >= CIRCLE_ASK:
-            self.loop_stuck(f"{last['operation']}|{last['action']}|{text or ''}|{last.get('spot')}")
+        spot = last.get("spot")
+        if executor.circles(history, last["operation"], last["action"], spot, text) >= CIRCLE_ASK:
+            self.loop_stuck(f"{last['operation']}|{last['action']}|{text or ''}|{spot}")
         elif not last["page_changed"] and executor.repeats(history, last["operation"], last["action"],
                                                            last["url"]) >= STUCK_AT:
             self.loop_stuck(f"{last['operation']}|{last['action']}|{urlparse(last['url']).path}")
+        elif spot and executor.visits(history, spot) >= VISITS:
+            self.loop_stuck(f"visits|{spot}")
+        elif spot and executor.undos(history) >= UNDOS:
+            self.loop_stuck(f"undos|{spot}")
         return None
+
+    def path_budget(self, last):
+        """Steps on one page address (host and path), counted over the whole task: the user is asked once at
+        PATH_ASK, and the task stops at PATH_HALT. Asking never resets the count, so a site that keeps its address
+        while going round can't go round for ever."""
+        s = self.state
+        parts = urlparse(last.get("url") or "")
+        key = f"{skills.bare(parts.netloc.lower())}{parts.path or '/'}"
+        count = s["path_steps"][key] = s["path_steps"].get(key, 0) + 1
+        if count >= PATH_HALT:
+            raise self.circling(after_asking=key in s["path_asked"])
+        if count >= PATH_ASK and key not in s["path_asked"]:
+            self.loop_stuck(f"path|{key}")  # a page that moved while asking: asked at the next step instead
+            s["path_asked"].append(key)
 
     def forbidden(self, operation, label, page, text=None):
         """Why this action may not run from this page now, or None: it already ran CIRCLE_AT times from the same page
@@ -1328,13 +1478,14 @@ class Worker:
             s["loop_from"], s["circled"] = len(s["history"]), {}
 
     def fruitless(self):
-        """Whether FRUITLESS steps in a row, all on one page (host and path), were judged failed by Jev: the planner
-        hears it once a streak, with what to try instead."""
+        """Whether FRUITLESS steps in a row, all on one page (host and path), were judged failed by Jev and left the
+        page's controls as they were (views.signature): the planner hears it once a streak, with what to try
+        instead. A scroll that shows new controls each time is still finding things."""
         s = self.state
         streak = []
         for h in reversed(s["history"]):
-            if h.get("effect") != "failed" or (streak and urlparse(h.get("url", ""))[1:3]
-                                               != urlparse(streak[0].get("url", ""))[1:3]):
+            if h.get("effect") != "failed" or h.get("spot") != h.get("after_spot") or (
+                    streak and urlparse(h.get("url", ""))[1:3] != urlparse(streak[0].get("url", ""))[1:3]):
                 break
             streak.append(h)
         start = len(s["history"]) - len(streak)  # where this streak began

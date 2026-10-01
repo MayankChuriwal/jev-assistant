@@ -3,8 +3,9 @@
 import re
 from urllib.parse import urlparse
 
-COMMIT = re.compile(  # outright: Jev can never clear these
-    r"\b(pay|place (your )?order|buy|purchase|book now|confirm (order|booking|ride|payment|purchase)"
+COMMIT = re.compile(  # outright: Jev can never clear these. "Buy it again" opens a list of past items to choose from
+    r"\b(pay|place (your )?order|buy(?!\s+(?:things\s+|it\s+)?again\b)|purchase|book now"
+    r"|confirm (order|booking|ride|payment|purchase)"
     r"|request (ride|uber\w*|trip)|cancel (my )?(order|booking|subscription|ride|membership)|delete"
     r"|submit (complaint|dispute|claim|request)|book (a )?(ride|cab|bike|auto|table|tickets?|room|hotel|flight)"
     r"|end (my )?(membership|subscription)|submit (the )?order|order now|recharge now|make (a )?payment"

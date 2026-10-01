@@ -106,3 +106,12 @@ def test_comparing_prices_is_a_lookup_and_groceries_are_bought():
     loaded = skills.load()
     assert loaded["groceries"]["description"].startswith("Order or buy groceries")
     assert "comparing prices across grocery or shopping apps" in loaded["lookup"]["description"]
+
+
+def test_every_site_a_goal_names_is_found_in_the_goals_order():
+    sites = skills.load_sites()
+    found = skills.named_all("Compare the iPhone 16 on Amazon.in and Flipkart, then Croma", sites)
+    assert [s["host"] for s in found] == ["amazon.in", "flipkart.com"]
+    assert skills.named_all("Order Diet Coke on Swiggy Instamart", sites) == [skills.named("Diet Coke on Swiggy",
+                                                                                          sites)]
+    assert skills.named_all("Book a table on EazyDiner", sites) == []

@@ -310,3 +310,13 @@ def test_an_error_page_by_its_opening_words_must_be_shorter_than_1500_characters
     ("Save my address as Home on Swiggy", False), ("How do I download my Aadhaar card?", False)])
 def test_a_goal_that_downloads_or_saves_a_document_needs_a_file(goal, wanted):
     assert rules.download_goal(goal) is wanted
+
+
+@pytest.mark.parametrize("label", ["Track, return, or buy things again", "Buy it again", "Buy again"])
+def test_buying_again_opens_a_list_and_is_no_commit(label):
+    assert rules.commit_label("CLICK", {"label": label}, {}) is None
+
+
+def test_buy_is_still_a_commit_when_it_is_not_buying_again():
+    assert rules.commit_label("CLICK", {"label": "Buy"}, {}) == "Buy"
+    assert rules.commit_label("CLICK", {"label": "Buy now"}, {}) == "Buy now"

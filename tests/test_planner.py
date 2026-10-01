@@ -213,3 +213,28 @@ def test_the_planner_is_told_to_keep_an_unchanged_plan_with_no_subgoals():
 def test_the_approval_summary_states_only_what_the_page_or_chat_shows():
     assert "only state facts the page or chat shows" in planner.SUMMARY
     assert "leave out a field the page doesn't show" in planner.SUMMARY
+
+
+@pytest.mark.parametrize("reason", ["unsure", "blocker:sign_in", "blocker:payment"])
+def test_continue_is_not_offered_when_jev_could_not_decide(monkeypatch, reason):
+    out = {"note": "", "subgoals": [], "action": {"op": "WAIT", "pick": "", "text": ""}, "message": "",
+           "options": []}
+    calls = scripted(monkeypatch, out, out)
+    planner.turn({"goal": "x", "reason": reason})
+    planner.turn({"goal": "x", "reason": "next"})
+    offered = [c["schema"]["properties"]["action"]["properties"]["op"]["enum"] for c in calls]
+    assert offered[0] == [op for op in planner.OPS if op != "CONTINUE"] and calls[1]["schema"] is planner.SCHEMA
+    assert calls[0]["schema"] is planner.DECIDE_SCHEMA and calls[0]["schema_name"] == "planner_turn"
+    assert planner.SCHEMA["properties"]["action"]["properties"]["op"]["enum"] == planner.OPS  # never changed
+
+
+def test_the_schema_without_continue_is_strict_everywhere():
+    def walk(node):
+        if node.get("type") == "object":
+            assert node["additionalProperties"] is False and set(node["required"]) == set(node["properties"])
+            for child in node["properties"].values():
+                walk(child)
+        if node.get("type") == "array":
+            walk(node["items"])
+
+    walk(planner.DECIDE_SCHEMA)

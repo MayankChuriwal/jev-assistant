@@ -130,12 +130,14 @@ def test_a_yes_with_a_change_commits_nothing(monkeypatch):
     assert w.state["approval"] is None
 
 
-def test_an_amount_the_page_doesnt_show_is_sent_back(monkeypatch):
+def test_an_amount_the_page_doesnt_show_never_reaches_the_user(monkeypatch):
     page = fake_page()
     summary(monkeypatch, ["Diet Coke", "Total ₹97"])
     checks(monkeypatch)
-    with pytest.raises(Retry, match="doesn't show ₹97"):
-        gate.approved(Fake(page), page, PAY, "Pay ₹79", None)
+    w = Fake(page)
+    with pytest.raises(Retry, match="did not approve"):  # asked, with the page's own total
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert "₹97" not in w.asked[0]["text"] and "Total: ₹79" in w.asked[0]["text"]
 
 
 INSTAMART = ("Bill details\nDiet Coke 300 ml ₹50.00\nItem total ₹50.00\nHandling Fee ₹12.00\n"
@@ -156,18 +158,18 @@ def test_a_summary_may_leave_off_or_add_a_zero_fraction_the_page_shows(monkeypat
 
 @pytest.mark.parametrize("line, missing", [("Total ₹121.50", "₹121.50"), ("Diet Coke ₹5", "₹5"),
                                            ("Diet Coke ₹500", "₹500"), ("Total ₹12,100", "₹12,100")])
-def test_a_summary_amount_with_other_digits_is_still_sent_back(monkeypatch, line, missing):
+def test_a_summary_amount_with_other_digits_is_still_left_out(monkeypatch, line, missing):
     page = fake_page(text=INSTAMART)
     summary(monkeypatch, ["Diet Coke 300 ml × 1", line])
-    with pytest.raises(Retry, match=f"doesn't show {missing}\\."):
-        gate.summary(Fake(page), page, gate.facts(page, []))
+    lines = gate.summary(Fake(page), page, gate.facts(page, []))
+    assert not gate.rules.amount_shown(missing, " ".join(lines)) and "Total: ₹121" in lines
 
 
 def test_a_whole_amount_is_never_taken_for_one_with_paise(monkeypatch):
     page = fake_page(text="Checkout\nDiet Coke ₹79.50\nTo pay ₹79.50\nPay")
     summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
-    with pytest.raises(Retry, match="doesn't show ₹79\\."):
-        gate.summary(Fake(page), page, gate.facts(page, []))
+    lines = gate.summary(Fake(page), page, gate.facts(page, []))
+    assert "Total ₹79" not in lines and "Total: ₹79.50" in lines
 
 
 def test_an_order_that_doesnt_match_is_fixed_twice_then_asked(monkeypatch):
@@ -1508,3 +1510,59 @@ def test_service_subtotal_packing_rain_and_mrp_lines_are_bill_lines(monkeypatch,
                                                   "Rain fee ₹10", "MRP ₹45"))
     w, page, _ = with_rule(monkeypatch, memory, text=text)
     assert gate.approved(w, page, PAY, "Pay ₹79", None) is True
+
+
+# ---- live bench D1: the summary's amounts are fixed in the summary, and an accordion is no outright commit
+
+
+def scripted_summary(monkeypatch, *outs):
+    """planner.summary's replies in order (the last one repeats); returns the payloads it was sent."""
+    calls = []
+    monkeypatch.setattr(gate.planner, "summary",
+                        lambda payload: calls.append(payload) or list(outs[min(len(calls), len(outs)) - 1]))
+    return calls
+
+
+def test_an_amount_the_page_doesnt_show_is_asked_for_again_once_naming_it(monkeypatch):
+    page = fake_page()
+    calls = scripted_summary(monkeypatch, ["Diet Coke", "Total ₹97"], ["Diet Coke", "Total ₹79"])
+    assert gate.summary(Fake(page), page, gate.facts(page, [])) == ["Diet Coke", "Total ₹79"]
+    assert len(calls) == 2 and "₹97" in calls[1]["feedback"] and "feedback" not in calls[0]
+
+
+def test_an_amount_still_wrong_after_asking_again_is_left_out_and_the_pages_total_stands(monkeypatch):
+    page = fake_page()
+    calls = scripted_summary(monkeypatch, ["Diet Coke ₹97", "Total ₹97"])
+    assert gate.summary(Fake(page), page, gate.facts(page, [])) == ["Diet Coke", "Total: ₹79"]
+    assert len(calls) == 2
+
+
+AIRDOPES = ("boAt Airdopes 141 Gen 2\nOne-time purchase\nCashback Rewards ₹100\nDelivery Saturday, 3 October\n"
+            "Deliver to Mayank - Mumbai 400098")
+
+
+def test_a_total_read_off_a_cashback_line_is_left_out(monkeypatch):
+    page = fake_page(text=AIRDOPES)
+    found = gate.facts(page, [])
+    assert found["total"] is None
+    summary(monkeypatch, ["boAt Airdopes 141 Gen 2, Qty 1", "Total: ₹100"])
+    lines = gate.summary(Fake(page), page, found)
+    assert lines[0] == "boAt Airdopes 141 Gen 2, Qty 1" and not any("₹100" in line for line in lines)
+    priced = fake_page(text="boAt Airdopes 141\nPrice ₹1,099\nCashback ₹100")
+    summary(monkeypatch, ["boAt Airdopes 141", "Total ₹1,099"])
+    assert "Total ₹1,099" in gate.summary(Fake(priced), priced, gate.facts(priced, []))
+
+
+def test_an_accordion_header_with_no_price_is_at_most_a_maybe_commit(monkeypatch):
+    page = fake_page(text="boAt Airdopes 141\nOne-time purchase\nSubscribe & Save")
+    header = {"id": "a", "kind": "click", "label": "One-time purchase #buybox .a-accordion", "role": "button",
+              "node": 50, "expanded": "false"}
+    calls = jev_says(monkeypatch, ("step", 0.9))
+    assert gate.commit_label(Fake(page), "CLICK", header, page, subgoal=ACT) is None and calls == [header["label"]]
+    jev_says(monkeypatch, ("step", 0.5))
+    assert gate.commit_label(Fake(page), "CLICK", header, page, subgoal=ACT) == header["label"]
+    jev_says(monkeypatch, ("step", 1.0))
+    plain = {k: v for k, v in header.items() if k != "expanded"}
+    assert gate.commit_label(Fake(page), "CLICK", plain, page, subgoal=ACT) == plain["label"]  # no state: outright
+    priced = {**header, "label": "One-time purchase ₹1,099"}
+    assert gate.commit_label(Fake(page), "CLICK", priced, page, subgoal=ACT) == priced["label"]

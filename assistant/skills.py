@@ -124,14 +124,24 @@ def site_for(url, sites):
     return sites[key] if key else None
 
 
+def named_at(goal, site):
+    """Where the goal first names this site, by name, alias, or host (a note with a path is named only by its name);
+    None when it doesn't."""
+    names = [site["name"], *site["aliases"], *([site["host"]] if "/" not in site["host"] else [])]
+    found = [m.start() for name in names
+             for m in [re.search(r"(?<!\w)" + re.escape(name.lower()) + r"(?!\w)", goal.lower())] if m]
+    return min(found, default=None)
+
+
 def named(goal, sites):
     """The site note the goal names by name, alias, or host (a note with a path is named only by its name)."""
-    text = goal.lower()
-    for site in sites.values():
-        names = [site["name"], *site["aliases"], *([site["host"]] if "/" not in site["host"] else [])]
-        if any(re.search(r"(?<!\w)" + re.escape(name.lower()) + r"(?!\w)", text) for name in names):
-            return site
-    return None
+    return next((site for site in sites.values() if named_at(goal, site) is not None), None)
+
+
+def named_all(goal, sites):
+    """Every site note the goal names, in the order the goal names them: a comparison names two."""
+    found = [(at, n, site) for n, site in enumerate(sites.values()) if (at := named_at(goal, site)) is not None]
+    return [site for _, _, site in sorted(found, key=lambda x: x[:2])]
 
 
 def start(site, skill_name):

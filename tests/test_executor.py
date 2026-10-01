@@ -162,3 +162,25 @@ def test_scrolls_count_only_the_last_run_on_one_path():
                {**down, "operation": "SCROLL_UP"}, {**down, "url": "https://s.test/p?x=2"}]
     assert executor.scrolls(history, "https://s.test/p") == 3
     assert executor.scrolls(history, "https://s.test/q") == 0
+
+
+def test_visits_count_every_step_from_one_page_state_with_no_window():
+    run = {"operation": "CLICK", "action": "Row K", "spot": "map"}
+    history = [run, *[{"operation": "CLICK", "action": f"Tile {n}", "spot": f"s{n}"} for n in range(25)],
+               {**run, "action": "Row J"}, {**run, "operation": "WAIT"}, {**run, "relayed": True}]
+    assert executor.visits(history, "map") == 2  # waits and the user's own captcha picks aside
+    assert executor.visits(history, None) == 0
+
+
+def test_an_undo_is_the_same_step_from_the_same_page_after_going_somewhere_and_back():
+    def step(spot, action):
+        return {"operation": "CLICK", "action": action, "spot": spot}
+
+    toggle = [step("A", "Select seat"), step("B", "Seat selected"), step("A", "Select seat"),
+              step("B", "Seat selected"), step("A", "Select seat")]
+    assert executor.undos(toggle) == 3
+    browsing = [step("list", "Phone 1"), step("p1", "Back"), step("list", "Phone 2"), step("p2", "Back"),
+                step("list", "Phone 3")]
+    assert executor.undos(browsing) == 0  # back to a list to open the next item is no undo
+    waited = [toggle[0], {"operation": "WAIT", "action": "Wait", "spot": "B"}, *toggle[1:3]]
+    assert executor.undos(waited) == 1

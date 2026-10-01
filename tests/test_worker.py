@@ -94,13 +94,14 @@ def test_a_missing_profile_detail_is_asked_hidden_and_remembered(tmp_path, monke
 
 def test_a_field_with_no_value_is_written_by_the_planner(tmp_path, monkeypatch):
     w = worker_with(tmp_path)
-    seen = script_planner(monkeypatch, turn(subgoals=[sub("fill the form")]), turn("TYPE", pick=1, text="Test User"))
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("fill the form")]),
+                          turn("TYPE", pick=1, text="080 4040 1234"))  # a phone box takes a phone number
     script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Phone number"})
     jev_checks(monkeypatch)
     for _ in range(3):
         w.command("tick")
     assert seen[1]["candidates"][0]["element"] == "Phone number"
-    assert w.browser.act.call_args.kwargs["text"] == "Test User"
+    assert w.browser.act.call_args.kwargs["text"] == "080 4040 1234"
 
 
 def test_an_answer_told_just_before_done_goes_out_once(tmp_path, monkeypatch):
@@ -239,6 +240,11 @@ def test_an_otp_question_is_asked_through_the_hidden_field_with_its_options_list
     assert "482913" not in json.dumps(w.state["messages"]) and "482913" not in json.dumps(w.state["chat"])
 
 
+# The user chose to pay by card: only then is a card detail asked for.
+CHOSE_CARD = [{"from": "agent", "text": "How would you like to pay?\n1. UPI\n2. Card"},
+              {"from": "user", "text": "“Card” → option 2: Card"}]
+
+
 def card_page():
     page = fake_page()
     page["actions"].append({"id": "e9", "kind": "fill", "label": "Card number", "role": "textbox", "value": "",
@@ -248,6 +254,7 @@ def card_page():
 
 def test_card_details_are_asked_hidden_and_never_reach_a_model_or_a_log(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=card_page(), replies=[{"text": "4111 1111 1111 1111"}])
+    w.state["chat"] = [dict(c) for c in CHOSE_CARD]
     seen = script_planner(monkeypatch,
                           turn("ASK", message="What's your card number and expiry date?", options=["Visa", "Amex"]),
                           turn(subgoals=[sub("enter the card number")]),
@@ -406,10 +413,14 @@ def test_a_captcha_goes_to_the_user_as_a_numbered_picture(tmp_path, monkeypatch)
 
 
 def test_jev_picks_which_value_goes_into_an_unclear_field(tmp_path, monkeypatch):
-    w = worker_with(tmp_path)
+    page = fake_page()  # a free-text field: a phone box would refuse a time
+    page["actions"].append({"id": "e11", "kind": "fill", "label": "Special requests", "role": "textbox", "value": "",
+                            "node": 22})
+    page["fingerprint"] = fingerprint(page)
+    w = worker_with(tmp_path, page=page)
     script_planner(monkeypatch, turn(subgoals=[sub("fill the form", values=[("customer", "Test User"),
                                                                             ("time", "19:00")])]))
-    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Phone number"})
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Special requests"})
     jev_checks(monkeypatch, value_for="time")
     w.command("tick")
     w.command("tick")
@@ -852,6 +863,7 @@ def test_a_choice_question_that_mentions_card_details_keeps_its_options_and_a_pi
 
 def test_a_choice_question_answered_with_something_else_keeps_that_answer_hidden(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=fake_page(text=PAYMENT), replies=[{"text": "4111 1111 1111 1111"}])
+    w.state["chat"] = [dict(c) for c in CHOSE_CARD]
     script_planner(monkeypatch, turn("ASK", message="Which card? Card details are asked through a hidden field.",
                                      options=["Saved HDFC card", "Add a new card"]))
     jev_checks(monkeypatch)
@@ -1502,8 +1514,8 @@ def test_an_order_replan_that_drops_the_commit_gets_the_old_commit_and_report_ba
         tmp_path, monkeypatch):
     w, _ = planned_order(tmp_path, monkeypatch, [sub("open the fees"), sub("ask about the small cart fee", kind="ask"),
                                                  sub("report the bill", kind="report")])
-    replan(w)
-    assert steps(w) == [("open the fees", "act"), ("ask about the small cart fee", "ask"),
+    replan(w)  # "open the fees" rewrites "open the cart"; the payment question nothing rewrote comes back too
+    assert steps(w) == [("open the fees", "act"), ("ask about the small cart fee", "ask"), ("choose how to pay", "ask"),
                         ("place the order", "commit"), ("report the order", "report")]
     assert w.state["feedback"] == [] and w.state["commit_drops"] == 0 and len(w.payloads) == 2
 
@@ -1520,7 +1532,8 @@ def test_a_repaired_replan_has_each_step_once_and_the_commit_as_a_commit(tmp_pat
     w, _ = planned_order(tmp_path, monkeypatch, [sub("open the fees"), sub("Place  the order"),
                                                  sub("report the order", kind="report")])
     replan(w)
-    assert steps(w) == [("open the fees", "act"), ("place the order", "commit"), ("report the order", "report")]
+    assert steps(w) == [("open the fees", "act"), ("choose how to pay", "ask"), ("place the order", "commit"),
+                        ("report the order", "report")]
 
 
 def test_a_repair_keeps_the_new_report_when_the_old_tail_has_none(tmp_path, monkeypatch):
@@ -1762,14 +1775,14 @@ def test_an_order_replan_that_drops_the_shopping_steps_gets_them_back_in_order(t
         "choose the payment method", "place the order", "report the order"]
 
 
-def test_an_order_replan_that_rewrites_a_step_is_not_given_the_old_steps_back(tmp_path, monkeypatch):
+def test_an_order_replan_that_rewrites_a_step_gets_back_only_the_steps_it_left_out(tmp_path, monkeypatch):
     first = [sub("search for Amul Taaza milk"), sub("open the product page"), sub("place the order", kind="commit"),
              sub("report the order", kind="report")]
     w, _ = planned_order(tmp_path, monkeypatch, [sub("search for Amul Taaza milk 500 ml in the groceries box")],
                          first=first)
     replan(w)
-    assert [do for do, _ in steps(w)] == ["search for Amul Taaza milk 500 ml in the groceries box", "place the order",
-                                          "report the order"]
+    assert [do for do, _ in steps(w)] == ["search for Amul Taaza milk 500 ml in the groceries box",
+                                          "open the product page", "place the order", "report the order"]
 
 
 def test_six_failed_steps_in_a_row_on_one_page_bring_a_replan_once(tmp_path, monkeypatch):
@@ -1835,6 +1848,7 @@ def test_asking_for_a_code_the_site_has_not_asked_for_is_refused(tmp_path, monke
     assert w.asked == [] and w.state["code_asks"] == 0
     assert "don't ask the user for a code the site hasn't asked for" in w.state["feedback"][-1]
     script_planner(monkeypatch, turn("ASK", message="What's your card number and expiry date?"))
+    w.state["chat"] += [dict(c) for c in CHOSE_CARD]
     w.command("tick")  # a card detail is not a code: the system asks it hidden, field or not
     assert len(w.asked) == 1 and w.asked[0]["kind"] == "secret"
 
@@ -2072,3 +2086,302 @@ def test_time_spent_waiting_for_the_user_never_exceeds_the_time_recorded(tmp_pat
     w.command("tick")
     assert w.state["status"] == "cancelled" and w.state["waited_ms"] == 300000
     assert w.state["elapsed_ms"] >= w.state["waited_ms"] and w.trace()["elapsed_ms"] >= 300000
+
+
+# ---- live bench D1: element numbers, loops by page, middles kept per step, safer asks and values, honest results
+
+LOGIN = [{"id": "x", "kind": "click", "label": "Close", "role": "button", "node": 1},
+         {"id": "g", "kind": "click", "label": "Continue", "role": "button", "node": 2},
+         {"id": "m", "kind": "fill", "label": "Enter mobile number", "role": "textbox", "value": "", "node": 3,
+          "constraints": {"type": "tel"}},
+         {"id": "s1", "kind": "select", "label": "Country → India", "role": "combobox", "value": "IN",
+          "current_value": "Choose", "node": 4},
+         {"id": "s2", "kind": "select", "label": "Country → Nepal", "role": "combobox", "value": "NP",
+          "current_value": "Choose", "node": 4},
+         {"id": "wait", "kind": "wait", "label": "Wait", "node": None}]
+ONLY_CONTINUE = [{"n": 1, "op": "CLICK", "operation": "CLICK", "element": "[2] Continue", "p": 0.4,
+                  "action": LOGIN[1]}]
+
+
+def login_worker(tmp_path, **options):
+    w = worker_with(tmp_path, page=fake_page(text="Log in\nEnter mobile number", actions=LOGIN), **options)
+    w.state["candidates"] = list(ONLY_CONTINUE)  # Jev ranked only the Continue button
+    return w
+
+
+def test_a_planner_type_onto_an_element_number_types_into_that_field(tmp_path):
+    from assistant import views
+
+    w = login_worker(tmp_path)
+    page = w.state["page"]
+    assert '[3] textbox "Enter mobile number"' in views.view(page, None)["elements"]  # the number the planner reads
+    w.do({"op": "TYPE", "pick": "[3]", "text": "[profile:phone]"}, page)
+    operation, action = w.browser.act.call_args.args[:2]
+    assert (operation, action["label"]) == ("TYPE_TEXT", "Enter mobile number")
+    assert w.browser.act.call_args.kwargs["text"] == "+91 98765 43210"
+    assert w.state["history"][-1]["text"] == "[profile:phone]"
+
+
+def test_a_planner_pick_or_type_by_element_number_clicks_selects_and_is_held_to_the_gates(tmp_path, monkeypatch):
+    w = login_worker(tmp_path, replies=[{"text": "no"}])
+    script_planner(monkeypatch, turn())
+    jev_checks(monkeypatch)
+    page = w.state["page"]
+    w.do({"op": "PICK", "pick": "[2]", "text": ""}, page)
+    assert pressed(w) == ["Continue"]
+    w.do({"op": "TYPE", "pick": "[4]", "text": "Nepal"}, page)  # a dropdown takes one of its options
+    operation, action = w.browser.act.call_args.args[:2]
+    assert (operation, action["value"]) == ("SELECT", "NP")
+    with pytest.raises(Retry, match="not a field to type into"):
+        w.do({"op": "TYPE", "pick": "[1]", "text": "hello"}, page)
+    pay = fake_page()  # the Pay button is element [6]: a commit by number still needs the user's yes
+    w.state["page"], w.state["candidates"] = pay, []
+    with pytest.raises(Retry, match="did not approve"):
+        w.do({"op": "PICK", "pick": "[6]", "text": ""}, pay)
+    assert w.asked[-1]["approval"] and "I'll press “Pay ₹79”" in w.asked[-1]["text"]
+
+
+def test_an_element_number_that_isnt_on_the_page_and_a_bare_number_that_isnt_a_candidate_are_refused(tmp_path):
+    w = login_worker(tmp_path)
+    page = w.state["page"]
+    with pytest.raises(Retry) as missing:
+        w.do({"op": "TYPE", "pick": "[99]", "text": "hello"}, page)
+    assert "[99]" in str(missing.value) and "candidates: 1 [2] Continue" in str(missing.value)
+    with pytest.raises(Retry) as bare:
+        w.do({"op": "PICK", "pick": "3", "text": ""}, page)
+    assert "names one of Jev's candidates by its number" in str(bare.value)
+    assert "candidates: 1 [2] Continue" in str(bare.value)
+    assert "use its element number in brackets, like [12]" in str(bare.value)
+    assert not w.browser.act.called
+
+
+def test_the_planner_is_told_how_to_name_a_control_jev_did_not_rank():
+    assert "for a control that isn't a candidate use its element number in brackets, like [12]" in \
+        " ".join(planner.SYSTEM.split())
+    assert "never PICK a different candidate instead" not in " ".join(planner.SYSTEM.split())
+
+
+def toggle(url, n):
+    """A seat that is pressed and unpressed: page A shows it free, page B shows it taken."""
+    return {"step": n, "operation": "CLICK", "action": "Select seat 01" if n % 2 else "seat 01 selected",
+            "url": url, "page_changed": True, "spot": "A" if n % 2 else "B"}
+
+
+def test_a_control_pressed_and_unpressed_three_times_asks_the_user(tmp_path):
+    w = worker_with(tmp_path, replies=[{"text": "pick any two seats together"}])
+    url = w.state["page"]["url"]
+    for n in range(1, 5):  # A B A B: two undo pairs
+        w.state["history"].append(toggle(url, n))
+        w.track_loop(w.state["history"][-1])
+    assert w.asked == []
+    w.state["history"].append(toggle(url, 5))  # A B A B A: three
+    w.track_loop(w.state["history"][-1])
+    assert len(w.asked) == 1 and "I'm stuck" in w.asked[0]["text"] and w.state["loop_from"] == 5
+
+
+def test_six_steps_from_one_page_state_ask_the_user_however_far_apart(tmp_path):
+    w = worker_with(tmp_path, replies=[{"text": "try the other cinema"}])
+    url, n = w.state["page"]["url"], 0
+    for visit in range(1, 7):
+        for other in range(4):  # four steps on other page states in between: 26 steps, past any 20-step window
+            n += 1
+            w.state["history"].append({"step": n, "operation": "CLICK", "action": f"Tile {n}",
+                                       "url": "https://shop.test/other",
+                                       "page_changed": True, "spot": f"elsewhere {n}"})
+            w.track_loop(w.state["history"][-1])
+        n += 1
+        w.state["history"].append({"step": n, "operation": "CLICK", "action": f"Row {visit}", "url": url,
+                                   "page_changed": True, "spot": "seat map"})
+        w.track_loop(w.state["history"][-1])
+        assert len(w.asked) == (visit == 6), visit
+    assert w.state["loop_from"] == n
+
+
+def test_thirty_steps_on_one_path_ask_once_and_forty_five_stop_even_after_an_answer(tmp_path):
+    from assistant.errors import Halt
+
+    w = worker_with(tmp_path, replies=[{"text": "keep going"}])
+    url = w.state["page"]["url"]
+    for n in range(1, 45):
+        op = "WAIT" if n % 5 == 0 else "CLICK"  # waits spend the path's budget too
+        w.state["history"].append({"step": n, "operation": op, "action": f"Tile {n}", "url": url,
+                                   "page_changed": True, "spot": f"state {n}"})
+        w.track_loop(w.state["history"][-1])
+        assert len(w.asked) == (n >= 30), n
+    w.state["history"].append({"step": 45, "operation": "CLICK", "action": "Tile 45", "url": url,
+                               "page_changed": True, "spot": "state 45"})
+    with pytest.raises(Halt, match="going in circles"):
+        w.track_loop(w.state["history"][-1])
+    assert len(w.asked) == 1
+
+
+def test_failed_scrolls_that_each_show_something_new_are_not_fruitless(tmp_path):
+    w = worker_with(tmp_path)
+    url = w.state["page"]["url"]
+    w.state["history"] = [{"step": n, "operation": "SCROLL_DOWN", "action": "Panel: All billers", "url": url,
+                           "effect": "failed", "spot": f"list {n}", "after_spot": f"list {n + 1}"}
+                          for n in range(1, 7)]
+    assert not w.fruitless()
+    w.state["history"] = [{**h, "after_spot": h["spot"]} for h in w.state["history"]]
+    assert w.fruitless() and "Six steps in a row" in w.state["feedback"][-1]
+
+
+def test_a_step_records_the_page_it_left_and_the_one_it_reached(tmp_path, monkeypatch):
+    from assistant import views
+
+    w = office_click(tmp_path, monkeypatch)
+    w.command("tick")
+    entry, page = w.state["history"][-1], w.state["page"]
+    assert entry["spot"] == views.signature(page) and entry["after_spot"] == views.signature(page)
+
+
+UBER_PLAN = [sub("set the pickup to your current location"),
+             sub("set the drop to Kempegowda International Airport Terminal 1"),
+             sub("choose the ride type", kind="ask"), sub("choose how to pay", kind="ask"),
+             sub("request the ride", kind="commit"), sub("report the driver and the arrival time", kind="report")]
+
+
+def test_a_replan_that_shares_words_with_one_old_step_keeps_the_others(tmp_path, monkeypatch):
+    goal = "Book an Uber from my current location to Kempegowda International Airport Terminal 1"
+    w, _ = planned_order(tmp_path, monkeypatch, [sub("ask for the pickup location since detecting it failed",
+                                                     kind="ask")], goal=goal, first=UBER_PLAN)
+    replan(w)
+    assert steps(w) == [("ask for the pickup location since detecting it failed", "ask"),
+                        ("set the pickup to your current location", "act"),
+                        ("set the drop to Kempegowda International Airport Terminal 1", "act"),
+                        ("choose the ride type", "ask"), ("choose how to pay", "ask"), ("request the ride", "commit"),
+                        ("report the driver and the arrival time", "report")]
+
+
+INSTAMART_PAY = fake_page(text="Payment\nHDFC Bank Card ••1234\nUPI\nPay on Delivery\nTo pay ₹121\nPay ₹121",
+                          url="https://www.swiggy.com/instamart/payment")
+
+
+def test_a_card_detail_is_asked_only_after_the_user_chose_how_to_pay(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=INSTAMART_PAY, replies=[{"text": "123"}], goal="Order one Diet Coke on Instamart")
+    script_planner(monkeypatch, turn("ASK", message="Please provide the CVV for your HDFC Bank Card to continue the "
+                                                    "payment."))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.asked == [] and "ASK which payment method first, listing every method the page shows; a " \
+                             "pre-selected saved card is not the user's pick" in w.state["feedback"][-1]
+    w.state["chat"] += [{"from": "agent", "text": "How would you like to pay?\n1. HDFC Bank Card\n2. UPI\n"
+                                                  "3. Pay on Delivery"},
+                        {"from": "user", "text": "“card” → option 1: HDFC Bank Card"}]
+    w.state["reason"] = "reply"
+    w.command("tick")
+    assert len(w.asked) == 1 and w.asked[0]["kind"] == "secret"
+
+
+def test_a_question_that_asks_how_to_pay_is_never_held_back(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=INSTAMART_PAY, replies=[{"text": "UPI"}])
+    script_planner(monkeypatch, turn("ASK", message="How would you like to pay? Card details are asked hidden.",
+                                     options=["HDFC Bank Card", "UPI", "Pay on Delivery"]))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert len(w.asked) == 1
+
+
+def test_asking_for_a_phone_number_in_the_chat_is_refused_when_memory_has_none(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, profile={"phone": ""})
+    script_planner(monkeypatch, turn("ASK", message="Please provide your mobile number to sign in to MakeMyTrip."))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.asked == [] and "TYPE [profile:phone] into the field instead" in w.state["feedback"][-1]
+
+
+def test_text_that_doesnt_fit_a_phone_field_is_refused_before_typing(tmp_path):
+    w = worker_with(tmp_path)
+    page = w.state["page"]
+    mobile = {"id": "m", "kind": "fill", "label": "Enter Mobile Number", "role": "textbox", "value": "", "node": 40}
+    for field in (mobile, {**mobile, "constraints": {"type": "tel"}}):
+        with pytest.raises(Retry, match="doesn't look like a phone number"):
+            w.value(field, "Goa", page)
+        assert w.value(field, "[profile:phone]", page)[0] == {"text": "+91 98765 43210"}
+    with pytest.raises(Retry, match="Dates go in as YYYY-MM-DD"):
+        w.value({**mobile, "label": "Check-in", "constraints": {"type": "date"}}, "3 Oct 2026", page)
+
+
+def test_an_empty_value_only_focuses_the_field_and_typing_nothing_is_refused(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text="Pickup\nDrop", actions=RIDE_PAGE))
+    script_planner(monkeypatch, turn(subgoals=[sub("set the pickup to the current location",
+                                                   values=[("pickup", ""), ("drop", "Indiranagar")])]))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.state["plan"][0]["values"] == [{"field": "drop", "text": "Indiranagar"}]
+    with pytest.raises(Retry, match="typing replaces"):
+        w.value(RIDE_PAGE[0], "", w.state["page"])
+
+
+def test_an_address_that_redirects_elsewhere_is_said_in_the_step_and_the_notes(tmp_path, monkeypatch):
+    prime = fake_page(text="Amazon Prime\nShopping plans", url="https://www.amazon.in/amazonprime")
+    w = worker_with(tmp_path, page=prime, goal="Cancel my Amazon Prime membership")
+    script_planner(monkeypatch, turn("OPEN_URL", text="https://www.amazon.in/mc"))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    said = "OPEN_URL to https://www.amazon.in/mc ended at https://www.amazon.in/amazonprime (redirected)"
+    assert said in w.state["history"][-1]["changed"] and said in w.state["notes"]
+
+
+def test_a_download_that_was_never_opened_says_so_instead_of_guessing_it_opened(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=ORDER_PAGE, goal=INVOICE)
+    script_planner(monkeypatch, turn("DONE", message="You have no recent orders.", text="Your Orders"))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert "open the document's download link first" in w.state["feedback"][-1]
+    for _ in range(3):
+        w.command("tick")
+    assert w.state["status"] == "blocked" and "no file was saved" in w.told[-1]["text"]
+    assert "download link was never opened" in w.told[-1]["text"] and "opened in the browser" not in w.told[-1]["text"]
+    clicked = worker_with(tmp_path, page=ORDER_PAGE, goal=INVOICE)
+    clicked.state["history"].append({"step": 1, "operation": "CLICK", "action": "Download invoice", "url": ""})
+    for _ in range(4):
+        clicked.command("tick")
+    assert "may have opened in the browser" in clicked.told[-1]["text"]
+
+
+FORM = [{"id": "t", "kind": "fill", "label": "Date picker", "role": "textbox", "value": "", "node": 1},
+        {"id": "b", "kind": "click", "label": "Submit", "role": "button", "node": 2}]
+
+
+def test_a_field_that_reads_back_what_was_typed_counts_as_worked_whatever_jev_says_next(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text="Web form", actions=FORM), goal="Fill the web form")
+    script_planner(monkeypatch, turn(subgoals=[sub("set the date", values=[("Date picker", "2026-10-15")])]))
+    typing = {"next": "TYPE", "type_text_target": "Date picker"}
+    script_jev(monkeypatch, typing, typing, {"next": "THINK", "effect": "failed"})  # plan's look, step, next look
+    jev_checks(monkeypatch)
+    w.command("tick")
+    filled = fake_page(text="Web form", actions=[{**FORM[0], "value": "2026-10-15"}, FORM[1]])
+    w.browser.observe.return_value = filled
+    w.command("tick")
+    assert w.state["history"][-1]["effect"] == "worked" and w.state["history"][-1]["typed_ok"]
+    w.command("tick")  # Jev now judges that step failed: the field itself says otherwise
+    assert w.state["history"][-1]["effect"] == "worked"
+    assert "done_when quotes values exactly as the plan types them" in " ".join(planner.SYSTEM.split())
+
+
+def test_a_field_that_reads_back_something_else_is_left_to_jev(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text="Web form", actions=FORM), goal="Fill the web form")
+    script_planner(monkeypatch, turn(subgoals=[sub("set the date", values=[("Date picker", "2026-10-15")])]))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Date picker"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.browser.observe.return_value = fake_page(text="Web form", actions=[{**FORM[0], "value": "10/20/2026"}, FORM[1]])
+    w.command("tick")
+    assert "effect" not in w.state["history"][-1] and not w.state["history"][-1].get("typed_ok")
+
+
+def test_the_planner_reads_each_note_once_and_every_site_the_goal_names(tmp_path, monkeypatch):
+    goal = "Compare the price of the Apple iPhone 16 128 GB on Flipkart and Amazon.in"
+    w = worker_with(tmp_path, page=fake_page(url="https://www.flipkart.com/"), goal=goal)
+    seen = script_planner(monkeypatch, turn("STOP", message="Done here."))
+    w.state["notes"] = ["BESCOM isn't listed.", "Price ₹69,900 on Flipkart.", "BESCOM isn't listed."]
+    w.command("tick")
+    assert seen[0]["notes"] == ["Price ₹69,900 on Flipkart.", "BESCOM isn't listed."]
+    assert [(s["name"], s["start"], s["search"]) for s in seen[0]["sites"]] == [
+        ("Flipkart", "https://www.flipkart.com", "https://www.flipkart.com/search?q={query}"),
+        ("Amazon", "https://www.amazon.in", "https://www.amazon.in/s?k={query}")]
+
+
+def test_the_planner_is_told_to_send_no_plan_unless_it_changes(tmp_path):
+    assert "Return subgoals: [] unless you change the plan. Never repeat the plan." in " ".join(planner.SYSTEM.split())
