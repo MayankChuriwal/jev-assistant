@@ -176,3 +176,20 @@ def test_redaction_reaches_dictionary_keys_and_a_leak_is_seen():
     assert secrets.leaks(body)
     clean = secrets.redact(body)
     assert "Call [profile:phone]" in clean and not secrets.leaks(clean)
+
+
+# Final review, Group B: a short digit secret never matches inside a larger number.
+
+def test_a_short_digit_secret_never_matches_inside_a_larger_number():
+    s = Secrets([("499", "[secret:answer1]")])
+    for text in ("To pay ₹1,499", "₹1499", "₹499.00", "Total 2,499.50", "Pay ₹1,499.00 now", "1.499"):
+        assert s.text(text) == text and not s.leaks(text), text
+    for text, shown in (("CVV 499", "CVV [secret:answer1]"), ("499", "[secret:answer1]"),
+                        ("code: 4 9 9.", "code: [secret:answer1]."), ("(499)", "([secret:answer1])")):
+        assert s.text(text) == shown and s.leaks(text), text
+
+
+def test_a_long_digit_secret_keeps_its_spacing_tolerance_and_its_number_boundaries():
+    s = Secrets([("482913", "[secret:otp]")])
+    assert s.text("OTP 482 913.") == "OTP [secret:otp]." and s.text("OTP 482-913") == "OTP [secret:otp]"
+    assert s.text("Order 1,482913") == "Order 1,482913" and s.text("₹482913.50") == "₹482913.50"

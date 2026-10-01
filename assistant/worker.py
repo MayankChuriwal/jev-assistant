@@ -48,6 +48,21 @@ def secret_field(action):
                                           and bool(rules.CARD_DETAIL.search(action.get("label") or "")))
 
 
+def trivial(value):
+    """A hidden reply too plain to redact: letters and spaces only, or under 4 characters that are not all digits.
+    A CVV or code (digits) is always registered; the registry never matches it inside a larger number."""
+    value = str(value or "").strip()
+    return (len(value) < 4 and not value.isdigit()) or bool(re.fullmatch(r"[^\W\d_]+(?:[\s'-]+[^\W\d_]+)*", value))
+
+
+def picked(answer, options):
+    """The option a hidden reply names by code alone (its number, or its words exactly), else None."""
+    text = answer.strip().rstrip(".").casefold()
+    if re.fullmatch(r"[0-9]{1,2}", text) and 1 <= int(text) <= len(options):
+        return int(text)
+    return next((n for n, option in enumerate(options, 1) if option.strip().casefold() == text), None)
+
+
 def plain(text):
     """Text as the user should read it: entities unescaped until none are left (some sites escape twice)."""
     while (unescaped := html.unescape(text)) != text:
@@ -197,6 +212,8 @@ class Worker:
     def command(self, name):
         if name != "tick":
             raise ValueError("Unknown command")
+        for value, placeholder in self.profile.hidden_values():  # a value another task learned is hidden here too
+            self.secrets.add(value, placeholder)
         secrets, meter = SECRETS.set(self.secrets), METER.set(self.state["meter"])
         try:
             return self.tick()
@@ -560,6 +577,8 @@ class Worker:
             return self.finish(act, message, page)
         if not message:
             raise Retry("ASK needs the question in message.")
+        # A question that asks for (or mentions) a code, password, or card detail goes through the hidden field,
+        # options included: a reply typed in the open would reach the models. A picked option is read by code below.
         secret = (rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
                   or bool(rules.CARD_DETAIL.search(message)))
         held = [k for k, pattern in PROFILE_ASKS.items() if self.profile.data.get(k) and pattern.search(message)]
@@ -575,7 +594,6 @@ class Worker:
                                   "Chrome window, then ask me again.")
         if self.moved(page):
             raise StalePage("The page changed while the planner decided. Decide again.")
-        options = [] if secret else options
         text = message + "".join(f"\n{n}. {o}" for n, o in enumerate(options, 1))
         self.steady(page)  # a page still switching screens gets read again first
         reply = self.ask({"kind": "secret" if secret else "text", "text": text})
@@ -583,7 +601,10 @@ class Worker:
             s["code_asks"] += 1  # a code counts once it was asked: a question dropped for a changed page doesn't
         answer = str(reply.get("text", "")).strip()
         s["chat"].append({"from": "agent", "text": text})
-        if secret:
+        pick = picked(answer, options) if secret else None
+        if pick:  # one of the offered options: not a secret, and the planner needs to read it
+            s["chat"].append({"from": "user", "text": f"“{answer}” → option {pick}: {options[pick - 1]}"})
+        elif secret:
             name = self.keep_secret(answer)
             s["chat"].append({"from": "user", "text": f"[secret:{name}] (hidden answer; type it as this placeholder)"})
         else:
@@ -876,10 +897,12 @@ class Worker:
         return views.lines(self.observe()) != views.lines(page)
 
     def keep_secret(self, value):
-        """Hold a secret answer for this task: registered for redaction, usable by its name, never logged."""
+        """Hold a secret answer for this task: usable by its name, never logged, and registered for redaction unless
+        it is a word or a short reply ("yes", "pay", "use UPI"), which would hide those words on every page."""
         name = f"answer{len(self.state['answers']) + 1}"
         self.state["answers"][name] = value
-        self.secrets.add(value, f"[secret:{name}]")
+        if not trivial(value):
+            self.secrets.add(value, f"[secret:{name}]")
         return name
 
     def learn(self, key, value):

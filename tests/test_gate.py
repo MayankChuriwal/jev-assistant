@@ -1035,3 +1035,13 @@ def test_a_checkout_step_beside_a_payment_method_is_not_cleared_as_an_outright_c
         assert gate.commit_label(Fake(page), "CLICK", control(label), page, subgoal=ACT) == label
     assert gate.commit_label(Fake(page), "CLICK", control("Amazon Pay"), page, subgoal=ACT) is None  # a method
     assert gate.commit_label(Fake(page), "CLICK", control("Proceed to Pay"), page, subgoal=ACT) is None  # a step
+
+
+def test_an_amount_the_redactor_hid_still_counts_as_money():
+    """A secret equal to the price ("₹499" with a CVV 499) hides the number: the page still shows money."""
+    for text in ("Renew\nTo pay ₹[secret:answer1]\nPay", "Renew\nTotal\n[secret:answer1]\nPay"):
+        assert gate.shows_money(text), text
+        page = fake_page(text=text)
+        state = {**Fake(page).state, "preauth": True, "cap": None, "goal": "Renew my plan, don't ask"}
+        assert gate.preauthorised(state, gate.facts(page, []), page) is False
+    assert not gate.shows_money("Hi [profile:name]\nYour plan\nRenew")

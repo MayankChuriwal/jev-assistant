@@ -718,3 +718,13 @@ def test_a_bench_question_scripted_for_the_user_goes_to_the_chat(tmp_path):
     assert until(lambda: c.open is not None)
     c.answer(c.open, {"type": "text", "text": "1234567"})
     assert until(lambda: replies) and replies == [{"text": "1234567"}]
+
+
+def test_a_profile_value_learned_mid_session_is_hidden_from_the_concierges_next_model_call(tmp_path):
+    from assistant.profile import SECRETS
+
+    profile = Profile(tmp_path / "p.json")
+    c = conversation.Core(WebChannel(tmp_path / "media"), profile=profile, make_worker=lambda *a: None,
+                          start=lambda goal: ("https://x.test/", "x", True), library=EMPTY, poll=0.01)
+    profile.data["phone"] = "9876543210"  # what a task's Worker.learn does while the chat runs
+    assert c.hidden(lambda: SECRETS.get().text("recharge 9876543210")) == "recharge [profile:phone]"

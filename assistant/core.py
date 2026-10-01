@@ -72,15 +72,15 @@ class Core:
         self.tasks, self.queue, self.open, self.log = {}, [], None, []
         self.remembering, self.routes = {}, {}
         self.task_ids, self.question_ids = itertools.count(1), itertools.count(1)
-        self.secrets = Secrets(self.profile.hidden_values())  # routing never sees the profile's values
 
     def worker_for(self, task, url, asker, notify):
         return Worker(url, task.goal, title=task.title, asker=asker, notify=notify, profile=self.profile,
                       skill=task.skill, preauth=task.preauth, cap=task.cap, library=self.library)
 
     def hidden(self, call, *args):
-        """A model call with the user's profile values redacted."""
-        token = SECRETS.set(self.secrets)
+        """A model call with the user's profile values redacted: read afresh each time, so a value a task learned
+        a moment ago is hidden too."""
+        token = SECRETS.set(Secrets(self.profile.hidden_values()))
         try:
             return call(*args)
         finally:

@@ -228,12 +228,14 @@ def test_steps_tick_until_the_task_stops(tmp_path, monkeypatch):
     assert [state["status"] for state in w.steps()] == ["blocked"]
 
 
-def test_an_otp_question_is_asked_through_the_hidden_field_without_options(tmp_path, monkeypatch):
+def test_an_otp_question_is_asked_through_the_hidden_field_with_its_options_listed(tmp_path, monkeypatch):
     w = worker_with(tmp_path, replies=[{"text": "482913"}])
     script_planner(monkeypatch, turn("ASK", message="Enter your OTP", options=["Resend OTP", "Use another number"]))
     jev_checks(monkeypatch)
     w.command("tick")
-    assert w.asked[0]["kind"] == "secret" and w.asked[0]["text"] == "Enter your OTP"
+    assert w.asked[0]["kind"] == "secret"  # options stay listed; a reply that is not one of them stays hidden
+    assert w.asked[0]["text"] == "Enter your OTP\n1. Resend OTP\n2. Use another number"
+    assert w.state["chat"][-1]["text"].startswith("[secret:answer1]")
     assert "482913" not in json.dumps(w.state["messages"]) and "482913" not in json.dumps(w.state["chat"])
 
 
@@ -254,7 +256,8 @@ def test_card_details_are_asked_hidden_and_never_reach_a_model_or_a_log(tmp_path
     jev_checks(monkeypatch)
     for _ in range(4):
         w.command("tick")
-    assert w.asked[0]["kind"] == "secret" and w.asked[0]["text"] == "What's your card number and expiry date?"
+    assert w.asked[0]["kind"] == "secret"
+    assert w.asked[0]["text"] == "What's your card number and expiry date?\n1. Visa\n2. Amex"
     assert w.browser.act.call_args.args[0] == "TYPE_TEXT"
     assert w.browser.act.call_args.kwargs["text"].replace(" ", "") == "4111111111111111"
     assert w.state["history"][-1]["text"] == "[secret:answer1]" and (None, 20) in w.secrets.nodes
@@ -783,3 +786,115 @@ def test_a_maybe_commit_jev_clears_runs_and_is_recorded_for_the_bench(tmp_path, 
 def test_a_captcha_square_that_may_commit_is_not_pressed_either(tmp_path):
     w = captcha_relay(tmp_path, "2", ["Tile 1", "Book Ola Mini", "Tile 3"])
     assert pressed(w) == [] and any("would commit" in note for note in w.state["notes"])
+
+
+# ---- final review, Group B: secrets never corrupt money or commit words, and only real secrets are hidden
+
+def test_a_cvv_whose_digits_end_the_total_leaves_the_total_whole(tmp_path):
+    from assistant import gate
+
+    page = fake_page(text="Checkout\nOne cushion\nTo pay ₹1,499\nPay ₹1,499")
+    w = worker_with(tmp_path, page=page, preauth=True, cap=100.0)
+    w.keep_secret("499")
+    seen = w.observe()
+    assert seen["text"] == "Checkout\nOne cushion\nTo pay ₹1,499\nPay ₹1,499"
+    found = gate.facts(seen, [seen["text"]])
+    assert found["total"] == "₹1,499" and gate.worst(seen["text"]) == 1499.0
+    w.state["site"] = "shop.test"
+    assert gate.preauthorised(w.state, found, seen) is False
+
+
+def test_a_hidden_reply_that_is_a_commit_word_does_not_hide_the_commit(tmp_path):
+    from assistant import gate
+
+    w = worker_with(tmp_path, replies=[{"text": "pay"}])
+    w.state["plan"] = [sub("pay", kind="act")]
+    w.stuck()  # the page has a CVV and a code field, so the reply is hidden
+    assert w.state["chat"][-1]["text"].startswith("[secret:answer1]") and w.state["answers"]["answer1"] == "pay"
+    page = w.observe()
+    pay = next(a for a in page["actions"] if a.get("node") == 11)
+    assert pay["label"] == "Pay ₹79" and "Pay ₹79" in page["text"]
+    assert gate.commit_label(w, "CLICK", pay, page, None, {"do": "x", "kind": "act"}) == "Pay ₹79"
+
+
+PAYMENT = "Payment\nUPI\nCash on delivery\nSaved HDFC card\nTo pay ₹79\nPay ₹79"
+
+
+def test_a_choice_question_that_mentions_card_details_keeps_its_options_and_a_picked_option_is_not_a_secret(
+        tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text=PAYMENT), replies=[{"text": "UPI"}, {"text": "2"}])
+    script_planner(monkeypatch, turn("ASK", message="How would you like to pay? Card details are asked through a "
+                                                    "hidden field.",
+                                     options=["UPI", "Cash on delivery", "Saved HDFC card"]))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    # Safer than a visible box: what is typed may be a card number, so the field stays hidden; the options stay.
+    assert w.asked[0]["kind"] == "secret" and w.asked[0]["text"].endswith("\n1. UPI\n2. Cash on delivery\n"
+                                                                         "3. Saved HDFC card")
+    assert w.state["chat"][-1]["text"] == "“UPI” → option 1: UPI" and w.state["answers"] == {}
+    assert "UPI" in w.observe()["text"] and w.secrets.text("Pay by UPI") == "Pay by UPI"
+    w.state["reason"] = None
+    w.state["chat"] = []
+    w.command("tick")  # a number picks an option too
+    assert w.state["chat"][-1]["text"] == "“2” → option 2: Cash on delivery"
+
+
+def test_a_choice_question_answered_with_something_else_keeps_that_answer_hidden(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text=PAYMENT), replies=[{"text": "4111 1111 1111 1111"}])
+    script_planner(monkeypatch, turn("ASK", message="Which card? Card details are asked through a hidden field.",
+                                     options=["Saved HDFC card", "Add a new card"]))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.asked[0]["kind"] == "secret" and w.state["chat"][-1]["text"].startswith("[secret:answer1]")
+    assert "4111" not in json.dumps([w.state["chat"], w.state["messages"], w.trace()])
+
+
+def test_a_plain_choice_question_is_never_hidden(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text=PAYMENT), replies=[{"text": "UPI"}])
+    script_planner(monkeypatch, turn("ASK", message="How would you like to pay?",
+                                     options=["UPI", "Cash on delivery"]))
+    jev_checks(monkeypatch, read_reply="1")
+    w.command("tick")
+    assert w.asked[0]["kind"] == "text" and w.state["chat"][-1]["text"] == "“UPI” → option 1: UPI"
+
+
+def test_a_trivial_hidden_answer_is_kept_but_never_hides_words_on_later_pages(tmp_path, monkeypatch):
+    from assistant import jev, model
+    from assistant.profile import SECRETS
+
+    w = worker_with(tmp_path, page=fake_page(text="Yes, deliver here\nPay ₹79"))
+    for value in ("yes", "ok", "no", "Use the saved card"):
+        w.keep_secret(value)
+    assert w.observe()["text"] == "Yes, deliver here\nPay ₹79" and not w.secrets.leaks("yes ok no")
+    password = {"id": "pw", "kind": "fill", "label": "Password", "role": "textbox", "value": "", "node": 40,
+                "constraints": {"type": "password"}}
+    assert w.value(password, "[secret:answer1]", w.state["page"]) == ({"text": "yes"}, "[secret:answer1]")
+    sent = []
+
+    class Response:
+        status_code, is_error = 200, False
+
+        def json(self):
+            options = ["yes", "no", "change"]
+            return {"answers": {"approval": {"choice": "yes", "probabilities": dict(zip(options, [0.9, 0.05, 0.05])),
+                                             "confidence": 0.9}}}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-test")
+    monkeypatch.setattr(model.CLIENT, "post", lambda url, json, headers: sent.append(json) or Response())
+    token = SECRETS.set(w.secrets)
+    try:
+        assert jev.approval("Diet Coke ₹79. Reply yes to go ahead.", "yes") == "yes"
+    finally:
+        SECRETS.reset(token)
+    assert "Reply: yes" in sent[0]["state"]["page"]["text"]  # the user's yes reaches Jev as it was typed
+
+
+def test_profile_values_learned_by_one_task_are_hidden_from_the_next_model_call_of_another(tmp_path, monkeypatch):
+    first = worker_with(tmp_path, replies=[{"text": "me@example.com"}], profile={"email": ""})
+    second = worker_with(tmp_path)
+    second.profile = first.profile  # the chat core gives every task the same profile
+    assert first.profile_value("email") == "me@example.com"
+    assert second.secrets.text("mail me@example.com") == "mail me@example.com"  # not yet: no command since
+    script_planner(monkeypatch, turn("STOP", message="Done here."))
+    second.command("tick")
+    assert second.secrets.text("mail me@example.com") == "mail [profile:email]"

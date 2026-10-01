@@ -144,8 +144,9 @@ class Secrets:
         if len(value) < 3:
             return
         digits = re.sub(r"[\s-]", "", value)
-        if digits.isdigit() and len(digits) >= 4:  # card numbers and phones, in any spacing
-            pattern = r"(?<!\d)" + r"[\s().-]*".join(digits) + r"(?!\d)"  # any spacing, brackets, dots, dashes
+        if digits.isdigit() and len(digits) >= 3:  # card numbers, phones, codes, and CVVs, in any spacing
+            # (brackets, dots, dashes), but never inside a larger number: a CVV 499 is not "₹1,499" or "₹499.00"
+            pattern = r"(?<![\d.,])" + r"[\s().-]*".join(digits) + r"(?![.,]?\d)"
         else:
             pattern = r"(?<!\w)" + re.escape(value) + r"(?!\w)"
         self.values[value] = (re.compile(pattern, re.IGNORECASE), placeholder)

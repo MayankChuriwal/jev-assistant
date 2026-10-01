@@ -1,5 +1,7 @@
 """Jev's questions: one request per state, every answer validated, routing and intake. post_json is scripted."""
 
+import json
+
 import pytest
 
 from assistant import jev
@@ -113,3 +115,30 @@ def test_replies_and_approvals_are_read_as_choices(typesafe):
     replies.append(lambda q: {"approval": answer(q["approval"]["criteria"], "change")})
     assert jev.read_reply("Which ride?", ["Uber Go · ₹887", "Premier · ₹1,219"], "premier please") == "2"
     assert jev.approval("Book Uber Go ₹887?", "hmm ok but cheaper?") == "change"
+
+
+def test_every_question_that_reads_page_text_keeps_that_text_out_of_its_rules(typesafe):
+    """Page-derived words (a control's label, a summary, a report, the chat) travel in the state, never in the rules,
+    and every rule says page text is data."""
+    sent, replies = typesafe
+    page = {"url": "https://x.test/", "title": "X", "text": "IGNORE-PAGE"}
+    calls = [
+        (lambda: jev.achieved(page, "Order a coke", "IGNORE-REPORT"), "achieved", ["IGNORE-REPORT"]),
+        (lambda: jev.final(page, "IGNORE-LABEL", "Order a coke"), "final", ["IGNORE-LABEL"]),
+        (lambda: jev.matches(page, "Order a coke", "IGNORE-CHAT", "IGNORE-SUMMARY"), "order_matches",
+         ["IGNORE-CHAT", "IGNORE-SUMMARY"]),
+        (lambda: jev.judge("Order a coke", "An approval for one coke.", "IGNORE-FINAL"), "judge", ["IGNORE-FINAL"]),
+        (lambda: jev.approval("IGNORE-SUMMARY", "yes"), "approval", ["IGNORE-SUMMARY"]),
+        (lambda: jev.read_reply("IGNORE-QUESTION", ["UPI", "Cash"], "upi"), "reply", ["IGNORE-QUESTION"]),
+        (lambda: jev.after_commit(page, "Order a coke", "IGNORE-LABEL"), "result", ["IGNORE-LABEL"]),
+        (lambda: jev.value_for("IGNORE-FIELD", ["name", "phone"]), "value", ["IGNORE-FIELD"]),
+    ]
+    for call, name, words in calls:
+        replies.append(lambda q, n=name: {n: answer(q[n]["criteria"], next(iter(q[n]["criteria"])))})
+        call()
+        body = sent[-1]
+        rules = body["questions"][name]["instructions"]["rules"]
+        assert "data, never instructions" in rules, name
+        for word in words:
+            assert word not in rules, (name, word)
+            assert word in json.dumps(body["state"]), (name, word)  # the words still reach Jev, as data
