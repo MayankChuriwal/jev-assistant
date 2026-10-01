@@ -1467,16 +1467,19 @@ def test_planner_turns_keep_the_candidates_and_feedback_they_were_shown(tmp_path
     assert trace["turns"][-1]["candidates"] == last["candidates"] and "feedback" in trace["turns"][-1]
 
 
-def planned_order(tmp_path, monkeypatch, *replans, goal="Order Diet Coke on Instamart"):
-    """A worker whose first plan ends in the commit, then a replan turn for each of `replans` (lists of subgoals)."""
+ORDER_PLAN = [sub("open the cart"), sub("choose how to pay", kind="ask"), sub("place the order", kind="commit"),
+              sub("report the order", kind="report")]
+
+
+def planned_order(tmp_path, monkeypatch, *replans, goal="Order Diet Coke on Instamart", first=ORDER_PLAN):
+    """A worker whose first plan is `first` (by default one ending in the commit), then a replan turn for each of
+    `replans` (lists of subgoals). `w.payloads` holds what the planner was shown, one per planner call."""
     w = worker_with(tmp_path, goal=goal)
-    plan = [sub("open the cart"), sub("choose how to pay", kind="ask"), sub("place the order", kind="commit"),
-            sub("report the order", kind="report")]
-    script_planner(monkeypatch, turn(subgoals=plan), *(turn(subgoals=r) for r in replans))
+    w.payloads = script_planner(monkeypatch, turn(subgoals=first), *(turn(subgoals=r) for r in replans))
     script_jev(monkeypatch, {"next": "THINK"})
     jev_checks(monkeypatch)
     w.command("tick")
-    return w, plan
+    return w, first
 
 
 def replan(w):
@@ -1484,11 +1487,41 @@ def replan(w):
     w.command("tick")
 
 
-def test_an_order_replan_that_drops_the_commit_is_refused_and_the_plan_kept(tmp_path, monkeypatch):
-    w, plan = planned_order(tmp_path, monkeypatch, [sub("open the fees"), sub("report the bill", kind="report")])
+def steps(w):
+    return [(g["do"], g["kind"]) for g in w.state["plan"]]
+
+
+def test_an_order_replan_that_drops_the_commit_gets_the_old_commit_and_report_back_with_no_planner_call(
+        tmp_path, monkeypatch):
+    w, _ = planned_order(tmp_path, monkeypatch, [sub("open the fees"), sub("ask about the small cart fee", kind="ask"),
+                                                 sub("report the bill", kind="report")])
     replan(w)
-    assert "must include the final commit subgoal" in w.state["feedback"][-1]
-    assert [g["do"] for g in w.state["plan"]] == [g["do"] for g in plan] and w.state["reason"] == "replan"
+    assert steps(w) == [("open the fees", "act"), ("ask about the small cart fee", "ask"),
+                        ("place the order", "commit"), ("report the order", "report")]
+    assert w.state["feedback"] == [] and w.state["commit_drops"] == 0 and len(w.payloads) == 2
+
+
+def test_a_repaired_replan_keeps_the_done_steps_and_takes_the_tail_from_the_current_one(tmp_path, monkeypatch):
+    w, _ = planned_order(tmp_path, monkeypatch, [sub("ask about the small cart fee", kind="ask")])
+    w.state["current"] = 2  # at the commit: the cart is open and the payment chosen
+    replan(w)
+    assert steps(w) == [("open the cart", "act"), ("choose how to pay", "ask"), ("ask about the small cart fee", "ask"),
+                        ("place the order", "commit"), ("report the order", "report")]
+
+
+def test_a_repaired_replan_has_each_step_once_and_the_commit_as_a_commit(tmp_path, monkeypatch):
+    w, _ = planned_order(tmp_path, monkeypatch, [sub("open the fees"), sub("Place  the order"),
+                                                 sub("report the order", kind="report")])
+    replan(w)
+    assert steps(w) == [("open the fees", "act"), ("place the order", "commit"), ("report the order", "report")]
+
+
+def test_a_repair_keeps_the_new_report_when_the_old_tail_has_none(tmp_path, monkeypatch):
+    first = [sub("open the cart"), sub("place the order", kind="commit")]
+    w, _ = planned_order(tmp_path, monkeypatch, [sub("open the fees"), sub("report the bill", kind="report")],
+                         first=first)
+    replan(w)
+    assert steps(w) == [("open the fees", "act"), ("place the order", "commit"), ("report the bill", "report")]
 
 
 def test_an_order_replan_that_keeps_the_commit_is_taken(tmp_path, monkeypatch):
@@ -1497,13 +1530,41 @@ def test_an_order_replan_that_keeps_the_commit_is_taken(tmp_path, monkeypatch):
     assert [g["do"] for g in w.state["plan"]] == ["open the fees", "place the order"] and w.state["feedback"] == []
 
 
-def test_a_replan_that_drops_the_commit_is_taken_after_three_refusals_in_a_row(tmp_path, monkeypatch):
-    w, _ = planned_order(tmp_path, monkeypatch, [sub("open the fees")])
+NO_COMMIT = [sub("open the cart"), sub("report the order", kind="report")]
+
+
+def test_an_order_replan_with_no_commit_in_either_plan_is_refused_and_the_plan_kept(tmp_path, monkeypatch):
+    w, first = planned_order(tmp_path, monkeypatch, [sub("open the fees"), sub("report the bill", kind="report")],
+                             first=NO_COMMIT)
+    replan(w)
+    assert "must include the final commit subgoal" in w.state["feedback"][-1]
+    assert [g["do"] for g in w.state["plan"]] == [g["do"] for g in first] and w.state["reason"] == "replan"
+
+
+def test_a_replan_with_no_commit_in_either_plan_is_taken_after_three_refusals_and_not_refused_again(
+        tmp_path, monkeypatch):
+    w, _ = planned_order(tmp_path, monkeypatch, [sub("open the fees")], [sub("open the fees")], [sub("open the fees")],
+                         [sub("open the fees")], [sub("open the offers")], first=NO_COMMIT)
     for _ in range(3):
         replan(w)
         assert w.state["plan"][0]["do"] == "open the cart"
     replan(w)
-    assert [g["do"] for g in w.state["plan"]] == ["open the fees"] and w.state["commit_drops"] == 0
+    assert [g["do"] for g in w.state["plan"]] == ["open the fees"]
+    calls = len(w.payloads)
+    replan(w)  # the planner insisted three times: a later plan without a commit costs no more refusals
+    assert [g["do"] for g in w.state["plan"]] == ["open the offers"] and len(w.payloads) == calls + 1
+
+
+def test_a_plan_with_a_commit_starts_the_refusals_afresh(tmp_path, monkeypatch):
+    w, _ = planned_order(tmp_path, monkeypatch, *[[sub("open the fees")]] * 4,
+                         [sub("open the cart"), sub("place the order", kind="commit")], [sub("open the fees")],
+                         first=NO_COMMIT)
+    for _ in range(5):
+        replan(w)
+    assert w.state["commit_drops"] == 0 and steps(w)[-1] == ("place the order", "commit")
+    w.state.update(plan=[sub("open the cart")], current=0)  # the commit subgoal gone, the order not through
+    replan(w)
+    assert "must include the final commit subgoal" in w.state["feedback"][-1] and steps(w) == [("open the cart", "act")]
 
 
 @pytest.mark.parametrize("goal", ["What is the price of Diet Coke on Instamart?", "What did I order last on Swiggy?"])

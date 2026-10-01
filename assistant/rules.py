@@ -115,10 +115,15 @@ def approval_valid(approval, page, steps):
     return not approval["amount"] or amount_shown(approval["amount"], page["text"])
 
 
+ZERO_FRACTION = r"(?:\.0{1,2}|,00)"  # ".0", ".00", ",00": no paise. ",000" and "€1.000" are thousands, never this
+
+
 def amount_shown(amount, text):
-    """The approved amount on the page as a whole number: ₹79 is not ₹790, ₹79.50, or 179."""
-    fragment = normal(amount)
-    return bool(fragment) and re.search(r"(?<!\d)" + re.escape(fragment) + r"(?![\d.,]*\d)", normal(text)) is not None
+    """The approved amount on the page as a whole number: ₹79 is not ₹790, ₹79.50, or 179. A fraction of only
+    zeros, on either side, is the same value spelled another way: ₹50 is ₹50.00, and ₹1,299.00 is ₹1,299."""
+    fragment = re.sub(r"(?<=\d)" + ZERO_FRACTION + "$", "", normal(amount))
+    return bool(fragment) and re.search(r"(?<!\d)" + re.escape(fragment) + ZERO_FRACTION + r"?(?![\d.,]*\d)",
+                                        normal(text)) is not None
 
 
 def asks_for_secret(text):

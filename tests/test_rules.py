@@ -105,6 +105,31 @@ def test_an_approved_amount_must_appear_whole():
     assert not rules.approval_valid({**approval, "amount": "79"}, page("Total 179"), 1)
 
 
+@pytest.mark.parametrize("amount, text", [
+    ("₹50", "Diet Coke ₹50.00"), ("₹1,299", "To pay ₹1,299.00"), ("Rs. 79", "Total Rs. 79.00"),
+    ("₹ 79", "Total ₹ 79.0"), ("₹50.00", "Diet Coke ₹50"), ("₹1,299.00", "To pay ₹1,299"), ("₹50.0", "Item ₹50.00"),
+    ("€50", "Total €50,00"), ("₹121", "To pay ₹121"), ("₹79.50", "Total ₹79.50")])
+def test_a_zero_fraction_on_either_side_is_the_same_amount(amount, text):
+    assert rules.amount_shown(amount, text)
+
+
+@pytest.mark.parametrize("amount, text", [
+    ("₹79", "Total ₹79.50"), ("₹79", "Total ₹79.05"), ("₹79", "Total ₹790.00"), ("₹79", "Total ₹179.00"),
+    ("₹79", "Total ₹79.001"), ("₹1", "Total ₹1,000"), ("₹1", "Total ₹1,00,000"), ("₹50", "Total ₹50,000.00"),
+    ("₹79.00", "Total ₹79.50"), ("₹79.00", "Total ₹790"), ("₹1,000", "Total ₹1"), ("₹1,000.00", "Total ₹1"),
+    ("79.00", "Total 179"), ("€1", "Total €1.000"), ("€1", "Total €1,000"), ("₹50", "Total ₹50,0")])
+def test_only_a_zero_fraction_is_ignored_never_digits_or_a_thousands_group(amount, text):
+    assert not rules.amount_shown(amount, text)
+
+
+def test_an_approved_amount_holds_while_the_page_shows_the_same_value_with_or_without_zeros():
+    approval = {"host": "shop.test", "step": 0, "amount": "₹121"}
+    page = {"url": "https://shop.test/pay", "text": "Item total ₹91.00\nTo pay ₹121.00"}
+    assert rules.approval_valid(approval, page, 1)
+    assert rules.approval_valid({**approval, "amount": "₹121.00"}, {**page, "text": "To pay ₹121"}, 1)
+    assert not rules.approval_valid(approval, {**page, "text": "To pay ₹121.50"}, 1)
+
+
 def test_codes_are_secret_but_a_phone_number_for_a_code_is_not():
     for text in ("Please enter the OTP you received.", "Enter the 4-digit verification code sent via SMS",
                  "Enter the code we sent to your email", "Enter your UPI PIN", "Your Uber account password"):

@@ -138,6 +138,38 @@ def test_an_amount_the_page_doesnt_show_is_sent_back(monkeypatch):
         gate.approved(Fake(page), page, PAY, "Pay ₹79", None)
 
 
+INSTAMART = ("Bill details\nDiet Coke 300 ml ₹50.00\nItem total ₹50.00\nHandling Fee ₹12.00\n"
+             "Small Cart Fee ₹20.00\nNo small cart fee on orders above ₹99\nDelivery Partner Fee ₹30.00\n"
+             "Platform Fee ₹9.00\nTo Pay ₹121\nProceed to Pay")
+
+
+def test_a_summary_may_leave_off_or_add_a_zero_fraction_the_page_shows(monkeypatch):
+    page = fake_page(text=INSTAMART)
+    found = gate.facts(page, [])
+    summary(monkeypatch, ["Diet Coke 300 ml × 1 · ₹50", "Fees: handling ₹12, small cart ₹20, delivery partner ₹30, "
+                          "platform ₹9", "Total ₹121.00"])
+    lines = gate.summary(Fake(page), page, found)
+    assert lines[:3] == ["Diet Coke 300 ml × 1 · ₹50", "Fees: handling ₹12, small cart ₹20, delivery partner ₹30, "
+                         "platform ₹9", "Total ₹121.00"]
+    assert not any(line.startswith("Total:") for line in lines)  # ₹121.00 already says the page's ₹121
+
+
+@pytest.mark.parametrize("line, missing", [("Total ₹121.50", "₹121.50"), ("Diet Coke ₹5", "₹5"),
+                                           ("Diet Coke ₹500", "₹500"), ("Total ₹12,100", "₹12,100")])
+def test_a_summary_amount_with_other_digits_is_still_sent_back(monkeypatch, line, missing):
+    page = fake_page(text=INSTAMART)
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", line])
+    with pytest.raises(Retry, match=f"doesn't show {missing}\\."):
+        gate.summary(Fake(page), page, gate.facts(page, []))
+
+
+def test_a_whole_amount_is_never_taken_for_one_with_paise(monkeypatch):
+    page = fake_page(text="Checkout\nDiet Coke ₹79.50\nTo pay ₹79.50\nPay")
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
+    with pytest.raises(Retry, match="doesn't show ₹79\\."):
+        gate.summary(Fake(page), page, gate.facts(page, []))
+
+
 def test_an_order_that_doesnt_match_is_fixed_twice_then_asked(monkeypatch):
     page = fake_page()
     summary(monkeypatch, ["Pepsi", "Total ₹79"])

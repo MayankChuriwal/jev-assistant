@@ -26,7 +26,7 @@ SUBGOAL_STEPS = 12
 STUCK_AT = 8
 IDLE_HALT = 16  # ticks in a row with no browser step and no question to the user: ask at STUCK_AT, stop here
 CODE_ASKS = 3
-COMMIT_DROPS = 3  # an order's replan that drops its commit is refused this many times in a row, then taken
+COMMIT_DROPS = 3  # an order's replan with no commit (none left in the old plan either): refused this often, then taken
 CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QUIET = {"WAIT", "SCROLL_UP", "SCROLL_DOWN"}  # repeating these is not going in circles
 TALKING = {"ASK", "TELL", "DONE", "STOP"}
@@ -68,6 +68,31 @@ def picked(answer, options):
 
 def has_commit(plan):
     return any(g["kind"] == "commit" for g in plan)
+
+
+def step_words(subgoal):
+    return " ".join(subgoal["do"].lower().split())
+
+
+def with_commit(subgoals, rest):
+    """A replan that left the commit out, repaired: the new subgoals, then the old plan's `rest` from its first commit
+    subgoal on (the commit, the report). The new plan's closing reports move after the commit, or go when the old tail
+    has its own; a step written in both is kept once, and as the commit when the old tail has it as one."""
+    tail = rest[next(i for i, g in enumerate(rest) if g["kind"] == "commit"):]
+    end = len(subgoals)
+    while end and subgoals[end - 1]["kind"] == "report":
+        end -= 1
+    if not any(g["kind"] == "report" for g in tail):
+        tail = tail + subgoals[end:]
+    commits = {step_words(g) for g in tail if g["kind"] == "commit"}
+    head = [g for g in subgoals[:end] if step_words(g) not in commits]
+    have = {step_words(g) for g in head}
+    return head + [g for g in tail if g["kind"] == "commit" or step_words(g) not in have]
+
+
+def asks(goal):
+    """Whether the goal is a question ("What did I order last on Swiggy?"): a lookup, even when it names an order."""
+    return bool(planner.OPEN_Q.match(goal or "")) or (goal or "").rstrip().endswith("?")
 
 
 def plain(text):
@@ -590,8 +615,7 @@ class Worker:
                      "values": [v for v in g["values"] if v["field"].strip()]}
                     for g in out["subgoals"] if g["do"].strip()][:10]
         if subgoals:
-            self.keeps_commit(subgoals)
-            s["plan"] = s["plan"][:s["current"]] + subgoals
+            s["plan"] = s["plan"][:s["current"]] + self.keeps_commit(subgoals)
             s["subgoal_steps"] = 0
         if s["replay"] and (reason == "start" or subgoals):  # a plan of another shape, now or later: no replay
             s["replay"]["on"] = s["replay"]["on"] and replay.same_shape(s["plan"], self.habit["plan"])
@@ -622,15 +646,22 @@ class Worker:
         return " (ending with the commit step: place the order, pay, or book)" if self.unordered() else ""
 
     def keeps_commit(self, subgoals):
-        """A replan of an order or booking that drops the commit subgoal the plan still had is refused, and the plan
-        kept. After COMMIT_DROPS refusals in a row it is taken: the gate still guards every commit, and a plan that
-        runs out is refused at CONTINUE until the user is asked."""
+        """The new rest of the plan, still holding the commit while an order or booking hasn't gone through. A replan
+        that leaves out the commit subgoal the old plan still has gets it back (`with_commit`), with no planner call.
+        When neither has one, the replan is refused and the old plan kept; after COMMIT_DROPS refusals in a row it is
+        taken, and so is every later plan without a commit until one has a commit again: the gate still guards every
+        commit, and a plan that runs out is refused at CONTINUE until the user is asked. The first plan, and the plan
+        for a goal that asks a question, are never refused."""
         s = self.state
-        dropped = (self.unordered() and has_commit(s["plan"][s["current"]:])
-                   and not has_commit(s["plan"][:s["current"]] + subgoals))
-        if not dropped or s["commit_drops"] >= COMMIT_DROPS:
+        rest = s["plan"][s["current"]:]
+        if not self.unordered() or has_commit(subgoals):
             s["commit_drops"] = 0
-            return
+            return subgoals
+        if has_commit(rest):
+            s["commit_drops"] = 0
+            return with_commit(subgoals, rest)
+        if not s["plan"] or asks(s["goal"]) or s["commit_drops"] >= COMMIT_DROPS:
+            return subgoals
         s["commit_drops"] += 1
         s["reason"] = "replan"
         raise Retry("This goal ends in an order or booking: the plan must include the final commit subgoal (kind "

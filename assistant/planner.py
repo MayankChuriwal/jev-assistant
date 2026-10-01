@@ -73,6 +73,10 @@ Rules:
   see and their prices. When the user leaves a choice to you ("you choose", "the cheapest"), pick the best fit and
   TELL them which. A choice saved in memory (a default address, ride type, usual size, default app) counts as
   theirs: use it and TELL them which you used.
+- When you tell the user about a fee they could avoid, quote the page's own words for that fee and its threshold
+  exactly (for example “Small Cart Fee ₹20.00: no small cart fee on orders above ₹99”), say how much it would save,
+  and never merge two fees or thresholds into one sentence.
+- Copy amounts exactly as the page shows them, decimals included.
 - Ask for information, never for clicks: never tell the user to click, tap, type, scroll, or select anything.
 - Read the chat before asking; never ask again for something already answered.
 - Never ask the user to confirm or approve: the system asks before any commit, from the page's own facts.
