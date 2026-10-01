@@ -9,6 +9,7 @@ import pytest
 from fakes import jev_checks, script_jev, script_planner, store, sub, turn
 from helpers import log
 
+from assistant import bench, learn
 from assistant.worker import Worker
 
 pytestmark = pytest.mark.browser
@@ -70,3 +71,60 @@ def test_the_worker_signs_in_orders_and_reports_on_a_real_page(chrome, site, tmp
     trace = Path(w.state["trace_path"]).read_text()
     assert json.loads(trace)["status"] == "done"
     assert "482913" not in trace and "98765" not in trace and re.search(r"(?<!\d)123(?!\d)", trace) is None
+
+
+# ---- Plan 7 Task 11: the same errand twice
+
+
+def shop_run(site, tmp_path, memory, monkeypatch, *, turns, habit=None):
+    """One run of shop.html. Jev answers as shop_step, but is unsure about the address the first time it is asked."""
+    seen = script_planner(monkeypatch, *turns)
+    unsure = []
+
+    def step(state):
+        pick = shop_step(state)
+        if pick.get("click_target") == "Office" and not unsure:
+            unsure.append(True)
+            return {**pick, "next": ("CLICK", 0.4)}  # under ACT_P: Phase A would ask the planner
+        return pick
+
+    sent = script_jev(monkeypatch, step)
+    jev_checks(monkeypatch)
+    replies = [{"text": "482913"}, {"text": "123"}, {"text": "yes"}]
+    w = Worker(site["a"] + "/shop.html", "Order Diet Coke from the shop", memory=memory, skill="groceries",
+               habit=habit, sameness="same" if habit else None, trace_dir=tmp_path / "t",
+               asker=lambda message: replies.pop(0))
+    try:
+        for state in w.steps():
+            assert len(state["history"]) < 20, "the loop should finish in a few steps"
+        assert w.state["status"] == "done" and log(w.browser) == ["otp:482913", "pay:office:3"]
+    finally:
+        w.close()
+    return w, seen, sent
+
+
+def test_the_same_errand_replays_its_habit_to_the_approval_without_the_planner(chrome, site, tmp_path, monkeypatch):
+    memory = store()
+    memory.set_id("phone", "phone number", "+91 98765 43210")
+    start = turn(subgoals=[sub("sign in and place the order", "the order is placed",
+                               values=[("phone number", "[profile:phone]")])])
+    done = turn("DONE", message="Order placed #A1B2, arriving in 12 minutes.", text="Order placed #A1B2")
+    first, seen_one, sent_one = shop_run(site, tmp_path, memory, monkeypatch, turns=[start, turn(), done])
+    learn.after(first.state, memory, reflect=lambda digest: ([], []))
+    habit = memory.habits(skill="groceries")[0]
+    second, seen_two, sent_two = shop_run(site, tmp_path, memory, monkeypatch, turns=[done], habit=habit)
+    assert [p["reason"] for p in seen_one] == ["start", "unsure", "commit"]
+    assert [p["reason"] for p in seen_two] == ["commit"]  # nothing before the approval
+    assert len(sent_two) < len(sent_one)
+    record = second.state["replay"]
+    assert record["fallbacks"] == [] and record["matched"] >= 4
+    assert second.state["messages"][0]["text"] == "Same as last time: " + habit["title"] + "."
+    # no ID, code, or CVV in any model request, either trace, or any table
+    requests = json.dumps([state for state, _ in sent_one + sent_two]) + json.dumps(seen_one + seen_two, default=str)
+    traces = [first.state["trace_path"], second.state["trace_path"]]
+    tables = "\n".join(r["row"] for table in bench.SCANNED for r in memory.run(  # an ID's events: only its token
+        lambda cur, t=table: cur.execute(f"SELECT to_jsonb(r)::text AS row FROM {t} r"
+                                         + (" WHERE ref NOT LIKE 'ids:%'" if t == "events" else "")).fetchall()))
+    for text in (requests, tables, *(Path(t).read_text() for t in traces)):
+        assert "482913" not in text and "98765" not in text and re.search(r"(?<!\d)123(?!\d)", text) is None
+    assert bench.secret_audit(memory, traces) == []
