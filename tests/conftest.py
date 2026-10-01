@@ -43,20 +43,15 @@ def no_real_models(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_settling_wait(monkeypatch):
-    """Fakes never change on their own, so waiting before asking the user, or between looks at a commit the site
-    is still processing, would only slow the tests down."""
-    from assistant import agent
-
-    monkeypatch.setattr(agent.Agent, "steady_ms", 0)
-    monkeypatch.setattr(agent.Agent, "outcome_pause", 0)
-    from assistant import driver
-
-    monkeypatch.setattr(driver.MiniAgent, "quiet_wait", 0)
+    """Fakes never change on their own, so waiting before asking the user, between looks at a commit the site is
+    still processing, or for a click to show its effect would only slow the tests down."""
     from assistant import worker
 
     monkeypatch.setattr(worker.Worker, "steady_ms", 0)
     monkeypatch.setattr(worker.Worker, "outcome_pause", 0)
     monkeypatch.setattr(worker.Worker, "quiet_wait", 0)
+
+
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 

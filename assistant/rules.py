@@ -17,23 +17,10 @@ TO_RECEIVE = re.compile(r"\b(phone|mobile|e-?mail)\b.*\b(to|for) (receive|get)\b
 CHALLENGE = re.compile(r"i'?m not a robot|select all (the )?(images|squares)|click verify once|"
                        r"type the (text|characters|word)|verify (that )?you are (a )?human|press and hold|"
                        r"are you a robot", re.IGNORECASE)
-SAVED_ADDRESS = re.compile(r"^(home|work|office|other|hotel)\b.*,|\b\d{6}\b|,.*\b(road|street|lane|nagar|layout|colony|"
-                           r"sector|avenue|block|cross)\b", re.IGNORECASE)
-ADDRESS_EXTRA = re.compile(r"\b(current location|add (a )?new address)\b", re.IGNORECASE)
-CURRENT_PLACE = re.compile(r"^\s*(please )?(use )?((my |the )?(current|present) (location|place|address)|here|"
-                           r"where i am|my location)\s*(please)?\s*\.?\s*$", re.IGNORECASE)
 # Payment methods named with "pay" (UPI Scan and Pay, Pay on Delivery): choosing one pays nothing by itself.
 METHOD = re.compile(r"\b(upi|cash|card|wallets?|net ?banking|pay later|pay on delivery|cash on delivery|scan and pay|"
                     r"amazon pay|google pay|gpay|phonepe|paytm)\b", re.IGNORECASE)
 COMMERCE = re.compile(r"\b(book|order|buy|purchase|pay|reserve)\b", re.IGNORECASE)
-TO_USER = re.compile(r"^\s*(please|kindly|do you|would you|could you|can you|shall i|should i|are you)\b",
-                     re.IGNORECASE)
-DIRECTION = re.compile(r"^\s*(do you want|would you like|should i|shall i|do you have|can you confirm|"
-                       r"please confirm)\b", re.IGNORECASE)
-FREE_TEXT = re.compile(r"\b(message|comment|note|instruction|description|feedback|review|complaint|details|"
-                       r"reason)s?\b", re.IGNORECASE)
-LOGIN = re.compile(r"\b(sign[ -]?in|log[ -]?in)\b", re.IGNORECASE)
-SSO = re.compile(r"\b(google|apple|facebook|microsoft)\b", re.IGNORECASE)
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -96,43 +83,9 @@ def amount_shown(amount, text):
     return bool(fragment) and re.search(r"(?<!\d)" + re.escape(fragment) + r"(?![\d.,]*\d)", normal(text)) is not None
 
 
-def login_offered(page):
-    """Whether the page offers the user's own sign-in: a sign-in or log-in control, not a Google or Apple one."""
-    return any(a.get("kind") in {"click", "fill"} and LOGIN.search(a.get("label", "")) and not SSO.search(a["label"])
-               for a in page["actions"])
-
-
 def asks_for_secret(text):
     """Whether a question asks for a code, password, CVV, or PIN: its answer must be hidden, whatever a model said."""
     return bool(SECRET_ASK.search(text or "")) and not TO_RECEIVE.search(text or "")  # "your phone, to get a code"
-
-
-def addressed_to_user(text):
-    """Whether a "value" is really a message to the user: a request or a question."""
-    text = (text or "").strip()
-    return bool(TO_USER.search(text)) or text.endswith("?")
-
-
-def direction_question(text):
-    """Whether a question asks the user what to do rather than for a value to type."""
-    return bool(DIRECTION.search(text or ""))
-
-
-def free_text(action):
-    """Fields that take sentences (a message, a complaint), where a request or question is a fine value."""
-    return bool(FREE_TEXT.search(action.get("label", "")))
-
-
-def profile_detail(action):
-    """The hidden profile key a field holds, from its type and label: the user's phone, email, or name."""
-    kind, label = (action.get("constraints") or {}).get("type"), action.get("label", "").strip().lower()
-    if kind == "tel" or re.search(r"\b(phone|mobile)\b", label):
-        return "phone"
-    if kind == "email" or re.search(r"\be-?mail\b", label):
-        return "email"
-    if re.fullmatch(r"(your |full )?name", label):
-        return "name"
-    return None
 
 
 def secret_field(action):
@@ -153,48 +106,8 @@ def captcha_challenge(page):
     return bool(CHALLENGE.search(page.get("text", "")))
 
 
-def saved_address(label):
-    """Whether a control is one of the site's saved addresses ("HOME 1122, Sobha Royal Pavilion, …")."""
-    return bool(SAVED_ADDRESS.search(label or ""))
-
-
-def address_extra(label):
-    """Other ways to set the address that the user may prefer: current location, a new address."""
-    return bool(ADDRESS_EXTRA.search(label or ""))
-
-
 CARD_DETAIL = re.compile(r"\b(cvv|cvc|card (number|no\.?|details?)|expir(y|ation)( date)?|upi pin)\b", re.IGNORECASE)
 PRICE = re.compile(r"[₹$€£]\s?\d(?:[\d,]*\d)?(?:\.\d+)?|\bRs\.?\s?\d(?:[\d,]*\d)?(?:\.\d+)?", re.IGNORECASE)
-CHOICE_ROLES = ("option", "radio")
-ACTING = {"request", "book", "confirm", "pay", "place", "order", "buy", "purchase", "proceed", "continue", "choose",
-          "select"}
-
-
-def priced_choice(page, action):
-    """(the priced alternatives, the one this click takes) when it picks, or commits to, one of two or more options
-    or radios that each show a price (ride types, sizes, plans); ([], None) otherwise."""
-    def group(role):
-        found = [a for a in page["actions"] if a["kind"] == "click" and a.get("role") == role
-                 and PRICE.search(a.get("label", ""))]
-        return found if len(found) >= 2 else []
-
-    label = action.get("label", "")
-    if action.get("role") in CHOICE_ROLES:
-        found = group(action["role"])
-        return (found, action) if action in found else ([], None)
-    named = words(label) - ACTING  # "Request Uber Go AC" names the ride it requests
-    if not COMMIT.search(label) or not named:
-        return [], None
-    for found in map(group, CHOICE_ROLES):
-        target = next((a for a in found if named <= words(a["label"])), None)
-        if target:
-            return found, target
-    return [], None
-
-
-def means_current_location(text):
-    """Whether the user answered "current location" (the agent's browser has no location of its own)."""
-    return bool(CURRENT_PLACE.search(text or ""))
 
 
 def commerce_goal(goal):

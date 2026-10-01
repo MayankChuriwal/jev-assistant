@@ -1,28 +1,15 @@
-"""TypeSafe makes choices; an optional small OpenAI-compatible model writes field values."""
+"""The two model transports (TypeSafe Jev and the OpenAI-compatible text model), the per-task spend meter, and a
+page's action space: one index per observed element, compatible targets per operation."""
 
 import contextvars
 import json
 import math
 import os
 import time
-from urllib.parse import urlparse
 
 import httpx
 
-from .profile import CARD_PARTS, SECRETS
-from .questions import (
-    FIELD_VALUE,
-    HEAD_PREMISE,
-    INTENT_RULE,
-    INTENTS,
-    KEY_HELP,
-    KEY_RULE,
-    NEXT_ACTION,
-    OPERATIONS,
-    TARGET,
-    TASK_RULE,
-    URL_VALUE,
-)
+from .profile import SECRETS
 
 CLIENT = httpx.Client(http2=True, timeout=25)
 TYPESAFE = "https://api.typesafe.ai/"
@@ -179,77 +166,6 @@ def criteria(candidates):
     }
 
 
-def choose(state, goal, history):
-    elements, heads, controls = action_space(state["actions"])
-    operations = {op: OPERATIONS[op] for head in heads for op in HEAD_OPERATIONS.get(head, ())}
-    operations.update({op: OPERATIONS[op] for op in controls})
-    operations.update({op: OPERATIONS[op] for op in ("ASK_USER", "CONFIRM", "NOTE", "DONE", "BLOCKED")})
-    questions = {
-        "operation": {"type": "choice", "criteria": operations, "instructions": {"goal": goal, "rules": NEXT_ACTION}}
-    }
-    for head, candidates in heads.items():
-        questions[head] = {
-            "type": "choice",
-            "criteria": criteria(candidates),
-            "instructions": {"goal": goal, "operation": HEAD_PREMISE[head], "rules": [NEXT_ACTION, TARGET]},
-        }
-    if "press_key_target" in heads:
-        questions["press_key_key"] = {
-            "type": "choice",
-            "criteria": KEY_HELP,
-            "instructions": {"goal": goal, "operation": "PRESS_KEY", "rules": [NEXT_ACTION, KEY_RULE]},
-        }
-    body = {
-        "model": os.environ.get("TYPESAFE_MODEL", "jev-latest"),
-        "state": {
-            "page": {k: state[k] for k in ("url", "title", "text")},
-            "elements": elements,
-            "recent_actions": [
-                {k: h.get(k) for k in ("operation", "action", "text", "page_changed")} for h in history[-10:]
-            ],
-        },
-        "questions": questions,
-    }
-    started = time.perf_counter()
-    result = post_json("https://api.typesafe.ai/v1/systemone", os.environ["TYPESAFE_API_KEY"], body)
-    answers = result["answers"]
-    operation_answer = validate_choice(answers.get("operation", {}), operations)
-    operation = operation_answer["choice"]
-    decision = {"operation": operation, "target": None, "key": None, "drop": None,
-                "target_probabilities": {}, "target_confidence": None}
-    head = OPERATION_HEAD.get(operation)
-    if head:
-        # Unused target questions cannot cause an action. Validate the one the operation selects.
-        target_answer = validate_choice(answers.get(head, {}), heads[head])
-        action = heads[head][target_answer["choice"]]
-        decision.update(
-            target=target_answer["choice"],
-            choice=action["id"],
-            probabilities={a["id"]: target_answer["probabilities"][i] for i, a in heads[head].items()},
-            target_probabilities=target_answer["probabilities"],
-            target_confidence=target_answer["confidence"],
-        )
-        if operation == "DRAG":
-            drop = validate_choice(answers.get("drag_target", {}), heads["drag_target"])["choice"]
-            if heads["drag_target"][drop] is action or heads["drag_target"][drop].get("node") == action.get("node"):
-                raise ValueError("Invalid TypeSafe response; no action executed.")
-            decision["drop"] = heads["drag_target"][drop]["id"]
-        if operation == "PRESS_KEY":
-            decision["key"] = validate_choice(answers.get("press_key_key", {}), KEY_HELP)["choice"]
-    else:
-        choice = controls[operation]["id"] if operation in controls else operation
-        decision.update(choice=choice, probabilities={choice: operation_answer["probabilities"][operation]})
-    decision.update(
-        confidence=operation_answer["confidence"],
-        operation_probabilities=operation_answer["probabilities"],
-        raw_answers=answers,
-        model=result["model"],
-        usage=result.get("usage", {}),
-        latency_ms=round((time.perf_counter() - started) * 1000),
-        request=SECRETS.get().redact(body) if SECRETS.get() else body,
-    )
-    return decision
-
 def text_json(system, payload, *, max_tokens=512, images=(), schema=None, schema_name="reply"):
     """One JSON object from the OpenAI-compatible text model, plus call metadata. With a schema the reply is
     held to it (strict json_schema); a reply cut off or refused is an error, never a partial step."""
@@ -291,80 +207,3 @@ def text_json(system, payload, *, max_tokens=512, images=(), schema=None, schema
         "latency_ms": round((time.perf_counter() - started) * 1000),
         "usage": result.get("usage", {}),
     }
-
-
-def field_context(context, action, page, history, profile, allowed, previous=None):
-    field = {k: action.get(k) for k in ("label", "role", "value", "constraints")}
-    if action.get("group"):
-        field["code_length"] = len(action["group"])
-    return {
-        "goal": context,
-        "field": field,
-        "page": {"title": page["title"], "text": page["text"][:6000]},
-        "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-6:]],
-        "profile": profile,
-        "allowed": allowed,
-        "previous": previous,
-    }
-
-
-SAVE_AS = {f"card.{part}" for part in CARD_PARTS}
-
-
-def field_value(context):
-    """What goes into a field: ("text", value), ("profile", key), ("secret", key),
-    or ("ask", question, secret, save_as)."""
-    out, meta = text_json(FIELD_VALUE, context, max_tokens=1024)
-    keys = set(out)
-    if keys == {"text"} and isinstance(out["text"], str) and out["text"].strip() and len(out["text"]) <= 2000:
-        return ("text", out["text"]), meta
-    if keys == {"profile"} and out["profile"] in context.get("profile", {}).get("profile_keys", []):
-        return ("profile", out["profile"]), meta
-    if keys == {"secret"} and out["secret"] in context.get("allowed", []):
-        return ("secret", out["secret"]), meta
-    if (keys in ({"ask", "secret"}, {"ask", "secret", "save_as"}) and isinstance(out["ask"], str)
-            and out["ask"].strip() and isinstance(out["secret"], bool)
-            and out.get("save_as", "card.number") in SAVE_AS):
-        return ("ask", out["ask"].strip(), out["secret"], out.get("save_as")), meta
-    raise ValueError("Text helper returned no valid field value; nothing typed.")
-
-
-def url_value(goal, page, history):
-    output, meta = text_json(
-        URL_VALUE,
-        {
-            "goal": goal,
-            "page": {"url": page["url"], "title": page["title"], "text": page["text"][:3000]},
-            "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-6:]],
-        },
-    )
-    url = output.get("url")
-    parsed = urlparse(url) if isinstance(url, str) else None
-    if set(output) != {"url"} or not parsed or parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("Text model returned no valid http(s) URL; nothing opened.")
-    return url, meta
-
-
-def classify(message, tasks, chat):
-    """Jev's reading of one chat message: (intent, task id or "none", intent probabilities, task probabilities)."""
-    targets = {t["id"]: {k: t[k] for k in ("title", "goal", "step", "open_question") if t.get(k)} for t in tasks}
-    targets["none"] = "No existing task: a new request, or a message about no task"
-    body = {
-        "model": os.environ.get("TYPESAFE_MODEL", "jev-latest"),
-        "state": {"message": message, "tasks": tasks, "recent_chat": chat[-6:]},
-        "questions": {
-            "intent": {"type": "choice", "criteria": INTENTS,
-                       "instructions": {"message": message, "rules": INTENT_RULE}},
-            "task": {"type": "choice", "criteria": targets, "instructions": {"message": message, "rules": TASK_RULE}},
-        },
-    }
-    result = post_json("https://api.typesafe.ai/v1/systemone", os.environ["TYPESAFE_API_KEY"], body)
-    intent = validate_choice(result["answers"].get("intent", {}), INTENTS)
-    task = validate_choice(result["answers"].get("task", {}), targets)
-    return intent["choice"], task["choice"], intent["probabilities"], task["probabilities"]
-
-
-def ambiguous(probabilities):
-    """Too close to call: the top intent is under 0.6, or within 0.2 of the second."""
-    top, second = (sorted(probabilities.values(), reverse=True) + [0.0, 0.0])[:2]
-    return top < 0.6 or top - second < 0.2

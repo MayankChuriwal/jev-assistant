@@ -1,57 +1,84 @@
 # Jev Assistant
 
-A chat assistant that completes real web tasks in its own Chrome. Each step, GPT-4.1 mini decides what to do and
-writes every word the user reads (`assistant/mind.py`); TypeSafe's Jev picks the exact element mini described,
-checks what each step did, and reads the user's replies (`assistant/jev.py`); code keeps the safety rails: nothing
-is paid or booked without a yes in chat, and codes, passwords, and profile details never reach a model
-(`assistant/driver.py`). The browser layer comes from [jev-ultrafast](https://github.com/browser-use/jev-ultrafast).
+A chat assistant that does real web tasks in its own Chrome and asks only for what it needs. **Jev**, TypeSafe's
+System One model, chooses every browser step: the operation and its element, whether the subgoal is done, what
+blocks the page, and whether the last step worked. **GPT-4.1 mini** plans the subgoals, resolves the steps Jev is
+unsure about, and writes every word you read. Code guards the rest: nothing is paid, booked, or sent without your
+yes in chat (or your own "don't ask, under ₹N"), and codes, passwords, and profile details never reach a model.
 
-Design: `docs/superpowers/specs/2026-09-26-mini-jev-agent-design.md` (loop) and
-`docs/superpowers/specs/2026-09-23-jev-assistant-design.md` (browser, chat, profile). `JEV_DRIVER=legacy` runs the
-earlier loop, where Jev chose every operation.
+Task and site know-how lives in markdown skills (`skills/`), not in code. The browser layer comes from
+[jev-ultrafast](https://github.com/browser-use/jev-ultrafast).
+
+Design: `docs/superpowers/specs/2026-10-01-system-one-agent-design.md`. Known issues: `docs/known-issues.md`.
 
 ## Setup
 
     uv sync
     cp .env.example .env      # add TYPESAFE_API_KEY and OPENAI_API_KEY
-    uv run jev probe          # optional: check the smoke-set sites for 403s and captchas
+    uv run jev probe          # optional: check sites for 403s and captchas
 
 ## Chat
 
     uv run jev                # starts the hidden agent Chrome if needed, then serves the chat
                               # open http://127.0.0.1:8766/
 
-Type a goal, such as "Order a Diet Coke on Instamart". The agent works in its own hidden Chrome and asks only for
-what it needs, one question at a time, in plain messages: choices come as a numbered list with prices and you
-reply in your own words; OTPs and CVVs go in a hidden field; a summary comes before anything is paid for or booked,
-and only a clear yes goes ahead. A goal that names no app is asked once per kind of task ("Which app should I use
-for groceries?") and remembered. Up to three tasks run at once (one per site). Messages sent
-mid-task count as answers, changes, new tasks, cancellations, or status questions. Files the agent saves, such as
-receipts or PDFs, arrive in chat as documents. When a control can't be named from the page (a canvas, a map,
-an image-only button), the agent finds it on a masked screenshot.
+Ask for anything, several things at once if you like ("milk from Zepto and a cab home"). The agent works in its own
+hidden Chrome and asks only for what it needs, in plain messages:
 
-The chat uses WhatsApp Cloud API shapes: a webhook comes in, send-message payloads go out, and files travel as
-media ids. A WhatsApp channel can therefore replace `assistant/channel_web.py` without touching the conversation core
+- **Choices** come as a numbered list with prices.
+- **Hidden field:** codes, CVVs, and a phone number the profile lacks go in a hidden field.
+- **Before paying, booking, or sending:** you see a summary read from the page, and it waits for your yes. The
+  exception is a message of your own that said not to ask and set a cap ("order it, don't ask, under ₹300").
+- **Which app:** a goal that names no app is asked once per kind of task and remembered.
+- **Several tasks:** up to three run at once, one per site.
+- **Messages mid-task** count as answers, changes, new tasks, cancellations, or status questions.
+- **Files** the agent saves arrive in chat as documents.
+
+The chat uses WhatsApp Cloud API shapes: a webhook comes in, send-message payloads go out, and files travel as media
+ids, so a WhatsApp channel can replace `assistant/channel_web.py` without touching the conversation core
 (`assistant/core.py`). The server listens on 127.0.0.1 only and checks a per-launch token. `JEV_DEBUG=1` adds
 `/api/debug` with each task's recent steps.
 
-## Traces and the smoke set
+## Skills
 
-Every task writes a redacted trace to `~/.jev/traces/` when it ends; `uv run jev traces` lists the latest ones with
-their outcome, question count, and quoted evidence. The live smoke set that defines v1 as done is in
-`docs/smoke.md`. Known issues and their status are in `docs/known-issues.md`.
+Kind skills: `skills/<kind>.md` holds one kind of task (groceries, rides, travel, …). Each lists:
 
-## The live bench
+- what to ask up front;
+- the usual plan and its rules;
+- what the approval names;
+- what the final report names.
 
-    uv run jev --bench                           # all 12 tasks in bench/tasks.toml, twice
+Situation skills: `skills/sign-in.md`, `payment.md`, and `location.md` join a task when Jev sees that the page needs
+them.
+
+Site notes: `skills/sites/<host>.md` holds one site's start pages, search address, and quirks.
+
+A new kind of task or a new site is one markdown file. Never write one for a task or a site in `bench/unseen.toml`.
+
+## Traces and the bench
+
+Every task writes a redacted trace to `~/.jev/traces/` when it ends. `uv run jev traces` lists the latest ones.
+
+    uv run jev --bench                              # 24 known tasks × 2, plus 8 unseen tasks per run
     uv run jev --bench --only uber,instamart --repeat 1
+    uv run jev --bench --seed 7                     # the same unseen sample again
 
-The bench runs scripted goals on real sites through the chat: questions get the answers in `bench/tasks.toml`,
-sign-in codes and captchas come to your chat page (keep http://127.0.0.1:8766/ open), and every final approval is
-answered **no**, so nothing is bought or booked. The report lands in `~/.jev/bench/<run>/report.html`, with runs that
-passed before and fail now marked. A bad step in any trace can be kept as a replay case and re-run without a browser:
+The bench runs scripted goals on real sites through the chat:
 
-    uv run jev bench-save ~/.jev/traces/<trace>.json 7 "op=ASK"
+- Questions get the answers in `bench/tasks.toml`, then the bench defaults.
+- Codes, captchas, and questions scripted as `@user` come to your chat page; keep http://127.0.0.1:8766/ open.
+- Every final approval is answered **no**, so nothing is bought or booked.
+
+The report lands in `~/.jev/bench/<run>/report.html`. It shows:
+
+- the done bar: ≥ 80% known, ≥ 60% unseen, 0 unsafe, ≤ 2 s per step, ≤ $0.02 per task;
+- results per category;
+- Jev's margins and the escalations;
+- regressions.
+
+A Jev step from any trace can be kept as a replay case and asked again (this uses the paid API):
+
+    uv run jev bench-save ~/.jev/traces/<trace>.json 7 "op=CLICK, target~search"
     uv run jev replay
 
 ## One task in the terminal
@@ -61,16 +88,16 @@ passed before and fail now marked. A bad step in any trace can be kept as a repl
 
 Questions are asked in the terminal; type `cancel` to stop.
 
-## Use the loop
+## Use the worker
 
-    from assistant.agent import Agent
+    from assistant.worker import Worker
 
-    with Agent("https://en.wikipedia.org/wiki/Main_Page", "Open the article about Gödel's incompleteness theorems") as agent:
-        for state in agent.run():
+    with Worker("https://en.wikipedia.org/wiki/Main_Page", "Open the article about Gödel's incompleteness theorems") as worker:
+        for state in worker.steps():
             print(state["elapsed_ms"], state["status"], state["history"][-1:])
 
-Run with `uv run --env-file .env python script.py` after `uv run jev chrome`. Without an `asker`, goals that need
-the user (logins, OTPs, files, approvals) stop at BLOCKED.
+Run it with `uv run --env-file .env python script.py` after `uv run jev chrome`. Without an `asker`, goals that need
+you (codes, files, approvals) stop at BLOCKED.
 
 ## Checks
 

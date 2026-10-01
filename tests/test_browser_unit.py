@@ -110,9 +110,9 @@ def test_download_names_stay_one_safe_component(name):
 
 
 def test_every_key_jev_can_choose_can_be_pressed():
-    from assistant.questions import KEY_HELP
+    from assistant import jev
 
-    assert set(browser.KEYS) == set(KEY_HELP)
+    assert set(jev.KEYS) <= set(browser.KEYS)
 
 
 def test_the_agent_never_falls_back_to_the_default_daemon():
