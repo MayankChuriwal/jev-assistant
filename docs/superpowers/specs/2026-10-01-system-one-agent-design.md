@@ -578,17 +578,13 @@ median ≤ 2 s per executed step; median ≤ $0.02 per task.
 
 - `browser.py` and `snapshot.js`: observation, frames, pop-ups, events, uploads, downloads, and dialogs.
 - The web channel in WhatsApp Cloud API shapes, and the chat UI with its hidden input.
-- Profile and Keychain vault, redaction, captcha relay, LOOK.
-- `jev chrome`, `jev probe`, `jev run`, `jev traces`, `jev profile`, `jev forget`.
+- Redaction, captcha relay, LOOK. (Phase B replaced the profile and the Keychain vault with memory in Postgres.)
+- `jev chrome`, `jev probe`, `jev run`, `jev traces`, `jev forget`. (Phase B replaced `jev profile` with `jev memory`.)
 
 ## 14. Later phases (not in this spec)
 
-- **B, learns:**
-  - a git-markdown memory folder (profile, phone, addresses, preferences, standing approvals such as "usual
-    Instamart orders under ₹300");
-  - site notes the agent drafts after runs, which the user approves;
-  - habit replay: record verified runs per site, replay them with Jev checking each step, and fall back to the live
-    loop on a mismatch.
+- **B, learns:** delivered by `docs/superpowers/specs/2026-10-01-phase-b-learning-design.md`: memory in Postgres
+  (instead of a markdown folder), standing approvals, learned site notes, and habit replay.
 - **C, reaches out:**
   - WhatsApp and iMessage, with secrets through a secure one-time web link, because a chat app has no hidden input;
   - wake subscriptions and scheduled or watching tasks;

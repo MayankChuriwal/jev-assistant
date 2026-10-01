@@ -267,7 +267,7 @@ When the `jev` schema has no facts and no IDs and `~/.jev/profile.json` exists, 
 
   Each is offered once with Remember / No buttons. Remember saves a preference fact tagged with the skill and the site.
 - **Known limit.** An ID typed in plain chat reaches Jev's router and the memory job once, before it is saved. Once
-  saved, the reply asks you to use the 🔒 field for IDs next time.
+  saved, the reply suggests `jev memory set <key>` for next time: the chat shows a hidden field only when a task asks.
 
 ### 5.2 Recall
 
@@ -371,7 +371,8 @@ A habit is recorded from a verified run that has a skill and a site.
   - `plan`: the subgoals (do, done_when, kind, and values with placeholders, as the planner wrote them).
   - `steps`: for each subgoal, the executed steps that moved it forward. Each step records:
     - op: Jev's operation name;
-    - name: the control's own name, with prices and counts removed;
+    - name: the control's label (with the context a page adds to tell like controls apart), lowercased, with prices
+      and counts removed;
     - key;
     - value field: the subgoal value that was typed;
     - secret: true for a secret field, and then never a value;
@@ -384,7 +385,8 @@ A habit is recorded from a verified run that has a skill and a site.
   - steps judged failed, or that changed nothing;
   - a step undone by BACK, and the BACK itself;
   - repeats inside a loop;
-  - unconfirmed steps.
+  - unconfirmed steps;
+  - waits, scrolls, and captcha squares the user picked.
 - **Versions.** The same site, skill and goal (ignoring case and spaces) makes a new version of the existing habit. A
   different goal makes a new habit.
 - **Counters.** `replays`, `clean_replays` (replays with no fallback), and `failed_in_a_row` (replays that did not
@@ -452,8 +454,11 @@ Notes stay drafts until you choose. `--learn` saves notes and guesses at once, i
 ### 8.3 Each step
 
 The expected step is the habit's next recorded step for the current subgoal. Jev is asked exactly as in Phase A. Then:
-- **Jev's top pick is the expected step.** The operation and the target's own name (normalised like the habit's names)
-  match, even if the gates would escalate. Act on it, and count it as matched.
+- **Jev's top pick is the expected step.** The operation and the target's label (normalised like the habit's names)
+  match. Act on it and count it as matched when it passes the gates, or, when the gates would escalate, only if that
+  label is unique on the page. A label shown twice goes through the gates as in Phase A.
+- **A wait or a scroll.** Act on it as in Phase A; replay stays as it is, since habits don't record them. When a
+  subgoal's recorded steps are used up, Jev goes on as in Phase A and nothing counts.
 - **Jev picks something else that passes the gates.** Act on Jev's pick. This subgoal leaves replay, with the fallback
   "Jev chose <name>".
 - **Neither.** Go to the planner as in Phase A, with the fallback "unsure".
@@ -504,7 +509,8 @@ reason). It is written to the trace.
 `jev --bench --learn [--only …] [--unseen 8] [--seed N] [--keep]` gives each task its own schema, `bench_<run>_<n>`:
 1. pass 1 on an empty memory;
 2. grade it;
-3. `learn`, with verified meaning the judge passed it, and notes and guesses saved at once;
+3. `learn`, with verified meaning the judge passed it, and notes and guesses saved at once; pass 1's checkout (when it
+   passed) becomes a standing approval in the pair's schema, which pass 2's gate can only log;
 4. pass 2;
 5. grade it again, which completes the pair.
 

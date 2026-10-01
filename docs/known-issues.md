@@ -70,9 +70,9 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | P4-06 | With `JEV_DEBUG=1`, a debug-view capture can unmask fields in the middle of a LOOK capture. | `server.py`, `browser.py` | open |
 | P4-07 | `jev traces --limit 0` prints every trace. | `server.py` | open |
 | P4-08 | A `[secret:<key>]` the field may use is refused (a "Problem" message) instead of being used like `{"secret": key}`. | `agent.py` `resolve` | superseded (Plan 6): the code was deleted; was open |
-| P4-09 | URL-encoded emails (`m%40…`) and name parts that are common words escape redaction. | `profile.py` `Secrets` | open |
+| P4-09 | URL-encoded emails (`m%40…`) and name parts that are common words escape redaction. | `privacy.py` `Secrets` | open |
 | P4-10 | An answer the text model marks as not secret reaches task memory and traces as typed. | `agent.py` | superseded (Plan 6): the code was deleted; was open |
-| P4-11 | Profile saves are locked within one process only; `jev run` and `jev` running at once can collide. | `profile.py` | open |
+| P4-11 | Profile saves are locked within one process only; `jev run` and `jev` running at once can collide. | `profile.py` | superseded (Plan 7 Task 3): `profile.py` was deleted and memory is in Postgres; was open |
 | P4-12 | How reliably GPT-4.1 mini reads the 11 px grid labels, and clip scale on a Retina display, are unverified until live runs. | `browser.py`, `questions.py` | superseded (Plan 6): the code was deleted; was open |
 
 ## Live runs
@@ -82,7 +82,7 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | L1-01 | "Order Diet Coke from Swiggy" starts on swiggy.com's restaurant search instead of Instamart, and wanders through restaurant menus. | `jobs.start`, Jev | fixed (live run 2): grocery items start in the service's grocery section; loops ask for help |
 | L1-02 | A site that keeps a "Sign in" banner up after the user signed in keeps the sign-in step pending; the user must say "continue". | `agent.py` `track_login` | superseded (Plan 6): the code was deleted; was open (sign-in via a magic link or a device approval also stays pending) |
 | L2-01 | Icon-only tiles carry labels like "IM" and "DO", so Jev cannot tell that "IM" is Instamart. | `snapshot.js` labels | open |
-| L2-02 | The user's name shown by a site after sign-in reaches the models unless it is in the profile; set it once with `jev profile --name …`. | `profile.py` | open (mitigated: `jev profile`; phone and email are learned when typed) |
+| L2-02 | The user's name shown by a site after sign-in reaches the models unless memory holds it; set it once with `jev memory set name`. | `memory.py` | open (mitigated: `jev memory set name`; any ID a task asks for is kept and hidden from then on) |
 | L3-01 | On Uber, the summary card for "Request Uber Go AC" failed three times, so the ride was never requested; the error was not recorded then. Traces now keep errors, so the next run shows the cause. | `jobs.confirm_card` | superseded (Plan 6): the code was deleted; was open |
 | L3-02 | Ola's login form was not seen after "LOG IN" (only a scroll panel and a reCAPTCHA badge), so the phone number had nowhere to go. Repeated questions now turn into help, where the user can say "scroll down". | `snapshot.js`, Jev | open |
 | L4-01 | Instamart: the agent picked the saved "HOME" address itself instead of asking which address. | `agent.py` | fixed (live run 4): two or more saved addresses always become a question unless a saved preference names one |
@@ -155,15 +155,15 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | P6-11 | `core.run` sets the task's status before `settle()` collects late downloads. | `core.py` `run` | open |
 | P6-12 | An unmarked price on a page with no money word or currency marker ("Uber Go 249") is not seen as money. | `gate.py` `money_parts` | open |
 | P6-13 | The bench's `FINAL` regex accepts "Buy Now" and "Proceed to checkout" as final steps. | `bench.py` `FINAL` | open |
-| P6-14 | Questions a bench script forwards to the user (`@user`) are not recorded in the run's results. | `core.py` `scripted`, `bench.py` | open |
-| P6-15 | The legacy Keychain vault is unused outside its tests. | `profile.py` `Vault` | open |
+| P6-14 | Questions a bench script forwards to the user (`@user`) are not recorded in the run's results. | `core.py` `scripted`, `bench.py` | partly fixed (Plan 7 Task 9): learn mode counts every question a pass asks; the normal bench's results still don't list them |
+| P6-15 | The legacy Keychain vault is unused outside its tests. | `profile.py` `Vault` | fixed (Plan 7 Task 3): `profile.py` and the vault are deleted |
 | P6-16 | Compact countdowns ("4m 59s") are not cut as ticking text, so an approval on such a page is asked again. | `gate.py` `TICKING` | open |
 | P6-17 | `Worker.look` never sets `hover`, so LOOK can only click. | `worker.py` `look` | open |
 | P6-18 | Jev's `value_for` has no "none" option, so it must pick a value even when none fits the field. | `jev.py` `value_for` | open |
 | P6-19 | Every maybe-commit word ("Confirm location", "Request OTP", "Submit" on a search form) costs one Jev final check; when Jev is not sure (step < 0.8) the user is asked to approve a harmless step. | `rules.py` `MAYBE`, `gate.py` | open |
 | P6-20 | A question that mentions a code, password, or card detail is asked through the hidden field even when it is a choice; its options are listed and a picked option (number or exact words) is read by code. A reply in other words stays hidden from the planner. | `worker.py` `talk` | open |
 | P6-21 | A hidden reply made only of letters ("yes", a letters-only password) is not registered for redaction; a typed secret is still masked in its field by node. | `worker.py` `keep_secret` | open |
-| P6-22 | A short numeric secret (a CVV, an OTP) never matches inside a larger number ("₹1,499", "₹1 499", "₹499.00"), but a standalone price equal to it is still redacted: with CVV 299, "₹299" reads "₹" then "[secret:answer1]", so the total reads unknown. That only makes the agent ask: nothing is pre-authorised and the approval lacks the amount. | `profile.py` `Secrets` | open |
+| P6-22 | A short numeric secret (a CVV, an OTP) never matches inside a larger number ("₹1,499", "₹1 499", "₹499.00"), but a standalone price equal to it is still redacted: with CVV 299, "₹299" reads "₹" then "[secret:answer1]", so the total reads unknown. That only makes the agent ask: nothing is pre-authorised and the approval lacks the amount. | `privacy.py` `Secrets` | open |
 | P6-23 | On a page whose only total is a plain "Total" line followed by "you pay ₹433" (an EMI), the last plain total (₹433) is read; the worst-number check still blocks pre-authorisation. | `gate.py` `payable` | open |
 | P6-24 | The ACCEPT_DIALOG text starts with "Browser confirm dialog:" and the word "confirm" matches the maybe tier, so every `confirm()` dialog costs a Jev check. Strip the prefix before matching. | `rules.py` `control_words`, `MAYBE` | open |
 | P6-25 | The `[profile:` placeholder rule makes every control that shows the user's name or phone a maybe-commit: more Jev calls and more bench approvals. | `rules.py` `maybe_commits`, `gate.py` | open |
@@ -174,3 +174,32 @@ Status: `open` · `Plan N Task M` (scheduled) · `fixed (Plan N Task M)` · `won
 | P6-30 | Labels neither commit tier catches: "Yes, cancel", "Finish Cancellation", "Start membership", "Join Prime", "Upgrade now", "Renew now", "Activate", "Authorize", "Approve", "Donate", "Tip ₹20", icon-only buttons with empty names, Enter in a field outside any form, a slider or drag "swipe to pay", a SELECT that submits on change. Suggested follow-up: treat any control whose own label carries a ₹ price and is not a payment method, or ends in "cancel", as a maybe-commit. | `rules.py` `COMMIT`, `MAYBE`, `gate.py` | open |
 | P6-31 | `rules.COMMERCE` misses ride, cab, recharge, subscribe, renew, top up, send money, transfer, and donate goals for the no-cap route (only matters under `JEV_PREAUTH=on`). | `rules.py` `COMMERCE` | open |
 | P6-32 | A Jev "step ≥ 0.8" clearance of a maybe-tier final ("Book Mini/Prime/Sedan", "Confirm UberGo", "Reserve", "Submit", "Send", "Confirm pickup") runs with no yes. Read `cleared_maybe` in every bench report. | `gate.py` `commit_label`, `bench.py` | open |
+
+## Plan 7 — memory, learning, replay
+
+| ID | Issue | Where | Status |
+|---|---|---|---|
+| P7-01 | An ID typed in plain chat ("my BESCOM account is …") reaches Jev's router and the memory job once, before code saves it and hides it. The reply suggests `jev memory set <key>` for next time. | `core.py` `memory_message` | open (by design: the chat has no hidden field unless a task asks) |
+| P7-02 | A 12-digit number that passes the Verhoeff check is refused as an Aadhaar number, e.g. a phone typed as `918123456789` without + or spaces; it is used for that task only. | `privacy.py` `storable` | open (rare) |
+| P7-03 | `jev run` learns and asks about notes and guesses in the terminal, but doesn't match habits or offer standing approvals; the chat does both. | `server.py` `run` | open |
+| P7-04 | Habit steps key on the control's label with its context, so a similar errand (another item) leaves replay at item-specific steps and Jev decides them as in Phase A. | `learn.py`, `replay.py` | open (by design; crystallised replay is the next speed step) |
+| P7-05 | To measure standing approvals that would have fired, learn mode keeps pass 1's checkout (cart read from the page) as a rule in the pair's throwaway schema. The gate only logs it on a bench run. | `bench.py` `rule_from` | open (by design) |
+| P7-06 | Reflection runs after any escalation, and most runs have one, so most runs cost one extra mini call after the result. | `learn.py` `taught` | open |
+| P7-07 | Note lint drops any line naming a code or a PIN, so "promo codes go under the cart" or "enter the pin code first" is never kept. | `learn.py` `UNSAFE` | open (errs toward dropping) |
+| P7-08 | The secret audit skips saved values shorter than 4 characters. | `bench.py` `secret_audit` | open |
+| P7-09 | The cart reader knows "item × n", "n x item", and "Qty n" under the item; other layouts give no cart, so no standing approval applies and the gate asks. | `gate.py` `cart` | open |
+| P7-10 | Two numbers in one chat message separated by a single space read as one ID candidate. | `core.py` `id_candidates` | open |
+| P7-11 | `jev memory` shows learned notes only as a count per site, and the chat's "forget" takes only refs its list showed, so a `note:<n>` ref (which `jev memory forget` accepts) can't be discovered, and a saved note can't be forgotten by asking. | `server.py` `print_listing`, `core.py` `memory_op` | open |
+| P7-12 | A standing approval stores the cart and cap, not the control: it covers any checkout control on the matching page. | `gate.py` `standing`, `memory.py` `approve` | open |
+| P7-13 | "Show me the total first" and similar words in a goal don't stop a standing approval; only a cap in the message does. | `gate.py` `approved` | open |
+| P7-14 | The cart reading treats a page as unreadable whenever a priced line isn't a recognised cart line, fee, or total (bill words such as service, subtotal, packing, rain, mrp are missing), so a standing approval asks instead of firing. | `gate.py` `standing`, `BILL_WORDS` | open (fails safe) |
+| P7-15 | The "Don't ask next time" and learned-note buttons live in the chat process only: they are lost on a restart, never expire, can be offered twice, and an offer is used up before its save succeeds. | `core.py` `offers` | open |
+| P7-16 | A typed standing approval accepts any site that is a raw substring of the message ("ola.com" inside "viola.com"); it is bounded by the site's last order and your cap. | `core.py` `approve_words` | open |
+| P7-17 | `id_candidates` is quadratic on a long unbroken run of letters, digits, or hyphens, and an IFSC-style code yields a fragment. | `core.py` `id_candidates` | open |
+| P7-18 | `save_key` writes `.env` in place (truncate, then write): a crash mid-write can lose the file. A shell-exported empty `JEV_MEMORY_KEY` hides the `.env` value (`setdefault`) and counts as missing. | `server.py` `save_key`, `load_environment` | open |
+| P7-19 | A `profile.json` whose top level isn't an object raises an uncaught `AttributeError` at start. | `memory.py` `import_profile`, `server.py` `open_memory` | open |
+| P7-20 | The tables are made with `CREATE … IF NOT EXISTS` and no `ALTER`: a `jev` schema made by an older build is not upgraded. There is no statement or lock timeout, and a write retried after a dropped connection can apply twice. | `memory.py` `migrate`, `run` | open (POC: no legacy database exists) |
+| P7-21 | Replay counts a replay that never engaged (no expected step) toward `failed_in_a_row`; a similar errand needs a Jev pick of at least 0.7 and not ambiguous, else it is "similar"; and an expected step that is a commit control has no unique-label override, so the gates handle it as in Phase A. | `learn.py` `after`, `replay.py` | open |
+| P7-22 | Habits key on host, skill and goal, so two different goals the store won't keep (blank after hiding) share one habit key; name-variant hiding may over-redact a short name ("Will"). | `memory.py` `record_habit`, `hide` | open |
+| P7-23 | The bench's trace wait can pass on a per-tick checkpoint of a halted or cancelled task before its final trace is written, so the secret audit may read an unfinished trace. | `bench.py` `traced` | open |
+| P7-24 | In learn mode a pair's learner error shows only in `pairs.json`, not in `learn.html` or `learn_summary.json`; a failure to open a pair's schema ends the whole bench; Ctrl+C mid-pair leaves its schema behind; two benches started in the same second share a schema name. | `bench.py` `learn`, `server.py` `serve` | open |
