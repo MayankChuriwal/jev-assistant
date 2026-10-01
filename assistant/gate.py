@@ -58,7 +58,7 @@ BILL_WORDS = frozenset(  # the only words a bill line (a fee, tax, total, or sav
     "delivery handling platform packaging convenience small cart surge late night fee fees charge charges "
     "tax taxes gst cgst sgst cess item items sub total to pay payable grand order bill you your saved "
     "save saving savings discount coupon off free incl including all on this partner tip amount due net "
-    "final applied cashback rewards of for the and at rs inr".split())
+    "final applied cashback rewards of for the and at rs inr service subtotal packing rain mrp".split())
 QTY_LINE = re.compile(r"^(?:qty|quantity)\s*:?\s*(?P<qty>\d{1,3})$", re.IGNORECASE)  # "Qty 2" under the item's line
 TICKING = re.compile(  # a clock or a countdown changes by itself: these tokens, and their number, are not money
     r"\b\d{1,2}:\d{2}(?::\d{2})?\b|\b(?<![\d,.])\d+(?:\.\d+)?\s*(?:mins?|minutes?|secs?|seconds?|hrs?|hours?|left)\b|"

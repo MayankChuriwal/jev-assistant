@@ -226,6 +226,19 @@ def test_listing_names_everything_but_never_an_id_value(memory):
     assert "98765" not in json.dumps(listing, default=str)
 
 
+def test_listing_names_each_saved_note_by_its_ref_and_never_a_draft(memory):
+    kept = memory.draft_notes("zeptonow.com", ["Search appears after the pop-up closes"])
+    memory.decide_notes(kept, save=True)
+    memory.decide_notes(memory.draft_notes("zeptonow.com", ["A skipped line"]), save=False)
+    memory.draft_notes("blinkit.com", ["A draft line"])
+    listing = memory.listing()
+    assert listing["notes_list"] == [{"ref": f"note:{kept[0]}", "host": "zeptonow.com",
+                                      "text": "Search appears after the pop-up closes"}]
+    assert listing["notes"] == {"zeptonow.com": 1}
+    memory.forget(f"note:{kept[0]}")
+    assert memory.listing()["notes_list"] == []
+
+
 def test_profile_json_is_imported_once(memory, tmp_path):
     path = tmp_path / "profile.json"
     path.write_text(json.dumps({

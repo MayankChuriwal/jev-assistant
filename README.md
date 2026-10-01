@@ -68,8 +68,10 @@ hidden Chrome and asks only for what it needs, in plain messages:
   nothing in a note changes what needs your yes. `uv run jev run` asks the same in the terminal ("Save these notes?
   [y/N]").
 - **Repeats:** an errand you've done before starts where it did and follows the steps that worked ("Same as last
-  time: …"). Jev still checks every step, a step the page no longer offers or that Jev picks differently goes back to
-  the normal loop, and the approval works as always. `jev run` records habits but doesn't replay them.
+  time: …"; when Jev isn't sure it is the same errand, the planner writes the plan with the old one attached). Jev
+  still checks every step, a step the page no longer offers or that Jev picks differently goes back to the normal
+  loop, a commit step is taken only when Jev is sure of it, and the approval works as always. `jev run` records habits
+  but doesn't replay them.
 - **Several tasks:** up to three run at once, one per site.
 - **Messages mid-task** count as answers, changes, new tasks, cancellations, or status questions.
 - **Files** the agent saves arrive in chat as documents.
@@ -87,9 +89,9 @@ a model, and kept encrypted. Or use the terminal:
 
     uv run jev memory                       # what it keeps, with refs; IDs by name only, never their values
     uv run jev memory set bescom_account "BESCOM account number"   # typed hidden
-    uv run jev memory forget 12 id:phone rule:3 habit:5   # refs as `jev memory` lists them: a fact's number, id:, rule:, habit:
+    uv run jev memory forget 12 id:phone rule:3 note:7 habit:5   # refs as `jev memory` lists them
     uv run jev memory undo                  # the latest change; a forgotten item can be undone for a day
-    uv run jev memory notes zeptonow.com    # saved learned notes: one host, or every host without one
+    uv run jev memory notes zeptonow.com    # saved learned notes with their refs: one host, or every host without one
 
 `set` needs a key that starts with a letter and has 2–40 lowercase letters, digits, or underscores (`bescom_account`) and an optional label; its value is
 typed at a hidden prompt. `forget` takes one or more refs, and a ref that fails doesn't stop the others. Without the
@@ -147,7 +149,9 @@ writes `learn.html`, `pairs.json`, and `learn_summary.json` beside the report. F
   approval and resembles a pass-1 one; an ID asked again counts);
 - busy time, spend and steps;
 - the habit match, matched steps and fallbacks;
-- notes · facts/IDs saved, and the standing approvals that would have fired (memory hits are in `pairs.json`);
+- notes · facts/IDs saved (and the learner's error, if reflection failed: it never costs the pair its second pass or
+  the bar; `learn_summary.json` counts them as `learner_errors`), and the standing approvals that would have fired
+  (memory hits are in `pairs.json`);
 - the secret audit.
 
 Its bar:

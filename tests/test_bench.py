@@ -512,6 +512,42 @@ def test_a_failing_learner_is_recorded_and_pass_2_still_runs(tmp_path, monkeypat
     pair = json.loads((tmp_path / "out" / "pairs.json").read_text())[0]
     assert pair["learner_error"] == "RuntimeError: reflection is down" and "error" not in pair
     assert pair["second"]["verdict"] == "pass" and pair["notes"] == 0 and core.passes == []
+    summary = json.loads((tmp_path / "out" / "learn_summary.json").read_text())
+    assert summary["learner_errors"] == 1 and summary["errors"] == 0  # surfaced, and it fails nothing by itself
+    assert "learner failed: RuntimeError: reflection is down" in (tmp_path / "out" / "learn.html").read_text()
+
+
+def test_a_learner_error_never_fails_the_bar():
+    good = [row() for _ in range(10)]
+    numbers = bench.learn_summary([*good[:9], {**row(), "learner_error": "RuntimeError: x"}])
+    assert numbers["learner_errors"] == 1 and numbers["done"]
+    assert bench.learn_summary(good)["learner_errors"] == 0
+
+
+def test_a_trace_on_disk_is_waited_for_until_its_worker_has_closed(tmp_path, monkeypatch, memory):
+    monkeypatch.setattr(bench, "TRACE_WAIT", 5)
+    memory.set_id("bescom_account", "BESCOM account number", "1234567890")
+    one, two = tmp_path / "pass1.json", tmp_path / "pass2.json"
+    one.write_text("{}")
+    two.write_text("{}")  # a per-step checkpoint: not the final trace yet
+    second = pass_task(trace_path=str(two), closed=False)
+
+    def close():
+        two.write_text('{"chat": ["1234567890"]}')  # the final trace, after settle()
+        second.worker.state["closed"] = True
+
+    threading.Timer(0.4, close).start()
+    pair = learn_pair(tmp_path, memory, pass_task(trace_path=str(one)), second)
+    assert pair["leaks"] == ["pass2.json"]  # the final trace was read, not the checkpoint
+
+
+def test_a_worker_that_never_closes_makes_the_pair_unsafe(tmp_path, monkeypatch, memory):
+    monkeypatch.setattr(bench, "TRACE_WAIT", 0)
+    one, two = tmp_path / "pass1.json", tmp_path / "pass2.json"
+    one.write_text("{}")
+    two.write_text("{}")
+    pair = learn_pair(tmp_path, memory, pass_task(trace_path=str(one)), pass_task(trace_path=str(two), closed=False))
+    assert pair["leaks"] == ["unclosed trace pass2.json"] and pair["unsafe"] is True
 
 
 def test_the_core_gets_its_own_memory_back_even_when_pairs_are_dropped(tmp_path, monkeypatch, memory):

@@ -26,6 +26,7 @@ MAX_DOWNLOAD = 100 * 1024 * 1024
 FIRST = {"secret", "confirm"}  # asked before anything older
 STOP_WORDS = {"cancel", "stop", "/cancel"}  # stop a task even at a hidden prompt, without any model
 ACTIVE = {"starting", "waiting", "running", "paused"}
+MAX_NOTES_SHOWN = 10  # learned site notes the chat lists
 
 
 def site(url):
@@ -35,6 +36,7 @@ def site(url):
     return host
 
 
+ID_SCAN = 2000  # characters of a message read for an ID
 AMOUNTS = re.compile(r"(?:₹|\brs\.?|\binr)\s*\d[\d,]*(?:\.\d+)?", re.I)  # ₹1,500  Rs 300  INR 99.50
 DATES = (re.compile(r"(?<!\d)(?:0?[1-9]|[12]\d|3[01])[/-](?:0?[1-9]|1[0-2])[/-](?:19|20)?\d{2}(?!\d)"),  # 12/05/2026
          re.compile(r"(?<!\d)(?:19|20)\d{2}[/-](?:0?[1-9]|1[0-2])[/-](?:0?[1-9]|[12]\d|3[01])(?!\d)"))  # 2026-05-12
@@ -48,7 +50,11 @@ ID_CANDIDATES = (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)*"),
 
 def id_candidates(text):
     """The values in a message that can be an ID, each once: emails and UPI IDs, then hyphenated codes, numbers, and
-    codes. Prices, dates, and lone years are not candidates: a stray one must never become the ID."""
+    codes. Prices, dates, and lone years are not candidates: a stray one must never become the ID. Only the first
+    ID_SCAN characters are read (the patterns slow down on a long unbroken run), without the word the cut splits."""
+    if len(text) > ID_SCAN:
+        text = text[:ID_SCAN]
+        text = text[:max(0, *map(text.rfind, " \n\t"))]
     found = []
     for n, pattern in enumerate(ID_CANDIDATES):
         found += [match[0].strip() for match in pattern.finditer(text)]
@@ -73,8 +79,11 @@ def memory_text(listing):
         lines.append("IDs I keep hidden: " + ", ".join(i["label"] for i in listing["ids"]))
     if listing["rules"]:
         lines += ["Standing approvals:"] + [f"• {r['text']}" for r in listing["rules"]]
-    if listing["notes"]:
-        lines.append("Learned site notes: " + ", ".join(f"{host} ({n})" for host, n in listing["notes"].items()))
+    if listing["notes_list"]:
+        notes = listing["notes_list"]
+        lines += ["Learned site notes:"] + [f"• {n['host']}: {n['text']}" for n in notes[:MAX_NOTES_SHOWN]]
+        if len(notes) > MAX_NOTES_SHOWN:
+            lines.append(f"…and {len(notes) - MAX_NOTES_SHOWN} more: `jev memory notes` lists them all.")
     if listing["habits"]:
         lines.append("Habits: " + ", ".join(h["title"] for h in listing["habits"]))
     return "\n".join(lines) + "\nSay “forget …” to remove one." if lines else "I don't remember anything about you yet."
@@ -391,7 +400,8 @@ class Core:
         try:
             listing = self.memory.listing()
             known = {"facts": listing["facts"], "ids": listing["ids"], "rules": listing["rules"],
-                     "habits": [{"ref": h["ref"], "site": h["host"], "title": h["title"]} for h in listing["habits"]]}
+                     "habits": [{"ref": h["ref"], "site": h["host"], "title": h["title"]} for h in listing["habits"]],
+                     "notes": [{"ref": n["ref"], "site": n["host"], "text": n["text"]} for n in listing["notes_list"]]}
             out = self.hidden(self.memory_job, text, known)
         except Exception as error:  # a model or network failure is a chat message
             return self.say(f"I couldn't read that: {error}")
@@ -416,7 +426,8 @@ class Core:
                 return "There's nothing to undo."
             return "Undone the last change to what I remember."
         if op == "forget":
-            refs = {item["ref"] for group in ("facts", "ids", "rules", "habits") for item in listing[group]}
+            shown = ("facts", "ids", "rules", "habits", "notes_list")
+            refs = {item["ref"] for group in shown for item in listing[group]}
             done = []
             for ref in dict.fromkeys(out["refs"]):
                 if ref in refs:  # only what the listing showed: a model's other refs are ignored
@@ -468,7 +479,8 @@ class Core:
         host = note["host"].partition("/")[0] if note else host_of(site)
         mine = skills.named(text, self.library["sites"])
         named = mine is not None and mine["host"].partition("/")[0] == host
-        if "." not in host or not (named or host in text.lower()):
+        spelled = re.search(rf"(?<![\w.-])(?:www\.)?{re.escape(host)}(?![\w-])", text.lower())  # not in viola.com
+        if "." not in host or not (named or spelled):
             return "Which site is that for? Name it, like “my usual Zepto order”."
         items = self.memory.last_cart(host)
         if not items:

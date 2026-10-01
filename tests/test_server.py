@@ -188,11 +188,31 @@ def test_jev_memory_lists_sets_forgets_and_undoes(monkeypatch, capsys):
     assert server.main(["memory", "forget", str(fact)]) == 0 and memory.facts() == []
     assert server.main(["memory", "undo"]) == 0 and memory.facts()[0]["text"] == "12 MG Road"
     assert server.main(["memory", "forget", "habit:999"]) == 1
-    memory.decide_notes(memory.draft_notes("zeptonow.com", ["Search appears after the location pop-up closes"]),
-                        save=True)
+    note = memory.draft_notes("zeptonow.com", ["Search appears after the location pop-up closes"])[0]
+    memory.decide_notes([note], save=True)
     capsys.readouterr()
     assert server.main(["memory", "notes"]) == 0
-    assert "zeptonow.com\n  • Search appears after the location pop-up closes" in capsys.readouterr().out
+    assert f"zeptonow.com\n  note:{note}  Search appears after the location pop-up closes" in capsys.readouterr().out
+
+
+def test_jev_memory_lists_each_saved_note_by_ref_and_forgets_it(monkeypatch, capsys):
+    memory = store()
+    monkeypatch.setattr(server, "open_memory", lambda **options: memory)
+    note = memory.draft_notes("zeptonow.com", ["Search appears after the location pop-up closes"])[0]
+    memory.decide_notes([note], save=True)
+    other = memory.draft_notes("blinkit.com", ["Close the app banner first"])[0]
+    memory.decide_notes([other], save=True)
+    memory.draft_notes("zeptonow.com", ["A draft nobody saved"])
+    assert server.main(["memory"]) == 0
+    out = capsys.readouterr().out
+    assert (f"Learned site notes:\n  note:{other}  blinkit.com: Close the app banner first\n"
+            f"  note:{note}  zeptonow.com: Search appears after the location pop-up closes\n") in out
+    assert "draft" not in out
+    assert server.main(["memory", "notes", "zeptonow.com"]) == 0
+    out = capsys.readouterr().out
+    assert out == f"zeptonow.com\n  note:{note}  Search appears after the location pop-up closes\n"
+    assert server.main(["memory", "forget", f"note:{note}"]) == 0
+    assert "Forgot the note" in capsys.readouterr().out and memory.notes("zeptonow.com") == []
 
 
 # ---- Plan 7 Task 4 fixes: the purge loop, .env handling, failures at start-up, `jev memory` edge cases

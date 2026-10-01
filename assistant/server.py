@@ -127,8 +127,7 @@ def print_listing(listing):
         ("Facts:", [f"  {f['ref']}  {f['kind']}  " + (f"{f['label']}: {f['text']}" if f["label"] else f["text"])
                     for f in listing["facts"]]),
         ("Standing approvals:", [f"  {r['ref']}  {r['text']}" for r in listing["rules"]]),
-        ("Learned site notes:", [f"  {host}: {n} line{'' if n == 1 else 's'}"
-                                 for host, n in listing["notes"].items()]),
+        ("Learned site notes:", [f"  {n['ref']}  {n['host']}: {n['text']}" for n in listing["notes_list"]]),
         ("Habits:", [f"  {h['ref']}  {h['host']} · {h['skill']} · {h['title']} ({h['replays']} replays, "
                      f"{h['clean_replays']} clean)" for h in listing["habits"]]),
     ]
@@ -173,10 +172,12 @@ def memory_command(action="list", rest=()):
                     failed = True
         elif action == "undo":
             print(f"Undone: {memory.undo()}.")
-        else:  # notes
-            learned = memory.learned()
+        else:  # notes, each with the ref that forgets it
+            learned = {}
+            for note in memory.listing()["notes_list"]:
+                learned.setdefault(note["host"], []).append(note)
             for host in ([rest[0]] if rest else sorted(learned)):
-                print(host + "".join(f"\n  • {line}" for line in learned.get(host, [])))
+                print(host + "".join(f"\n  {n['ref']}  {n['text']}" for n in learned.get(host, [])))
     except KeyError as error:  # undo: its message says what's wrong ("nothing to undo")
         print(f"jev: {error.args[0] if error.args else 'nothing matches'}", file=sys.stderr)
         return 1

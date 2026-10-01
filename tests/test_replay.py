@@ -72,3 +72,34 @@ def test_an_expected_label_shown_twice_needs_the_gates():
     assert replay.present(expected, twice) == 2
     assert replay.judge(expected, jev_step("think"), {}, twice, {}) == ("unsure", None)
     assert replay.judge(expected, jev_step("act"), {}, twice, {}) == ("matched", ("CLICK", OFFICE, None))
+
+
+# ---- cleanup wave: a commit step is never forced; sameness needs a sure answer
+
+PAY = next(a for a in ACTIONS if a["label"] == "Pay ₹79")
+PAY_STEP = {"subgoal": 1, "op": "CLICK", "name": "pay", "key": None, "value": None, "secret": False, "commit": True,
+            "url": "shop.test/checkout", "title": "Shop"}
+
+
+def test_a_unique_commit_control_is_never_forced_through_an_unsure_pick():
+    page = fake_page()
+    assert replay.present(PAY_STEP, page) == 1
+    assert replay.judge(PAY_STEP, jev_step("think", target=PAY), {}, page, {}) == ("unsure", None)
+    step = {**PAY_STEP, "commit": False}  # a recorded step that didn't commit, under a commit subgoal
+    assert replay.judge(step, jev_step("think", target=PAY), {}, page, {}, commit=True) == ("unsure", None)
+    assert replay.judge(step, jev_step("think", target=PAY), {}, page, {}) == ("matched", ("CLICK", PAY, None))
+    sure = jev_step("act", target=PAY)  # a confident pick of the expected step still counts
+    assert replay.judge(PAY_STEP, sure, {}, page, {}) == ("matched", ("CLICK", PAY, None))
+    assert replay.judge(step, sure, {}, page, {}, commit=True) == ("matched", ("CLICK", PAY, None))
+
+
+def test_sameness_counts_as_same_only_when_jev_is_sure():
+    def sameness(probabilities):
+        pick = max(probabilities, key=probabilities.get)
+        return {"choice": pick, "probabilities": probabilities, "confidence": probabilities[pick]}
+
+    sure = choice("7", 0.9)
+    assert replay.match((sure, sameness({"same": 0.7, "similar": 0.3})), [HABIT]) == (HABIT, "same")
+    assert replay.match((sure, sameness({"same": 0.69, "similar": 0.31})), [HABIT]) == (HABIT, "similar")
+    assert replay.match((sure, sameness({"same": 0.75, "similar": 0.6})), [HABIT]) == (HABIT, "similar")  # ambiguous
+    assert replay.match((sure, sameness({"same": 0.1, "similar": 0.9})), [HABIT]) == (HABIT, "similar")

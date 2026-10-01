@@ -1261,7 +1261,8 @@ def stray_lines():
             **{f"an item named with a bill word: {line!r}": SHOP + "\n" + line for line in [
                 "Sugar Free Gold 25 Pellets ₹20", "Sugar Free Gold 25 Pellets\n₹20", "Gluten Free Bread\n₹20",
                 "Lays Classic 52 g 10% off\n₹20", "Free Range Eggs ₹20", "Delivery Pack ₹20",
-                "Cotton Tips 100 pcs\n₹20", "Total Whey Protein Bar\n₹20"]}}
+                "Cotton Tips 100 pcs\n₹20", "Total Whey Protein Bar\n₹20", "Rain Poncho Kids ₹20",
+                "Service Station Wipes\n₹20", "MRP Saver Pack ₹20", "Packing Tape 2 rolls ₹20"]}}
 
 
 @pytest.mark.parametrize("probe", list(stray_lines()))
@@ -1326,3 +1327,15 @@ def test_a_failing_rule_lookup_reaches_the_trace(tmp_path, monkeypatch, memory):
     monkeypatch.setattr(memory, "rules_for", lambda *a: (_ for _ in ()).throw(RuntimeError("database down")))
     assert gate.standing(w, {"total": "₹79"}, fake_page(text=SHOP)) is None
     assert w.trace()["standing_error"] == "database down"
+
+
+MORE_BILL = ("Checkout\nDiet Coke 300 ml × 1 — ₹40\nMRP ₹45\nSubtotal ₹40\nService fee ₹5\nPacking charge ₹3\n"
+             "Rain fee ₹10\nTo pay ₹79\nPay ₹79")
+
+
+@pytest.mark.parametrize("text", [MORE_BILL, MORE_BILL.replace("Service fee ₹5", "Service fee\n₹5")])
+def test_service_subtotal_packing_rain_and_mrp_lines_are_bill_lines(monkeypatch, memory, text):
+    assert all(gate.bill_line(line) for line in ("Service fee ₹5", "Subtotal ₹40", "Packing charge ₹3",
+                                                  "Rain fee ₹10", "MRP ₹45"))
+    w, page, _ = with_rule(monkeypatch, memory, text=text)
+    assert gate.approved(w, page, PAY, "Pay ₹79", None) is True

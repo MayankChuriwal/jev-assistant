@@ -665,15 +665,20 @@ class Memory:
     # ---- views and the old profile
 
     def listing(self):
-        """Everything memory holds, for `jev memory` and the chat: never an ID's value."""
-        notes = self.run(lambda cur: cur.execute(
-            "SELECT host, count(*) AS n FROM notes WHERE status = 'saved' GROUP BY host ORDER BY host").fetchall())
+        """Everything memory holds, for `jev memory` and the chat: never an ID's value. Saved notes come as counts
+        per site ("notes") and one by one with their refs ("notes_list"); a draft or skipped note is never listed."""
+        saved = self.run(lambda cur: cur.execute(
+            "SELECT id, host, text FROM notes WHERE status = 'saved' ORDER BY host, decided_at, id").fetchall())
+        notes = {}
+        for row in saved:
+            notes[row["host"]] = notes.get(row["host"], 0) + 1
         return {
             "facts": [{"ref": str(f["id"]), "kind": f["kind"], "label": f["label"], "text": f["text"]}
                       for f in self.facts()],
             "ids": [{"ref": f"id:{i['key']}", "label": i["label"]} for i in self.ids()],
             "rules": [{"ref": f"rule:{r['id']}", "text": rule_line(r)} for r in self.live_rules()],
-            "notes": {r["host"]: r["n"] for r in notes},
+            "notes": notes,
+            "notes_list": [{"ref": f"note:{r['id']}", "host": r["host"], "text": r["text"]} for r in saved],
             "habits": [{"ref": f"habit:{h['id']}", "host": h["host"], "skill": h["skill"], "title": h["title"],
                         "replays": h["replays"], "clean_replays": h["clean_replays"]} for h in self.habits()],
         }

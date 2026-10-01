@@ -177,3 +177,14 @@ def test_an_unsure_habit_match_is_ignored(tmp_path):
     c.new_task("order a diet coke")
     until(lambda: c.open is not None)
     assert c.open.message["text"] == "Which app should I use for groceries: Swiggy or Zepto?"
+
+
+def test_an_unsure_sameness_starts_the_habit_as_similar(tmp_path):
+    c, made, memory = core(tmp_path)
+    habit = saved_habit(memory)
+    pick, _ = sure(habit)
+    c.habit_job = lambda goal, habits: (pick, {"choice": "same", "probabilities": {"same": 0.6, "similar": 0.4},
+                                               "confidence": 0.6})
+    c.new_task("order a diet coke")
+    until(lambda: made)
+    assert made[0][3:] == (habit, "similar")  # the planner writes the plan: no "same as last time"

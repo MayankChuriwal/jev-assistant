@@ -126,7 +126,7 @@ class Worker:
             subgoal_steps=0, loop_from=0, code_asks=0, model_errors=0, mismatches=0, done_refusals=0,
             captcha_rounds=0, meter=new_meter(), escalations={}, margins=[], situations=[], uploaded=[], held=None,
             told_at=None, delegated_at=None, relaying=False, skill=None, preauth=False, cap=None, site="",
-            cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None,
+            cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None, closed=False,
         )
 
     # ---- what the user and the models see
@@ -380,16 +380,17 @@ class Worker:
 
     def guided(self, step, answers, page, controls):
         """Replay's say on Jev's answers: (operation, action, key, text) to act on when Jev's top pick is the step the
-        habit expects (passing the gates, or the only control on the page with that label), else None to go on as
-        in Phase A. Another pick that passes the gates, or none, takes this subgoal out of replay. A wait, a scroll,
-        a secret field, an expected control not on the page yet, or one that changed nothing twice (the loop ladder
-        decides) changes nothing."""
+        habit expects (passing the gates, or the only control on the page with that label unless it commits), else
+        None to go on as in Phase A. Another pick that passes the gates, or none, takes this subgoal out of replay. A
+        wait, a scroll, a secret field, an expected control not on the page yet, or one that changed nothing twice
+        (the loop ladder decides) changes nothing."""
         s = self.state
         record = s["replay"]
         expected = replay.expected(self.habit, record, s["current"]) if record else None
         if not expected or expected["secret"]:
             return None
-        verdict, chosen = replay.judge(expected, step, answers, page, controls)
+        commit = (self.subgoal() or {}).get("kind") == "commit"  # a commit is never forced past the gates
+        verdict, chosen = replay.judge(expected, step, answers, page, controls, commit=commit)
         if verdict in {"absent", "quiet"}:
             return None
         if verdict == "matched" and chosen[0] not in QUIET and executor.repeats(
@@ -1095,8 +1096,10 @@ class Worker:
         self.state["files"].extend(arrived)
 
     def close(self):
+        """Write the final trace, then close the tabs. `closed` tells the bench the final trace is on disk."""
         try:
             self.state["trace_path"] = str(self.save_trace())
+            self.state["closed"] = True
         except OSError as error:  # a trace is a record: never a reason to leave the tabs open
             print(f"jev: trace not saved: {error}", file=sys.stderr)
         finally:

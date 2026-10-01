@@ -232,6 +232,17 @@ def test_learned_lines_join_the_shipped_note_of_their_host_or_its_parent():
 
 def test_a_replayed_run_counts_on_its_habit(memory):
     found = learn.after(run_state(), memory, reflect=lambda digest: ([], []))
-    learn.after(run_state(replay={"habit": found["habit"], "fallbacks": []}), memory, reflect=lambda digest: ([], []))
+    learn.after(run_state(replay={"habit": found["habit"], "expected": 1, "fallbacks": []}), memory,
+                reflect=lambda digest: ([], []))
     kept = memory.habit(found["habit"])
     assert (kept["replays"], kept["clean_replays"], kept["failed_in_a_row"]) == (1, 1, 0)
+
+
+def test_a_replay_that_never_engaged_does_not_count_on_its_habit(memory):
+    found = learn.after(run_state(), memory, reflect=lambda digest: ([], []))
+    for _ in range(3):  # three unverified runs where replay never judged a step: the habit is not retired
+        learn.after(run_state(status="failed", orders=[], replay={"habit": found["habit"], "expected": 0,
+                                                                  "fallbacks": []}),
+                    memory, reflect=lambda digest: ([], []))
+    kept = memory.habit(found["habit"])
+    assert (kept["replays"], kept["failed_in_a_row"], kept["retired_at"]) == (0, 0, None)

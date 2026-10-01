@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -1040,3 +1041,52 @@ def test_a_site_note_resolves_the_site_the_user_and_the_model_named(world):
         .startswith("Saved: zeptonow.com")
     other = "always order my usual Blinkit cart, up to ₹300"
     assert tell_memory(world, other, said("approve", site="Zepto")).startswith("Which site is that for?")
+
+
+# ---- cleanup wave: the site must be a whole word; a long message is scanned only so far
+
+
+def test_a_site_inside_another_word_does_not_corroborate_the_site(world):
+    out = said("approve", site="ola.com")
+    world.core.memory.record_habit({"host": "ola.com", "skill": "cabs", "title": "Ola · Office",
+                                    "goal": "Cab to office", "start": "https://ola.com/", "plan": [], "steps": [],
+                                    "cart": [{"item": "mini to office", "qty": 1}]})
+    ask = "Which site is that for? Name it, like “my usual Zepto order”."
+    for words in ("always book my usual viola.com ride, up to ₹300", "always book my usual ola.community ride, ₹300",
+                  "always book my usual my-ola.com ride, up to ₹300"):
+        assert tell_memory(world, words, out) == ask, words
+    for words in ("always book my usual ola.com ride, up to ₹300", "always book www.ola.com rides up to ₹300"):
+        assert tell_memory(world, words, out).startswith("Saved: ola.com"), words
+
+
+def test_a_long_message_is_scanned_for_ids_only_so_far_and_quickly():
+    started = time.monotonic()
+    assert conversation.id_candidates("1-" * 50000) == []
+    assert time.monotonic() - started < 1.0
+    assert conversation.id_candidates("x " * 999 + "1234567890") == []  # an ID the cut splits is not a candidate
+    assert conversation.id_candidates("my BESCOM account is 1234567890 " + "x " * 2000) == ["1234567890"]
+
+
+def test_saved_notes_are_listed_and_forgotten_by_their_ref_in_chat(world):
+    memory = world.core.memory
+    note = memory.draft_notes("zeptonow.com", ["Search appears after the location pop-up closes"])[0]
+    memory.decide_notes([note], save=True)
+    draft = memory.draft_notes("zeptonow.com", ["A draft nobody saved"])[0]
+    listed = tell_memory(world, "what do you remember?", said("list"))
+    assert "Learned site notes:\n• zeptonow.com: Search appears after the location pop-up closes" in listed
+    assert "draft" not in listed
+    assert world.known[-1]["notes"] == [{"ref": f"note:{note}", "site": "zeptonow.com",
+                                         "text": "Search appears after the location pop-up closes"}]
+    assert tell_memory(world, "forget that draft", said("forget", refs=[f"note:{draft}"])).startswith(
+        "I couldn't find that")  # a draft was never listed
+    assert tell_memory(world, "forget the Zepto search note", said("forget", refs=[f"note:{note}"])) == \
+        "Forgot the note “Search appears after the location pop-up closes”."
+    assert memory.notes("zeptonow.com") == []
+
+
+def test_the_chat_lists_at_most_ten_notes():
+    listing = {"facts": [], "ids": [], "rules": [], "habits": [], "notes": {"zeptonow.com": 12},
+               "notes_list": [{"ref": f"note:{n}", "host": "zeptonow.com", "text": f"Line {n}"} for n in range(12)]}
+    shown = conversation.memory_text(listing)
+    assert "• zeptonow.com: Line 9" in shown and "Line 10" not in shown
+    assert "…and 2 more: `jev memory notes` lists them all." in shown

@@ -132,8 +132,8 @@ def after(state, memory, *, judged=None, reflect=None, save=False, actor="agent"
     if not site:
         return found
     ok = verified(state, judged)
-    if state.get("replay"):  # three replays in a row that didn't verify retire the habit
-        memory.replayed(state["replay"]["habit"], not state["replay"]["fallbacks"], ok, actor=actor)
+    if state.get("replay") and state["replay"].get("expected", 0) > 0:  # a replay counts once it judged a step;
+        memory.replayed(state["replay"]["habit"], not state["replay"]["fallbacks"], ok, actor=actor)  # 3 failed retire
     first = not memory.habits(hosts=[site], limit=1) and not memory.notes(site)
     habit = habit_from(state) if ok else None
     if habit:

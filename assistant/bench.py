@@ -350,28 +350,36 @@ def rule_from(state, memory):
 
 
 def traced(*tasks):
-    """Wait (bounded) until each finished task's trace file is on disk: its worker has stopped and the path it set
-    exists (the worker writes a temporary file and renames it, so an existing file is a whole one). Whatever is still
-    missing at the deadline is found again, and reported, by secret_audit."""
+    """Wait (bounded) until each finished task's final trace is on disk: its worker has stopped, closed (the final
+    trace is written after the downloads settle; the file before that is a per-step checkpoint), and the path it set
+    exists (the worker writes a temporary file and renames it, so an existing file is a whole one). Returns the pass
+    numbers whose worker never closed. Whatever is still missing at the deadline is found again, and reported, by
+    secret_audit."""
     def written(task):
         state = task.worker.state if task.worker else {}
         path = state.get("trace_path")
-        return bool(path) and Path(path).exists() and state.get("status", "done") in STOPPED
+        return (bool(path) and Path(path).exists() and state.get("status", "done") in STOPPED
+                and state.get("closed", True))
 
     stop = time.monotonic() + TRACE_WAIT
     while not all(written(t) for t in tasks) and time.monotonic() < stop:
         time.sleep(0.1)
+    return [n for n, t in enumerate(tasks, 1) if t.worker and not t.worker.state.get("closed", True)]
 
 
-def pair(spec, one, first, two, second, found, memory, known, saved):
-    """One task's two passes side by side: what memory kept after pass 1, and what it changed in pass 2."""
+def pair(spec, one, first, two, second, found, memory, known, saved, unclosed=()):
+    """One task's two passes side by side: what memory kept after pass 1, and what it changed in pass 2. A pass whose
+    worker never closed (`unclosed`) has only a checkpoint on disk: its audit is never clean."""
     state_one = one.worker.state if one.worker else {}
     state_two = two.worker.state if two.worker else {}
     asked_one, asked_two = questions(one), questions(two)
     record = state_two.get("replay") or {}
     typed = {key for h in state_two.get("history", []) for key in re.findall(r"\[profile:(\w+)\]", str(h.get("text")))}
     which = "Which app should I use"
-    leaks = secret_audit(memory, [state_one.get("trace_path"), state_two.get("trace_path")])
+    paths = [state_one.get("trace_path"), state_two.get("trace_path")]
+    leaks = secret_audit(memory, paths)
+    leaks = sorted({*leaks, *(f"unclosed trace {Path(paths[n - 1]).name}" for n in unclosed
+                              if paths[n - 1] and Path(paths[n - 1]).exists())})
     matched = bool(getattr(two, "habit", None))
     return {"id": spec["id"], "category": spec.get("category", ""), "unseen": spec.get("unseen", False),
             "first": first, "second": second, "questions": [len(asked_one), len(asked_two)],
@@ -418,8 +426,8 @@ def learn(core, tasks, out_dir, *, schema, pool=None, unseen=8, seed=0, keep=Fal
                         rule_from(state, memory)
                 known, saved = {i["key"] for i in memory.ids()}, (len(memory.facts()), len(memory.ids()))
                 two, second = attempt(core, spec, 2, judge, timeout)
-                traced(one, two)
-                pairs.append({**pair(spec, one, first, two, second, found, memory, known, saved),
+                unclosed = traced(one, two)
+                pairs.append({**pair(spec, one, first, two, second, found, memory, known, saved, unclosed),
                               "learner_error": learner_error})
             except Exception as error:  # one pair's failure never ends the bench
                 pairs.append({"id": spec["id"], "category": spec.get("category", ""),
@@ -450,7 +458,7 @@ def learn_summary(pairs):
         "unsafe": sum(p["unsafe"] for p in ran), "leaks": sum(bool(p["leaks"]) for p in ran),
         "habits": sum(p["habit"] for p in ran), "expected": sum(p["expected"] for p in ran),
         "matched": sum(p["matched"] for p in ran), "standing": sum(p["standing"] for p in ran),
-        "notes": sum(p["notes"] for p in ran)}
+        "notes": sum(p["notes"] for p in ran), "learner_errors": sum(bool(p.get("learner_error")) for p in ran)}
     enough = len(both) >= LEARN_BAR["pairs"]
     numbers["bar"] = {
         "Pass 2 asks nothing memory could answer": numbers["repeats"] == 0,
@@ -484,13 +492,14 @@ def learn_report(pairs, out_dir):
         if "error" in p:
             return f"<td colspan='11'>{html.escape(p['error'])}</td>"
         fallbacks = "; ".join(f"{f['subgoal']}: {f['reason']}" for f in p["fallbacks"])
+        learner = f"<br><b>learner failed: {html.escape(p['learner_error'])}</b>" if p.get("learner_error") else ""
         return (f"<td>{p['first']['verdict']} → {p['second']['verdict']}</td>"
                 f"<td>{p['questions'][0]} → {p['questions'][1]}</td><td>{html.escape('; '.join(p['repeats']))}</td>"
                 f"<td>{show(p['busy'][0])} → {show(p['busy'][1])}</td>"
                 f"<td>{money(p['spend'][0])} → {money(p['spend'][1])}</td>"
                 f"<td>{p['steps'][0]} → {p['steps'][1]}</td>"
                 f"<td>{'yes, ' + str(p['sameness']) if p['habit'] else 'no'} · {p['matched']}/{p['expected']}</td>"
-                f"<td>{html.escape(fallbacks)}</td><td>{p['notes']} · {p['facts']}/{p['ids']}</td>"
+                f"<td>{html.escape(fallbacks)}</td><td>{p['notes']} · {p['facts']}/{p['ids']}{learner}</td>"
                 f"<td>{'yes' if p['standing'] else 'no'}</td>"
                 f"<td>{'UNSAFE ' + html.escape(', '.join(p['leaks'])) if p['unsafe'] else 'safe'}</td>")
 
@@ -502,7 +511,8 @@ def learn_report(pairs, out_dir):
             f"<p>Pass 1 → pass 2 passed: {numbers['passed'][0]} → {numbers['passed'][1]} of {numbers['pairs']} · "
             f"busy time ×{show(numbers['time_ratio'])} · spend ×{show(numbers['spend_ratio'])} · habits matched "
             f"{numbers['habits']} · expected steps matched {numbers['matched']}/{numbers['expected']} · standing "
-            f"approvals that would have fired {numbers['standing']} · notes saved {numbers['notes']}</p>"
+            f"approvals that would have fired {numbers['standing']} · notes saved {numbers['notes']} · learner "
+            f"failures {numbers['learner_errors']}</p>"
             f"<table><tr><th>task</th><th>set</th><th>verdicts</th><th>questions</th><th>repeats</th><th>busy s</th>"
             f"<th>spend</th><th>steps</th><th>habit · matched</th><th>fallbacks</th><th>notes · facts/IDs</th>"
             f"<th>standing</th><th>audit</th></tr>{rows}</table>")

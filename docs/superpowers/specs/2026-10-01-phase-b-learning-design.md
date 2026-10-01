@@ -18,7 +18,7 @@ to macOS, so it can be deployed.
 | Privacy | IDs reach models only as placeholders and are stored encrypted. IDs are your phone, email, name, UPI ID, bill and consumer numbers, and other account numbers. Addresses, preferences, carts and notes are visible to models. Card numbers, CVVs, OTPs, passwords, PINs, Aadhaar and PAN are never stored |
 | Standing approvals | One site, one recorded cart and a ₹ cap. Created from your words, or from a "Don't ask next time" tap after an order you approved. A rule expires after 30 days, skips the question only with `JEV_PREAUTH=on`, and you're told every time it's used |
 | Site notes | Drafted after a run by one mini call, only when the run taught something. You Save or Skip them right after the result |
-| Replay | A recorded run guides Jev. When Jev is unsure, the recorded control wins. A different confident pick takes that subgoal out of replay. On an exact repeat, the planner's start turn is skipped |
+| Replay | A recorded run guides Jev. When Jev is unsure, the recorded control wins if it is the only one with its label and doesn't commit. A different confident pick takes that subgoal out of replay. On an exact repeat, the planner's start turn is skipped |
 | Bench | The normal bench starts from an empty memory every run. `--learn` runs each task twice in a throwaway schema and measures the gain |
 | Done bar | Section 2 |
 
@@ -199,7 +199,7 @@ CREATE TABLE schema_version (version integer NOT NULL);
     sets the file to mode 0600, and says so once.
   - Missing at start, and IDs are stored: `jev` and `jev run` refuse to start ("JEV_MEMORY_KEY is missing: the saved IDs
     can't be read without it…"). `jev memory` still lists and forgets (`jev memory forget id:<key>`; it hides the IDs, so
-    the key name must be known), after which a key can be generated again on the next start.
+    the key name must be known). Only once no ID is stored does the next start generate a new key.
   - A wrong key that can't open a stored ID: that ID counts as unreadable and is asked for again, with one notice.
 - Decrypted values are cached per process. `hidden_values()` reads the IDs again whenever `max(updated_at)` changes,
   which costs one query per step. So an ID that another task or process saved is redacted here too.
@@ -301,11 +301,13 @@ The planner payload's `memory` block replaces `profile`:
   and "undo that". Jev's new intent reads: "Tells the assistant something to remember about the user, asks it to forget
   something or stop a standing approval, asks what it remembers, or asks to undo the last memory change."
 - **CLI.**
-  - `jev memory`: lists the facts with their ids, the IDs by label only, rules, notes per site, and habits.
+  - `jev memory`: lists the facts with their ids, the IDs by label only, rules, each saved note with its ref
+    (`note:7  zeptonow.com: <line>`; drafts and skipped notes are never listed), and habits. The chat's list shows the
+    saved notes' text (ten at most), and "forget" in the chat takes their refs too.
   - `jev memory set <key> [label]`: the value is typed hidden.
   - `jev memory forget <ref>`: refs look like `12`, `id:phone`, `rule:3`, `note:7` or `habit:5`.
   - `jev memory undo`.
-  - `jev memory notes [host]`.
+  - `jev memory notes [host]`: the saved notes, each with its ref.
 
 ## 6. Standing approvals
 
@@ -391,7 +393,8 @@ A habit is recorded from a verified run that has a skill and a site.
 - **Versions.** The same site, skill and goal (ignoring case and spaces) makes a new version of the existing habit. A
   different goal makes a new habit.
 - **Counters.** `replays`, `clean_replays` (replays with no fallback), and `failed_in_a_row` (replays that did not
-  verify). Three failed replays in a row retire the habit.
+  verify). Three failed replays in a row retire the habit. A run counts as a replay only once replay judged at least
+  one expected step (`expected > 0`).
 
 ### 7.4 Reflection (one mini call)
 
@@ -443,6 +446,8 @@ Notes stay drafts until you choose. `--learn` saves notes and guesses at once, i
   - `sameness`: `same` (the same items, quantities, places and choices) or `similar` (the same kind of errand on this
     site, with different items, places or choices).
 - A match needs `habit` to be something other than none, with probability ≥ 0.7, and `jev.ambiguous` to be false.
+  The sameness counts as `same` only when its answer has probability ≥ 0.7 and isn't ambiguous; otherwise it is
+  `similar`.
 - On a match, the habit's site and start page are used, and the "which app?" question is skipped.
 
 ### 8.2 Starting
@@ -457,7 +462,9 @@ Notes stay drafts until you choose. `--learn` saves notes and guesses at once, i
 The expected step is the habit's next recorded step for the current subgoal. Jev is asked exactly as in Phase A. Then:
 - **Jev's top pick is the expected step.** The operation and the target's label (normalised like the habit's names)
   match. Act on it and count it as matched when it passes the gates, or, when the gates would escalate, only if that
-  label is unique on the page. A label shown twice goes through the gates as in Phase A.
+  label is unique on the page and the step is no commit. A label shown twice goes through the gates as in Phase A. A
+  recorded commit step, or any step of a commit subgoal, is never forced: unless Jev's pick passes the gates, the
+  planner decides as in Phase A (fallback "unsure"), with or without pre-authorisation.
 - **A wait or a scroll.** Act on it as in Phase A; replay stays as it is, since habits don't record them. When a
   subgoal's recorded steps are used up, Jev goes on as in Phase A and nothing counts.
 - **Jev picks something else that passes the gates.** Act on Jev's pick. This subgoal leaves replay, with the fallback
@@ -491,7 +498,7 @@ reason). It is written to the trace.
    Save; the only exception is the bench's learn mode, inside its own schema.
 5. Standing approvals follow Section 6.4. On top of that, they need `JEV_PREAUTH=on`, you're told about each use, and they
    can be revoked.
-6. Replay never bypasses anything in Section 8.4.
+6. Replay never bypasses anything in Section 8.4, and never forces a commit step Jev is unsure of (Section 8.3).
 7. A bench run never reads or writes your memory. Lessons from unseen tasks stay in bench schemas, which are dropped
    afterwards.
 8. Forgotten means gone after 24 hours (Section 4.5).
@@ -608,7 +615,7 @@ The summary lists each Section 2 bar item as met or not met.
 | A hostile page plants a note | Notes need your Save; code lint; notes are hints in prompts; the gate is code |
 | Memory gets noisy | Recall is capped at 12 facts and 1,500 characters; forget and undo; guesses need a tap |
 | An ID leaks | Encrypted at rest; placeholders in prompts; leak scan at send time; secret audit on the bench |
-| `JEV_MEMORY_KEY` is lost | With IDs stored, `jev` and `jev run` refuse to start ("JEV_MEMORY_KEY is missing…"); `jev memory` still lists and forgets (`jev memory forget id:<key>`), after which the key can be generated again. A wrong key makes those IDs unreadable and they are asked for again. Facts, notes and habits are unaffected |
+| `JEV_MEMORY_KEY` is lost | With IDs stored, `jev` and `jev run` refuse to start ("JEV_MEMORY_KEY is missing…"); `jev memory` still lists and forgets (`jev memory forget id:<key>`); only once no ID is stored does the next start generate a new key. A wrong key makes those IDs unreadable and they are asked for again. Facts, notes and habits are unaffected |
 | Postgres is not running | `jev` and the tests stop with the fix in one line |
 | The time bar is missed | The report shows where the time goes; crystallised replay (code acting on exact matches after repeated clean replays) is the next speed step |
 

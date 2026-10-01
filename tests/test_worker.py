@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 from fakes import fake_page, jev_checks, script_jev, script_planner, store, sub, turn, worker_with
 
-from assistant import jev, planner, rules
+from assistant import executor, jev, planner, rules
 from assistant.browser import ExecutionUncertain, StalePage, fingerprint
 from assistant.errors import Retry
 from assistant.worker import STOPPED, Worker, secret_field
@@ -1243,3 +1243,88 @@ def test_a_later_plan_of_another_shape_ends_replay_and_one_of_the_same_shape_kee
 
     assert replanned(sub("choose the Office address"), sub("pay", kind="commit")) is True
     assert replanned(sub("open the address list"), sub("choose Office"), sub("pay", kind="commit")) is False
+
+
+# ---- cleanup wave: replay never forces a commit; Phase A's blockers, DONE, and hidden asks win
+
+
+def commit_habit(commit=True, kind="commit"):
+    plan = [sub("choose the Office address"), sub("pay", kind=kind)]
+    return habit_for(hstep(1, "CLICK", "pay", commit=commit), plan=plan)
+
+
+def paying(tmp_path, monkeypatch, confidence, habit, **options):
+    w = worker_with(tmp_path, habit=habit, sameness="same", **options)
+    w.state["current"] = 1  # at the pay subgoal
+    seen = script_planner(monkeypatch, turn())
+    script_jev(monkeypatch, {"next": ("CLICK", confidence), "click_target": "Pay"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    return w, seen
+
+
+@pytest.mark.parametrize("habit", [commit_habit(), commit_habit(commit=False), commit_habit(kind="act")],
+                         ids=["commit-step", "commit-subgoal", "commit-step-act-subgoal"])
+def test_an_unsure_pick_of_a_unique_recorded_commit_control_goes_to_the_planner(tmp_path, monkeypatch, habit):
+    w, seen = paying(tmp_path, monkeypatch, 0.4, habit)
+    assert not w.browser.act.called and seen[0]["reason"] == "unsure"
+    assert w.state["replay"]["fallbacks"] == [{"subgoal": 1, "step": 1, "reason": "unsure"}]
+
+
+def test_a_recorded_commit_step_is_not_forced_under_pre_authorisation(tmp_path, monkeypatch):
+    monkeypatch.setenv("JEV_PREAUTH", "on")
+    w, seen = paying(tmp_path, monkeypatch, 0.4, commit_habit(), preauth=True, cap=100.0)
+    assert not w.browser.act.called and seen[0]["reason"] == "unsure"
+    assert not any(m["text"].startswith("Placing") for m in w.state["messages"])
+    assert w.state["replay"]["matched"] == 0
+
+
+def test_a_confident_pick_of_the_recorded_commit_step_still_counts(tmp_path, monkeypatch):
+    monkeypatch.setenv("JEV_PREAUTH", "on")
+    w, seen = paying(tmp_path, monkeypatch, 0.9, commit_habit(), preauth=True, cap=100.0)
+    assert seen == [] and (w.state["replay"]["expected"], w.state["replay"]["matched"]) == (1, 1)
+    assert w.browser.act.call_args.args[1]["label"] == "Pay ₹79"
+    assert any(m["text"].startswith("Placing") for m in w.state["messages"])
+
+
+def test_a_blocker_and_done_beat_a_pending_expected_step(tmp_path, monkeypatch):
+    def ticked(picks):
+        w = worker_with(tmp_path, habit=habit_for(hstep(0, "CLICK", "office")), sameness="same")
+        seen = script_planner(monkeypatch, turn(op="ASK", message="How should I pay?", options=["UPI", "Cash"]))
+        script_jev(monkeypatch, picks)
+        jev_checks(monkeypatch)
+        w.command("tick")
+        return w, seen
+
+    blocked, seen = ticked({"next": ("CLICK", 0.4), "click_target": "Office", "blocker": "payment"})
+    assert not blocked.browser.act.called and seen[0]["reason"] == "blocker:payment"
+    assert (blocked.state["replay"]["expected"], blocked.state["replay"]["fallbacks"]) == (0, [])
+    done, _ = ticked({"next": "DONE", "click_target": "Office"})
+    assert not done.browser.act.called and done.state["current"] == 1
+    assert (done.state["replay"]["expected"], done.state["replay"]["fallbacks"]) == (0, [])
+
+
+def test_a_secret_expected_step_is_declined_and_asked_hidden_as_in_phase_a(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, replies=[{"text": "4 8 1 5 1 6"}],
+                    habit=habit_for(hstep(0, "TYPE_TEXT", "code", secret=True)), sameness="same")
+    seen = script_planner(monkeypatch, turn())
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Code", "blocker": "code"})
+    jev_checks(monkeypatch)
+    page = w.state["page"]  # replay's own say on Jev's pick of the secret step: none
+    state, questions, heads, controls = executor.request(page, w.subgoal(), {"goal": w.state["goal"], "answers": [],
+                                                                             "recent": []}, None)
+    answers = jev.request(state, questions)
+    assert w.guided(executor.decide(answers, questions, heads, controls), answers, page, controls) is None
+    w.command("tick")
+    w.command("tick")
+    assert seen == [] and w.asked[0]["kind"] == "secret"
+    assert w.browser.act.call_args.kwargs["text"] == "481516" and w.state["history"][-1]["text"] == "[secret:answer1]"
+    assert w.state["replay"]["expected"] == 0 and w.state["replay"]["used"] == {"0": 1}
+
+
+def test_close_marks_the_worker_closed_after_the_final_trace(tmp_path):
+    w = worker_with(tmp_path)
+    assert w.state["closed"] is False
+    w.close()
+    assert w.state["closed"] is True and Path(w.state["trace_path"]).exists()
+    assert "closed" not in json.loads(Path(w.state["trace_path"]).read_text())
