@@ -22,6 +22,7 @@ DEFAULTS = [[r"\b(pay|paying|payment|payments)\b", "Cash on delivery if it's off
 FINAL = re.compile(r"\b(submit|place|order|pay|book|confirm|request|buy|purchase|send|checkout|reserve|cancel|end|"
                    r"recharge)\b", re.IGNORECASE)
 ACTIVE = {"starting", "waiting", "running", "paused"}
+STOPPED = {"done", "blocked", "failed", "cancelled"}  # a worker whose trace is final
 POLL = 2  # seconds between looks at a running task
 CANCEL_WAIT = 60  # seconds a cancelled task gets to stop before the bench moves on without it
 BASELINE = {"run": "20260926-143539", "passed": 40, "runs": 72, "median_seconds": 56.5,
@@ -319,15 +320,22 @@ def closest(memory, text, others):
 
 def secret_audit(memory, paths):
     """Where a saved ID's value, or a reformatting of it, shows in clear: in a trace, or in any text or JSON the
-    schema stores. An ID's own events hold only its token, so they are not read."""
+    schema stores. An ID's own events hold only its token, so they are not read. A trace that is missing is reported
+    as "missing trace <name>": an audit that could not read one never counts as clean."""
     values = [value for value, _ in memory.hidden_values() if len(value) >= 4]
-    texts = {Path(p).name: Path(p).read_text() for p in paths if p and Path(p).exists()}
+    needles = {form for value in values for form in (value, json.dumps(value, ensure_ascii=False)[1:-1])}
+    texts, missing = {}, []
+    for number, path in enumerate(paths, 1):
+        if path and Path(path).exists():
+            texts[Path(path).name] = Path(path).read_text()
+        else:
+            missing.append(f"missing trace {Path(path).name if path else f'(pass {number})'}")
     for table in SCANNED:
         skip = " WHERE ref NOT LIKE 'ids:%'" if table == "events" else ""
         rows = memory.run(lambda cur, q=f"SELECT to_jsonb(r)::text AS row FROM {table} r{skip}": cur.execute(q)
                           .fetchall())
         texts[table] = "\n".join(r["row"] for r in rows)
-    return sorted(name for name, text in texts.items() if any(value in text for value in values))
+    return sorted({*missing, *(name for name, text in texts.items() if any(n in text for n in needles))})
 
 
 def rule_from(state, memory):
@@ -342,9 +350,16 @@ def rule_from(state, memory):
 
 
 def traced(*tasks):
-    """Wait (bounded) until each finished task has written its trace."""
+    """Wait (bounded) until each finished task's trace file is on disk: its worker has stopped and the path it set
+    exists (the worker writes a temporary file and renames it, so an existing file is a whole one). Whatever is still
+    missing at the deadline is found again, and reported, by secret_audit."""
+    def written(task):
+        state = task.worker.state if task.worker else {}
+        path = state.get("trace_path")
+        return bool(path) and Path(path).exists() and state.get("status", "done") in STOPPED
+
     stop = time.monotonic() + TRACE_WAIT
-    while any(t.worker and not t.worker.state.get("trace_path") for t in tasks) and time.monotonic() < stop:
+    while not all(written(t) for t in tasks) and time.monotonic() < stop:
         time.sleep(0.1)
 
 
@@ -361,7 +376,8 @@ def pair(spec, one, first, two, second, found, memory, known, saved):
     return {"id": spec["id"], "category": spec.get("category", ""), "unseen": spec.get("unseen", False),
             "first": first, "second": second, "questions": [len(asked_one), len(asked_two)],
             "repeats": [q for q in asked_two if closest(memory, q, asked_one) >= REPEAT],
-            "busy": [first["busy"], second["busy"]], "spend": [first["spend_raw"], second["spend_raw"]],
+            "busy": [first["busy"], second["busy"]], "busy_raw": [first["busy_raw"], second["busy_raw"]],
+            "spend": [first["spend_raw"], second["spend_raw"]],
             "calls": [[first["mini_calls"], first["jev_calls"]], [second["mini_calls"], second["jev_calls"]]],
             "steps": [first["steps"], second["steps"]], "habit": matched, "sameness": getattr(two, "sameness", None),
             "expected": record.get("expected", 0), "matched": record.get("matched", 0),
@@ -385,27 +401,35 @@ def learn(core, tasks, out_dir, *, schema, pool=None, unseen=8, seed=0, keep=Fal
     judge = judge or (lambda goal, rule, final: core.hidden(jev.judge, goal, rule, final))
     learner = learner or (lambda state, memory, **kw: core.hidden(lambda: learning.after(state, memory, **kw)))
     open_memory = open_memory or (lambda name: Memory.open(schema=name))
-    pairs = []
-    for n, spec in enumerate(tasks + (sample(pool, unseen, seed + 1) if pool and unseen else []), 1):
-        memory = core.memory = open_memory(f"{schema}_{n}")
-        try:
-            one, first = attempt(core, spec, 1, judge, timeout)
-            state = one.worker.state if one.worker else None
-            found = learner(state, memory, judged=first["verdict"] == "pass", save=True, actor="bench") \
-                if state else {"notes": []}
-            if state and first["verdict"] == "pass":
-                rule_from(state, memory)
-            known, saved = {i["key"] for i in memory.ids()}, (len(memory.facts()), len(memory.ids()))
-            two, second = attempt(core, spec, 2, judge, timeout)
-            traced(one, two)
-            pairs.append(pair(spec, one, first, two, second, found, memory, known, saved))
-        except Exception as error:  # one pair's failure never ends the bench
-            pairs.append({"id": spec["id"], "category": spec.get("category", ""), "unseen": spec.get("unseen", False),
-                          "error": f"{type(error).__name__}: {error}"})
-        finally:
-            if not keep:
-                memory.drop()
-        learn_report(pairs, out_dir)
+    pairs, original = [], getattr(core, "memory", None)
+    try:
+        for n, spec in enumerate(tasks + (sample(pool, unseen, seed + 1) if pool and unseen else []), 1):
+            memory = core.memory = open_memory(f"{schema}_{n}")
+            try:
+                one, first = attempt(core, spec, 1, judge, timeout)
+                state = one.worker.state if one.worker else None
+                found, learner_error = {"notes": []}, None
+                if state:
+                    try:
+                        found = learner(state, memory, judged=first["verdict"] == "pass", save=True, actor="bench")
+                    except Exception as error:  # a failed reflection never costs the pair its second pass
+                        learner_error = f"{type(error).__name__}: {error}"
+                    if first["verdict"] == "pass":
+                        rule_from(state, memory)
+                known, saved = {i["key"] for i in memory.ids()}, (len(memory.facts()), len(memory.ids()))
+                two, second = attempt(core, spec, 2, judge, timeout)
+                traced(one, two)
+                pairs.append({**pair(spec, one, first, two, second, found, memory, known, saved),
+                              "learner_error": learner_error})
+            except Exception as error:  # one pair's failure never ends the bench
+                pairs.append({"id": spec["id"], "category": spec.get("category", ""),
+                              "unseen": spec.get("unseen", False), "error": f"{type(error).__name__}: {error}"})
+            finally:
+                if not keep:
+                    memory.drop()
+            learn_report(pairs, out_dir)
+    finally:
+        core.memory = original  # never left pointing at a pair's schema, dropped or not
     return learn_report(pairs, out_dir)
 
 
@@ -420,7 +444,7 @@ def learn_summary(pairs):
         "passed": [sum(p["first"]["verdict"] == "pass" for p in ran),
                    sum(p["second"]["verdict"] == "pass" for p in ran)],
         "repeats": sum(len(p["repeats"]) for p in ran),
-        "time_ratio": median([p["busy"][1] / p["busy"][0] for p in both if p["busy"][0]], None),
+        "time_ratio": median([p["busy_raw"][1] / p["busy_raw"][0] for p in both if p["busy_raw"][0]], None),
         "spend_ratio": median([p["spend"][1] / p["spend"][0] for p in both if p["spend"][0]], None),
         "failed_first": len(failed_first), "fixed": fixed,
         "unsafe": sum(p["unsafe"] for p in ran), "leaks": sum(bool(p["leaks"]) for p in ran),

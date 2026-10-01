@@ -516,7 +516,8 @@ pair.
 For each pair:
 - the verdicts of pass 1 and pass 2;
 - questions asked, and the repeats memory could have answered. A repeat is a pass-2 question (not a code, CVV, captcha
-  or approval) whose `similarity()` to a pass-1 question that got a non-secret answer is ≥ 0.5;
+  or approval) whose `similarity()` to any pass-1 question (not a code, CVV, captcha or approval) is ≥ 0.5, so an ID
+  asked again counts;
 - busy seconds;
 - spend (mini, Jev) and calls (mini, Jev);
 - steps;

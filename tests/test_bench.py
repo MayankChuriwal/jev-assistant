@@ -1,6 +1,7 @@
 """The live bench's pieces without a browser: task files, scripted replies, grading, the report, replay cases."""
 
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -370,10 +371,11 @@ class PairCore(FakeCore):
 
     def __init__(self, passes):
         super().__init__()
-        self.passes, self.memory = list(passes), None
+        self.passes, self.memory, self.seen = list(passes), None, []
 
     def new_task(self, goal, script=None):
         self.goals.append(goal)
+        self.seen.append(self.memory)
         return self.passes.pop(0)
 
 
@@ -405,7 +407,8 @@ def test_learn_mode_runs_each_task_as_a_pair_in_its_own_schema_and_measures_it(t
     bench.learn(core, [SPEC], tmp_path / "out", schema="bench_x", judge=PASS, learner=learner, keep=True,
                 open_memory=lambda name: names.append(name) or memory)
     pair = json.loads((tmp_path / "out" / "pairs.json").read_text())[0]
-    assert names == ["bench_x_1"] and core.memory is memory and calls == [{"judged": True, "save": True,
+    assert names == ["bench_x_1"] and core.seen == [memory, memory] and core.memory is None  # the original, restored
+    assert calls == [{"judged": True, "save": True,
                                                                            "actor": "bench"}]
     assert (pair["first"]["verdict"], pair["second"]["verdict"]) == ("pass", "pass")
     assert pair["questions"] == [3, 1] and pair["repeats"] == [PASS2]  # codes never count
@@ -418,10 +421,10 @@ def test_learn_mode_runs_each_task_as_a_pair_in_its_own_schema_and_measures_it(t
     assert "Learning bar not met" in page and "Not enough runs" in page
 
 
-def test_a_pair_that_breaks_is_recorded_and_its_schema_still_dropped(tmp_path, memory):
+def test_a_pair_that_breaks_is_recorded_and_its_schema_still_dropped(tmp_path, memory, monkeypatch):
     core = PairCore([])  # new_task fails: no pass to hand out
     dropped = []
-    memory.drop = lambda: dropped.append(True)
+    monkeypatch.setattr(memory, "drop", lambda: dropped.append(True))
     bench.learn(core, [SPEC], tmp_path / "out", schema="bench_x", judge=PASS, open_memory=lambda name: memory)
     pair = json.loads((tmp_path / "out" / "pairs.json").read_text())[0]
     assert pair["id"] == "instamart" and pair["error"].startswith("IndexError") and dropped == [True]
@@ -429,7 +432,8 @@ def test_a_pair_that_breaks_is_recorded_and_its_schema_still_dropped(tmp_path, m
 
 def row(first="pass", second="pass", busy=(40.0, 12.0), spend=(0.01, 0.002), repeats=(), leaks=()):
     return {"id": "x", "unseen": False, "first": {"verdict": first}, "second": {"verdict": second},
-            "busy": list(busy), "spend": list(spend), "repeats": list(repeats), "leaks": list(leaks),
+            "busy": list(busy), "busy_raw": list(busy), "spend": list(spend), "repeats": list(repeats),
+            "leaks": list(leaks),
             "unsafe": bool(leaks), "habit": True, "expected": 6, "matched": 5, "standing": False, "notes": 1}
 
 
@@ -452,3 +456,89 @@ def test_the_learning_bar():
 def test_grading_reports_busy_time():
     r = bench.grade(SPEC, task(gate=GATE), 1, PASS)
     assert r["busy"] == 40.0 and bench.failed(SPEC, task(), 1, RuntimeError("x"))["busy"] is None
+
+
+def learn_pair(tmp_path, memory, first, second, learner=None, **options):
+    core = PairCore([first, second])
+    learner = learner or (lambda state, mem, **kw: {"notes": []})
+    bench.learn(core, [SPEC], tmp_path / "out", schema="bench_x", judge=PASS, learner=learner, keep=True,
+                open_memory=lambda name: memory, **options)
+    return json.loads((tmp_path / "out" / "pairs.json").read_text())[0]
+
+
+def test_a_trace_that_never_appears_makes_the_pair_unsafe_never_clean(tmp_path, monkeypatch, memory):
+    monkeypatch.setattr(bench, "TRACE_WAIT", 0)
+    memory.set_id("bescom_account", "BESCOM account number", "1234567890")
+    one = tmp_path / "pass1.json"
+    one.write_text("{}")
+    pair = learn_pair(tmp_path, memory, pass_task(trace_path=str(one)),
+                      pass_task(trace_path=str(tmp_path / "pass2.json")))  # never written
+    assert pair["leaks"] == ["missing trace pass2.json"] and pair["unsafe"] is True
+    assert not bench.learn_summary([row(), pair | {"id": "x"}])["done"]
+    summary = json.loads((tmp_path / "out" / "learn_summary.json").read_text())
+    assert summary["leaks"] == 1 and not summary["done"]
+
+
+def test_a_worker_with_no_trace_path_at_all_is_reported_missing(tmp_path, monkeypatch, memory):
+    monkeypatch.setattr(bench, "TRACE_WAIT", 0)
+    one = tmp_path / "pass1.json"
+    one.write_text("{}")
+    pair = learn_pair(tmp_path, memory, pass_task(trace_path=str(one)), pass_task())
+    assert pair["leaks"] == ["missing trace (pass 2)"] and pair["unsafe"] is True
+
+
+def test_a_trace_written_late_is_still_waited_for_and_read(tmp_path, monkeypatch, memory):
+    monkeypatch.setattr(bench, "TRACE_WAIT", 5)
+    memory.set_id("bescom_account", "BESCOM account number", "1234567890")
+    one, two = tmp_path / "pass1.json", tmp_path / "pass2.json"
+    one.write_text("{}")
+    threading.Timer(0.4, lambda: two.write_text('{"chat": ["1234567890"]}')).start()
+    pair = learn_pair(tmp_path, memory, pass_task(trace_path=str(one)), pass_task(trace_path=str(two)))
+    assert pair["leaks"] == ["pass2.json"]  # read after it arrived: not skipped, not "missing"
+
+
+def test_a_failing_learner_is_recorded_and_pass_2_still_runs(tmp_path, monkeypatch, memory):
+    monkeypatch.setattr(bench, "TRACE_WAIT", 0)
+    one, two = tmp_path / "pass1.json", tmp_path / "pass2.json"
+    one.write_text("{}")
+    two.write_text("{}")
+
+    def broken(state, mem, **kw):
+        raise RuntimeError("reflection is down")
+
+    core = PairCore([pass_task(trace_path=str(one)), pass_task(trace_path=str(two))])
+    bench.learn(core, [SPEC], tmp_path / "out", schema="bench_x", judge=PASS, learner=broken,
+                open_memory=lambda name: memory, keep=True)
+    pair = json.loads((tmp_path / "out" / "pairs.json").read_text())[0]
+    assert pair["learner_error"] == "RuntimeError: reflection is down" and "error" not in pair
+    assert pair["second"]["verdict"] == "pass" and pair["notes"] == 0 and core.passes == []
+
+
+def test_the_core_gets_its_own_memory_back_even_when_pairs_are_dropped(tmp_path, monkeypatch, memory):
+    monkeypatch.setattr(bench, "TRACE_WAIT", 0)
+    monkeypatch.setattr(memory, "drop", lambda: None)
+    core = PairCore([])
+    core.memory = original = object()
+    bench.learn(core, [SPEC], tmp_path / "out", schema="bench_x", judge=PASS, open_memory=lambda name: memory)
+    assert core.memory is original
+
+
+def test_the_time_ratio_uses_unrounded_busy_time():
+    rows = [{**row(), "busy": [40.0, 20.0], "busy_raw": [40.04, 20.9]} for _ in range(10)]  # 0.522, not 0.5
+    numbers = bench.learn_summary(rows)
+    assert numbers["time_ratio"] > 0.5 and not numbers["bar"]["Busy time ≤ 0.50× pass 1"]
+
+
+def test_the_secret_audit_reads_every_stored_table_and_json_escaped_values(tmp_path, memory):
+    memory.set_id("bescom_account", "BESCOM account number", "1234567890")
+    memory.set_id("quoted", "A quoted ID", 'ab"cd\\ef')
+    assert bench.secret_audit(memory, []) == []  # the ids' own events hold only tokens: not flagged
+    memory.run(lambda cur: cur.execute("INSERT INTO facts (kind, text) VALUES ('fact', 'account 1234567890')"))
+    assert bench.secret_audit(memory, []) == ["facts"]
+    memory.run(lambda cur: cur.execute("DELETE FROM facts"))
+    memory.run(lambda cur: cur.execute("INSERT INTO notes (host, text, status) VALUES ('x.com', %s, 'draft')",
+                                       ('type ab"cd\\ef here',)))
+    assert bench.secret_audit(memory, []) == ["notes"]  # the JSON form of the row escapes the quote
+    trace = tmp_path / "t.json"
+    trace.write_text(json.dumps({"chat": ['ab"cd\\ef']}))
+    assert bench.secret_audit(memory, [trace]) == ["notes", "t.json"]

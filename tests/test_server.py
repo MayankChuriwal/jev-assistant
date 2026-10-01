@@ -4,6 +4,7 @@ import json
 import os
 import re
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from fakes import store
@@ -382,3 +383,18 @@ def test_a_bench_schema_never_imports_your_old_profile(tmp_path, monkeypatch, da
         assert memory.ids() == [] and (tmp_path / "profile.json").exists()
     finally:
         memory.drop()
+
+
+def test_learn_and_keep_need_bench(capsys):
+    assert server.main(["--learn"]) == 2 and server.main(["--keep"]) == 2
+    assert "--learn and --keep need --bench" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("keep, dropped", [(False, [True]), (True, [])])
+def test_a_bench_run_that_cannot_start_drops_its_own_schema_unless_kept(monkeypatch, keep, dropped):
+    calls = []
+    stub = SimpleNamespace(drop=lambda: calls.append(True), hidden_values=lambda: [])
+    monkeypatch.setattr(server, "open_memory", lambda **options: stub)
+    monkeypatch.setattr(server, "chrome", lambda: 1)  # Chrome won't start: serve stops before the chat
+    spec = {"path": "x", "only": None, "repeat": 1, "unseen": 0, "seed": 1, "learn": False, "keep": keep}
+    assert server.serve(bench=spec) == 1 and calls == dropped

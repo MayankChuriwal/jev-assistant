@@ -630,6 +630,9 @@ def main(argv=None):
     parser.add_argument("--learn", action="store_true", help="with --bench: run each task twice and measure the gain")
     parser.add_argument("--keep", action="store_true", help="with --bench: keep the bench's memory schemas")
     args = parser.parse_args(argv)
+    if (args.learn or args.keep) and not args.bench:
+        print("jev: --learn and --keep need --bench", file=sys.stderr)
+        return 2
     if args.command == "chrome":
         return chrome()
     if args.command == "probe":
