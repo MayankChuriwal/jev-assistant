@@ -451,8 +451,10 @@ class Memory:
         return [r for r in self.live_rules() if here == r["site"] or here.endswith("." + r["site"])]
 
     def used(self, rule_id):
-        self.run(lambda cur: cur.execute("UPDATE approvals SET uses = uses + 1, last_used_at = now() WHERE id = %s",
-                                         (rule_id,)))
+        """Count one use of a rule, only while it is live: True when it was, False when it was revoked or expired."""
+        return self.run(lambda cur: cur.execute(
+            "UPDATE approvals SET uses = uses + 1, last_used_at = now() WHERE id = %s AND revoked_at IS NULL "
+            "AND expires_at > now() RETURNING id", (rule_id,)).fetchone()) is not None
 
     # ---- learned site notes
 

@@ -376,3 +376,14 @@ def test_the_task_words_and_notes_and_habits_never_hold_a_plain_id(memory):
         "UNION ALL SELECT to_jsonb(h) FROM habits h UNION ALL SELECT to_jsonb(e) FROM events e "
         "WHERE e.ref NOT LIKE 'ids:%'").fetchall()]))
     assert "9876543210" not in dump and "recharge [profile:phone]" in dump
+
+
+def test_a_standing_approval_is_counted_only_while_it_is_live(memory):
+    rule = memory.approve("swiggy.com", [{"item": "diet coke 300 ml", "qty": 1}], 100, "Don't ask next time")
+    assert memory.used(rule) is True and memory.live_rules()[0]["uses"] == 1
+    memory.run(lambda cur: cur.execute("UPDATE approvals SET expires_at = now() - interval '1 minute'"))
+    assert memory.used(rule) is False
+    assert memory.run(lambda cur: cur.execute("SELECT uses FROM approvals").fetchone())["uses"] == 1
+    other = memory.approve("swiggy.com", [{"item": "atta 1 kg", "qty": 1}], 100, "Don't ask next time")
+    memory.forget(f"rule:{other}")
+    assert memory.used(other) is False and memory.used(10**6) is False

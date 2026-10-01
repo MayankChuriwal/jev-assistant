@@ -1241,3 +1241,67 @@ def test_a_standing_approval_that_cannot_be_read_or_recorded_is_not_used(monkeyp
     with pytest.raises(Retry, match="did not approve"):
         gate.approved(w, page, PAY, "Pay ₹79", None)
     assert len(w.asked) == 1 and not any(line.startswith("Placing") for line in w.said)
+
+
+# ---- Plan 7 Task 5 fix round 1: an item the cart reading missed never rides along under a standing approval
+
+LAYS_QTY = "\nLays Classic 52 g\n₹20\nQty: 1"
+
+
+def stray_lines():
+    lays = "Lays Classic 52 g"
+    return {"a quantity stepper": SHOP + f"\n{lays}\n−\n1\n+",
+            "a stepper written plus first": SHOP + f"\n{lays}\n+\n1\n−",
+            "a price line between an item and its Qty": SHOP + LAYS_QTY,
+            "the same item on two lines": SHOP.replace("Delivery", "Diet Coke 300 ml × 1 — ₹40\nDelivery"),
+            "an item count that fits nothing": SHOP + "\n3 items",
+            "an upsell with a price": SHOP + "\nJoin Pass ₹99",
+            "a stray priced item line": SHOP + f"\n{lays} ₹20",
+            "a stray item with its price on the next line": SHOP + f"\n{lays}\n₹20"}
+
+
+@pytest.mark.parametrize("probe", list(stray_lines()))
+def test_a_standing_approval_never_covers_a_cart_with_something_the_reading_missed(monkeypatch, memory, probe):
+    w, page, _ = with_rule(monkeypatch, memory, text=stray_lines()[probe])
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert len(w.asked) == 1 and not any(line.startswith("Placing") for line in w.said)
+    assert memory.live_rules()[0]["uses"] == 0 and w.state["approval"] is None
+
+
+def test_a_qty_line_reads_the_item_above_its_price_and_a_matching_count_still_applies(monkeypatch, memory):
+    assert gate.cart(SHOP + LAYS_QTY) == COKE + [{"item": "lays classic 52 g", "qty": 1}]
+    w, page, _ = with_rule(monkeypatch, memory, text=SHOP + "\n1 item")  # a count equal to the cart is no hint
+    assert gate.approved(w, page, PAY, "Pay ₹79", None) is True
+
+
+def test_the_same_item_on_two_lines_is_not_one_item(monkeypatch, memory):
+    text = SHOP.replace("Delivery", "Diet Coke 300 ml × 1 — ₹40\nDelivery")
+    w, page, _ = with_rule(monkeypatch, memory, text=text)
+    assert gate.standing(w, {"total": "₹79"}, page) is None
+    w, page, _ = with_rule(monkeypatch, memory, text=SHOP)
+    assert gate.standing(w, {"total": "₹79"}, page)["cart"] == COKE
+
+
+def test_a_standing_approval_revoked_before_it_is_counted_is_not_used(monkeypatch, memory):
+    w, page, rule = with_rule(monkeypatch, memory)
+    real = memory.used
+
+    def revoked_first(rule_id):
+        memory.forget(f"rule:{rule}")  # between reading the rule and counting its use
+        return real(rule_id)
+
+    monkeypatch.setattr(memory, "used", revoked_first)
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert len(w.asked) == 1 and not any(line.startswith("Placing") for line in w.said)
+    assert w.state["approval"] is None
+
+
+@pytest.mark.parametrize("broken", ["rules_for", "used"])
+def test_a_standing_approval_error_is_asked_about_and_kept_for_the_trace(monkeypatch, memory, broken):
+    w, page, _ = with_rule(monkeypatch, memory)
+    monkeypatch.setattr(memory, broken, lambda *a: (_ for _ in ()).throw(RuntimeError("database down")))
+    with pytest.raises(Retry):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert w.state["standing_error"] == "database down" and w.said == []

@@ -53,6 +53,9 @@ UNIT = re.compile(r"\s?(?:ml|ltrs?|litres?|liters?|l|g|gms?|grams?|kgs?|mg|oz|lb
 ITEM_AFTER = re.compile(r"^(?P<item>.*?[^\W\d_].*?)\s*(?:×|(?<=\s)[xX])\s*(?P<qty>\d{1,3})(?![\d.,])(?!" +
                         UNIT.pattern + ")", re.IGNORECASE)  # "Diet Coke 300 ml × 2"; never "Box x 200ml"
 ITEM_BEFORE = re.compile(r"^(?P<qty>\d{1,3})\s*(?:×|[xX](?=\s))\s*(?P<item>.*[^\W\d_].*)$", re.IGNORECASE)  # "2 x Atta"
+MINUS = {"-", "−", "–", "—"}  # the stepper signs around a quantity: "−", "1", "+"
+BILL_LINE = re.compile(r"\b(?:delivery|handling|platform|packaging|convenience|surge|small cart|late night|rain|"
+                       r"service|tips?|fees?|charges?|taxes|tax|gst|cess)\b", re.IGNORECASE)  # a fee or tax on the bill
 QTY_LINE = re.compile(r"^(?:qty|quantity)\s*:?\s*(?P<qty>\d{1,3})$", re.IGNORECASE)  # "Qty 2" under the item's line
 TICKING = re.compile(  # a clock or a countdown changes by itself: these tokens, and their number, are not money
     r"\b\d{1,2}:\d{2}(?::\d{2})?\b|\b(?<![\d,.])\d+(?:\.\d+)?\s*(?:mins?|minutes?|secs?|seconds?|hrs?|hours?|left)\b|"
@@ -307,20 +310,37 @@ def item_name(text):
     return " ".join(re.sub(r"[—–|:,]+|\s-\s", " ", text).lower().split()).strip(" -")
 
 
-def cart(text):
-    """The cart lines the page shows, as items and quantities: "Diet Coke 300 ml × 2", "2 x Atta 1 kg", or "Qty 2"
-    under the item's own line. Each item once; [] when none can be read, and then no standing approval applies."""
-    lines = flat(text).splitlines()
-    found = []
+def has_words(line):
+    """Whether a line says anything besides prices, numbers, and stepper signs."""
+    return bool(re.search(r"[^\W\d_]", rules.PRICE.sub(" ", line)))
+
+
+def read_cart(lines):
+    """Every cart line the page text shows as (item, quantity), in page order, and the indexes of the lines used:
+    "Diet Coke 300 ml × 2", "2 x Atta 1 kg", or "Qty 2" under the item's own line (the nearest line above with words:
+    a price line between them is skipped)."""
+    found, used = [], set()
     for i, line in enumerate(lines):
         if m := QTY_LINE.match(line):
-            item = item_name(lines[i - 1]) if i else ""
+            j = i - 1
+            while j >= 0 and not has_words(lines[j]):
+                j -= 1
+            item = item_name(lines[j]) if j >= 0 else ""
+            lead = {i, j}
         elif m := ITEM_BEFORE.match(line) or ITEM_AFTER.match(line):
-            item = item_name(m["item"])
+            item, lead = item_name(m["item"]), {i}
         else:
             continue
         if item and int(m["qty"]):
             found.append((item, int(m["qty"])))
+            used |= lead
+    return found, used
+
+
+def cart(text):
+    """The cart lines the page shows, as items and quantities (`read_cart`). Each item once; [] when none can be
+    read, and then no standing approval applies."""
+    found, _ = read_cart(flat(text).splitlines())
     return [{"item": item, "qty": qty} for item, qty in dict.fromkeys(found)]
 
 
@@ -470,19 +490,51 @@ def preauthorised(state, found, page):
             and worst(page["text"]) <= state["cap"])
 
 
+def stepper(lines):
+    """Whether the page shows a quantity stepper ("−", "1", "+"): a cart line `cart` cannot read."""
+    return any(lines[i] in MINUS and lines[i + 2] == "+" or lines[i] == "+" and lines[i + 2] in MINUS
+               for i in range(len(lines) - 2) if re.fullmatch(r"\d{1,3}", lines[i + 1]))
+
+
+def unread_money(lines, used, page, value):
+    """Whether a line with a price on it is none of: a cart line `read_cart` used, a fee, tax, total, saving, or other
+    remark on the bill, or a page control that costs this payable total ("Pay ₹79") - an item the cart reading missed,
+    or an upsell. A line of only a price belongs to the line above it, and counts when that one does."""
+    labels = {" ".join(tight(a.get("label") or "").lower().split()) for a in page.get("actions", [])
+              if amount(a.get("label") or "") == value}
+    above = False  # whether the last line with words was a counted one
+    for i, line in enumerate(lines):
+        if has_words(line):
+            above = i in used or bool(BILL_LINE.search(line) or TOTAL.search(line) or PAYABLE.search(line)
+                                      or NOT_TOTAL.search(line) or EXEMPT.search(line)
+                                      or " ".join(tight(line).lower().split()) in labels)
+            if not above and PRICES.search(line):
+                return True
+        elif PRICES.search(line) and not above:
+            return True
+    return False
+
+
 def standing(w, found, page):
     """The live standing approval that covers this checkout, or None: a rule for this site whose cart is the page's
-    cart, with the payable total and every money line within its cap."""
+    cart, with the payable total and every money line within its cap. The page must also show nothing the cart
+    reading missed (a quantity stepper, an item counted twice or another count of items, a priced line that is no cart
+    line, fee, or total): then the cart may hold more than the rule approved, and the gate asks."""
     if w.memory is None or found["total"] is None:
         return None
-    value, items = amount(found["total"]), cart(page["text"])
-    if value is None or not items:
+    value, lines = amount(found["total"]), flat(page["text"]).splitlines()
+    raw, used = read_cart(lines)
+    names, items = [item for item, _ in raw], cart(page["text"])
+    if value is None or not items or len(set(names)) != len(names) or stepper(lines) or any(
+            int(n) not in {len(names), sum(q for _, q in raw)} for n in ITEMS.findall("\n".join(lines))) \
+            or unread_money(lines, used, page, value):
         return None
     here = skills.bare(rules.host(page["url"]).lower())
     try:
         live = w.memory.rules_for(here)
-    except Exception:
-        return None  # memory unreachable: no rule can be checked, so ask
+    except Exception as error:
+        w.state["standing_error"] = str(error)[:200]  # memory unreachable: no rule can be checked, so ask
+        return None
     return next((rule for rule in live if same_cart(rule["cart"], items)
                  and value <= rule["cap"] and worst(page["text"]) <= rule["cap"]), None)
 
@@ -532,8 +584,10 @@ def approved(w, page, action, label, subgoal):
             s["standing_shadow"] = covered = True  # asked anyway until pre-approval is switched on
         else:
             try:
-                w.memory.used(rule["id"])
-            except Exception:
+                if not w.memory.used(rule["id"]):
+                    rule = None  # revoked or expired since it was read: ask
+            except Exception as error:
+                s["standing_error"] = str(error)[:200]
                 rule = None  # a use that can't be recorded is not a use: ask
             if rule:
                 w.say(f"Placing your usual {rule['site']} order ({tight(found['total'])}) under your "
