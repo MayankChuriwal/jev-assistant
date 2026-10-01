@@ -278,7 +278,7 @@ class Memory:
         if kind not in FACT_KINDS:
             raise ValueError(f"Unknown kind of fact: {kind}")
         raw = f"{str(label or '').strip()} {str(text or '').strip()}"
-        text, label, source = self.hide(text), self.hide(label), self.hide(source)
+        text, label, source, task = self.hide(text), self.hide(label), self.hide(source), self.hide(task)[:200]
         if not text:
             raise ValueError("A fact needs words.")
         # the raw words too: a short ID inside a card number would leave a placeholder where its digits were
@@ -295,7 +295,7 @@ class Memory:
                 return same["id"]
             fact = cur.execute("INSERT INTO facts (kind, label, text, tags, data, source, task) VALUES "
                                "(%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-                               (kind, label, text, tags, Jsonb(data or {}), source, str(task)[:200])).fetchone()["id"]
+                               (kind, label, text, tags, Jsonb(data or {}), source, task)).fetchone()["id"]
             if supersede:
                 cur.execute("UPDATE facts SET superseded_by = %s WHERE kind = %s AND label = %s AND id <> %s "
                             "AND superseded_by IS NULL", (fact, kind, label, fact))
@@ -457,9 +457,11 @@ class Memory:
     # ---- learned site notes
 
     def draft_notes(self, host, lines, task=""):
+        task, lines = self.hide(task)[:200], [self.hide(line) for line in lines]
+
         def work(cur):
             return [cur.execute("INSERT INTO notes (host, text, status, task) VALUES (%s, %s, 'draft', %s) "
-                                "RETURNING id", (host, line, str(task)[:200])).fetchone()["id"] for line in lines]
+                                "RETURNING id", (host, line, task)).fetchone()["id"] for line in lines]
 
         return self.run(work)
 
@@ -503,6 +505,7 @@ class Memory:
     def record_habit(self, habit, actor="agent"):
         """Keep a verified run. The same live site, skill, and goal (case and spaces aside) becomes a new version of
         it; an empty cart never replaces a known one. Returns the habit's id."""
+        habit = {**habit, "goal": self.hide(habit["goal"]), "title": self.hide(habit["title"])}
         key = " ".join(habit["goal"].lower().split())
         values = (habit["title"][:80], habit["goal"], habit["start"], Jsonb(habit["plan"]), Jsonb(habit["steps"]))
         cart = Jsonb(habit.get("cart") or [])

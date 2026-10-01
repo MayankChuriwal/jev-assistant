@@ -364,3 +364,15 @@ def test_only_a_missing_database_is_created_and_connecting_has_a_timeout(databas
     with pytest.raises(StoreError, match="isn't reachable"):
         Memory.open(database_url, schema="t_norole", key=TEST_KEY)
     assert made == [] and seen == [10]
+
+
+def test_the_task_words_and_notes_and_habits_never_hold_a_plain_id(memory):
+    memory.set_id("phone", "phone number", "9876543210")
+    memory.remember("preference", "Likes it cold", task="recharge 9876543210")
+    memory.draft_notes("zeptonow.com", ["Use 9876543210 to sign in"], task="recharge 9876543210")
+    memory.record_habit({**HABIT, "goal": "Recharge 9876543210", "title": "Recharge 9876543210"})
+    dump = memory.run(lambda cur: json.dumps([r["row"] for r in cur.execute(
+        "SELECT to_jsonb(t) AS row FROM facts t UNION ALL SELECT to_jsonb(n) FROM notes n "
+        "UNION ALL SELECT to_jsonb(h) FROM habits h UNION ALL SELECT to_jsonb(e) FROM events e "
+        "WHERE e.ref NOT LIKE 'ids:%'").fetchall()]))
+    assert "9876543210" not in dump and "recharge [profile:phone]" in dump

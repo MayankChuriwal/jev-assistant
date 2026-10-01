@@ -799,6 +799,7 @@ class Worker:
         label = (LABELS.get(key) or next((v["field"].strip() for v in values if f"[profile:{key}]" in v["text"]
                                           and v["field"].strip()), None)
                  or (action or {}).get("label") or key.replace("_", " "))
+        label = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", label).split())[:60] or key.replace("_", " ")
         if not storable(label):
             raise Retry(f"“{label}” is never kept or asked for this way: the system asks for codes and card details "
                         "itself.")
@@ -975,7 +976,10 @@ class Worker:
             raise StalePage("The user cancelled or changed the task. Decide again.")
 
     def hidden_details(self):
-        return [value for value, _ in self.memory.hidden_values()]  # screenshots blur them where the page shows them
+        """Every ID value this task knows, for screenshots to blur where a page shows it: what memory holds now, and
+        what this task's registry still hides (an ID kept for this task only, or forgotten while it ran)."""
+        held = [value for value, _ in self.memory.hidden_values()]
+        return held + [v for v in self.secrets.values_for("[profile:") if v not in held]
 
     # ---- records
 

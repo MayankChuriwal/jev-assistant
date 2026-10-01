@@ -95,6 +95,10 @@ class Secrets:
             pattern = r"(?<!\w)" + re.escape(value) + r"(?!\w)"
         self.values[value] = (re.compile(pattern, re.IGNORECASE), placeholder)
 
+    def values_for(self, prefix):
+        """The registered values whose placeholder starts with `prefix` ("[profile:" for the user's IDs)."""
+        return [value for value, (_, placeholder) in self.values.items() if placeholder.startswith(prefix)]
+
     def text(self, s):
         if s.startswith("data:image/"):
             return s

@@ -94,3 +94,14 @@ def test_the_agent_chrome_isolates_every_origin():
     """Same-site frames from another origin (payments.site.com inside m.site.com) get their own process, so the
     agent can read them like any other cross-origin frame."""
     assert "--enable-features=StrictOriginIsolation" in server.chrome_command()
+
+
+def test_a_memory_that_cannot_open_is_explained_and_not_used(monkeypatch, capsys):
+    from assistant.memory import Memory, StoreError
+
+    def refuse(*_args, **_kwargs):
+        raise StoreError("Postgres isn't running. Start it.")
+
+    monkeypatch.setattr(Memory, "open", refuse)
+    assert server.open_memory() is None
+    assert "jev: Postgres isn't running. Start it." in capsys.readouterr().err

@@ -1065,3 +1065,19 @@ def test_an_id_that_is_never_kept_is_used_for_this_task_only(tmp_path, monkeypat
     assert any("for this task only" in m["text"] for m in w.told)
     with pytest.raises(KeyError):
         w.memory.id_value("consumer_number")
+    assert w.secrets.text("no. 4111 1111 1111 1111") == "no. [profile:consumer_number]" and "ids" not in w.snapshot()
+
+
+def test_screenshots_blur_an_id_kept_for_this_task_only_and_one_forgotten_mid_task(tmp_path):
+    w = worker_with(tmp_path, replies=[{"text": "4111 1111 1111 1111"}], profile={"email": "me@example.com"})
+    w.profile_value("consumer_number")
+    assert "4111 1111 1111 1111" in w.hidden_details() and "me@example.com" in w.hidden_details()
+    w.memory.forget("id:email")
+    assert "me@example.com" in w.hidden_details() and "4111 1111 1111 1111" in w.hidden_details()
+
+
+def test_a_label_taken_from_the_page_is_cleaned_and_capped(tmp_path):
+    w = worker_with(tmp_path, replies=[{"text": "ABC-123"}])
+    w.profile_value("shop_code", {"label": "Your\nshop\tcode " + "x" * 100})
+    assert len(w.asked[0]["text"].split("What's your ")[1].split("? It stays")[0]) == 60
+    assert "\n" not in w.asked[0]["text"] and "\t" not in w.asked[0]["text"]
