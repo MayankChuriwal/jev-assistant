@@ -35,3 +35,22 @@ def test_long_pages_are_trimmed():
                                                 for n in range(1, 200)])
     seen = views.view(page, None)
     assert len(seen["text"]) == views.TEXT and len(seen["elements"]) == views.ELEMENTS
+
+
+def test_the_loop_signature_reads_the_elements_and_the_path_not_the_text():
+    page = fake_page(text="Search “milk”", url="https://x.test/home?ref=1", actions=[A, B])
+    rotated = fake_page(text="Search “bread”\nDelivery in 9 minutes", url="https://x.test/home?ref=2", actions=[A, B])
+    assert views.signature(page) == views.signature(rotated)  # text that rotates or ticks is no new page
+    opened = fake_page(text="Search “milk”", url="https://x.test/home", actions=[A, B, T1])
+    elsewhere = fake_page(text="Search “milk”", url="https://x.test/cart", actions=[A, B])
+    typed = fake_page(text="Search “milk”", url="https://x.test/home", actions=[A, {**B, "value": "Indiranagar"}])
+    assert len({views.signature(p) for p in (page, opened, elsewhere, typed)}) == 4
+
+
+def test_the_loop_signature_ignores_counters_and_rotating_placeholders_in_labels():
+    def search(words, minutes):
+        return fake_page(actions=[{**A, "label": f'Search for "{words}"'},
+                                  {**T1, "label": f"Delivery in {minutes} minutes (1 of {minutes})"}])
+
+    assert views.signature(search("Fruits", 8)) == views.signature(search("Atta", 9))
+    assert views.signature(search("Fruits", 8)) != views.signature(fake_page(actions=[A, T1]))

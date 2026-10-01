@@ -114,7 +114,9 @@ def test_the_same_errand_replays_its_habit_to_the_approval_without_the_planner(c
     start = turn(subgoals=[sub("sign in and place the order", "the order is placed",
                                values=[("phone number", "[profile:phone]")])])
     done = turn("DONE", message="Order placed #A1B2, arriving in 12 minutes.", text="Order placed #A1B2")
-    first, seen_one, sent_one, _ = shop_run(site, tmp_path, memory, monkeypatch, turns=[start, turn(), done])
+    # Jev is unsure about Office once: the planner picks it (a CONTINUE back to an unsure Jev is refused)
+    first, seen_one, sent_one, _ = shop_run(site, tmp_path, memory, monkeypatch,
+                                            turns=[start, turn("PICK", pick=1), done])
     learn.after(first.state, memory, reflect=lambda digest: ([], []))
     habit = memory.habits(skill="groceries")[0]
     second, seen_two, sent_two, unsure_two = shop_run(site, tmp_path, memory, monkeypatch, turns=[done], habit=habit)

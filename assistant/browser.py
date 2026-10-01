@@ -207,6 +207,10 @@ class ExecutionUncertain(RuntimeError):
     """Input may already have reached the page. Never retried: the task stops and reports it."""
 
 
+class TabsClosed(RuntimeError):
+    """The task's tab is gone (closed by the site, the user, or Chrome): there is no page left to work on."""
+
+
 class EventPump:
     """Drains Browser Harness's one shared event buffer and routes each event by CDP session id."""
 
@@ -360,7 +364,10 @@ class Browser:
 
     @property
     def session(self):
-        return self.tabs[self.active]
+        try:
+            return self.tabs[self.active]
+        except KeyError:
+            raise TabsClosed("The task's browser tab has closed.") from None
 
     def call(self, method, session=None, *, timeout=5.0, **params):
         return cdp(method, session_id=session or self.session, _response_timeout=timeout, **params)
@@ -949,7 +956,7 @@ class Browser:
                 except RuntimeError:  # it closed while being adopted, like a tab that only started a download
                     self._forget(target)
         if self.active is None:
-            raise RuntimeError("Every tab of this task has closed.")
+            raise TabsClosed("Every tab of this task has closed.")
         self.titles = {t: pages[t]["title"] or pages[t]["url"] for t in self.tabs if t in pages}
 
     def _active_sessions(self):

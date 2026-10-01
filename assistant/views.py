@@ -1,10 +1,16 @@
 """What mini sees of a page: a short numbered element list (new elements starred), trimmed text, and one line
-saying what the last step changed."""
+saying what the last step changed. Also the page as the loop guard compares it."""
+
+import hashlib
+import re
+from urllib.parse import urlparse
 
 from .model import action_space
 
 ELEMENTS = 120
 TEXT = 3000
+QUOTED = re.compile(r"[\"“][^\"”]*[\"”]")  # a rotating placeholder: Search for "Atta"
+NUMBER = re.compile(r"\d+")  # a counter, a timer, a carousel's "1 of 3"
 
 
 def lines(page):
@@ -46,3 +52,17 @@ def change(before, after):
     if fresh:
         parts.append("new text: " + " | ".join(fresh))
     return "; ".join(parts) or "nothing changed"
+
+
+def calm(text):
+    """Text as the loop guard compares it: numbers and quoted words dropped, so what ticks or rotates stays the same."""
+    return " ".join(NUMBER.sub("#", QUOTED.sub("“”", str(text or ""))).lower().split())
+
+
+def signature(page):
+    """The page as the loop guard tells pages apart: its URL path and its elements (role, label, value, state), not
+    its text, and with counters and rotating placeholders ignored. Two reads with the same signature offer the same
+    controls in the same state, however much the text around them changed."""
+    elements, _, _ = action_space(page["actions"])
+    shown = sorted({line({**e, "label": calm(e["label"]), "value": calm(e.get("value"))}) for e in elements})
+    return hashlib.sha256("\n".join([urlparse(page["url"]).path, *shown]).encode()).hexdigest()[:16]

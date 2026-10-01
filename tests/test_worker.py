@@ -958,8 +958,10 @@ def test_the_planner_saying_continue_to_a_jev_that_thinks_is_bounded_by_ticks(tm
 
 
 def test_an_executed_step_resets_the_count_of_idle_ticks(tmp_path, monkeypatch):
-    w = worker_with(tmp_path)
-    script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]), turn())
+    w = worker_with(tmp_path, goal="Find the Office address on the shop")
+    office, home = sub("choose the Office address"), sub("pick the Home radio button")
+    # Each answer to an unsure Jev gives Jev another subgoal, so its CONTINUE is taken: an idle tick, not a refusal.
+    script_planner(monkeypatch, *[turn(subgoals=[(office, home)[n % 2]]) for n in range(16)])
     script_jev(monkeypatch, *([{"next": "THINK"}] * 6), {"next": "CLICK", "click_target": "Office"},
                {"next": "THINK"})
     jev_checks(monkeypatch)
@@ -1597,3 +1599,279 @@ def test_continue_on_a_subgoal_only_the_planner_can_do_is_refused_then_replanned
             assert "ending with the commit step" in w.state["feedback"][-1] and w.state["reason"] == "replan"
     assert len(w.asked) == 1 and "I'm stuck" in w.asked[0]["text"] and w.state["reason"] == "reply"
     assert not w.browser.act.called
+
+
+# ---- live bench fixes, batch A: loops on pages that keep changing, plans that keep their middle, safer asks
+
+
+def rotating(actions):
+    """A page whose text changes on every look (a rotating search placeholder) while its controls stay the same."""
+    looks = iter(range(1000))
+    return lambda *a, **k: fake_page(text=f"Shop\nSearch “item {next(looks)}”", actions=actions)
+
+
+def test_jevs_pick_that_ran_three_times_from_the_same_controls_is_not_run_again(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(actions=BUTTONS))
+    w.browser.observe.side_effect = rotating(BUTTONS)  # every click "changes" the page: only its text
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("choose Office")]))
+    script_jev(monkeypatch, {"next": "CLICK", "click_target": ("Office", 0.8)})
+    jev_checks(monkeypatch)
+    for _ in range(5):
+        w.command("tick")
+    labels = pressed(w)
+    assert labels[:3] == ["Office"] * 3 and labels[3] != "Office" and len(labels) == 4  # then Jev's next-best once
+    assert all(h["page_changed"] for h in w.state["history"])  # the old guard never saw a repeat
+    w.command("tick")
+    assert len(pressed(w)) == 4 and seen[-1]["reason"] == "unsure"
+    assert "“Office” already ran 3 times from this same page" in seen[-1]["feedback"][-1]
+
+
+def test_the_planners_pick_that_ran_three_times_is_refused_then_the_user_decides(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(actions=BUTTONS), replies=[{"text": "try Home instead"}])
+    w.browser.observe.side_effect = rotating(BUTTONS)
+    script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]), turn("PICK", pick=1))
+    script_jev(monkeypatch, {"next": ("CLICK", 0.4), "click_target": "Office"})  # Jev is unsure every time
+    jev_checks(monkeypatch)
+    for _ in range(5):
+        w.command("tick")
+    assert pressed(w) == ["Office"] * 3 and w.asked == []
+    assert "“Office” already ran 3 times from this same page" in w.state["feedback"][-1]
+    w.command("tick")  # the planner insists: five times on one loop, and the user decides
+    assert pressed(w) == ["Office"] * 3 and len(w.asked) == 1 and "I'm stuck" in w.asked[0]["text"]
+    assert w.state["reason"] == "reply" and w.state["loop_from"] == 3
+
+
+def test_a_loop_asked_about_twice_stops_and_a_reply_that_leaves_it_to_me_keeps_the_count(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(actions=BUTTONS), replies=[{"text": "you choose"}] * 3)
+    w.browser.observe.side_effect = rotating(BUTTONS)
+    script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]), turn("PICK", pick=1))
+    script_jev(monkeypatch, {"next": ("CLICK", 0.4), "click_target": "Office"})
+    jev_checks(monkeypatch)
+    ticks = 0
+    while w.state["status"] not in STOPPED and ticks < 40:
+        w.command("tick")
+        ticks += 1
+    assert w.state["status"] == "blocked" and "going in circles" in w.told[-1]["text"]
+    assert len(w.asked) == 2 and pressed(w) == ["Office"] * 6  # a fresh count after the first answer only
+
+
+def test_a_loop_the_user_was_asked_about_twice_stops_the_next_time_round(tmp_path):
+    from assistant.errors import Halt
+
+    w = worker_with(tmp_path, replies=[{"text": "you choose"}, {"text": "whatever works"}])
+    unchanged = {"operation": "CLICK", "action": "Office", "url": w.state["page"]["url"], "page_changed": False}
+    w.state["history"] = [unchanged] * 8
+    w.track_loop(unchanged)
+    assert len(w.asked) == 1 and w.state["loop_from"] == 8  # the first answer starts a fresh count
+    w.state["history"] += [unchanged] * 8
+    w.track_loop(unchanged)
+    assert len(w.asked) == 2 and w.state["loop_from"] == 8  # a second answer that leaves it to me doesn't
+    w.state["history"].append(unchanged)
+    with pytest.raises(Halt, match="going in circles"):
+        w.track_loop(unchanged)
+    assert len(w.asked) == 2
+
+
+def test_scrolling_is_quiet_until_eight_scrolls_in_a_row_on_one_page(tmp_path):
+    w = worker_with(tmp_path)
+    page, url = w.state["page"], w.state["page"]["url"]
+    scroll = {"operation": "SCROLL_DOWN", "action": "Page", "url": url, "page_changed": True}
+    w.state["history"] = [scroll] * 7
+    assert w.forbidden("SCROLL_DOWN", "Page", page) is None and w.forbidden("WAIT", "Wait", page) is None
+    w.state["history"].append({**scroll, "operation": "SCROLL_UP"})
+    assert "8 scrolls in a row" in w.forbidden("SCROLL_DOWN", "Page", page)
+    w.state["history"].append({**scroll, "operation": "CLICK", "action": "Office"})
+    assert w.forbidden("SCROLL_DOWN", "Page", page) is None
+
+
+def test_the_planner_rewriting_the_same_subgoal_keeps_its_step_count(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, goal="Find the price of Britannia white bread on Blinkit")
+    script_planner(monkeypatch, turn(subgoals=[sub("Search for Britannia white bread")]))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.state.update(subgoal_steps=5, reason="unsure")
+    script_planner(monkeypatch, turn("WAIT", subgoals=[sub("search for Britannia white bread using the search box")]))
+    w.command("tick")
+    assert w.state["subgoal_steps"] == 6  # the same subgoal, reworded: still counting toward the cap
+    w.state.update(subgoal_steps=11, reason="unsure")
+    w.command("tick")
+    assert w.state["subgoal_steps"] == 12
+    seen = script_planner(monkeypatch, turn("WAIT", subgoals=[sub("open the bread section")]))
+    w.command("tick")  # the cap fires at last
+    assert seen[0]["reason"] == "replan" and "12 steps" in seen[0]["feedback"][0]
+    assert w.state["subgoal_steps"] == 1
+    w.state.update(subgoal_steps=5, reason="unsure")
+    script_planner(monkeypatch, turn("WAIT", subgoals=[sub("read the price of the 400 g loaf")]))
+    w.command("tick")
+    assert w.state["subgoal_steps"] == 1  # another subgoal starts its own count
+
+
+@pytest.mark.parametrize("reason", ["unsure", "blocker:sign_in"])
+def test_continue_when_jev_could_not_decide_is_refused(tmp_path, monkeypatch, reason):
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]),
+                   turn(message="I will close the sign-in pop-up."))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.state["reason"] = reason
+    w.command("tick")
+    assert "Jev couldn't decide: PICK a candidate, TYPE, ASK, OPEN_URL, LOOK, WAIT or BACK; CONTINUE does nothing " \
+           "here" in w.state["feedback"][-1]
+    assert w.state["refusals"] == {"CONTINUE::": 1} and w.state["reason"] == "unsure"
+
+
+def test_continue_with_a_new_subgoal_for_jev_is_taken(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, goal="Find the cheapest hotel in Goa on MakeMyTrip")
+    script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]),
+                   turn(subgoals=[sub("close the sign-in pop-up")]))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.state["reason"] = "blocker:sign_in"
+    w.command("tick")
+    assert w.state["feedback"] == [] and w.subgoal()["do"] == "close the sign-in pop-up"
+
+
+def test_an_order_replan_that_drops_the_payment_question_gets_it_back_before_the_commit(tmp_path, monkeypatch):
+    first = [sub("open the cart and view the detailed bill"), sub("choose the payment method", kind="ask"),
+             sub("place the order", kind="commit"), sub("report the order", kind="report")]
+    w, _ = planned_order(tmp_path, monkeypatch, [sub("ask whether to pay the small cart fee", kind="ask"),
+                                                 sub("report the bill", kind="report")], first=first)
+    w.state["current"] = 1  # the cart is open: at the payment question
+    replan(w)
+    assert steps(w) == [("open the cart and view the detailed bill", "act"),
+                        ("ask whether to pay the small cart fee", "ask"), ("choose the payment method", "ask"),
+                        ("place the order", "commit"), ("report the order", "report")]
+
+
+def test_an_order_replan_that_drops_the_shopping_steps_gets_them_back_in_order(tmp_path, monkeypatch):
+    first = [sub("search for Amul Taaza milk 500 ml"), sub("open the product page"), sub("add one pack to the cart"),
+             sub("open the cart"), sub("choose the payment method", kind="ask"), sub("place the order", kind="commit"),
+             sub("report the order", kind="report")]
+    w, _ = planned_order(tmp_path, monkeypatch, [sub("close the location pop-up"),
+                                                 sub("type the phone number into the sign-in field"),
+                                                 sub("press continue to get the code")], first=first)
+    replan(w)
+    assert [do for do, _ in steps(w)] == [
+        "close the location pop-up", "type the phone number into the sign-in field", "press continue to get the code",
+        "search for Amul Taaza milk 500 ml", "open the product page", "add one pack to the cart", "open the cart",
+        "choose the payment method", "place the order", "report the order"]
+
+
+def test_an_order_replan_that_rewrites_a_step_is_not_given_the_old_steps_back(tmp_path, monkeypatch):
+    first = [sub("search for Amul Taaza milk"), sub("open the product page"), sub("place the order", kind="commit"),
+             sub("report the order", kind="report")]
+    w, _ = planned_order(tmp_path, monkeypatch, [sub("search for Amul Taaza milk 500 ml in the groceries box")],
+                         first=first)
+    replan(w)
+    assert [do for do, _ in steps(w)] == ["search for Amul Taaza milk 500 ml in the groceries box", "place the order",
+                                          "report the order"]
+
+
+def test_six_failed_steps_in_a_row_on_one_page_bring_a_replan_once(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("close the pop-up")]), turn("WAIT"))
+    script_jev(monkeypatch, {"next": "CLICK", "click_target": "Office", "effect": "failed"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    url = w.state["page"]["url"]
+    w.state["history"] = [{"step": n, "operation": "CLICK", "action": f"Button {n}", "url": url, "page_changed": True,
+                           **({"effect": "failed"} if n < 6 else {})} for n in range(1, 7)]
+    w.command("tick")
+    assert seen[-1]["reason"] == "replan"
+    assert seen[-1]["feedback"][-1] == ("Six steps in a row changed nothing useful here: try LOOK for the control, "
+                                        "OPEN_URL the target address, or ASK the user.")
+    assert pressed(w) == ["Wait"]
+    w.command("tick")  # the same streak goes on: Jev acts, and the planner isn't told again
+    assert len(seen) == 2 and pressed(w) == ["Wait", "Office"]
+
+
+RIDE_PAGE = [{"id": "p", "kind": "fill", "label": "pickup", "role": "textbox", "value": "", "node": 1},
+             {"id": "l", "kind": "click", "label": "Locate me", "role": "button", "node": 2},
+             {"id": "d", "kind": "fill", "label": "drop", "role": "textbox", "value": "", "node": 3}]
+
+
+def test_a_field_with_no_value_keeps_jevs_other_candidates_and_a_pick_of_it_focuses_it(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text="Pickup\nDrop", actions=RIDE_PAGE))
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("set the pickup to the current location")]),
+                          turn("PICK", pick=1))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "pickup"})
+    jev_checks(monkeypatch)
+    for _ in range(3):  # the plan; Jev types into pickup with no value; the planner picks the field
+        w.command("tick")
+    listed = seen[1]["candidates"]
+    assert listed[0]["element"] == "pickup" and len(listed) > 1 and any("Locate me" in c["element"] for c in listed)
+    assert [c["n"] for c in listed] == list(range(1, len(listed) + 1))
+    assert sum(c["op"] == "TYPE" and "pickup" in c["element"] for c in listed) == 1
+    operation, action = w.browser.act.call_args.args[:2]
+    assert (operation, action["label"]) == ("CLICK", "pickup")  # focused, so the site can offer its own options
+
+
+def test_text_longer_than_the_fields_limit_is_refused_not_cut_short(tmp_path, monkeypatch):
+    field = {"id": "loc", "kind": "fill", "label": "Enter your delivery location", "role": "textbox", "value": "",
+             "node": 6, "constraints": {"maxlength": 30}}
+    w = worker_with(tmp_path, page=fake_page(actions=[field]))
+    script_planner(monkeypatch, turn(subgoals=[sub("set the delivery location")]),
+                   turn("TYPE", pick=1, text="Bhive Workspace, Service Rd, Sector 6, HSR Layout, Bengaluru"))
+    script_jev(monkeypatch, {"next": ("TYPE", 0.4), "type_text_target": "delivery location"})
+    jev_checks(monkeypatch)
+    for _ in range(2):
+        w.command("tick")
+    assert "takes at most 30 characters" in w.state["feedback"][-1] and not w.browser.act.called
+    assert w.value(field, "HSR Layout, Bengaluru", w.state["page"]) == ({"text": "HSR Layout, Bengaluru"},
+                                                                        "HSR Layout, Bengaluru")
+
+
+def test_asking_for_a_code_the_site_has_not_asked_for_is_refused(tmp_path, monkeypatch):
+    page = fake_page(actions=[a for a in fake_page()["actions"] if a["id"] not in {"e2", "e3"}])  # no code field
+    w = worker_with(tmp_path, page=page, replies=[{"text": "123456"}])
+    script_planner(monkeypatch, turn("ASK", message="Please enter the sign-in code (OTP) sent to your phone."))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.asked == [] and w.state["code_asks"] == 0
+    assert "don't ask the user for a code the site hasn't asked for" in w.state["feedback"][-1]
+    script_planner(monkeypatch, turn("ASK", message="What's your card number and expiry date?"))
+    w.command("tick")  # a card detail is not a code: the system asks it hidden, field or not
+    assert len(w.asked) == 1 and w.asked[0]["kind"] == "secret"
+
+
+BLANK = fake_page(text="", actions=[{"id": "wait", "kind": "wait", "label": "Wait", "node": None},
+                                    {"id": "open_url", "kind": "open_url", "label": "Open a web address", "node": None},
+                                    {"id": "c", "kind": "click", "label": "", "role": "generic", "node": 1}])
+
+
+def test_a_blank_page_is_read_again_before_anyone_decides_on_it(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=BLANK)
+    w.browser.observe.side_effect = [BLANK, fake_page()]
+    seen = script_planner(monkeypatch, turn("STOP", message="Nothing to do."))
+    sent = script_jev(monkeypatch, {"next": "THINK"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.browser.observe.call_count == 3 and w.state["blank_waits"] == 0  # two waits, then the real page
+    assert seen[0]["page"]["text"] == fake_page()["text"] and seen[0]["feedback"] == []
+    assert all(state["page"]["text"] for state, _ in sent)  # Jev never read the blank page either
+
+
+def test_a_page_that_stays_blank_reaches_the_planner_as_blank_after_three_waits(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=BLANK)
+    seen = script_planner(monkeypatch, turn("OPEN_URL", text="https://shop.test/"))
+    script_jev(monkeypatch, {"next": "THINK"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.state["blank_waits"] == 4 and w.browser.act.call_count == 1  # three waits, then the planner
+    assert seen[0]["feedback"] == ["The page has stayed blank (no text and no controls) after 3 waits: OPEN_URL "
+                                   "the address you need, go BACK, or ASK the user."]
+    assert pressed(w) == ["Open a web address"]
+
+
+def test_a_tab_that_vanished_stops_the_task_instead_of_crashing_it(tmp_path, monkeypatch):
+    from assistant.browser import TabsClosed
+
+    w = worker_with(tmp_path)
+    w.browser.fresh.side_effect = KeyError(None)  # Browser.session when its tab is gone
+    w.command("tick")
+    assert w.state["status"] == "blocked" and w.told[-1]["text"] == "The browser tab closed, so I stopped."
+    other = worker_with(tmp_path)
+    other.browser.fresh.return_value = False
+    other.browser.observe.side_effect = TabsClosed("Every tab of this task has closed.")
+    other.command("tick")
+    assert other.state["status"] == "blocked" and other.state["errors"] == []

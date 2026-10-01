@@ -121,3 +121,23 @@ def test_repeats_count_only_unchanged_steps_on_the_same_path():
                {"operation": "CLICK", "action": "Add", "url": "https://s.test/q", "page_changed": False},
                {"operation": "CLICK", "action": "Add", "url": "https://s.test/p", "page_changed": True}]
     assert executor.repeats(history, "CLICK", "Add", "https://s.test/p") == 2
+
+
+def test_circles_count_one_action_from_one_page_whatever_each_run_changed():
+    run = {"operation": "CLICK", "action": "Sign In", "spot": "a", "page_changed": True}
+    history = [run, {**run, "page_changed": False}, {**run, "spot": "b"}, {**run, "action": "Close"},
+               {**run, "relayed": True}, {"operation": "TYPE_TEXT", "action": "Search", "spot": "a", "text": "milk"},
+               {"operation": "TYPE_TEXT", "action": "Search", "spot": "a", "text": "bread"}]
+    assert executor.circles(history, "CLICK", "Sign In", "a") == 2
+    assert executor.circles(history, "TYPE_TEXT", "Search", "a", "milk") == 1
+    assert executor.circles(history, "TYPE_TEXT", "Search", "a") == 2  # Jev's own pick: whatever its text
+    assert executor.circles(history, "CLICK", "Sign In", None) == 0
+    assert executor.circles([run] * 25, "CLICK", "Sign In", "a") == 20  # the last 20 steps only
+
+
+def test_scrolls_count_only_the_last_run_on_one_path():
+    down = {"operation": "SCROLL_DOWN", "action": "Page", "url": "https://s.test/p?x=1"}
+    history = [down, {"operation": "CLICK", "action": "Add", "url": "https://s.test/p"}, down,
+               {**down, "operation": "SCROLL_UP"}, {**down, "url": "https://s.test/p?x=2"}]
+    assert executor.scrolls(history, "https://s.test/p") == 3
+    assert executor.scrolls(history, "https://s.test/q") == 0

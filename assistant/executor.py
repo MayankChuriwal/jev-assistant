@@ -16,6 +16,8 @@ TEXT = 2500  # page characters Jev reads
 ELEMENTS = 200  # elements Jev reads
 OPTIONS = 250  # targets per question: Jev takes at most 255 options
 RECENT = 6  # steps Jev reads
+WINDOW = 20  # steps the loop guards look back over
+SCROLLS = {"SCROLL_UP", "SCROLL_DOWN"}
 TARGETED = {"CLICK": ("CLICK", "click_target"), "TYPE": ("TYPE_TEXT", "type_text_target"),
             "SELECT": ("SELECT", "select_target"), "KEY": ("PRESS_KEY", "press_key_target"),
             "SCROLL_UP": ("SCROLL_UP", "scroll_up_target"), "SCROLL_DOWN": ("SCROLL_DOWN", "scroll_down_target"),
@@ -145,5 +147,24 @@ def value(action, values):
 def repeats(history, operation, label, url):
     """How often, among the last 20 steps, this operation on this element changed nothing on this URL path."""
     path = urlparse(url).path
-    return sum(1 for h in history[-20:] if h.get("page_changed") is False and h.get("operation") == operation
+    return sum(1 for h in history[-WINDOW:] if h.get("page_changed") is False and h.get("operation") == operation
                and h.get("action") == label and urlparse(h.get("url", "")).path == path)
+
+
+def circles(history, operation, label, spot, text=None):
+    """How often, among the last 20 steps, this operation on this element ran from the page `spot` names
+    (views.signature: the same URL path and the same controls), whatever each run changed: a page whose text changes
+    on every look, or a pop-up that opens and closes, still counts. `text` (what was typed, or the address opened) is
+    compared when given. A captcha square the user picked never counts."""
+    return sum(1 for h in history[-WINDOW:] if spot and h.get("spot") == spot and h.get("operation") == operation
+               and h.get("action") == label and (text is None or h.get("text") == text) and not h.get("relayed"))
+
+
+def scrolls(history, url):
+    """Scrolls in a row at the end of `history`, all on this URL path."""
+    path, run = urlparse(url).path, 0
+    for h in reversed(history):
+        if h.get("operation") not in SCROLLS or urlparse(h.get("url", "")).path != path:
+            break
+        run += 1
+    return run

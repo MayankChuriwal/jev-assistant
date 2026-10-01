@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from . import executor, gate, jev, learn, planner, replay, rules, skills, views
-from .browser import Browser, ExecutionUncertain, StalePage, unique
+from .browser import Browser, ExecutionUncertain, StalePage, TabsClosed, unique
 from .errors import Halt, Retry
 from .memory import HOME, KEY, LABELS, Memory, StoreError, Unstorable
 from .model import METER, action_space, new_meter, spent
@@ -28,10 +28,19 @@ IDLE_HALT = 16  # ticks in a row with no browser step and no question to the use
 CODE_ASKS = 3
 COMMIT_DROPS = 3  # an order's replan with no commit (none left in the old plan either): refused this often, then taken
 CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
-QUIET = {"WAIT", "SCROLL_UP", "SCROLL_DOWN"}  # repeating these is not going in circles
+QUIET = {"WAIT", "SCROLL_UP", "SCROLL_DOWN"}  # repeating these is not going in circles…
+SCROLLS = 8  # …until this many scrolls in a row on one page: then scrolling has stopped finding anything
+CIRCLE_AT = 3  # one action run this often from the same page (its path and controls) is not run from it again…
+CIRCLE_ASK = 5  # …and once its runs and the planner's refused tries reach this, the user decides
+LOOP_ASKS = 2  # questions about one loop: the next time it comes round, the task stops
+FRUITLESS = 6  # steps in a row Jev judged failed on one page: the planner hears it, once a streak
+BLANK_WAITS = 3  # reads of a blank page before the planner hears it is blank
+TYPED = {"TYPE_TEXT", "OPEN_URL"}  # what these typed or opened is part of the action
+CONTAINERS = {"", "generic", "group", "region", "main", "document", "presentation", "none", "section", "article",
+              "application"}
 TALKING = {"ASK", "TELL", "DONE", "STOP"}
 TRACE_STEP = ("step", "subgoal", "operation", "action", "title", "text", "key", "files", "page_changed", "url",
-              "changed", "effect", "committed", "approved", "elapsed_ms", "unconfirmed")
+              "changed", "effect", "committed", "approved", "elapsed_ms", "unconfirmed", "spot")
 PLACEHOLDER = re.compile(r"\[(profile|secret):([\w.]+)\]")
 CODE_WORDS = re.compile(r"\b(otp|passcode|password|cvv|pin(?![\s-]?code)|"  # a PIN code or promo code is no secret
                         r"(?<!pin )(?<!pin-)(?<!promo )(?<!zip )(?<!postal )code)\b", re.IGNORECASE)
@@ -39,6 +48,8 @@ DELEGATE = re.compile(r"\b(you (choose|decide|pick)|whatever (you|fits|works|is)
                       r"up to you|your (choice|call)|doesn'?t matter)\b", re.IGNORECASE)
 PLACE = re.compile(r"\b(address|deliver(y)? (to|location|address)|where (should|do you want|to deliver|are you)|"
                    r"pick ?-?up (location|point|address|from)|drop(-| )?off|drop location)\b", re.IGNORECASE)
+FILLER = {"a", "an", "the", "and", "or", "to", "of", "for", "in", "on", "at", "by", "with", "from", "into", "as", "is",
+          "it", "its", "if", "then", "that", "this", "s", "your", "my", "user", "users"}
 PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGNORECASE),
                 "email": re.compile(r"\b(your e-?mail|e-?mail (address|id))\b", re.IGNORECASE),
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
@@ -74,18 +85,44 @@ def step_words(subgoal):
     return " ".join(subgoal["do"].lower().split())
 
 
+def gist(text):
+    return set(re.findall(r"[a-z0-9]+", text.lower())) - FILLER
+
+
+def shares(a, b, by=min):
+    """Whether two subgoals' words overlap by at least half: of the shorter one's (by=min, "one is mostly the other"),
+    or of the longer one's (by=max, "they are the same step")."""
+    x, y = gist(a), gist(b)
+    return bool(x and y) and len(x & y) / by(len(x), len(y)) >= 0.5
+
+
+def blank(page):
+    """Whether a page shows nothing to decide on: no text, and no control but at most one empty container (an app
+    still loading, a passkey prompt drawn outside the page)."""
+    if page.get("text", "").strip() or page.get("dialog"):
+        return False
+    elements, _, _ = action_space(page["actions"])
+    return len(elements) <= 1 and all(e.get("role", "") in CONTAINERS or not e["label"].strip() for e in elements)
+
+
 def with_commit(subgoals, rest):
     """A replan that left the commit out, repaired: the new subgoals, then the old plan's `rest` from its first commit
     subgoal on (the commit, the report). The new plan's closing reports move after the commit, or go when the old tail
-    has its own; a step written in both is kept once, and as the commit when the old tail has it as one."""
-    tail = rest[next(i for i, g in enumerate(rest) if g["kind"] == "commit"):]
+    has its own; a step written in both is kept once, and as the commit when the old tail has it as one. A replan that
+    is shorter than the old rest and has no step resembling any act or ask step the old plan still had before the
+    commit dropped those steps rather than replaced them: they come back, in their old order, before the commit."""
+    first = next(i for i, g in enumerate(rest) if g["kind"] == "commit")
+    tail = rest[first:]
+    middle = [g for g in rest[:first] if g["kind"] in {"act", "ask"}]
+    if len(subgoals) >= len(rest) or any(shares(new["do"], old["do"]) for new in subgoals for old in middle):
+        middle = []
     end = len(subgoals)
     while end and subgoals[end - 1]["kind"] == "report":
         end -= 1
     if not any(g["kind"] == "report" for g in tail):
         tail = tail + subgoals[end:]
     commits = {step_words(g) for g in tail if g["kind"] == "commit"}
-    head = [g for g in subgoals[:end] if step_words(g) not in commits]
+    head = [g for g in subgoals[:end] if step_words(g) not in commits] + middle
     have = {step_words(g) for g in head}
     return head + [g for g in tail if g["kind"] == "commit" or step_words(g) not in have]
 
@@ -109,6 +146,7 @@ class Worker:
     processing_ms = 300000  # how long to watch a commit the site is still working on
     outcome_pause = 5.0  # seconds between looks at that commit
     quiet_wait = 1.5  # seconds to keep looking when a step seems to have changed nothing
+    blank_pause = 1.0  # seconds before a blank page is read again
     bench = False  # a bench run: a pre-authorisation is logged, never used
 
     def __init__(self, url, goal, *, asker=None, notify=None, memory=None, habit=None, sameness=None, browser=None,
@@ -157,7 +195,7 @@ class Worker:
             captcha_rounds=0, meter=new_meter(), escalations={}, margins=[], situations=[], uploaded=[], held=None,
             told_at=None, delegated_at=None, relaying=False, skill=None, preauth=False, cap=None, site="",
             cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None, closed=False,
-            commit_drops=0,
+            commit_drops=0, idle_asked=0, circled={}, loops={}, fruitless=None, blank_waits=0,
         )
 
     # ---- what the user and the models see
@@ -278,6 +316,8 @@ class Worker:
         except StalePage:
             s["status"] = "ready"
             self.observe()
+        except TabsClosed as error:  # no page left to work on: never a hiccup to retry
+            raise Halt("blocked", f"The browser tab closed, so I stopped.{self.pending()}") from error
         except Retry as why:
             s["feedback"].append(str(why))
             s["reason"] = s["reason"] or "unsure"  # the planner hears it next
@@ -312,10 +352,15 @@ class Worker:
         if s["idle"] > 1:  # the planning tick of every run runs no step; only a second one in a row is idle
             s["idle_ticks"] += 1  # never reset: learning reads it
         if s["idle"] >= IDLE_HALT:
-            raise Halt("blocked", f"I'm going in circles on {rules.host(s['page']['url'])} and stopped. Tell me "
-                                  f"more about what you want, or check the site yourself.{self.pending()}")
-        if s["idle"] == STUCK_AT:
+            raise self.circling()
+        if s["idle"] == STUCK_AT and not s["idle_asked"]:  # asked already since the last step: no second question
             self.stuck()
+
+    def circling(self, after_asking=False):
+        """The stop for a task going round in circles."""
+        asked = " even after asking you," if after_asking else ""
+        return Halt("blocked", f"I'm going in circles on {rules.host(self.state['page']['url'])}{asked} and stopped. "
+                               f"Tell me more about what you want, or check the site yourself.{self.pending()}")
 
     def pending(self):
         """The warning a stop carries while a commit's outcome is unknown."""
@@ -349,7 +394,13 @@ class Worker:
             return None
         self.check_caps()
         s.pop("typing", None)  # a code counts as an attempt only once it is typed
-        page = s["page"] if s["browser"].fresh(s["page"]) else self.observe()
+        try:
+            page = s["page"] if s["browser"].fresh(s["page"]) else self.observe()
+        except KeyError as error:  # Browser.session with its tab gone
+            raise TabsClosed("The task's browser tab has closed.") from error
+        page = self.unblank(page)
+        if page is None:
+            return None
         if not s["recent"] or s["recent"][-1] != page["text"]:
             s["recent"] = (s["recent"] + [page["text"]])[-10:]  # facts may come from a page seen a moment ago
         if s["reason"]:
@@ -362,6 +413,30 @@ class Worker:
             s["feedback"].append(f"{SUBGOAL_STEPS} steps on “{sub['do']}” without finishing it: rewrite the plan.")
             return self.escalate("replan", page)
         return self.system_one(page, sub)
+
+    def unblank(self, page):
+        """A blank page (no text, no controls) is no state for Jev or the planner to decide on: it is read again after
+        a short pause, up to BLANK_WAITS times. One that stays blank goes to the planner as blank, and after three such
+        turns the user is asked. Returns the page to decide on, or None when the user was asked."""
+        s = self.state
+        while blank(page) and s["blank_waits"] < BLANK_WAITS:
+            s["blank_waits"] += 1
+            time.sleep(self.blank_pause)
+            page = self.observe()
+        if not blank(page):
+            s["blank_waits"] = 0
+            return page
+        s["blank_waits"] += 1
+        if s["blank_waits"] > BLANK_WAITS + 3:
+            s["blank_waits"] = BLANK_WAITS + 1
+            self.loop_stuck(f"blank|{urlparse(page['url']).path}")
+            return None
+        s["feedback"].append(f"The page has stayed blank (no text and no controls) after {BLANK_WAITS} waits: "
+                             "OPEN_URL the address you need, go BACK, or ASK the user.")
+        if not s["reason"]:
+            s["escalations"]["blank"] = s["escalations"].get("blank", 0) + 1
+            s["reason"] = "unsure"
+        return page
 
     def system_one(self, page, sub):
         """One Jev request for this step, and what its answers mean: act, finish the subgoal, a blocker, or the
@@ -384,6 +459,8 @@ class Worker:
         if s["history"] and step["effect"]:
             s["history"][-1].setdefault("effect", step["effect"])
         s["seen"], s["candidates"] = page, step["candidates"]
+        if self.fruitless():
+            return self.escalate("replan", page)
         if step["kind"] == "blocker":
             return self.blocked(step, page)
         if step["kind"] == "done":
@@ -395,13 +472,16 @@ class Worker:
         if step["kind"] == "think":
             return self.escalate("unsure", page)
         label = step["action"].get("label") or step["operation"]
+        problem = self.forbidden(step["operation"], label, page)  # ran 3 times from this page, or a 9th scroll
         count = executor.repeats(s["history"][s["loop_from"]:], step["operation"], label, page["url"])
-        if count >= 2 and step["operation"] not in QUIET:  # changed nothing twice: Jev's next-best once, then mini
+        if problem or (count >= 2 and step["operation"] not in QUIET):  # Jev's next-best once, then mini
             key = [step["operation"], label, urlparse(page["url"]).path]
-            other = next((c for c in step["candidates"] if c["action"].get("label") != label), None)
+            other = next((c for c in step["candidates"] if c["action"].get("label") != label
+                          and not self.forbidden(c["operation"], c["action"].get("label") or c["operation"], page)),
+                         None)
             if count >= 3 or key in s["switched"] or other is None:
-                s["feedback"].append(f"“{label}” changed nothing {count} times, and Jev's next-best choice didn't "
-                                     "help: try another way.")
+                s["feedback"].append(problem or f"“{label}” changed nothing {count} times, and Jev's next-best choice "
+                                                "didn't help: try another way.")
                 return self.escalate("unsure", page)
             s["switched"].append(key)
             return self.act(other["operation"], other["action"], page, sub, key=other.get("key"))
@@ -413,8 +493,8 @@ class Worker:
         """Replay's say on Jev's answers: (operation, action, key, text) to act on when Jev's top pick is the step the
         habit expects (passing the gates, or the only control on the page with that label unless it commits), else
         None to go on as in Phase A. Another pick that passes the gates, or none, takes this subgoal out of replay. A
-        wait, a scroll, a secret field, an expected control not on the page yet, or one that changed nothing twice
-        (the loop ladder decides) changes nothing."""
+        wait, a scroll, a secret field, an expected control not on the page yet, or one that changed nothing twice or
+        already ran three times from this page (the loop ladder decides) changes nothing."""
         s = self.state
         record = s["replay"]
         expected = replay.expected(self.habit, record, s["current"]) if record else None
@@ -424,9 +504,11 @@ class Worker:
         verdict, chosen = replay.judge(expected, step, answers, page, controls, commit=commit)
         if verdict in {"absent", "quiet"}:
             return None
-        if verdict == "matched" and chosen[0] not in QUIET and executor.repeats(
-                s["history"][s["loop_from"]:], chosen[0], chosen[1].get("label") or chosen[0], page["url"]) >= 2:
-            return None  # it changed nothing twice: the loop ladder decides, as in Phase A
+        if verdict == "matched":
+            name = chosen[1].get("label") or chosen[0]
+            unchanged = executor.repeats(s["history"][s["loop_from"]:], chosen[0], name, page["url"])
+            if self.forbidden(chosen[0], name, page) or (chosen[0] not in QUIET and unchanged >= 2):
+                return None  # it changed nothing twice, or ran from this page 3 times: the loop ladder decides
         record["expected"] += 1
         if verdict != "matched":
             record["left"].append(s["current"])
@@ -588,6 +670,8 @@ class Worker:
             s["reason"] = "replan"
         if count >= 6:
             s["refusals"][key] = 0
+            if s["idle_asked"]:  # the user was asked since the last step, and still nothing runs
+                raise self.circling(after_asking=True)
             self.stuck()
 
     # ---- System Two
@@ -614,9 +698,14 @@ class Worker:
         subgoals = [{"do": g["do"].strip(), "done_when": g["done_when"].strip(), "kind": g["kind"],
                      "values": [v for v in g["values"] if v["field"].strip()]}
                     for g in out["subgoals"] if g["do"].strip()][:10]
+        moved_on = False  # whether this turn gave Jev another current subgoal
         if subgoals:
+            was = self.subgoal()
             s["plan"] = s["plan"][:s["current"]] + self.keeps_commit(subgoals)
-            s["subgoal_steps"] = 0
+            now = self.subgoal()
+            moved_on = not (was and now and shares(was["do"], now["do"], by=max))
+            if moved_on:  # the same subgoal rewritten keeps counting toward SUBGOAL_STEPS
+                s["subgoal_steps"] = 0
         if s["replay"] and (reason == "start" or subgoals):  # a plan of another shape, now or later: no replay
             s["replay"]["on"] = s["replay"]["on"] and replay.same_shape(s["plan"], self.habit["plan"])
         act = out["action"]
@@ -633,6 +722,9 @@ class Worker:
                 yours = "ASK the question" if sub["kind"] == "ask" else "finish with DONE (the result and a quote)"
                 raise Retry(f"The current subgoal is yours, not Jev's: {yours}, or give the remaining subgoals"
                             f"{self.ending()}. CONTINUE does nothing here.")
+            if (reason == "unsure" or (reason or "").startswith("blocker:")) and not moved_on:
+                raise Retry("Jev couldn't decide: PICK a candidate, TYPE, ASK, OPEN_URL, LOOK, WAIT or BACK; CONTINUE "
+                            "does nothing here.")
             return None
         return self.do(act, page)
 
@@ -728,8 +820,13 @@ class Worker:
                             f"(candidates: {listed}).")
             if op == "TYPE" and chosen["operation"] != "TYPE_TEXT":
                 raise Retry(f"Candidate {chosen['n']} is not a field to type into.")
-            return self.act(chosen["operation"], chosen["action"], page, self.subgoal(), key=chosen.get("key"),
-                            text=act["text"] if op == "TYPE" else None)
+            operation, text = chosen["operation"], act["text"] if op == "TYPE" else None
+            if op == "PICK" and operation == "TYPE_TEXT":  # a field picked with no text: the subgoal's, else focus it
+                text = self.subgoal_value(chosen["action"], self.subgoal())
+                operation = "TYPE_TEXT" if text is not None else "CLICK"  # focused, the site may offer its own options
+            if self.guard(operation, chosen["action"].get("label") or operation, page, text):
+                return None
+            return self.act(operation, chosen["action"], page, self.subgoal(), key=chosen.get("key"), text=text)
         if op == "OPEN_URL":
             url = act["text"].strip()
             parts = urlparse(url)
@@ -737,15 +834,22 @@ class Worker:
                 raise Retry("OPEN_URL needs a full http(s) address in text.")
             if not skills.template_host(url, skills.site_for(page["url"], self.library["sites"])):
                 raise Retry("A search address built from the site's template must stay on that site.")
-            return self.run(page, "OPEN_URL", self.control(page, "OPEN_URL"), {"url": url}, url)
+            control = self.control(page, "OPEN_URL")
+            if self.guard("OPEN_URL", control.get("label") or "OPEN_URL", page, url):
+                return None
+            return self.run(page, "OPEN_URL", control, {"url": url}, url)
         if op == "WAIT":
             return self.run(page, "WAIT", self.control(page, "WAIT"), {}, None)
         if op == "BACK":
             _, heads, controls = action_space(page["actions"])
             current = next((a for a in heads.get("tab_target", {}).values() if a.get("current")), None)
             if "GO_BACK" not in controls and current and len(heads["tab_target"]) > 1:
-                return self.run(page, "CLOSE_TAB", current, {}, None)  # a new tab: back is its opener
-            return self.run(page, "GO_BACK", self.control(page, "GO_BACK"), {}, None)
+                operation, control = "CLOSE_TAB", current  # a new tab: back is its opener
+            else:
+                operation, control = "GO_BACK", self.control(page, "GO_BACK")
+            if self.guard(operation, control.get("label") or operation, page):
+                return None
+            return self.run(page, operation, control, {}, None)
         what = act["text"].strip() or (self.subgoal() or {}).get("do") or "the control the task needs next"
         spot = self.look(page, what)  # LOOK
         if spot is None:
@@ -781,6 +885,12 @@ class Worker:
             return self.finish(act, message, page)
         if not message:
             raise Retry("ASK needs the question in message.")
+        wants_code = bool(CODE_WORDS.search(message) or rules.asks_for_secret(message))
+        if wants_code and not rules.code_field(page) and not rules.CARD_DETAIL.search(message) \
+                and not rules.TO_RECEIVE.search(message):
+            raise Retry("The system asks for codes only when a code field is on the page: don't ask the user for a "
+                        "code the site hasn't asked for. Do the step that makes the site send one, then wait for its "
+                        "field.")
         # A question that asks for (or mentions) a code, password, or card detail goes through the hidden field,
         # options included: a reply typed in the open would reach the models. A picked option is read by code below.
         secret = (rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
@@ -898,19 +1008,29 @@ class Worker:
             return {"files": self.files_for(action)}, None
         return {}, None
 
-    def value_for(self, action, sub):
-        """The subgoal's text for the field Jev chose: by the field's name, the only value, or Jev's pick among the
-        names. With none, the planner writes it (the field is its candidate 1)."""
+    def subgoal_value(self, action, sub):
+        """The subgoal's text for a field: by the field's name, the only value, or Jev's pick among the names; else
+        None."""
         values = (sub or {}).get("values") or []
         text = executor.value(action, values)
         if text is None and len(values) > 1:
             name = jev.value_for(action["label"], [v["field"] for v in values])
-            text = next(v["text"] for v in values if v["field"] == name)
+            text = next((v["text"] for v in values if v["field"] == name), None)
+        return text
+
+    def value_for(self, action, sub):
+        """The subgoal's text for the field Jev chose. With none, the planner writes it: the field becomes its
+        candidate 1, and Jev's other candidates stay listed after it."""
+        text = self.subgoal_value(action, sub)
         if text is None:
-            self.state["candidates"] = [{"n": 1, "op": "TYPE", "operation": "TYPE_TEXT", "element": action["label"],
-                                         "p": 1.0, "action": action}]
+            s, field = self.state, (action.get("frame"), action.get("node"))
+            others = [c for c in s["candidates"] if not (c["operation"] == "TYPE_TEXT" and
+                                                         (c["action"].get("frame"), c["action"].get("node")) == field)]
+            s["candidates"] = [{"n": 1, "op": "TYPE", "operation": "TYPE_TEXT", "element": action["label"], "p": 1.0,
+                                "action": action}] + [{**c, "n": n} for n, c in enumerate(others, 2)]
             raise Retry(f"Jev chose to type into “{action['label']}”, but the subgoal has no value for it: TYPE "
-                        "pick 1 with the text, or decide otherwise.")
+                        "pick 1 with the text, PICK 1 to only focus it (the site may then offer its own options), or "
+                        "decide otherwise.")
         return text
 
     def value(self, action, text, page):
@@ -951,7 +1071,13 @@ class Worker:
                 return s["answers"][key]
             raise Retry(f"[secret:{key}] isn't one of the user's answers.")
 
-        return {"text": PLACEHOLDER.sub(real, text)}, text
+        typed = PLACEHOLDER.sub(real, text)
+        limit = (action.get("constraints") or {}).get("maxlength")
+        if limit and not action.get("group") and len(typed) > int(limit):  # the field would cut it short
+            raise Retry(f"“{action['label']}” takes at most {limit} characters, so “{text}” would be cut short: type "
+                        "a shorter text that still names what the site needs (the area or a landmark), or use another "
+                        "field.")
+        return {"text": typed}, text
 
     def profile_value(self, key, action=None):
         """An ID for a placeholder: from this task or memory, else asked once through the hidden field and kept,
@@ -1025,7 +1151,7 @@ class Worker:
                  "kind": action.get("kind"), "text": shown, "key": inputs.get("key"),
                  "files": [self.file_name(f) for f in inputs["files"]] if "files" in inputs else None,
                  "page_changed": None, "url": page["url"], "committed": bool(commit),
-                 "approved": (s["approval"] or {}).get("by") if commit else None}
+                 "approved": (s["approval"] or {}).get("by") if commit else None, "spot": views.signature(page)}
         try:
             s["browser"].act(operation, action, page, **inputs)
         except ExecutionUncertain as error:
@@ -1040,7 +1166,7 @@ class Worker:
             s["cleared_maybe"].append(cleared)
         s["subgoal_steps"] += 1
         self.replay_moved(operation, action)  # the step ran: replay moves past it
-        s["candidates"], s["refusals"], s["idle"] = [], {}, 0
+        s["candidates"], s["refusals"], s["idle"], s["idle_asked"] = [], {}, 0, 0
         typing = s.pop("typing", None)
         if typing:
             s["typed"][typing[0]] = typing[1]
@@ -1069,15 +1195,89 @@ class Worker:
         return self.track_loop(last)
 
     def track_loop(self, last):
-        """The same step on the same page changing nothing, again and again: the user is asked at STUCK_AT."""
+        """The same step going round: run CIRCLE_ASK times from the same page (whatever each run changed), or
+        STUCK_AT times on one path changing nothing. The user is asked (loop_stuck)."""
         s = self.state
-        if last["page_changed"] or last["operation"] in QUIET or s["relaying"]:
+        if last["operation"] in QUIET or s["relaying"]:
             return None
-        if executor.repeats(s["history"][s["loop_from"]:], last["operation"], last["action"], last["url"]) >= STUCK_AT:
-            self.steady(s["page"])
-            self.stuck()
-            s["loop_from"] = len(s["history"])  # the user's help starts a fresh count
+        history = s["history"][s["loop_from"]:]
+        text = last.get("text") if last["operation"] in TYPED else None
+        if executor.circles(history, last["operation"], last["action"], last.get("spot"), text) >= CIRCLE_ASK:
+            self.loop_stuck(f"{last['operation']}|{last['action']}|{text or ''}|{last.get('spot')}")
+        elif not last["page_changed"] and executor.repeats(history, last["operation"], last["action"],
+                                                           last["url"]) >= STUCK_AT:
+            self.loop_stuck(f"{last['operation']}|{last['action']}|{urlparse(last['url']).path}")
         return None
+
+    def forbidden(self, operation, label, page, text=None):
+        """Why this action may not run from this page now, or None: it already ran CIRCLE_AT times from the same page
+        (its URL path and its controls, views.signature), whatever each run changed; or it would be one more scroll
+        after SCROLLS in a row on this page. Waits are never refused. `text` (typed, or the address opened) is part of
+        the action when given."""
+        s = self.state
+        if s["relaying"]:
+            return None
+        history = s["history"][s["loop_from"]:]
+        if operation in executor.SCROLLS:
+            run = executor.scrolls(history, page["url"])
+            return None if run < SCROLLS else (f"{run} scrolls in a row on this page found nothing to act on: stop "
+                                               "scrolling. LOOK for the control, OPEN_URL the address you need, or "
+                                               "ASK the user.")
+        if operation in QUIET:
+            return None
+        count = executor.circles(history, operation, label, views.signature(page),
+                                 text if operation in TYPED else None)
+        return None if count < CIRCLE_AT else (
+            f"“{label}” already ran {count} times from this same page without getting anywhere: don't repeat it. "
+            "Pick another candidate, LOOK, OPEN_URL the address you need, ASK the user, or rewrite the plan.")
+
+    def guard(self, operation, label, page, text=None):
+        """The loop guard on one of the planner's actions: a Retry (counted) when it may not run from this page again;
+        True when its runs and refused tries reached CIRCLE_ASK and the user was asked instead (the turn is over)."""
+        problem = self.forbidden(operation, label, page, text)
+        if problem is None:
+            return False
+        if operation not in QUIET:
+            s, text = self.state, text if operation in TYPED else None
+            spot = views.signature(page)
+            key = f"{operation}|{label}|{text or ''}|{spot}"
+            s["circled"][key] = tries = s["circled"].get(key, 0) + 1
+            if executor.circles(s["history"][s["loop_from"]:], operation, label, spot, text) + tries >= CIRCLE_ASK:
+                self.loop_stuck(key)
+                return True
+        raise Retry(problem)
+
+    def loop_stuck(self, key):
+        """Ask the user about a loop the guards caught. A reply that helps starts a fresh count; a second reply that
+        leaves it to the agent ("you choose") doesn't, so the loop can't go on for ever: once one loop was asked about
+        LOOP_ASKS times, the next time it comes round the task stops."""
+        s = self.state
+        asked = s["loops"].get(key, 0)
+        if asked >= LOOP_ASKS:
+            raise self.circling(after_asking=True)
+        self.steady(s["page"])
+        s["loops"][key] = asked + 1
+        answer = self.stuck()
+        if not asked or not DELEGATE.search(answer):
+            s["loop_from"], s["circled"] = len(s["history"]), {}
+
+    def fruitless(self):
+        """Whether FRUITLESS steps in a row, all on one page (host and path), were judged failed by Jev: the planner
+        hears it once a streak, with what to try instead."""
+        s = self.state
+        streak = []
+        for h in reversed(s["history"]):
+            if h.get("effect") != "failed" or (streak and urlparse(h.get("url", ""))[1:3]
+                                               != urlparse(streak[0].get("url", ""))[1:3]):
+                break
+            streak.append(h)
+        start = len(s["history"]) - len(streak)  # where this streak began
+        if len(streak) < FRUITLESS or s["fruitless"] == start:
+            return False
+        s["fruitless"] = start
+        s["feedback"].append("Six steps in a row changed nothing useful here: try LOOK for the control, OPEN_URL the "
+                             "target address, or ASK the user.")
+        return True
 
     def look(self, page, purpose):
         """Find by sight what the element list can't name: one grid question, then a closer one inside the chosen
@@ -1105,12 +1305,14 @@ class Worker:
         coded = any(secret_field(a) for a in s["page"]["actions"])  # the reply may be a code or card detail: hide it
         reply = self.ask({"kind": "secret" if coded else "text", "text": question})
         answer = str(reply.get("text", "")).strip()
+        s["idle_asked"] += 1
         s["chat"].append({"from": "agent", "text": question})
         if coded:
             s["chat"].append({"from": "user", "text": f"[secret:{self.keep_secret(answer)}] (hidden answer)"})
         else:
             s["chat"].append({"from": "user", "text": f"“{answer}”"})
         s["reason"] = "reply"
+        return answer
 
     def steady(self, page):
         """Asking costs the user's time: right after a step, wait until steady_ms for the page to settle; a page

@@ -316,6 +316,7 @@ def test_model_errors_are_reported_and_three_in_a_row_stop_the_task(world):
     text(world, "Order Diet Coke")
     assert until(lambda: "Stopping after 3 problems in a row." in bodies(world))
     assert bodies(world).count("Problem: bad JSON") == 3 and "never" not in bodies(world)
+    assert world.agents["Order Diet Coke"].state["errors"] == [{"step": 0, "error": "ValueError: bad JSON"}] * 3
 
 
 def test_a_problem_after_a_commit_stops_with_a_warning(world):
@@ -1178,3 +1179,14 @@ def test_the_chat_lists_at_most_ten_notes():
     shown = conversation.memory_text(listing)
     assert "• zeptonow.com: Line 9" in shown and "Line 10" not in shown
     assert "…and 2 more: `jev memory notes` lists them all." in shown
+
+
+def test_an_exception_that_escapes_the_worker_is_kept_in_its_trace_errors(world):
+    def vanished(agent):
+        raise KeyError("tab-1")
+
+    world.scripts["Order Diet Coke"] = [vanished, tell("never")]
+    text(world, "Order Diet Coke")
+    assert until(lambda: world.core.tasks["t1"].status == "failed")
+    assert world.agents["Order Diet Coke"].state["errors"] == [{"step": 0, "error": "KeyError: 'tab-1'"}]
+    assert any("I couldn't carry on with" in b for b in bodies(world)) and "never" not in bodies(world)

@@ -44,7 +44,8 @@ Return:
   field's name, such as [profile:bescom_account], which the system asks the user for, hidden; the user's hidden
   answers as [secret:answerN]).
 - action, exactly one:
-  CONTINUE: Jev carries on with the plan.
+  CONTINUE: Jev carries on with the plan. Not when Jev couldn't decide (reason unsure, or a blocker): then PICK,
+  TYPE, ASK, OPEN_URL, LOOK, WAIT, or BACK, or give Jev a new current subgoal.
   PICK with pick n: do Jev's candidate n.
   TYPE with pick n and text: type text into candidate n.
   ASK with message (and options): a question for the user.

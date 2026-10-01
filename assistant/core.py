@@ -650,6 +650,7 @@ class Core:
                 self.deliver_files(task)
         except Exception as error:  # the start, launching the browser, anything: say it once
             self.say(f"I couldn't carry on with {task.title}: {error}")
+            self.record(task, error)
         finally:
             state = task.worker.state["status"] if task.worker else None
             task.status = state if state in STOPPED else ("cancelled" if task.cancelled else "failed")
@@ -779,10 +780,20 @@ class Core:
         while task.updates:
             task.worker.update(task.updates.pop(0))  # the planner hears it next; any approval is void
 
+    @staticmethod
+    def record(task, error):
+        """An error that escaped the worker goes into its trace too (redacted, like the rest of it), so the trace says
+        why the task stopped."""
+        if task.worker:
+            state = task.worker.state
+            state.setdefault("errors", []).append({"step": len(state.get("history", [])),
+                                                   "error": f"{type(error).__name__}: {error}"})
+
     def problem(self, task, error):
         """Report a model or network error. False when the task must stop."""
         task.problems += 1
         self.say(f"Problem: {error}", task)
+        self.record(task, error)
         commit = task.worker.state.get("commit")
         if commit:
             self.say(f"{commit['label']} may already have gone through. Check it before asking me again.", task)
