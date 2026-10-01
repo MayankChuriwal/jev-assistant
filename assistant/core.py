@@ -14,7 +14,7 @@ from . import jev, messages, planner, rules, skills
 from . import learn as learning
 from .gate import cap, rule_cap, same_cart
 from .memory import LABELS, RULE_DAYS, UNSTORABLE, Memory, StoreError, Unstorable, rule_line, rupees
-from .privacy import SECRETS, Secrets
+from .privacy import SECRETS, Secrets, storable
 from .worker import DELEGATE, STOPPED, Worker
 
 MAX_RUNNING = 3
@@ -35,18 +35,34 @@ def site(url):
     return host
 
 
-ID_CANDIDATES = (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)*"),  # an email address or a UPI ID
-                 re.compile(r"\+?\d(?:[\s-]?\d){5,}"),  # a number of six digits or more, spaced or not
-                 re.compile(r"\b(?=[A-Za-z]*\d)[A-Za-z0-9]{4,}\b"))  # four or more letters and digits, with a digit
+AMOUNTS = re.compile(r"(?:₹|\brs\.?|\binr)\s*\d[\d,]*(?:\.\d+)?", re.I)  # ₹1,500  Rs 300  INR 99.50
+DATES = (re.compile(r"(?<!\d)(?:0?[1-9]|[12]\d|3[01])[/-](?:0?[1-9]|1[0-2])[/-](?:19|20)?\d{2}(?!\d)"),  # 12/05/2026
+         re.compile(r"(?<!\d)(?:19|20)\d{2}[/-](?:0?[1-9]|1[0-2])[/-](?:0?[1-9]|[12]\d|3[01])(?!\d)"))  # 2026-05-12
+YEARS = re.compile(r"(?<![\w+])(?<!\d[\s-])(?:19|20)\d{2}(?!\w)(?![\s-]\d)")  # a year on its own, not inside a number
+# an email or UPI ID; a hyphenated code (AB-1234-CD) whole; a number of six digits or more, spaced or not; a code
+ID_CANDIDATES = (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)*"),
+                 re.compile(r"\b(?=[A-Za-z0-9-]*[A-Za-z])(?=[A-Za-z0-9-]*\d)[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+\b"),
+                 re.compile(r"\+?\d(?:[\s-]?\d){5,}"),
+                 re.compile(r"\b(?=[A-Za-z]*\d)[A-Za-z0-9]{4,}\b"))
 
 
 def id_candidates(text):
-    """The values in a message that can be an ID, each once: emails and UPI IDs, then numbers, then codes."""
+    """The values in a message that can be an ID, each once: emails and UPI IDs, then hyphenated codes, numbers, and
+    codes. Prices, dates, and lone years are not candidates: a stray one must never become the ID."""
     found = []
-    for pattern in ID_CANDIDATES:
+    for n, pattern in enumerate(ID_CANDIDATES):
         found += [match[0].strip() for match in pattern.finditer(text)]
         text = pattern.sub(" ", text)
+        if n == 1:  # after emails and hyphenated codes, before the plain numbers
+            for noise in (AMOUNTS, *DATES, YEARS):
+                text = noise.sub(" ", text)
     return list(dict.fromkeys(found))
+
+
+def host_of(site):
+    """The bare host in a site string a model wrote, with any scheme and path dropped."""
+    text = site.strip().lower()
+    return skills.bare(urlparse(text if "//" in text else "//" + text).hostname or "")
 
 
 def memory_text(listing):
@@ -369,10 +385,10 @@ class Core:
     def memory_message(self, text):
         """A message about what the agent remembers: remember, forget, list, approve, undo, or none. A model reads it;
         code saves."""
-        listing = self.memory.listing()
-        known = {"facts": listing["facts"], "ids": listing["ids"], "rules": listing["rules"],
-                 "habits": [{"ref": h["ref"], "site": h["host"], "title": h["title"]} for h in listing["habits"]]}
         try:
+            listing = self.memory.listing()
+            known = {"facts": listing["facts"], "ids": listing["ids"], "rules": listing["rules"],
+                     "habits": [{"ref": h["ref"], "site": h["host"], "title": h["title"]} for h in listing["habits"]]}
             out = self.hidden(self.memory_job, text, known)
         except Exception as error:  # a model or network failure is a chat message
             return self.say(f"I couldn't read that: {error}")
@@ -382,6 +398,8 @@ class Core:
             reply = UNSTORABLE
         except (StoreError, ValueError) as error:
             reply = f"I couldn't save that: {error}"
+        except Exception as error:  # the receive thread never dies on a memory message
+            reply = f"I couldn't do that: {error}"
         self.say(reply)
 
     def memory_op(self, out, text, listing):
@@ -409,39 +427,45 @@ class Core:
             return self.approve_words(out["site"], text)
         if op == "remember":
             return self.remember_words(out, text)
-        return out["reply"].strip() or "I didn't save anything."
+        return self.memory.hide(out["reply"]) or "I didn't save anything."
 
     def remember_words(self, out, text):
         """Save what the message gives. An ID's value is the one candidate code finds in the message, never a model's
         words; with two candidates nothing is saved, and with none it is asked through the hidden field later."""
+        key, label = out["id"]["key"].strip(), out["id"]["label"].strip()
+        if not (storable(text) and storable(key) and storable(label)):  # a password, OTP, PIN, or card stays out of
+            return UNSTORABLE  # memory, whatever the model made of the message
         said = []
-        key = out["id"]["key"].strip()
         if key:
-            label = out["id"]["label"].strip() or LABELS.get(key) or key.replace("_", " ")
+            if id_candidates(key) or id_candidates(label):  # a model must never carry a value in a name
+                return "I'll ask for that ID through the hidden field the next time a task needs it."
+            label = label or LABELS.get(key) or key.replace("_", " ")
             found = id_candidates(text)
             if len(found) > 1:
                 return f"I see more than one number there. Send your {label} on its own, please."
             if not found:
                 said.append(f"I'll ask for your {label} through the hidden field the next time a task needs it.")
             else:
-                if found[0] in label:
-                    label = LABELS.get(key) or key.replace("_", " ")
+                had = any(i["key"] == key for i in self.memory.ids())
                 self.memory.set_id(key, label, found[0], actor="user")
-                said.append(f"Saved your {label}. The models never see it. Next time, `jev memory set {key}` keeps an "
-                            "ID out of the chat entirely.")
+                said.append(f"{'Updated' if had else 'Saved'} your {label}. The models never see it. Next time, "
+                            f"`jev memory set {key}` keeps an ID out of the chat entirely.")
         for fact in out["facts"]:  # after the ID: its value is hidden in every fact from here on
             label = fact["label"].strip()
             self.memory.remember(fact["kind"], fact["text"], label=label, tags=fact["tags"], source=text,
                                  actor="user", supersede=bool(label))
-            said.append(f"Saved: {label}: {fact['text'].strip()}" if label else f"Saved: {fact['text'].strip()}")
-        return " ".join(said) or "I didn't find anything to save."
+            shown, shown_label = self.memory.hide(fact["text"]), self.memory.hide(label)
+            said.append(f"Saved: {shown_label}: {shown}" if label else f"Saved: {shown}")
+        return self.memory.hide(" ".join(said)) or "I didn't find anything to save."
 
     def approve_words(self, site, text):
         """A standing approval from the user's own words: the site they name, the cart of their latest order there,
-        and the cap their words set in rupees."""
+        and the cap their words set in rupees. The site a model names must be one the message names too."""
         note = skills.named(site, self.library["sites"]) if site.strip() else None
-        host = note["host"] if note else skills.bare(site.strip().lower())
-        if "." not in host:
+        host = note["host"].partition("/")[0] if note else host_of(site)
+        mine = skills.named(text, self.library["sites"])
+        named = mine is not None and mine["host"].partition("/")[0] == host
+        if "." not in host or not (named or host in text.lower()):
             return "Which site is that for? Name it, like “my usual Zepto order”."
         items = self.memory.last_cart(host)
         if not items:

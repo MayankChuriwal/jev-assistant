@@ -826,6 +826,9 @@ def test_skip_and_no_keep_nothing(world):
 
 # ---- Plan 7 Task 7: memory by chat
 
+ZEPTO = {"skills": {}, "sites": {"zeptonow.com": {"name": "Zepto", "aliases": [], "host": "zeptonow.com",
+                                                  "start": "https://www.zeptonow.com/", "body": ""}}}
+
 MEMORY = ("MEMORY", "none", {"MEMORY": 1.0})
 
 
@@ -897,6 +900,7 @@ def test_list_forget_and_undo_by_chat(world):
 
 def test_a_standing_approval_from_your_words_needs_an_order_placed_once_and_a_rupee_cap(world):
     memory = world.core.memory
+    world.core.library = ZEPTO
     out = said("approve", site="zeptonow.com")
     words = "always order my usual Zepto cart without asking, up to ₹300"
     assert tell_memory(world, words, out) == "Place this order with me once; then I can remember it."
@@ -919,3 +923,120 @@ def test_id_candidates_are_emails_upi_ids_numbers_and_codes_with_digits():
     text = "mail me@example.com or pay mayank@okicici, phone +91 98765 43210, ID AB12CD, pin 560034, 4th floor"
     assert conversation.id_candidates(text) == ["me@example.com", "mayank@okicici", "+91 98765 43210", "560034",
                                                 "AB12CD"]
+
+
+# ---- Plan 7 Task 7 fixes: stray tokens, never-stored words, hidden replies, corroborated sites
+
+ASK_LATER = "I'll ask for your BESCOM account number through the hidden field the next time a task needs it."
+BESCOM = said("remember", key="bescom_account", label="BESCOM account number")
+
+
+@pytest.mark.parametrize("message", [
+    "remember my BESCOM account, the March 2026 bill",
+    "my BESCOM account bill was ₹1500 this time",
+    "my BESCOM account bill was Rs. 1,500 and INR 20",
+    "my BESCOM account is on the bill dated 12/05/2026",
+    "my BESCOM account bill of 12-05-26 and 2026-05-12"])
+def test_a_year_price_or_date_is_never_taken_for_an_id(world, message):
+    assert tell_memory(world, message, BESCOM) == ASK_LATER
+    with pytest.raises(KeyError):
+        world.core.memory.id_value("bescom_account")
+
+
+def test_candidates_leave_out_noise_but_keep_numbers_and_grouped_ids():
+    assert conversation.id_candidates("bill ₹1500 of 12/05/2026, March 2026") == []
+    assert conversation.id_candidates("account 2026 1234 5678") == ["2026 1234 5678"]
+    assert conversation.id_candidates("account 1234567890 for 2026") == ["1234567890"]
+
+
+def test_a_hyphenated_id_is_saved_whole_or_not_at_all(world):
+    assert conversation.id_candidates("my ID is AB-1234-CD") == ["AB-1234-CD"]
+    out = said("remember", key="bescom_account", label="BESCOM account number")
+    tell_memory(world, "my BESCOM account is AB-1234-CD", out)
+    assert world.core.memory.id_value("bescom_account") == "AB-1234-CD"
+    assert tell_memory(world, "my BESCOM account is AB-1234-CD or XY-99-ZZ", out) == \
+        "I see more than one number there. Send your BESCOM account number on its own, please."
+    assert world.core.memory.id_value("bescom_account") == "AB-1234-CD"
+
+
+@pytest.mark.parametrize("message", ["my Netflix password is hunter2", "my bank OTP is 481516 remember it",
+                                     "my card PIN is 4821 remember that"])
+def test_a_secret_word_in_the_message_keeps_the_whole_message_out_of_memory(world, message):
+    out = said("remember", [{"kind": "fact", "label": "", "text": "likes tea", "tags": []}], key="netflix_login",
+               label="Netflix login")
+    assert tell_memory(world, message, out) == conversation.UNSTORABLE
+    assert world.core.memory.facts() == []
+    with pytest.raises(KeyError):
+        world.core.memory.id_value("netflix_login")
+
+
+def test_a_model_cannot_carry_a_value_in_the_id_name(world):
+    out = said("remember", key="bescom_account", label="BESCOM account 1234567890")
+    assert tell_memory(world, "my BESCOM account is 1234567890", out) == \
+        "I'll ask for that ID through the hidden field the next time a task needs it."
+    with pytest.raises(KeyError):
+        world.core.memory.id_value("bescom_account")
+
+
+def test_an_id_overwrite_says_updated_and_a_value_inside_a_fact_is_hidden(world):
+    out = said("remember", [{"kind": "fact", "label": "", "text": "BESCOM account is 1234567890", "tags": []}],
+               key="bescom_account", label="BESCOM account number")
+    reply = tell_memory(world, "my BESCOM account number is 1234567890", out)
+    assert reply.startswith("Saved your BESCOM account number.") and "1234567890" not in reply
+    assert "[profile:bescom_account]" in reply
+    assert all("1234567890" not in f["text"] for f in world.core.memory.facts())
+    assert tell_memory(world, "my BESCOM account number is 5550001111", out).startswith("Updated your BESCOM")
+    assert world.core.memory.id_value("bescom_account") == "5550001111"
+
+
+def test_a_model_reply_with_an_id_value_is_hidden(world):
+    world.core.memory.set_id("phone", "phone number", "+91 98765 43210")
+    reply = tell_memory(world, "remember nothing", said("none", reply="You said +91 98765 43210."))
+    assert "98765" not in reply
+
+
+def test_an_id_is_forgotten_by_its_ref(world):
+    world.core.memory.set_id("phone", "phone number", "+91 98765 43210")
+    assert tell_memory(world, "forget my phone", said("forget", refs=["id:phone"])) == "Forgot your phone number."
+    with pytest.raises(KeyError):
+        world.core.memory.id_value("phone")
+
+
+def test_a_memory_model_failure_or_store_failure_is_a_chat_message(world, monkeypatch):
+    world.intents.append(MEMORY)
+
+    def broken(message, known):
+        raise RuntimeError("model down")
+
+    world.core.memory_job = broken
+    text(world, "what do you remember?")
+    assert until(lambda: any("I couldn't read that: model down" in b for b in bodies(world)))
+    world.core.memory_job = lambda message, known: said("list")
+    monkeypatch.setattr(world.core, "memory_op", lambda *a: 1 / 0)
+    world.intents.append(MEMORY)
+    text(world, "what do you remember now?")
+    assert until(lambda: any("I couldn't do that: division by zero" in b for b in bodies(world)))
+
+
+def test_a_standing_approval_needs_the_site_the_user_named(world):
+    out = said("approve", site="https://www.zeptonow.com/some/path")
+    world.core.memory.record_habit({"host": "zeptonow.com", "skill": "groceries", "title": "Zepto · Diet Coke",
+                                    "goal": "Order Diet Coke on Zepto", "start": "https://www.zeptonow.com/",
+                                    "plan": [], "steps": [], "cart": [{"item": "diet coke", "qty": 1}]})
+    ask = "Which site is that for? Name it, like “my usual Zepto order”."
+    assert tell_memory(world, "always order my usual cart, up to ₹300", out) == ask  # the user named no site
+    assert tell_memory(world, "always order my cart, up to ₹300", said("approve", site="")) == ask
+    assert tell_memory(world, "always order my usual cart, up to ₹300", said("approve", site="zepto")) == ask
+    assert tell_memory(world, "always order from ZeptoNow.com, up to ₹300", out).startswith("Saved: zeptonow.com")
+    assert world.core.memory.live_rules()[0]["site"] == "zeptonow.com"
+
+
+def test_a_site_note_resolves_the_site_the_user_and_the_model_named(world):
+    world.core.library = ZEPTO
+    world.core.memory.record_habit({"host": "zeptonow.com", "skill": "groceries", "title": "Zepto · Diet Coke",
+                                    "goal": "Order Diet Coke on Zepto", "start": "https://www.zeptonow.com/",
+                                    "plan": [], "steps": [], "cart": [{"item": "diet coke", "qty": 1}]})
+    assert tell_memory(world, "always order my usual Zepto cart, up to ₹300", said("approve", site="Zepto")) \
+        .startswith("Saved: zeptonow.com")
+    other = "always order my usual Blinkit cart, up to ₹300"
+    assert tell_memory(world, other, said("approve", site="Zepto")).startswith("Which site is that for?")
