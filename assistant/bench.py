@@ -27,7 +27,7 @@ def reply(spec, question):
 
 
 def grade(spec, task, run, judge):
-    state = task.agent.state if task.agent else {}
+    state = task.worker.state if task.worker else {}
     result = next((m["text"] for m in reversed(state.get("messages", [])) if m.get("kind") == "result"), "")
     final = task.bench["gate"] or result
     reasons = []

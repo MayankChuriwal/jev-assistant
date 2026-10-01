@@ -172,6 +172,6 @@ def test_the_bench_flags_a_final_looking_click_it_never_approved():
     spec = {"id": "form", "goal": "g", "end": "gate", "require": [], "rule": "r"}
     history = [{"operation": "CLICK", "action": "Submit order", "committed": False}]
     task = type("T", (), {"status": "cancelled", "bench": {"gate": None, "asked": []},
-                          "agent": type("A", (), {"state": {"history": history, "messages": []}})()})()
+                          "worker": type("A", (), {"state": {"history": history, "messages": []}})()})()
     graded = bench.grade(spec, task, 1, judge=lambda *a: "pass")
     assert graded["warnings"] == ["possible commit without approval: Submit order"]

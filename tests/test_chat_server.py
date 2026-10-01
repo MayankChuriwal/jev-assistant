@@ -111,7 +111,7 @@ def test_the_debug_view_shows_steps_and_a_masked_screenshot():
     masks = []
     agent = SimpleNamespace(state={"history": [{"action": "Pay ₹79"}]}, secrets=SimpleNamespace(nodes={(1, 2)}),
                             browser=SimpleNamespace(screenshot=lambda masked: masks.append(masked) or "iVBOR"))
-    task = SimpleNamespace(id="t1", title="Diet Coke", status="running", host="shop.test", agent=agent)
+    task = SimpleNamespace(id="t1", title="Diet Coke", status="running", host="shop.test", worker=agent)
     assert server.debug_view(SimpleNamespace(lock=threading.RLock(), tasks={"t1": task})) == [
         {"id": "t1", "title": "Diet Coke", "status": "running", "host": "shop.test",
          "history": [{"action": "Pay ₹79"}], "screenshot": "iVBOR"}]

@@ -42,36 +42,43 @@ def test_images_are_saved_for_the_user_to_open(tmp_path, monkeypatch):
     assert any(line.startswith("(image: ") for line in out) and list(tmp_path.glob("jev-*.png"))
 
 
-def fake_agent(monkeypatch, command, **state):
-    agent = Mock(state={"status": "ready", "commit": None, "history": [], "elapsed_ms": 0, **state})
-    agent.command = Mock(side_effect=command)
+def fake_worker(monkeypatch, command, **state):
+    worker = Mock(state={"status": "ready", "commit": None, "history": [], "elapsed_ms": 0, **state})
+    worker.command = Mock(side_effect=command)
     made = []
-    monkeypatch.setattr("assistant.driver.agent_class",
-                        lambda: lambda url, goal, **kw: made.append((url, goal, kw)) or agent)
-    return agent, made
+    monkeypatch.setattr("assistant.worker.Worker", lambda url, goal, **kw: made.append((url, goal, kw)) or worker)
+    monkeypatch.setattr("assistant.jev.intake", lambda *a, **k: {"several": "no", "skill": "general", "preauth": "no"})
+    monkeypatch.setattr("assistant.planner.start", lambda goal: ("https://found.test/", "Found", True))
+    return worker, made
 
 
-def test_run_drives_the_agent_until_it_stops(monkeypatch):
+def test_run_drives_the_worker_until_it_stops(monkeypatch):
     def tick(name):
-        agent.state.update(status="done", history=[{"operation": "CLICK", "action": "Continue"}], elapsed_ms=900)
-        return agent.state
+        worker.state.update(status="done", history=[{"operation": "CLICK", "action": "Continue"}], elapsed_ms=900)
+        return worker.state
 
-    agent, made = fake_agent(monkeypatch, tick)
+    worker, made = fake_worker(monkeypatch, tick)
     assert server.main(["run", "Order Diet Coke", "--url", "https://www.swiggy.com"]) == 0
     assert made[0][:2] == ("https://www.swiggy.com", "Order Diet Coke")
     assert made[0][2]["asker"] is server.terminal_asker
-    agent.close.assert_called_once()
+    worker.close.assert_called_once()
+
+
+def test_run_finds_the_start_page_when_no_url_is_given(monkeypatch):
+    worker, made = fake_worker(monkeypatch, lambda name: worker.state.update(status="done") or worker.state)
+    assert server.main(["run", "Look something up"]) == 0
+    assert made[0][0] == "https://found.test/"
 
 
 def test_run_survives_model_errors_and_stops_after_three(monkeypatch, capsys):
-    agent, _ = fake_agent(monkeypatch, [ValueError("bad JSON")] * 3)
+    worker, _ = fake_worker(monkeypatch, [ValueError("bad JSON")] * 3)
     assert server.main(["run", "x", "--url", "https://a.test"]) == 1
     out = capsys.readouterr().out
     assert out.count("Problem: bad JSON") == 3 and "Stopping after 3 problems" in out
-    agent.close.assert_called_once()
+    worker.close.assert_called_once()
 
 
 def test_run_warns_when_a_commit_may_be_in_progress(monkeypatch, capsys):
-    agent, _ = fake_agent(monkeypatch, RuntimeError("HTTP 503"), commit={"label": "Pay ₹79", "checks": 1})
+    worker, _ = fake_worker(monkeypatch, RuntimeError("HTTP 503"), commit={"label": "Pay ₹79", "checks": 1})
     assert server.main(["run", "x", "--url", "https://a.test"]) == 1
     assert "Pay ₹79 may already have gone through" in capsys.readouterr().out

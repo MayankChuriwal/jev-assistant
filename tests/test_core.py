@@ -13,6 +13,7 @@ from assistant.profile import Profile
 ADDRESS = {"kind": "choice", "text": "Deliver to which address?", "remember": True,
            "options": [{"id": "o1", "label": "Home"}, {"id": "o2", "label": "Office"}]}
 OTP = {"kind": "secret", "text": "Enter the OTP.", "expects": {"length": 6}}
+EMPTY = {"skills": {}, "sites": {}}
 
 
 class Clock:
@@ -28,7 +29,7 @@ class FakeAgent:
 
     def __init__(self, script, asker, notify, late=()):
         self.script, self.asker, self.notify, self.late = list(script), asker, notify, list(late)
-        self.state = {"status": "ready", "history": [], "files": [], "memory": [],
+        self.state = {"status": "ready", "history": [], "files": [], "memory": [], "done": [],
                       "approval": {"action_label": "Pay ₹79"}, "commit": None}
         self.replies, self.closed = [], False
 
@@ -38,6 +39,10 @@ class FakeAgent:
         else:
             self.state["status"] = "done"
         return self.state
+
+    def update(self, text):
+        self.state["memory"].append(f"User update: {text}")
+        self.state["approval"] = None
 
     def settle(self):
         self.state["files"].extend(self.late)  # downloads that finished after the last step
@@ -65,22 +70,29 @@ def hold(gate):
 
 @pytest.fixture
 def world(tmp_path):
-    w = SimpleNamespace(scripts={}, hosts={}, agents={}, late={}, classified=[], intents=[], clock=Clock(), n=0)
+    w = SimpleNamespace(scripts={}, hosts={}, agents={}, late={}, classified=[], intents=[], clock=Clock(), n=0,
+                        intakes={}, splits={}, made={})
     w.channel = WebChannel(tmp_path / "media")
 
-    def make_agent(url, goal, title, asker, notify):
-        w.agents[goal] = FakeAgent(w.scripts.get(goal, []), asker, notify, w.late.get(goal, []))
-        return w.agents[goal]
+    def make_worker(task, url, asker, notify):
+        w.made[task.goal] = task
+        w.agents[task.goal] = FakeAgent(w.scripts.get(task.goal, []), asker, notify, w.late.get(task.goal, []))
+        return w.agents[task.goal]
 
-    def classify(text, tasks, chat):
+    def route(text, tasks, chat):
         w.classified.append(text)
         entry = w.intents.pop(0) if w.intents else ("NEW_TASK", "none", {"NEW_TASK": 1.0})
         return (*entry, {entry[1]: 1.0})[:4]  # the task pick is certain unless a test says otherwise
 
+    def intake(message, chat, kinds, several=True):
+        info = {"several": "no", "skill": "general", "preauth": "no", **w.intakes.get(message, {})}
+        return info if several else {**info, "several": "no"}
+
     w.core = conversation.Core(
-        w.channel, profile=Profile(tmp_path / "profile.json"), make_agent=make_agent,
-        start=lambda goal: (f"https://{w.hosts.get(goal, 'shop.test')}/", goal, {}),
-        classify=classify, chat=lambda message, tasks: (f"About {len(tasks)} task(s).", {}),
+        w.channel, profile=Profile(tmp_path / "profile.json"), make_worker=make_worker,
+        start=lambda goal: (f"https://{w.hosts.get(goal, 'shop.test')}/", goal, True), route=route, intake=intake,
+        split=lambda message: w.splits.get(message, [message]), library=EMPTY,
+        chat=lambda message, tasks: (f"About {len(tasks)} task(s).", {}),
         remember=lambda question, answer: (f"Default choice: {answer}", {}), clock=w.clock, poll=0.01)
     return w
 
@@ -212,10 +224,9 @@ def test_amendments_status_small_talk_and_cancel(world):
 
 def test_amending_after_a_payment_says_it_already_went_through(world):
     gate = threading.Event()
-    world.scripts["Order Diet Coke"] = [lambda agent: agent.state["memory"].append("Done: Pay ₹79 (Order placed)"),
-                                        hold(gate)]
+    world.scripts["Order Diet Coke"] = [lambda agent: agent.state["done"].append("Pay ₹79"), hold(gate)]
     text(world, "Order Diet Coke")
-    assert until(lambda: "Order Diet Coke" in world.agents and world.agents["Order Diet Coke"].state["memory"])
+    assert until(lambda: "Order Diet Coke" in world.agents and world.agents["Order Diet Coke"].state["done"])
     world.intents.append(("AMEND", "t1", {"AMEND": 0.9}))
     text(world, "make it 2 cans")
     assert until(lambda: any(b.startswith("Pay ₹79 already went through.") for b in bodies(world)))
@@ -348,7 +359,7 @@ def test_a_message_that_cannot_be_read_says_so(world):
     def down(text, tasks, chat):
         raise RuntimeError("Model connection failed; no action executed.")
 
-    world.core.classify = down
+    world.core.route_message = down
     text(world, "Order Diet Coke")
     assert "I couldn't read that message: Model connection failed; no action executed." in bodies(world)
     assert world.core.tasks == {}
@@ -446,7 +457,7 @@ def test_an_answer_goes_only_to_the_question_that_was_open(world):
         until(lambda: world.core.open is not None and world.core.open.id == 2)
         return "ANSWER", "t1", {"ANSWER": 0.95}, {"t1": 1.0}
 
-    world.core.classify = slow
+    world.core.route_message = slow
     text(world, "Home")
     assert "The question changed while I was reading your message. Please answer again." in bodies(world)
     assert world.agents["Order Diet Coke"].replies == [{"option": "o1"}] and world.core.open.id == 2
@@ -569,15 +580,17 @@ def test_a_bench_task_answers_from_its_script_and_says_no_at_approval(tmp_path):
     channel = WebChannel(tmp_path / "media")
     asked = []
 
-    def make_agent(url, goal, title, asker, notify):
+    def make_worker(task, url, asker, notify):
         asked.append(asker({"kind": "text", "text": "Where to?"}))
         asked.append(asker({"kind": "text", "text": "Uber Go ₹887. Book it?", "approval": True}))
-        return SimpleNamespace(state={"status": "cancelled", "memory": [], "files": [], "history": [],
+        return SimpleNamespace(state={"status": "cancelled", "memory": [], "done": [], "files": [], "history": [],
                                       "messages": []}, command=lambda n: None, settle=lambda: None,
                                close=lambda: None)
 
-    c = conversation.Core(channel, profile=Profile(tmp_path / "p.json"), make_agent=make_agent,
-                          start=lambda goal: ("https://m.uber.com/", "Uber", {}), poll=0.01)
+    c = conversation.Core(channel, profile=Profile(tmp_path / "p.json"), make_worker=make_worker, library=EMPTY,
+                          start=lambda goal: ("https://m.uber.com/", "Uber", True), poll=0.01,
+                          intake=lambda message, chat, kinds, several=True: {"several": "no", "skill": "general",
+                                                                             "preauth": "no"})
     task = c.new_task("Book an Uber", script={"answers": [["where to", "Terminal 1"]], "fallback": "ok"})
     until(lambda: len(asked) == 2)
     assert asked == [{"text": "Terminal 1"}, {"cancel": True}]
@@ -594,7 +607,8 @@ def test_shutting_down_cancels_running_tasks_so_their_traces_are_written(world):
 
 def test_a_cancelled_bench_task_gets_cancel_not_a_scripted_answer(tmp_path):
     c = conversation.Core(WebChannel(tmp_path / "media"), profile=Profile(tmp_path / "p.json"),
-                          make_agent=lambda *a: None, start=lambda goal: ("https://x.test/", "x", {}), poll=0.01)
+                          make_worker=lambda *a: None, start=lambda goal: ("https://x.test/", "x", True), library=EMPTY,
+                          poll=0.01)
     task = conversation.Task("t9", "Order a coke")
     task.script, task.cancelled = {"answers": [], "fallback": "ok"}, True
     assert c.ask(task, {"kind": "text", "text": "Which size?"}) == {"cancel": True}
@@ -602,7 +616,8 @@ def test_a_cancelled_bench_task_gets_cancel_not_a_scripted_answer(tmp_path):
 
 def test_a_bench_task_never_asks_for_card_details(tmp_path):
     c = conversation.Core(WebChannel(tmp_path / "media"), profile=Profile(tmp_path / "p.json"),
-                          make_agent=lambda *a: None, start=lambda goal: ("https://x.test/", "x", {}), poll=0.01)
+                          make_worker=lambda *a: None, start=lambda goal: ("https://x.test/", "x", True), library=EMPTY,
+                          poll=0.01)
     task = conversation.Task("t9", "Order a coke")
     task.script = {"answers": [], "fallback": "ok"}
     replies = []
@@ -621,30 +636,32 @@ def test_a_bench_task_moves_on_when_no_sign_in_code_comes(world):
     assert task.bench["stopped"] == "needs sign-in: no code came within 5 minutes"
 
 
-def test_a_new_request_while_a_task_runs_asks_to_drop_it_and_yes_switches(world):
+def test_a_new_request_while_a_task_runs_starts_alongside_it(world):
     gate = threading.Event()
+    world.hosts["Book a cab"] = "cab.test"
     world.scripts["Order Diet Coke"] = [hold(gate)]
-    world.scripts["Book a cab"] = [hold(threading.Event())]
+    world.scripts["Book a cab"] = [hold(gate)]
     text(world, "Order Diet Coke")
     assert until(lambda: world.core.tasks["t1"].status == "running")
     text(world, "Book a cab")
-    assert until(lambda: any("Drop it and start" in b for b in bodies(world)))
-    assert "t2" not in world.core.tasks
-    yes = interactive(world)[-1]["interactive"]["action"]["buttons"][0]["reply"]["id"]
-    tap(world, yes)
-    gate.set()  # the running task stops after its current step
-    assert until(lambda: world.core.tasks["t1"].status == "cancelled" and "t2" in world.core.tasks)
-
-
-def test_no_keeps_the_running_task_and_drops_the_new_request(world):
-    gate = threading.Event()
-    world.scripts["Order Diet Coke"] = [hold(gate)]
-    text(world, "Order Diet Coke")
-    assert until(lambda: world.core.tasks["t1"].status == "running")
-    text(world, "Book a cab")
-    assert until(lambda: any("Drop it and start" in b for b in bodies(world)))
-    no = interactive(world)[-1]["interactive"]["action"]["buttons"][1]["reply"]["id"]
-    tap(world, no)
-    assert until(lambda: any("keep going with Order Diet Coke" in b for b in bodies(world)))
-    assert world.core.tasks["t1"].status == "running" and "t2" not in world.core.tasks
+    assert until(lambda: "t2" in world.core.tasks and world.core.tasks["t2"].status == "running")
+    assert not any("Drop it and start" in b for b in bodies(world))
     gate.set()
+
+
+def test_a_message_with_two_errands_becomes_two_tasks(world):
+    message = "milk from Zepto and a cab home"
+    world.intakes[message] = {"several": "yes"}
+    world.splits[message] = ["Buy milk on Zepto", "Book a cab home"]
+    world.hosts["Book a cab home"] = "cab.test"
+    text(world, message)
+    assert until(lambda: {"Buy milk on Zepto", "Book a cab home"} <= set(world.agents))
+    assert "On it: 2 tasks." in bodies(world)
+
+
+def test_preauthorisation_and_its_cap_reach_the_task(world):
+    goal = "Order coke, don't ask, under ₹300"
+    world.intakes[goal] = {"preauth": "yes"}
+    text(world, goal)
+    assert until(lambda: goal in world.made)
+    assert world.made[goal].preauth and world.made[goal].cap == 300.0

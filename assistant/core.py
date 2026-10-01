@@ -1,4 +1,4 @@
-"""The conversation: routes every chat message, keeps one question open at a time, and runs each task's agent in
+"""The conversation: routes every chat message, keeps one question open at a time, and runs each task's worker in
 its own thread — at most three at once and one per site."""
 
 import base64
@@ -8,10 +8,10 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import jobs, messages, model, rules
-from .agent import STOPPED
-from .driver import agent_class
+from . import jev, messages, planner, rules, skills
+from .gate import cap
 from .profile import SECRETS, Profile, Secrets
+from .worker import DELEGATE, STOPPED, Worker
 
 MAX_RUNNING = 3
 PAUSE_AFTER = 15 * 60
@@ -37,14 +37,15 @@ class Question:
 
 
 class Task:
-    def __init__(self, tid, goal):
+    def __init__(self, tid, goal, single=False):
         self.id, self.goal, self.title, self.host = tid, goal, goal[:60], None
-        self.status, self.agent, self.updates = "starting", None, []
+        self.status, self.worker, self.updates = "starting", None, []
         self.cancelled, self.sent_files, self.problems = False, 0, 0
+        self.skill, self.preauth, self.cap, self.url, self.single = None, False, None, None, single
         self.script, self.bench = None, {"gate": None, "asked": []}  # a bench run: scripted replies
 
     def view(self, question=None):
-        history = self.agent.state["history"] if self.agent else []
+        history = self.worker.state["history"] if self.worker else []
         view = {"id": self.id, "title": self.title, "goal": self.goal,
                 "step": history[-1]["action"] if history else self.status}
         if question:
@@ -53,25 +54,29 @@ class Task:
 
 
 class Core:
-    def __init__(self, channel, *, user="local", profile=None, make_agent=None, start=None, classify=None,
-                 chat=None, remember=None, clock=time.monotonic, poll=1.0):
+    def __init__(self, channel, *, user="local", profile=None, make_worker=None, start=None, route=None, intake=None,
+                 split=None, chat=None, remember=None, library=None, clock=time.monotonic, poll=1.0):
         self.channel, self.user = channel, user
         self.profile = profile or Profile()
-        self.make_agent = make_agent or self.agent_for
-        self.start = start or jobs.start
-        self.classify = classify or model.classify
-        self.chat = chat or jobs.chat
-        self.remember_job = remember or jobs.remember
+        self.make_worker = make_worker or self.worker_for
+        self.start = start or planner.start
+        self.route_message = route or jev.route
+        self.intake = intake or jev.intake
+        self.split = split or planner.split
+        self.chat = chat or planner.chat
+        self.remember_job = remember or planner.remember
+        self.library = library if library is not None else {"skills": skills.load(), "sites": skills.load_sites()}
         self.clock, self.poll = clock, poll
         self.lock = threading.RLock()
         self.slots = threading.Condition(self.lock)
         self.tasks, self.queue, self.open, self.log = {}, [], None, []
         self.remembering, self.routes = {}, {}
         self.task_ids, self.question_ids = itertools.count(1), itertools.count(1)
-        self.secrets = Secrets(self.profile.hidden_values())  # classification never sees the profile's values
+        self.secrets = Secrets(self.profile.hidden_values())  # routing never sees the profile's values
 
-    def agent_for(self, url, goal, title, asker, notify):
-        return agent_class()(url, goal, title=title, asker=asker, notify=notify, profile=self.profile)
+    def worker_for(self, task, url, asker, notify):
+        return Worker(url, task.goal, title=task.title, asker=asker, notify=notify, profile=self.profile,
+                      skill=task.skill, preauth=task.preauth, cap=task.cap, library=self.library)
 
     def hidden(self, call, *args):
         """A model call with the user's profile values redacted."""
@@ -138,7 +143,7 @@ class Core:
                 return None
             views, chat = self.views(), self.log[-7:-1]
         try:
-            intent, target, probabilities, certainty = self.hidden(self.classify, text, views, chat)
+            intent, target, probabilities, certainty = self.hidden(self.route_message, text, views, chat)
         except Exception as error:  # a model or network failure is a chat message, never a failed webhook
             return self.say(f"I couldn't read that message: {error}")
         return self.route(event, text, intent, target, probabilities, certainty, question)
@@ -157,18 +162,18 @@ class Core:
             active = [t for t in self.tasks.values() if t.status in ACTIVE]
             task = self.tasks.get(target)
             task = task if task in active else None
-            if active and model.ambiguous(probabilities):
+            if active and jev.ambiguous(probabilities):
                 return self.which(event, text, active, None, asked)
             if intent == "ANSWER" and self.open:
                 if self.open is not asked:  # another question opened while Jev read this one's answer
                     return self.say("The question changed while I was reading your message. Please answer again.")
                 return self.answer(self.open, event)
             if intent == "NEW_TASK":
-                return self.switch(event, text, active) if active else self.new_task(text)
+                return self.new_task(text)
             if intent in {"CANCEL", "AMEND"}:
                 if not active:
                     return self.say("Nothing is running right now.")
-                if task is None or model.ambiguous(certainty):  # never stop or change a task by guess
+                if task is None or jev.ambiguous(certainty):  # never stop or change a task by guess
                     return self.which(event, text, active, intent, asked)
                 return self.cancel(task) if intent == "CANCEL" else self.amend(task, text)
             views = self.views()
@@ -180,8 +185,7 @@ class Core:
 
     def amend(self, task, text):
         task.updates.append(text)
-        done = [m.removeprefix("Done: ").rpartition(" (")[0] for m in task.agent.state["memory"]
-                if m.startswith("Done: ")] if task.agent else []  # the agent's record of a finished commit
+        done = task.worker.state.get("done", []) if task.worker else []  # commits the site confirmed
         if done:
             return self.say(f"{done[-1]} already went through. I'll try to change it on the site; anything "
                             "that costs money again waits for your OK. Say “cancel” to stop instead.", task)
@@ -196,28 +200,8 @@ class Core:
                                 options + [(f"route:new:{event['id']}", "New task")])
         self.buttons("Which task should I stop?" if intent == "CANCEL" else "Which task is this change for?", options)
 
-    def switch(self, event, text, active):
-        """One task at a time: a new request while one runs asks whether to drop the running one."""
-        self.routes[event["id"]] = (text, "SWITCH", None)
-        titles = " and ".join(f"“{t.title}”" for t in active)
-        self.buttons(f"You're in the middle of {titles}. Drop it and start “{text[:60]}” instead?",
-                     [(f"switch:yes:{event['id']}", "Yes, start the new one"),
-                      (f"switch:no:{event['id']}", f"No, keep {active[0].title}"[:20])])
-
     def tapped(self, event):
         kind, _, rest = event["reply_id"].partition(":")
-        if kind == "switch":
-            answer, _, key = rest.partition(":")
-            routed = self.routes.pop(key, None)
-            if routed is None:
-                return None
-            active = [t for t in self.tasks.values() if t.status in ACTIVE]
-            if answer == "no":
-                return self.say(f"Okay, I'll keep going with {', '.join(t.title for t in active) or 'what I was doing'}"
-                                " and won't start the new request.")
-            for task in active:
-                self.cancel(task)
-            return self.new_task(routed[0])
         if kind == "route":
             target, _, key = rest.partition(":")
             routed = self.routes.pop(key, None)
@@ -225,8 +209,7 @@ class Core:
                 return None
             text, intent, asked = routed
             if target == "new":
-                active = [t for t in self.tasks.values() if t.status in ACTIVE]
-                return self.switch(event | {"id": key}, text, active) if active else self.new_task(text)
+                return self.new_task(text)
             task = self.tasks.get(target)
             if not task or task.status not in ACTIVE:
                 return self.say(f"{task.title if task else 'That task'} already finished.")
@@ -280,7 +263,7 @@ class Core:
 
     def show_next(self):
         """Open the next question. A code or password request opens at once, moving an ordinary question aside
-        (its buttons still work), so a code typed as it arrives never goes to a model."""
+        (its buttons still work), so a code typed as it arrives never reaches a model call."""
         if self.open is None and self.queue:
             question = min(self.queue, key=lambda q: (q.message["kind"] not in FIRST, q.asked_at, q.id))
         elif self.open is not None and self.open.message["kind"] != "secret":
@@ -301,8 +284,8 @@ class Core:
 
     # ---- tasks
 
-    def new_task(self, goal, script=None):
-        task = Task(f"t{next(self.task_ids)}", goal)
+    def new_task(self, goal, script=None, single=False):
+        task = Task(f"t{next(self.task_ids)}", goal, single=single or script is not None)  # bench goals never split
         task.script = script
         self.tasks[task.id] = task
         threading.Thread(target=self.run, args=(task,), name=f"jev-{task.id}", daemon=True).start()
@@ -352,84 +335,123 @@ class Core:
 
     def run(self, task):
         try:
-            url, task.title, info = self.hidden(self.start, task.goal)
-            service = self.default_service(task, info or {})
-            if service:
-                url, task.title, _ = self.hidden(self.start, f"{task.goal} (on {service})")
-            task.host = site(url)
+            self.prepare(task)
             if not self.acquire(task):
                 return self.say(f"Cancelled {task.title} before it started.")
-            task.agent = self.make_agent(url, task.goal, task.title, lambda m: self.ask(task, m),
-                                         lambda m: self.send(m, task))
-            task.agent.interrupted = lambda: task.cancelled or bool(task.updates)
+            task.worker = self.make_worker(task, task.url, lambda m: self.ask(task, m), lambda m: self.send(m, task))
+            task.worker.bench = task.script is not None
+            task.worker.interrupted = lambda: task.cancelled or bool(task.updates)
             self.update_typing()
-            while task.agent.state["status"] not in STOPPED and not task.cancelled:
+            while task.worker.state["status"] not in STOPPED and not task.cancelled:
                 self.apply_updates(task)
                 try:
-                    task.agent.command("tick")
+                    task.worker.command("tick")
                     task.problems = 0
                 except (ValueError, RuntimeError) as error:
                     if not self.problem(task, error):
                         break
                 self.deliver_files(task)
-        except Exception as error:  # the start job, launching the browser, anything: say it once
+        except Exception as error:  # the start, launching the browser, anything: say it once
             self.say(f"I couldn't carry on with {task.title}: {error}")
         finally:
-            state = task.agent.state["status"] if task.agent else None
+            state = task.worker.state["status"] if task.worker else None
             task.status = state if state in STOPPED else ("cancelled" if task.cancelled else "failed")
-            if task.agent and state not in STOPPED:
-                task.agent.state["status"] = task.status  # so its trace says how it ended (P4-02)
-            if task.cancelled and task.agent and state not in STOPPED:  # it stopped between steps: say so
-                commit = task.agent.state.get("commit")
+            if task.worker and state not in STOPPED:
+                task.worker.state["status"] = task.status  # so its trace says how it ended
+            if task.cancelled and task.worker and state not in STOPPED:  # it stopped between steps: say so
+                commit = task.worker.state.get("commit")
                 pending = f" {commit['label']} may already have gone through; check it before trying again." \
                     if commit else ""
                 self.say(f"Stopped {task.title}.{pending}", task)
-            if task.agent:
+            if task.worker:
                 try:
-                    task.agent.settle()  # downloads that finish as the task ends still reach chat
+                    task.worker.settle()  # downloads that finish as the task ends still reach chat
                     self.deliver_files(task)
                 except Exception:
                     pass
                 try:
-                    task.agent.close()
+                    task.worker.close()
                 except Exception:
                     pass
             with self.slots:
                 self.slots.notify_all()
             self.update_typing()
 
-    def default_service(self, task, info):
-        """The app for a goal that names none: the saved default for its kind, or ask once and save it."""
-        kind, services = (info.get("kind") or "").strip(), info.get("services") or []
-        if info.get("service_named", True) or not kind or not services:
-            return None
-        prefix = f"default app for {kind.lower()}:"
+    def prepare(self, task):
+        """Before a task starts: its skill, pre-authorisation, cap, and start page. A message with several errands
+        becomes several tasks; this one keeps the first."""
+        kinds = skills.kinds(self.library["skills"])
+        info = self.hidden(self.intake, task.goal, self.log[-7:-1], kinds, not task.single)
+        if info.get("several") == "yes":
+            goals = self.hidden(self.split, task.goal)
+            if len(goals) > 1:
+                self.say(f"On it: {len(goals)} tasks.")
+                task.goal, task.title = goals[0], goals[0][:60]
+                with self.lock:  # other threads iterate self.tasks under the lock
+                    for goal in goals[1:]:
+                        self.new_task(goal, single=True)
+                info = self.hidden(self.intake, task.goal, [], kinds, False)
+        task.skill = info["skill"] if info["skill"] in self.library["skills"] else None
+        task.preauth, task.cap = info["preauth"] == "yes", cap(task.goal)
+        task.url, task.title = self.start_page(task)
+        task.host = site(task.url)
+
+    def start_page(self, task):
+        """(start URL, title): the site the goal names; else the one the start job finds when the goal names a site
+        without a note; else the skill's saved or asked default app."""
+        sites = self.library["sites"]
+        skill = self.library["skills"].get(task.skill) if task.skill else None
+        note = skills.named(task.goal, sites)
+        if note is None:
+            url, title, named = self.hidden(self.start, task.goal)
+            if named or not (skill and skill["sites"]):
+                return url, title
+            chosen = self.default_service(task, skill)
+            if chosen in sites:
+                note = sites[chosen]
+            elif chosen:  # an app the skill doesn't list, in the user's own words
+                return self.hidden(self.start, f"{task.goal} (on {chosen})")[:2]
+            else:
+                return url, title
+        return skills.start(note, task.skill), f"{note['name']} · {task.goal}"[:60]
+
+    def default_service(self, task, skill):
+        """The app for a skill when the goal names none: the saved default, else asked once and saved. Returns a
+        site note's host, the user's own words for an app the skill doesn't list, or None."""
+        names = {host: (self.library["sites"].get(host) or {}).get("name") or host for host in skill["sites"]}
+        prefix = f"default app for {skill['name']}:"
         saved = next((p["text"] for p in self.profile.data["preferences"] if p["text"].lower().startswith(prefix)),
                      None)
         if saved:
-            service = saved.split(":", 1)[1].strip()
-            self.say(f"Using {service} for {kind}, as you chose before.", task)
-            return service
-        listed = ", ".join(services[:-1]) + f" or {services[-1]}" if len(services) > 1 else services[0]
-        reply = self.ask(task, {"kind": "text", "text": f"Which app should I use for {kind}: {listed}?"})
+            name = saved.split(":", 1)[1].strip()
+            host = next((h for h, n in names.items() if n.lower() == name.lower()), None)
+            if host:
+                self.say(f"Using {name} for {skill['name']}, as you chose before.", task)
+                return host
+        listed = list(names.values())
+        options = ", ".join(listed[:-1]) + f" or {listed[-1]}" if len(listed) > 1 else listed[0]
+        reply = self.ask(task, {"kind": "text", "text": f"Which app should I use for {skill['name']}: {options}?"})
         text = str(reply.get("text", "")).strip()
         if reply.get("cancel") or not text:
             return None
-        service = next((s for s in services if s.lower() in text.lower() or text.lower() in s.lower()), text)
-        self.profile.remember(f"Default app for {kind}: {service}", task.goal)
-        self.say(f"Saved: I'll use {service} for {kind} from now on.", task)
-        return service
+        if DELEGATE.search(text):
+            return next(iter(names))  # left to me: the skill's usual first choice, not saved as a preference
+        host = next((h for h, n in names.items() if n.lower() in text.lower() or text.lower() in n.lower()), None)
+        if host is None:
+            return text
+        self.profile.remember(f"Default app for {skill['name']}: {names[host]}", task.goal)
+        self.say(f"Saved: I'll use {names[host]} for {skill['name']} from now on.", task)
+        return host
 
     def apply_updates(self, task):
         while task.updates:
-            task.agent.state["memory"].append(f"User update: {task.updates.pop(0)}")
-            task.agent.state["approval"] = None  # an amendment voids any approval given before it
+            task.worker.update(task.updates.pop(0))  # the planner hears it next; any approval is void
 
     def problem(self, task, error):
         """Report a model or network error. False when the task must stop."""
         task.problems += 1
         self.say(f"Problem: {error}", task)
-        commit = task.agent.state.get("commit")
+        commit = task.worker.state.get("commit")
         if commit:
             self.say(f"{commit['label']} may already have gone through. Check it before asking me again.", task)
             return False
@@ -499,7 +521,7 @@ class Core:
         return {"text": answer}
 
     def deliver_files(self, task):
-        files = task.agent.state["files"]
+        files = task.worker.state["files"]
         for name in files[task.sent_files:]:
             path = Path(name)
             if path.is_file() and path.stat().st_size <= MAX_DOWNLOAD:

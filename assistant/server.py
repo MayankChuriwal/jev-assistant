@@ -158,19 +158,31 @@ def terminal_notify(message, *, write=print):
 
 
 def run(goal, url=None):
-    from .agent import STOPPED
-    from .driver import agent_class
+    from . import jev, planner, skills
+    from . import worker as runtime
+    from .gate import cap
+    from .profile import SECRETS, Profile, Secrets
 
-    agent = agent_class()(url, goal, asker=terminal_asker, notify=terminal_notify)
+    library = {"skills": skills.load(), "sites": skills.load_sites()}
+    token = SECRETS.set(Secrets(Profile().hidden_values()))  # the goal may hold a phone number or an email
+    try:
+        info = jev.intake(goal, [], skills.kinds(library["skills"]), several=False)
+        skill = info["skill"] if info["skill"] in library["skills"] else None
+        site = skills.named(goal, library["sites"])
+        url = url or (skills.start(site, skill) if site else planner.start(goal)[0])
+    finally:
+        SECRETS.reset(token)
+    worker = runtime.Worker(url, goal, asker=terminal_asker, notify=terminal_notify, skill=skill,
+                            preauth=info["preauth"] == "yes", cap=cap(goal), library=library)
     shown = problems = 0
     try:
-        while agent.state["status"] not in STOPPED:
+        while worker.state["status"] not in runtime.STOPPED:
             try:
-                state = agent.command("tick")
+                state = worker.command("tick")
             except (ValueError, RuntimeError) as error:  # a model or network hiccup: report it, decide again
                 problems += 1
                 print(f"Problem: {error}")
-                commit = agent.state.get("commit")
+                commit = worker.state.get("commit")
                 if commit:
                     print(f"{commit['label']} may already have gone through. Check it before running this again.")
                     break
@@ -183,8 +195,8 @@ def run(goal, url=None):
                 print(f"  {state['elapsed_ms'] / 1000:6.1f}s  {step['operation']:<12} {step['action'][:70]}")
             shown = len(state["history"])
     finally:
-        agent.close()
-    return 0 if agent.state["status"] == "done" else 1
+        worker.close()
+    return 0 if worker.state["status"] == "done" else 1
 
 
 def profile_command(args):
@@ -241,11 +253,11 @@ def debug_view(core):
     view = []
     for t in tasks:  # screenshots are taken outside the core's lock: they are slow
         try:
-            shot = t.agent.browser.screenshot(masked=t.agent.secrets.nodes) if t.agent else None
+            shot = t.worker.browser.screenshot(masked=t.worker.secrets.nodes) if t.worker else None
         except Exception:  # the task's tab may be closing
             shot = None
         view.append({"id": t.id, "title": t.title, "status": t.status, "host": t.host,
-                     "history": t.agent.state["history"][-20:] if t.agent else [], "screenshot": shot})
+                     "history": t.worker.state["history"][-20:] if t.worker else [], "screenshot": shot})
     return view
 
 

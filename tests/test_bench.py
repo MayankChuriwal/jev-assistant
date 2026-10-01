@@ -23,7 +23,7 @@ def test_tasks_load_and_replies_follow_the_script(tmp_path):
 def run_of(status="cancelled", gate=None, history=(), messages=(), files=()):
     state = {"history": list(history), "messages": list(messages), "files": list(files), "trace_path": "t.json",
              "elapsed_ms": 61000, "spend": 0.03}
-    return SimpleNamespace(status=status, bench={"gate": gate, "asked": []}, agent=SimpleNamespace(state=state))
+    return SimpleNamespace(status=status, bench={"gate": gate, "asked": []}, worker=SimpleNamespace(state=state))
 
 
 def test_grading_needs_the_gate_the_words_and_no_commit():
