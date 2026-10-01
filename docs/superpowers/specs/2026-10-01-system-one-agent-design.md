@@ -20,7 +20,7 @@ Decided with the user on 2026-10-01:
 |---|---|
 | Model split | Jev chooses every browser step (operation + element) and judges done, blocked, and worked. Mini writes plan subgoals, typed values, and every word the user reads, and steps in only on low-margin or blocked steps. Code guards the invariants. |
 | Know-how | Markdown skills (task kinds + situations) with per-site notes. Code keeps only universal invariants. The commerce regex rails of `driver.py` move into skill text or are deleted. |
-| Autonomy | One approval per commit, with a summary whose facts come from code, bound to site and total, asked again if the total changes. Skipped only when the user's own message explicitly authorised the final step and code confirms items, site, and total ≤ the stated cap. |
+| Autonomy | One approval per commit, with a summary whose facts come from code, bound to site and total, asked again if the total changes. Skipped only when the user's own message explicitly authorised the final step and code confirms items, site, and total ≤ the stated cap. Pre-authorisation ships in shadow mode: until the owner sets `JEV_PREAUTH=on`, a pre-authorised commit is asked about like any other (the question adds a line saying so); bench runs always behave this way. |
 | Done bar | 24 known bench tasks over 10 categories, run twice, plus 8 unseen tasks per run from a pool no skill or site note is written for. Pass ≥ 80% known, ≥ 60% unseen, 0 unsafe actions, median ≤ 2 s per step, ≤ $0.02 per task. |
 | Parallel | Up to 3 tasks at once, one per site. The concierge is the only voice to the user. Jev routes every message; mini splits multi-part requests. |
 | Tools | Browser only. Skills may carry URL templates for search, filter, and sort. |
@@ -380,7 +380,7 @@ For each incoming message, in order:
    today.
 2. **Routing:** Jev reads the intent (ANSWER, AMEND, NEW_TASK, CANCEL, STATUS, OTHER) and the task (today's
    classifier, moved into `jev.py`). Ambiguous readings ask which task (today's `which`).
-3. **New task.** One Jev request with three questions over the message and the recent chat:
+3. **New task.** One Jev request with three questions over the user's current message (never earlier chat: a 'don't ask' for an earlier errand must not pre-authorise a later one):
    - `several`: yes/no, the message asks for more than one separate errand;
    - `skill`: the kind skill, or general;
    - `preauth`: yes/no, the user explicitly says to go ahead without confirming.
@@ -411,6 +411,8 @@ For each incoming message, in order:
      or
    - it happens during a `commit` subgoal and Jev's `final` check on the control says "final" (≥ 0.5).
 
+   Commit detection has two tiers: an outright tier (the commit regex: pay, place order, buy, book ride/cab/bike/auto/table, confirm order/payment, make payment, submit order, end/cancel membership, order now, recharge now, delete, …) that Jev can never clear, and a maybe tier (book, confirm, request, reserve, submit, send, transfer, recharge, subscribe, complete, place, proceed to pay/checkout, any control whose words contain a redaction placeholder) that Jev's `final` check may clear only with 'step' at probability ≥ 0.8.
+
    Jev's `final` check ("completes the order, booking, payment, submission, or message now" against "a step on the
    way") also runs for ambiguous regex hits: a checkout step such as "Proceed to Pay", or a payment method whose name
    contains "Pay". It clears only those (at "step" ≥ 0.8); a label the commit regex matches outright is never cleared
@@ -429,7 +431,8 @@ For each incoming message, in order:
    - **Pre-authorised run:** the task was pre-authorised, the page shows a payable total, code parses it as ≤ the
      cap, the match check says yes, and the host is the task's site. The summary is sent as "Placing: …" and the
      action runs.
-   - **Pre-authorised, no cap:** runs only when the page shows no amount at all (a form submission, a message).
+   - **Pre-authorised, no cap:** runs only when the goal is not a commerce goal (no order/buy/book/pay/purchase/reserve words) and the page shows no money at all; a commerce goal with no cap always asks.
+   - **Shadow mode (default):** unless `JEV_PREAUTH=on`, neither pre-authorised route runs; the commit is asked about, and the question ends with a line saying pre-approval is switched off.
    - **Everything else asks.** A yes needs both today's clear-yes words (no "no", "wait", "but", "?") and Jev's
      `approval` = yes. "Change" and "no" go to the planner; nothing is committed.
 6. **Bind.** The approval holds the element, host, and amount, and lapses when:
