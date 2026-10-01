@@ -42,8 +42,10 @@ PROFILE_NAMES = {"phone": "phone number", "email": "email address", "name": "ful
 
 
 def secret_field(action):
-    """Whether only the user's hidden answer may go into this field: a code or password, or a card detail."""
-    return rules.secret_field(action) or bool(rules.CARD_DETAIL.search(action.get("label") or ""))
+    """Whether only the user's hidden answer may go into this field: a code or password, or a card detail. A button
+    that merely mentions card details is not a field."""
+    return rules.secret_field(action) or (action.get("kind") == "fill"
+                                          and bool(rules.CARD_DETAIL.search(action.get("label") or "")))
 
 
 def plain(text):
@@ -319,7 +321,7 @@ class Worker:
         field and typed without the planner; anything else brings its situation skill to the planner."""
         if step["blocker"] == "captcha":
             return self.relay_captcha(page)
-        if step["blocker"] == "code" and rules.code_field(page):
+        if step["blocker"] == "code" and any(secret_field(a) for a in page["actions"]):
             return self.ask_code(page, step)
         situation = {"sign_in": "sign-in", "payment": "payment", "unavailable": "location"}.get(step["blocker"])
         if situation and situation not in self.state["situations"]:
@@ -334,7 +336,7 @@ class Worker:
         fields = [a for a in action_space(page["actions"])[1].get("type_text_target", {}).values()
                   if secret_field(a)]
         field = chosen if chosen is not None and secret_field(chosen) else (fields[0] if fields else None)
-        if field is None:
+        if field is None or field.get("value") == "[secret]":  # none, or a code typed that the site hasn't rejected
             return self.escalate("blocker:code", page)
         card = bool(rules.CARD_DETAIL.search(field["label"]))
         if not card and s["code_asks"] >= CODE_ASKS:  # each code usually means a new one sent to the user's phone
@@ -368,7 +370,9 @@ class Worker:
                           "with the numbers of the squares to pick, like 2 5 8; or type the text it shows; or say "
                           "none if there is nothing to pick."})
         text = str(reply.get("text", "")).strip()
-        picked = [int(n) for n in re.findall(r"\d+", text)] if re.fullmatch(r"[\d\s,]+", text) else None
+        joined = re.sub(r"\band\b", " ", text, flags=re.IGNORECASE)  # "2 and 5", "2, 5 & 7": squares; "4829": text
+        numbers = [int(n) for n in re.findall(r"\d+", joined)] if re.fullmatch(r"[\d\s,&]+", joined) else []
+        picked = list(dict.fromkeys(numbers)) if numbers and all(1 <= n <= len(marks) for n in numbers) else None
         if picked is None and text.lower() in {"none", ""}:
             s["notes"].append("The user says the captcha has nothing to pick: press its verify or skip button.")
         elif picked is None:
@@ -378,18 +382,18 @@ class Worker:
         else:
             s["relaying"] = True  # these clicks are the user's: no loop counting in between
             try:
-                for n in picked:
-                    if 1 <= n <= len(marks):
-                        self.click_same(marks[n - 1])
+                done = [n for n in picked if self.click_same(marks[n - 1])]
             finally:
                 s["relaying"] = False
-            s["notes"].append(f"Clicked the captcha squares the user picked ({', '.join(map(str, picked))}). "
-                              "Press its verify or next button now.")
+            s["notes"].append(f"Clicked the captcha squares the user picked ({', '.join(map(str, done))}). "
+                              "Press its verify or next button now." if done else
+                              "None of the squares the user picked could be pressed.")
         s["status"] = "ready"
         return None
 
     def click_same(self, target):
-        """Click the element the user named, on a fresh read of the page; never a commit."""
+        """Click the element the user named, on a fresh read of the page; never a commit. True only when it was
+        pressed."""
         page = self.observe()  # the user may have taken a while
         clicks = [a for a in page["actions"] if a["kind"] == "click"]
         same = (target.get("frame"), target.get("node"))
@@ -398,15 +402,16 @@ class Worker:
             named = [a for a in clicks if a["label"] == target["label"]]
             match = named[0] if len(named) == 1 else None  # two "Deliver here" buttons: never guess
         if match is None:
-            return None  # the page moved on
+            return False  # the page moved on
         if rules.commit_label("CLICK", match, page):
             self.state["notes"].append(f"The user's pick “{match['label']}” would commit, so it wasn't pressed.")
-            return None
+            return False
         try:
-            return self.run(page, "CLICK", match, {}, None, goal="the user's pick")
+            self.run(page, "CLICK", match, {}, None, goal="the user's pick")
         except StalePage:
             self.observe()
-            return None
+            return False
+        return True
 
     def escalate(self, reason, page):
         s = self.state

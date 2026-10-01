@@ -10,6 +10,7 @@ from fakes import fake_page, jev_checks, script_jev, script_planner, sub, turn, 
 
 from assistant import jev, planner
 from assistant.browser import StalePage
+from assistant.worker import secret_field
 
 
 def test_the_planner_plans_once_and_jev_does_the_steps(tmp_path, monkeypatch):
@@ -437,3 +438,97 @@ def test_card_digits_typed_as_the_stuck_reply_are_asked_hidden_and_kept_out_of_e
     assert w.asked[0]["kind"] == "secret" and w.state["reason"] == "reply"
     assert w.state["chat"][-1]["text"].startswith("[secret:answer1]")
     assert "4111" not in json.dumps([w.state["chat"], w.state["messages"], w.trace()])
+
+
+def captcha_relay(tmp_path, reply, labels=None):
+    """A worker over a 3x3 captcha, the user's reply given, relay_captcha run once."""
+    squares = [{"id": f"s{n}", "kind": "click", "label": label, "role": "button", "node": n}
+               for n, label in enumerate(labels or [f"Tile {n}" for n in range(1, 10)], 1)]
+    w = worker_with(tmp_path, page=fake_page(actions=squares), replies=[{"text": reply}])
+    w.browser.marked_screenshot = Mock(return_value="numbered")
+    w.relay_captcha(w.state["page"])
+    return w
+
+
+def pressed(w):
+    return [c.args[1]["label"] for c in w.browser.act.call_args_list]
+
+
+def test_a_numeric_text_captcha_is_text_not_squares(tmp_path):
+    for reply in ("4829", "2 40", "0 3"):  # a number outside the squares: the whole reply is the text it shows
+        w = captcha_relay(tmp_path, reply)
+        assert pressed(w) == [] and not any("Clicked" in note for note in w.state["notes"]), reply
+        assert reply in w.state["chat"][-1]["text"] and w.state["reason"] == "reply", reply
+
+
+def test_squares_may_be_joined_by_and_commas_or_ampersands(tmp_path):
+    assert pressed(captcha_relay(tmp_path, "2 and 5")) == ["Tile 2", "Tile 5"]
+    w = captcha_relay(tmp_path, "2, 5 & 7")
+    assert pressed(w) == ["Tile 2", "Tile 5", "Tile 7"] and w.state["reason"] != "reply"
+    assert "picked (2, 5, 7)" in w.state["notes"][-1]
+
+
+def test_a_square_named_twice_is_pressed_once(tmp_path):
+    w = captcha_relay(tmp_path, "2 2")
+    assert pressed(w) == ["Tile 2"] and "picked (2)" in w.state["notes"][-1]
+
+
+def test_a_square_that_would_commit_is_not_pressed_and_not_reported_as_pressed(tmp_path):
+    labels = ["Tile 1", "Pay ₹79", "Tile 3"]
+    w = captcha_relay(tmp_path, "1 2", labels)
+    assert pressed(w) == ["Tile 1"]
+    assert any("would commit" in note for note in w.state["notes"]) and "picked (1)" in w.state["notes"][-1]
+    w = captcha_relay(tmp_path, "2", labels)
+    assert pressed(w) == [] and not any("Clicked" in note for note in w.state["notes"])
+    assert any("would commit" in note for note in w.state["notes"])
+    assert "None of the squares" in w.state["notes"][-1]
+
+
+def test_a_page_with_only_a_card_field_asks_for_the_card_without_the_planner(tmp_path, monkeypatch):
+    page = fake_page(actions=[{"id": "e9", "kind": "fill", "label": "Card number", "role": "textbox", "value": "",
+                               "node": 20, "constraints": {}}])
+    w = worker_with(tmp_path, page=page, replies=[{"text": "4111 1111 1111 1111"}])
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("pay by card")]))
+    sent = script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Card number", "blocker": "code"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert len(seen) == 1 and w.asked[0]["kind"] == "secret" and w.state["code_asks"] == 0
+    assert w.browser.act.call_args.kwargs["text"].replace(" ", "") == "4111111111111111"
+    assert w.state["history"][-1]["text"] == "[secret:answer1]"
+    assert "4111" not in json.dumps([w.state["chat"], w.state["messages"], w.trace(), seen, sent])
+
+
+def test_a_button_called_card_details_is_not_a_secret_field(tmp_path):
+    button = {"id": "b1", "kind": "click", "label": "Card details", "role": "button", "node": 3}
+    w = worker_with(tmp_path, page=fake_page(actions=[button]), replies=[{"text": "use the saved one"}])
+    w.stuck()
+    assert w.asked[0]["kind"] == "text"
+    assert secret_field({**button, "kind": "fill", "label": "Card number"}) and not secret_field(button)
+
+
+def code_page(value):
+    page = fake_page()
+    next(a for a in page["actions"] if a["id"] == "e2")["value"] = value
+    return page
+
+
+def test_a_code_already_typed_is_not_asked_for_again(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=code_page("[secret]"), replies=[{"text": "481516"}])
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("sign in")]))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Code", "blocker": "code"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.state["code_asks"] = 3  # even at the limit: nothing is asked, so nothing is stopped
+    w.command("tick")
+    assert w.asked == [] and w.state["status"] != "blocked" and seen[-1]["reason"] == "blocker:code"
+
+
+def test_an_emptied_code_field_is_asked_for_again(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=code_page(""), replies=[{"text": "481516"}])
+    script_planner(monkeypatch, turn(subgoals=[sub("sign in")]))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Code", "blocker": "code"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert len(w.asked) == 1 and w.asked[0]["kind"] == "secret"
