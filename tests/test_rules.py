@@ -125,3 +125,14 @@ def test_checkout_steps_are_not_commits_but_final_buttons_are():
     click = lambda label: rules.commit_label("CLICK", {"label": label}, page)  # noqa: E731
     assert click("Proceed to Buy (1 item)") is None and click("Proceed to Pay") is None
     assert click("Place your order") and click("Pay ₹79") and click("Complete purchase") and click("Buy Now")
+
+
+@pytest.mark.parametrize("label", ["CVV", "card number", "Card Number", "card no", "Card No.", "card details",
+                                   "Expiration date", "expiry", "Expiry date", "UPI PIN"])
+def test_card_detail_labels_are_recognised(label):
+    assert rules.CARD_DETAIL.search(label), label
+
+
+@pytest.mark.parametrize("label", ["promo code", "card holder name", "gift card code", "Phone number", "Notes"])
+def test_other_labels_are_not_card_details(label):
+    assert not rules.CARD_DETAIL.search(label), label

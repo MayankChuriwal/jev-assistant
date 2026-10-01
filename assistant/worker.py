@@ -24,6 +24,7 @@ MAX_SPEND = 0.25
 SUBGOAL_STEPS = 12
 STUCK_AT = 8
 CODE_ASKS = 3
+CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QUIET = {"WAIT", "SCROLL_UP", "SCROLL_DOWN"}  # repeating these is not going in circles
 TALKING = {"ASK", "TELL", "DONE", "STOP"}
 TRACE_STEP = ("step", "subgoal", "operation", "action", "text", "key", "files", "page_changed", "url", "changed",
@@ -300,14 +301,112 @@ class Worker:
             return self.advance()
         if step["kind"] == "think":
             return self.escalate("unsure", page)
+        label = step["action"].get("label") or step["operation"]
+        count = executor.repeats(s["history"][s["loop_from"]:], step["operation"], label, page["url"])
+        if count >= 2 and step["operation"] not in QUIET:  # changed nothing twice: Jev's next-best once, then mini
+            key = [step["operation"], label, urlparse(page["url"]).path]
+            other = next((c for c in step["candidates"] if c["action"].get("label") != label), None)
+            if count >= 3 or key in s["switched"] or other is None:
+                s["feedback"].append(f"“{label}” changed nothing {count} times, and Jev's next-best choice didn't "
+                                     "help: try another way.")
+                return self.escalate("unsure", page)
+            s["switched"].append(key)
+            return self.act(other["operation"], other["action"], page, sub, key=other.get("key"))
         return self.act(step["operation"], step["action"], page, sub, key=step.get("key"))
 
     def blocked(self, step, page):
-        """A blocker Jev sees: its situation skill joins the planner's input, and the planner decides."""
+        """A blocker Jev sees. A captcha goes to the user as a picture; a code field is asked through the hidden
+        field and typed without the planner; anything else brings its situation skill to the planner."""
+        if step["blocker"] == "captcha":
+            return self.relay_captcha(page)
+        if step["blocker"] == "code" and rules.code_field(page):
+            return self.ask_code(page, step)
         situation = {"sign_in": "sign-in", "payment": "payment", "unavailable": "location"}.get(step["blocker"])
         if situation and situation not in self.state["situations"]:
             self.state["situations"].append(situation)
         return self.escalate(f"blocker:{step['blocker']}", page)
+
+    def ask_code(self, page, step):
+        """A code, OTP, password, or CVV field: the user answers through the hidden field and the answer is typed as
+        its placeholder. No model sees it, and the planner isn't called."""
+        s = self.state
+        chosen = step["targets"].get("type_text_target")
+        fields = [a for a in action_space(page["actions"])[1].get("type_text_target", {}).values()
+                  if secret_field(a)]
+        field = chosen if chosen is not None and secret_field(chosen) else (fields[0] if fields else None)
+        if field is None:
+            return self.escalate("blocker:code", page)
+        card = bool(rules.CARD_DETAIL.search(field["label"]))
+        if not card and s["code_asks"] >= CODE_ASKS:  # each code usually means a new one sent to the user's phone
+            raise Halt("blocked", f"Signing in to {rules.host(page['url'])} isn't working after {CODE_ASKS} codes, "
+                                  "so I stopped rather than send you more. Please sign in once in the agent's "
+                                  "Chrome window, then ask me again.")
+        site = page["title"] or rules.host(page["url"])
+        question = (f"{site} is asking for your card's {field['label']}. Type it here; it stays hidden." if card else
+                    f"{site} is asking for a code or password. Type it here; it stays hidden.")
+        self.steady(page)  # a page still switching screens gets read again first
+        reply = self.ask({"kind": "secret", "text": question})
+        if not card:
+            s["code_asks"] += 1  # a code counts once it was asked: a question dropped for a changed page doesn't
+        name = self.keep_secret(str(reply.get("text", "")).strip())
+        s["chat"] += [{"from": "agent", "text": question}, {"from": "user", "text": f"[secret:{name}] (hidden answer)"}]
+        inputs, shown = self.value(field, f"[secret:{name}]", page)
+        return self.run(page, "TYPE_TEXT", field, inputs, shown, goal="type what the user sent")
+
+    def relay_captcha(self, page):
+        """A captcha only the user may solve: they see it with its squares numbered, and the worker clicks exactly
+        the squares they name, or hands the text they read to the planner. Nothing is solved automatically."""
+        s = self.state
+        s["captcha_rounds"] += 1
+        if s["captcha_rounds"] > CAPTCHA_ROUNDS:
+            raise Halt("blocked", f"The site kept showing new checks after {CAPTCHA_ROUNDS} rounds, so I stopped. "
+                                  "Please try this step on your own device.")
+        clicks = [a for a in page["actions"] if a["kind"] == "click" and a.get("node") is not None]
+        marks = ([a for a in clicks if a.get("frame")] or clicks)[:40]  # a captcha lives in its own frame
+        image = s["browser"].marked_screenshot(marks, masked=self.secrets.nodes, hide=self.hidden_details())
+        reply = self.ask({"kind": "image", "image": image, "text": "The site wants a check (captcha) solved. Reply "
+                          "with the numbers of the squares to pick, like 2 5 8; or type the text it shows; or say "
+                          "none if there is nothing to pick."})
+        text = str(reply.get("text", "")).strip()
+        picked = [int(n) for n in re.findall(r"\d+", text)] if re.fullmatch(r"[\d\s,]+", text) else None
+        if picked is None and text.lower() in {"none", ""}:
+            s["notes"].append("The user says the captcha has nothing to pick: press its verify or skip button.")
+        elif picked is None:
+            s["chat"] += [{"from": "agent", "text": "(captcha)"}, {"from": "user", "text": f"“{text}” (the text "
+                                                                                            "the captcha shows)"}]
+            s["reason"] = "reply"  # the planner types it into the captcha's field
+        else:
+            s["relaying"] = True  # these clicks are the user's: no loop counting in between
+            try:
+                for n in picked:
+                    if 1 <= n <= len(marks):
+                        self.click_same(marks[n - 1])
+            finally:
+                s["relaying"] = False
+            s["notes"].append(f"Clicked the captcha squares the user picked ({', '.join(map(str, picked))}). "
+                              "Press its verify or next button now.")
+        s["status"] = "ready"
+        return None
+
+    def click_same(self, target):
+        """Click the element the user named, on a fresh read of the page; never a commit."""
+        page = self.observe()  # the user may have taken a while
+        clicks = [a for a in page["actions"] if a["kind"] == "click"]
+        same = (target.get("frame"), target.get("node"))
+        match = next((a for a in clicks if (a.get("frame"), a.get("node")) == same), None)
+        if match is None:
+            named = [a for a in clicks if a["label"] == target["label"]]
+            match = named[0] if len(named) == 1 else None  # two "Deliver here" buttons: never guess
+        if match is None:
+            return None  # the page moved on
+        if rules.commit_label("CLICK", match, page):
+            self.state["notes"].append(f"The user's pick “{match['label']}” would commit, so it wasn't pressed.")
+            return None
+        try:
+            return self.run(page, "CLICK", match, {}, None, goal="the user's pick")
+        except StalePage:
+            self.observe()
+            return None
 
     def escalate(self, reason, page):
         s = self.state
@@ -433,6 +532,8 @@ class Worker:
         message = plain(out["message"].strip() or (act["text"].strip() if act["op"] != "DONE" else ""))
         op = "ASK" if act["op"] == "TELL" and message.endswith("?") else act["op"]  # a question waits for its answer
         options = [re.sub(r"^\d{1,2}[.)]\s+", "", plain(o.strip())) for o in out["options"] if o.strip()][:10]
+        if op in {"ASK", "STOP"} and rules.captcha_challenge(page):
+            return self.relay_captcha(page)  # only the user solves a captcha
         problem = planner.lint(op, message, options, s["chat"])
         if problem:
             raise Retry(problem)
@@ -561,9 +662,13 @@ class Worker:
         return {}, None
 
     def value_for(self, action, sub):
-        """The subgoal's text for the field Jev chose: by the field's name, or the only value. With none, the
-        planner writes it (the field is its candidate 1)."""
-        text = executor.value(action, (sub or {}).get("values") or [])
+        """The subgoal's text for the field Jev chose: by the field's name, the only value, or Jev's pick among the
+        names. With none, the planner writes it (the field is its candidate 1)."""
+        values = (sub or {}).get("values") or []
+        text = executor.value(action, values)
+        if text is None and len(values) > 1:
+            name = jev.value_for(action["label"], [v["field"] for v in values])
+            text = next(v["text"] for v in values if v["field"] == name)
         if text is None:
             self.state["candidates"] = [{"n": 1, "op": "TYPE", "operation": "TYPE_TEXT", "element": action["label"],
                                          "p": 1.0, "action": action}]
@@ -730,7 +835,7 @@ class Worker:
         sub = self.subgoal()
         title = s["page"]["title"] or rules.host(s["page"]["url"])
         question = f"I'm stuck on {title}, trying to {sub['do'] if sub else s['goal']}. What should I do?"
-        coded = rules.code_field(s["page"])  # the reply may be the code itself: keep it out of every log
+        coded = any(secret_field(a) for a in s["page"]["actions"])  # the reply may be a code or card detail: hide it
         reply = self.ask({"kind": "secret" if coded else "text", "text": question})
         answer = str(reply.get("text", "")).strip()
         s["chat"].append({"from": "agent", "text": question})

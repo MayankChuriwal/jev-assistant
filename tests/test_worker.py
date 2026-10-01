@@ -9,6 +9,7 @@ from unittest.mock import Mock
 from fakes import fake_page, jev_checks, script_jev, script_planner, sub, turn, worker_with
 
 from assistant import jev, planner
+from assistant.browser import StalePage
 
 
 def test_the_planner_plans_once_and_jev_does_the_steps(tmp_path, monkeypatch):
@@ -318,3 +319,121 @@ def test_a_code_question_that_was_dropped_is_not_counted(tmp_path, monkeypatch):
     script_planner(monkeypatch, turn("ASK", message="Please type the OTP from the SMS"))
     w.command("tick")
     assert w.state["status"] == "blocked" and "isn't working after 3 codes" in w.told[-1]["text"]
+
+
+BUTTONS = [{"id": f"b{n}", "kind": "click", "label": label, "role": "button", "node": n + 1}
+           for n, label in enumerate(["Office", "Home", "Work"])]
+
+
+def test_a_code_field_is_asked_hidden_and_typed_without_the_planner(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, replies=[{"text": "4 8 1 5 1 6"}])
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("sign in")]))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Code", "blocker": "code"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert len(seen) == 1 and w.asked[0]["kind"] == "secret" and "code or password" in w.asked[0]["text"]
+    assert w.browser.act.call_args.kwargs["text"] == "481516" and w.state["history"][-1]["text"] == "[secret:answer1]"
+
+
+def test_a_fourth_code_stops_instead_of_sending_more(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn(subgoals=[sub("sign in")]))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Code", "blocker": "code"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.state["code_asks"] = 3
+    w.command("tick")
+    assert w.state["status"] == "blocked" and "after 3 codes" in w.told[-1]["text"]
+
+
+def test_a_code_question_dropped_for_a_changed_page_is_not_counted(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, replies=[{"text": "481516"}])
+    script_planner(monkeypatch, turn(subgoals=[sub("sign in")]))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Code", "blocker": "code"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.steady = Mock(side_effect=StalePage("The page changed while I was about to ask. Decide again."))
+    w.command("tick")
+    assert w.asked == [] and w.state["code_asks"] == 0 and w.state["status"] == "ready"
+    w.steady = Mock()
+    w.command("tick")
+    assert len(w.asked) == 1 and w.state["code_asks"] == 1
+
+
+def test_a_card_detail_is_asked_by_name_hidden_and_does_not_count_as_a_code(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=card_page(), replies=[{"text": "4111 1111 1111 1111"}])
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("pay by card")]))
+    sent = script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Card number", "blocker": "code"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert len(seen) == 1 and w.asked[0]["kind"] == "secret" and "card's Card number" in w.asked[0]["text"]
+    assert w.browser.act.call_args.kwargs["text"].replace(" ", "") == "4111111111111111"
+    assert w.state["code_asks"] == 0 and w.state["history"][-1]["text"] == "[secret:answer1]"
+    assert "4111" not in json.dumps([w.state["chat"], w.state["messages"], w.trace(), seen, sent])
+
+
+def test_a_code_blocker_without_a_code_field_goes_to_the_planner(tmp_path, monkeypatch):
+    page = fake_page(actions=[a for a in fake_page()["actions"] if a["id"] not in {"e2", "e3"}])
+    w = worker_with(tmp_path, page=page)
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("sign in")]))
+    script_jev(monkeypatch, {"next": "CLICK", "click_target": "Home", "blocker": "code"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert seen[-1]["reason"] == "blocker:code" and not w.asked
+
+
+def test_a_captcha_goes_to_the_user_as_a_numbered_picture(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, replies=[{"text": "2"}])
+    w.browser.marked_screenshot = Mock(return_value="numbered")
+    script_planner(monkeypatch, turn(subgoals=[sub("sign in")]))
+    script_jev(monkeypatch, {"next": "CLICK", "click_target": "Home", "blocker": "captcha"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert w.asked[0]["kind"] == "image" and w.asked[0]["image"] == "numbered"
+    assert w.browser.act.call_args.args[0] == "CLICK" and w.browser.act.call_args.args[1]["label"] == "Office"
+
+
+def test_jev_picks_which_value_goes_into_an_unclear_field(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn(subgoals=[sub("fill the form", values=[("customer", "Test User"),
+                                                                            ("time", "19:00")])]))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Phone number"})
+    jev_checks(monkeypatch, value_for="time")
+    w.command("tick")
+    w.command("tick")
+    assert w.browser.act.call_args.kwargs["text"] == "19:00"
+
+
+def test_a_step_that_changes_nothing_tries_jevs_next_best_then_the_planner(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(actions=BUTTONS))
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("choose Office")]))
+    script_jev(monkeypatch, {"next": "CLICK", "click_target": ("Office", 0.8)})
+    jev_checks(monkeypatch)
+    for _ in range(4):
+        w.command("tick")
+    labels = [c.args[1]["label"] for c in w.browser.act.call_args_list]
+    assert labels[:2] == ["Office", "Office"] and labels[2] != "Office"
+    w.command("tick")
+    assert seen[-1]["reason"] == "unsure" and "changed nothing" in seen[-1]["feedback"][0]
+
+
+def test_eight_unchanged_repeats_ask_the_user(tmp_path):
+    w = worker_with(tmp_path, replies=[{"text": "use the other address"}])
+    url = w.state["page"]["url"]
+    w.state["history"] = [{"operation": "CLICK", "action": "Office", "url": url, "page_changed": False}] * 8
+    w.track_loop(w.state["history"][-1])
+    assert "I'm stuck" in w.asked[0]["text"] and w.state["loop_from"] == 8 and w.state["reason"] == "reply"
+
+
+def test_card_digits_typed_as_the_stuck_reply_are_asked_hidden_and_kept_out_of_every_log(tmp_path):
+    page = fake_page(actions=[{"id": "e9", "kind": "fill", "label": "Card number", "role": "textbox", "value": "",
+                               "node": 20, "constraints": {}}])
+    w = worker_with(tmp_path, page=page, replies=[{"text": "4111 1111 1111 1111"}])
+    w.stuck()
+    assert w.asked[0]["kind"] == "secret" and w.state["reason"] == "reply"
+    assert w.state["chat"][-1]["text"].startswith("[secret:answer1]")
+    assert "4111" not in json.dumps([w.state["chat"], w.state["messages"], w.trace()])
