@@ -1344,7 +1344,7 @@ class Worker:
             return line + (" → the user's own location: click the empty location box and pick the suggestion marked as "
                            "their own location (“Your current location”, “Your location”); a detect button already "
                            "pressed isn't pressed again")
-        if delegates(answer) and PLACE.search(message):
+        if DELEGATE.search(answer) and PLACE.search(message):  # "you choose, just not the office" leaves it too
             return line + (" → a delivery or pickup place is never chosen for them: use the site's detect-location "
                            "option, or ASK which saved address (use it only if exactly one exists); if neither works, "
                            "STOP and say you need their address")

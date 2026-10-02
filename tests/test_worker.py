@@ -2864,6 +2864,14 @@ def test_a_reply_that_leaves_the_choice_but_turns_some_down_is_never_left_to_the
     assert ("leaves this choice" in line) is left and (w.state["delegated_at"] == 0) is left
 
 
+@pytest.mark.parametrize("answer", ["You choose, just not the office", "Up to you, but don't use home", "You choose",
+                                    "whatever you pick, not the old flat"])
+def test_a_place_left_to_the_agent_is_never_chosen_for_them_even_with_one_turned_down(tmp_path, answer):
+    w = worker_with(tmp_path)
+    line = w.read("Which address should I deliver to?", [], answer)  # the review's probe: the guard went quiet
+    assert "a delivery or pickup place is never chosen for them" in line and w.state["delegated_at"] is None
+
+
 SLIDER = [{"id": "s", "kind": "click", "label": "slider in “1 2 3 4 5 6 7 8 9 10”", "role": "slider", "node": 5},
           {"id": "b", "kind": "click", "label": "Select Seats", "role": "button", "node": 6}]
 
