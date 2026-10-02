@@ -2452,3 +2452,45 @@ def test_why_a_task_stopped_going_in_circles_is_in_the_trace(tmp_path):
     with pytest.raises(Halt, match="going in circles"):
         w.path_budget({"url": "https://shop.test/checkout"})
     assert w.trace()["stuck_why"] == "path halt 45: shop.test/checkout"
+
+
+# ---- a decision on a page whose text moves (a rotating placeholder, a carousel) still holds while its controls stay
+
+
+def test_an_action_on_a_page_whose_text_moved_but_whose_controls_did_not_runs_on_a_fresh_read(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(actions=BUTTONS))
+    w.browser.observe.side_effect = rotating(BUTTONS)
+    w.browser.act.side_effect = [StalePage("Page changed since this decision. Observe again."), {}]
+    script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]), turn("PICK", pick=1))
+    script_jev(monkeypatch, {"next": ("CLICK", 0.4), "click_target": "Office"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    first, second = w.browser.act.call_args_list
+    assert first.args[1]["label"] == second.args[1]["label"] == "Office" and first.args[2] is not second.args[2]
+    assert second.args[2]["text"] != first.args[2]["text"]  # acted on the fresh read
+    assert [h["action"] for h in w.state["history"]] == ["Office"] and w.state["refusals_log"] == []
+
+
+def test_a_stale_action_is_decided_again_when_the_pages_controls_changed(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(actions=BUTTONS))
+    moved = fake_page(actions=[*BUTTONS, {"id": "b9", "kind": "click", "label": "Sold out", "role": "button",
+                                          "node": 9}])
+    w.browser.observe.side_effect = [moved] * 20  # read again once the click went stale: a control was added
+    w.browser.act.side_effect = StalePage("Page changed since this decision. Observe again.")
+    script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]), turn("PICK", pick=1))
+    script_jev(monkeypatch, {"next": ("CLICK", 0.4), "click_target": "Office"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert w.browser.act.call_count == 1 and w.state["history"] == []
+    assert w.state["refusals_log"][-1]["error"] == "stale"
+
+
+def test_a_commit_on_a_stale_page_is_never_carried_to_a_fresh_read(tmp_path):
+    w = worker_with(tmp_path)
+    page = w.state["page"]
+    w.browser.act.side_effect = StalePage("Page changed since this decision. Observe again.")
+    with pytest.raises(StalePage):
+        w.run(page, "CLICK", next(a for a in page["actions"] if a["label"] == "Pay ₹79"), {}, None, commit="Pay ₹79")
+    assert w.browser.act.call_count == 1 and w.state["history"] == []

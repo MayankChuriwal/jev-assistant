@@ -1336,7 +1336,18 @@ class Worker:
                  "page_changed": None, "url": page["url"], "committed": bool(commit),
                  "approved": (s["approval"] or {}).get("by") if commit else None, "spot": views.signature(page)}
         try:
-            s["browser"].act(operation, action, page, **inputs)
+            try:
+                s["browser"].act(operation, action, page, **inputs)
+            except StalePage:  # nothing ran: on a page whose text alone moved, the decision still holds
+                if commit or s["relaying"]:
+                    raise  # a commit runs only on the page the user approved; a captcha square only as picked
+                again = self.observe()
+                same = self.still(page, again, operation, action)
+                if same is None:
+                    raise
+                page, action = again, same
+                entry.update(title=page.get("title", ""), url=page["url"])
+                s["browser"].act(operation, action, page, **inputs)
         except ExecutionUncertain as error:
             s["history"].append({**entry, "unconfirmed": str(error), "elapsed_ms": self.elapsed()})
             if cleared:
@@ -1385,6 +1396,20 @@ class Worker:
         if s["commit"]:
             return gate.watch(self, s["commit"]["label"], s["commit"].get("goal") or s["goal"])
         return self.track_loop(last)
+
+    @staticmethod
+    def still(page, again, operation, action):
+        """The action decided on `page`, on a fresh read `again`: the same control when only the text moved (a
+        rotating placeholder, a carousel, a timer) and the controls are as they were (views.signature), else None. A
+        control with a node must still be there under the same name; a spot found by looking is never carried over."""
+        if operation == "LOOK" or views.signature(page) != views.signature(again):
+            return None
+        if action.get("node") is None:
+            return action
+        name = views.calm(action.get("label"))
+        return next((a for a in again["actions"] if (a.get("frame"), a.get("node"), a.get("kind")) ==
+                     (action.get("frame"), action.get("node"), action.get("kind"))
+                     and views.calm(a.get("label")) == name and a.get("value") == action.get("value")), None)
 
     @staticmethod
     def landed(wanted, url):
