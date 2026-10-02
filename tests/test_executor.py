@@ -184,3 +184,11 @@ def test_an_undo_is_the_same_step_from_the_same_page_after_going_somewhere_and_b
     assert executor.undos(browsing) == 0  # back to a list to open the next item is no undo
     waited = [toggle[0], {"operation": "WAIT", "action": "Wait", "spot": "B"}, *toggle[1:3]]
     assert executor.undos(waited) == 1
+
+
+def test_a_value_named_for_one_place_never_goes_by_default_into_another_place_field():
+    drop = [{"field": "drop", "text": "Indiranagar Metro Station"}]
+    assert executor.value({"label": "pickup"}, drop) is None  # live rapido: the drop typed into the pickup box
+    assert executor.value({"label": "drop"}, drop) == "Indiranagar Metro Station"
+    location = [{"field": "location", "text": "HSR Layout"}]
+    assert executor.value({"label": "Search for area, street name"}, location) == "HSR Layout"

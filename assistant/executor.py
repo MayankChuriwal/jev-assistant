@@ -133,6 +133,7 @@ GENERIC = {"search", "field", "box", "input", "enter", "your", "new", "text"}  #
 PERSONAL = {"phone", "mobile", "tel", "telephone", "email", "mail", "otp", "password", "passcode", "code", "pin", "cvv",
             "card"}  # a field the only value is never guessed into
 PLACE = {"location", "address", "pincode", "postcode", "city", "area", "locality"}
+ROLES = {"pickup", "pick", "drop", "dropoff", "destination", "source", "origin"}  # one trip's two places
 
 
 def value(action, values):
@@ -150,7 +151,9 @@ def value(action, values):
             best, share = v, overlap
     if best and share >= 0.5:
         return best["text"]
-    if len(values) != 1 or label & PERSONAL or (label & PLACE and not words(values[0]["field"]) & PLACE):
+    name = words(values[0]["field"]) - GENERIC
+    if len(values) != 1 or label & PERSONAL or (label & PLACE and not words(values[0]["field"]) & PLACE) or \
+            (label & ROLES and name & ROLES and not label & name):  # the drop never goes into the pickup box
         return None
     return values[0]["text"]
 

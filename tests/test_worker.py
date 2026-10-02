@@ -2744,3 +2744,10 @@ def test_the_plans_value_for_one_field_typed_into_another_is_refused_with_the_ri
         w.do({"op": "TYPE", "pick": "[1]", "text": "Indiranagar Metro Station"}, w.state["page"])  # live rapido
     w.do({"op": "TYPE", "pick": "[3]", "text": "Indiranagar Metro Station"}, w.state["page"])
     assert w.browser.act.call_args.args[1]["label"] == "drop"
+
+
+@pytest.mark.parametrize("text", ["current location", "Use current location", "My location"])
+def test_words_for_the_users_own_location_are_never_typed_into_a_place_box(tmp_path, text):
+    w = worker_with(tmp_path, page=fake_page(text="Pickup\nDrop", actions=RIDE_PAGE))
+    with pytest.raises(Retry, match="finds places named so"):  # live rapido: “Track My Location (Coban…)”, Rajasthan
+        w.value(RIDE_PAGE[0], text, w.state["page"])
