@@ -75,7 +75,7 @@ def commit_label(operation, action, page, key=None, focused=""):
     if words is None:
         return None
     label, shown = words
-    if operation == "LOOK" and (action.get("commits") or COMMIT.search(shown)):
+    if operation == "LOOK" and COMMIT.search(shown):  # the look's own "commits" flag is a maybe: Jev confirms it
         return label or shown or "the control found on screen"
     rest = PROCEED_STEP.sub("", label)
     if operation in {"CLICK", "DOUBLE_CLICK"} and rest != label and not COMMIT.search(rest):
@@ -96,8 +96,8 @@ def maybe_commit_label(operation, action, page, key=None, focused=""):
     if words is None:
         return None
     label, shown = words
-    if operation == "LOOK" and maybe_commits(shown):
-        return label or shown
+    if operation == "LOOK" and (action.get("commits") or maybe_commits(shown)):
+        return label or shown or "the control found on screen"
     return label if maybe_commits(label) else None
 
 

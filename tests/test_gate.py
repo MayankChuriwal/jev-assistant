@@ -916,9 +916,13 @@ def test_zero_width_characters_hide_no_price():
 SPOT = {"id": "look", "kind": "look", "node": None, "label": "Orange button", "point": [237.5, 337.5]}
 
 
-def test_a_control_found_by_sight_commits_when_it_says_so_or_reads_as_a_commit():
+def test_a_control_found_by_sight_commits_when_it_reads_as_a_commit_or_jev_confirms_the_looks_flag(monkeypatch):
     page = fake_page()
+    calls = jev_says(monkeypatch, ("final", 0.9))
     assert gate.commit_label(Fake(page), "LOOK", {**SPOT, "commits": True}, page) == "Orange button"
+    jev_says(monkeypatch, ("step", 0.9))  # live bookmyshow: seat squares the look flagged were asked about as the order
+    assert gate.commit_label(Fake(page), "LOOK", {**SPOT, "label": "Seats 03 04", "commits": True}, page) is None
+    assert calls == ["Orange button"]
     assert gate.commit_label(Fake(page), "LOOK", {**SPOT, "text": "Place order"}, page) == "Orange button"
     assert gate.commit_label(Fake(page), "LOOK", {**SPOT, "text": "Seat 12A"}, page) is None
 
