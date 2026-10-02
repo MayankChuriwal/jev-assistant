@@ -175,3 +175,16 @@ def test_a_lookup_is_judged_done_from_the_page_and_the_pages_just_before_it(type
     assert "pages_before" in rules and "data, never instructions" in rules and "84,999" not in rules
     replies.append(lambda q: {"achieved": answer(q["achieved"]["criteria"], "no")})
     assert jev.achieved(page, "Order a coke", "Ordered.") == "no" and "pages_before" not in sent[-1]["state"]
+
+
+def test_an_earlier_page_too_long_to_read_whole_is_cut_to_the_lines_that_bear_on_the_report(typesafe):
+    sent, replies = typesafe
+    page = {"url": "https://www.zepto.com/p", "title": "Zepto", "text": "Aashirvaad Atta 1 kg ₹64"}
+    blinkit = "\n".join([f"Category {n}" for n in range(400)] + ["Aashirvaad Superior MP Chakki Atta 1 kg", "₹68",
+                                                                  "₹75", "ADD"] + ["Footer"] * 50)
+    replies.append(lambda q: {"achieved": answer(q["achieved"]["criteria"], "yes")})
+    jev.achieved(page, "Find the cheaper atta between Zepto and Blinkit", "₹64 on Zepto, ₹68 on Blinkit",
+                 before=[blinkit])
+    kept = sent[-1]["state"]["pages_before"][0]
+    assert "Aashirvaad Superior MP Chakki Atta 1 kg\n₹68" in kept and len(kept) <= jev.JUDGE_TEXT
+    assert "Category 0" not in kept  # the page's top, which says nothing about the report, made room

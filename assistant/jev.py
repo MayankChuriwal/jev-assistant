@@ -3,6 +3,7 @@ message, a new task's intake, each browser step (executor.py builds that request
 checks."""
 
 import os
+import re
 
 from .model import post_json, validate_choice
 
@@ -28,14 +29,30 @@ def ask(page, name, options, instructions, elements=(), **data):
 JUDGE_TEXT = 2500  # characters of each earlier page a judgement reads (the bench judge's budget)
 
 
+def bearing(text, report, limit=None):
+    """An earlier page cut to `limit` characters for a judgement: whole when it fits; else the lines that show the
+    report's numbers (two digits or more), each with three lines either side, in page order. A page whose top says
+    nothing about the report (a long category list) no longer hides the price below it. The first part when none
+    does."""
+    limit = limit or JUDGE_TEXT
+    if len(text) <= limit:
+        return text
+    numbers = {n for n in re.findall(r"\d[\d,]*(?:\.\d+)?", report or "") if len(re.sub(r"\D", "", n)) >= 2}
+    shows = [re.compile(r"(?<![\d,.])" + re.escape(n) + r"(?![\d,]|\.\d)") for n in numbers]
+    lines = text.splitlines()
+    near = sorted({j for i, line in enumerate(lines) if any(rule.search(line) for rule in shows)
+                   for j in range(max(i - 3, 0), min(i + 4, len(lines)))})
+    return ("\n".join(lines[j] for j in near) if near else text)[:limit]
+
+
 def achieved(page, goal, report, before=()):
     """Whether the page shows the goal done. `before` (a lookup's pages read just before this one, such as the other
-    site of a comparison) joins the state, each cut to JUDGE_TEXT."""
+    site of a comparison) joins the state, each cut to JUDGE_TEXT around what the report says (`bearing`)."""
     rules = "The agent's report is in the state. Judge only from the page. "
     if before:
         rules = ("The agent's report and the pages read just before this one (pages_before) are in the state. Judge "
                  "only from the page and those pages. ")
-    extra = {"pages_before": [text[:JUDGE_TEXT] for text in before]} if before else {}
+    extra = {"pages_before": [bearing(text, report) for text in before]} if before else {}
     return ask(page, "achieved", {"yes": "The page shows what the goal asks for: the outcome done, or the "
                                          "information it asks to find.",
                                   "no": "The page doesn't show that yet."},
