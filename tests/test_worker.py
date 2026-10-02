@@ -2797,6 +2797,25 @@ def test_a_step_that_brings_up_a_final_control_tells_the_planner(tmp_path, monke
     assert any("“Pay ₹ 1200” came up after this step" in f for f in w.state["feedback"])  # live bookmyshow #6
 
 
+def test_a_final_control_that_comes_back_when_a_dialog_closes_is_not_news_to_the_planner(tmp_path):
+    book = {"id": "bt", "kind": "click", "label": "Book tickets", "role": "button", "node": 28}
+    close = {"id": "c", "kind": "click", "label": "Close", "role": "button", "node": 1}
+    formats = [close, *({"id": f, "kind": "click", "label": f, "role": "button", "node": n}
+                        for n, f in enumerate(["2D", "IMAX 2D"], 2))]
+    movie = fake_page(text="Drishyam The Conclusion\nBook tickets", url="https://in.bookmyshow.com/movies/x",
+                      actions=[book])
+    panel = fake_page(text="Select language and format\nHindi\n2D", url="https://in.bookmyshow.com/movies/x",
+                      actions=formats)  # the dialog hides the page behind it, its Book tickets included
+    w = worker_with(tmp_path, page=movie)
+    w.remember_page(movie)
+    w.browser.observe.return_value = panel
+    w.run(movie, "CLICK", book, {}, None)
+    w.remember_page(panel)
+    w.browser.observe.return_value = movie
+    w.run(panel, "CLICK", close, {}, None)  # live bookmyshow bench: "came up" sent the planner back to it, 4 times
+    assert not any("came up after this step" in f for f in w.state["feedback"])
+
+
 def test_a_strip_of_numbers_is_clicked_on_the_planners_choice_never_on_its_middle_by_jev(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=fake_page(text="How many seats?", actions=SLIDER))
     seen = script_planner(monkeypatch, turn(subgoals=[sub("choose 2 tickets")]), turn("TYPE", pick=1, text="2"))

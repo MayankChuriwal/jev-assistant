@@ -233,6 +233,7 @@ class Worker:
                 raise
         finally:
             SECRETS.reset(token)
+        self.controls_seen = {}  # (host, path) → every control label read there: a dialog closing brings none new
         self.state = self.new_state(self.browser, goal, title or goal[:60], page)
         self.state.update(skill=skill, preauth=preauth, cap=cap, site=skills.bare(urlparse(url).netloc.lower()),
                           start=url)
@@ -510,6 +511,13 @@ class Worker:
             s["recent"] = (s["recent"] + [page["text"]])[-10:]
         s["recent_at"] = at
         s["last_by_site"][skills.bare(rules.host(page["url"]).lower())] = page["text"]
+        self.controls_seen.setdefault(self.place_of(page), set()).update(a.get("label") for a in page["actions"])
+
+    @staticmethod
+    def place_of(page):
+        """A page's address without its query: where controls read once stay known."""
+        parts = urlparse(page["url"])
+        return parts.netloc, parts.path
 
     def pages_before(self, page):
         """The pages a lookup's answer may come from besides this one: the last page read on every other site (a
@@ -1638,7 +1646,7 @@ class Worker:
             s["feedback"].append(f"“{self.file_name(s['files'][-1])}” was saved for the user (files_saved): the "
                                  "download is done; finish with DONE, naming the file.")
             s["reason"] = s["reason"] or "next"
-        finals = [] if commit else self.revealed(page, after)
+        finals = [] if commit else self.revealed(page, after, self.controls_seen.get(self.place_of(page), ()))
         if finals:  # seats picked on a canvas, a cart filled: the page may now be ready for its last step
             s["feedback"].append(f"“{finals[0]}” came up after this step: the choices on this page may be done; "
                                  "check them, then go on to it.")
@@ -1683,11 +1691,12 @@ class Worker:
         return after
 
     @staticmethod
-    def revealed(before, after):
-        """The final controls (ones the commit rule names outright) a step brought onto the same page."""
+    def revealed(before, after, seen=()):
+        """The final controls (ones the commit rule names outright) a step brought onto the same page, never read on
+        it before (`seen`): a dialog closing shows the page's own "Book tickets" again, which is no news."""
         if urlparse(before["url"]).path != urlparse(after["url"]).path:
             return []  # a new page: its controls are all new, and Jev reads it afresh
-        old = {a.get("label") for a in before["actions"]}
+        old = {a.get("label") for a in before["actions"]} | set(seen)
         return [a["label"] for a in after["actions"] if a.get("kind") == "click" and a.get("label") not in old
                 and rules.commit_label("CLICK", a, after)][:2]
 
