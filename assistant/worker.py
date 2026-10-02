@@ -1422,6 +1422,9 @@ class Worker:
                 raise Retry(f"“{action.get('label')}” is a photo in the item's picture gallery: clicking it only shows "
                             "that photo and chooses nothing. Choose with the page's own control for it (the colour or "
                             "size swatches, or the control naming the current choice), or LOOK for it.")
+            if STRIP.search(action.get("label") or "") and not action.get("within"):
+                raise Retry(f"“{action.get('label')}” is a strip of choices: clicking it lands on its middle. PICK it "
+                            "with the words of the one to click, like PICK [k] with text 2.")
             drift = self.other_item(action, page)
             if drift:
                 raise Retry(drift)

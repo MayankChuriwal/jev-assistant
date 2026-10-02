@@ -2894,6 +2894,15 @@ def test_a_strip_of_numbers_is_clicked_on_the_planners_choice_never_on_its_middl
     assert (operation, action.get("within")) == ("CLICK", "2")  # the planner's TYPE on the candidate: on “2”
 
 
+def test_a_strip_of_numbers_picked_without_the_words_to_click_is_refused(tmp_path):
+    w = worker_with(tmp_path, page=fake_page(text="How many seats?", actions=SLIDER))
+    with pytest.raises(Retry, match="PICK it with the words of the one to click"):  # live bookmyshow: 5 tickets
+        w.do({"op": "PICK", "pick": "[1]", "text": ""}, w.state["page"])
+    assert not w.browser.act.called
+    w.do({"op": "PICK", "pick": "[1]", "text": "2"}, w.state["page"])
+    assert w.browser.act.call_args.args[1]["within"] == "2"
+
+
 PROCEED = {"id": "m", "kind": "click", "label": "Make payment, tap to go to payment (shows “Proceed to Pay”)",
            "name": "Make payment, tap to go to payment", "shown": "Proceed to Pay", "role": "button", "node": 22}
 
