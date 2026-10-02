@@ -594,6 +594,10 @@ class Worker:
             s["feedback"].append(f"Jev chose “{step['action'].get('label')}”: clicking it lands on its middle. PICK it "
                                  "with the words of the choice to click, like PICK [k] with text 2.")
             return self.escalate("unsure", page)
+        if step["operation"] in {"CLICK", "DOUBLE_CLICK"} and self.recloses(step["action"]):
+            s["feedback"].append(f"“{step['action'].get('label')}” is open now, its text on the page: read it and "
+                                 "go on; pressing it again closes it.")
+            return self.escalate("unsure", page)
         if step["operation"] in {"CLICK", "DOUBLE_CLICK"} and self.raises_quantity(step["action"]):
             s["feedback"].append(f"Jev chose “{step['action'].get('label')}”, which raises a quantity: press it only "
                                  "while the item's count is below what the user asked for; at their count, go on.")
@@ -1134,6 +1138,12 @@ class Worker:
         if not re.search(r"(?<![\w])" + re.escape(words) + r"(?![\w])", name, re.IGNORECASE):
             return None
         return {**click, "within": words, "label": f"{name} (at “{words}”)"}
+
+    def recloses(self, action):
+        """Whether a click would close the panel the last step opened: the same control, now expanded."""
+        last = self.state["history"][-1] if self.state["history"] else {}
+        return str(action.get("expanded")).lower() == "true" and last.get("operation") in {"CLICK", "DOUBLE_CLICK"} \
+            and last.get("action") == action.get("label")
 
     @staticmethod
     def raises_quantity(action):

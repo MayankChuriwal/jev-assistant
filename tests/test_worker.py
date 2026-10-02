@@ -1628,6 +1628,25 @@ def rotating(actions):
     return lambda *a, **k: fake_page(text=f"Shop\nSearch “item {next(looks)}”", actions=actions)
 
 
+FAQ = {"id": "q", "kind": "click", "label": "How do I cancel my plan?", "role": "button", "node": 35}
+
+
+def test_jev_never_closes_the_panel_the_last_step_opened_the_planner_reads_it(tmp_path, monkeypatch):
+    opened = fake_page(text="How do I cancel my plan?\nYou may cancel your Prime membership at any time by visiting "
+                            "https://www.amazon.in/mc.", url="https://www.amazon.in/amazonprime",
+                       actions=[{**FAQ, "expanded": "true"}, *BUTTONS])
+    w = worker_with(tmp_path, page=opened, goal="Cancel my Amazon Prime membership")
+    w.state["history"] = [{"step": 1, "subgoal": 0, "operation": "CLICK", "action": FAQ["label"], "page_changed": True,
+                           "url": "https://www.amazon.in/amazonprime", "spot": "a", "effect": "worked"}]
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("follow the steps to cancel the Prime membership")]))
+    script_jev(monkeypatch, {"next": "CLICK", "click_target": ("How do I cancel my plan?", 0.99)})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")  # live cancel-prime bench: Jev closed and opened the answer five times, then "I'm stuck"
+    assert not w.browser.act.called and seen[-1]["reason"] == "unsure"
+    assert any("pressing it again closes it" in f for f in seen[-1]["feedback"])
+
+
 def test_jevs_pick_that_ran_three_times_from_the_same_controls_is_not_run_again(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=fake_page(actions=BUTTONS))
     w.browser.observe.side_effect = rotating(BUTTONS)  # every click "changes" the page: only its text
