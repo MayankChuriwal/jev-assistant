@@ -86,6 +86,16 @@ def test_inside_a_commit_subgoal_jev_confirms_a_control_the_regex_missed(monkeyp
     assert gate.commit_label(Fake(page), "CLICK", go, page, subgoal={"do": "open the cart", "kind": "act"}) is None
 
 
+@pytest.mark.parametrize("verdict", [("step", 0.9), ("final", 0.4)])
+def test_a_control_jev_lets_through_inside_a_commit_subgoal_is_kept_as_cleared_for_the_audit(monkeypatch, verdict):
+    page = fake_page()
+    go = {"id": "g", "kind": "click", "label": "Continue", "role": "button", "node": 41}
+    monkeypatch.setattr(gate.jev, "final", lambda *a: verdict)
+    w = Fake(page)
+    assert gate.commit_label(w, "CLICK", go, page, subgoal={"do": "place the order", "kind": "commit"}) is None
+    assert w.state["cleared"] == "Continue"  # it runs with no yes: the bench audits it, a stale page decides again
+
+
 @pytest.mark.parametrize("text, expected", [
     ("order it, don't ask, under ₹300", 300.0), ("max Rs. 1,250", 1250.0), ("budget of 500 INR", 500.0),
     ("upto ₹99.50", 99.5), ("order 2 cokes", None)])

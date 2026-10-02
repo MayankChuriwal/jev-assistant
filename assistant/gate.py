@@ -530,6 +530,7 @@ def commit_label(w, operation, action, page, key=None, subgoal=None):
         verdict, sure = jev.final(page, name, goal)
         if verdict == "final" and sure >= 0.5:
             return lookup(w, name, sure=True)
+        w.state["cleared"] = name  # Jev let it through with no yes: kept for the bench's audit
     return None
 
 
