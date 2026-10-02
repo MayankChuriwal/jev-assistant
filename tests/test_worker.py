@@ -2385,3 +2385,70 @@ def test_the_planner_reads_each_note_once_and_every_site_the_goal_names(tmp_path
 
 def test_the_planner_is_told_to_send_no_plan_unless_it_changes(tmp_path):
     assert "Return subgoals: [] unless you change the plan. Never repeat the plan." in " ".join(planner.SYSTEM.split())
+
+
+# ---- live debugging: every refusal and every reason to ask "I'm stuck" is in the trace
+
+
+def test_a_refused_planner_action_is_in_the_traces_refusals(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn(subgoals=[sub()]), turn("PICK", pick=9))
+    script_jev(monkeypatch, {"next": "THINK"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    refusal = w.trace()["refusals"][-1]
+    assert (refusal["step"], refusal["by"], refusal["error"], refusal["op"], refusal["pick"]) == \
+        (1, "planner", "retry", "PICK", "9")
+    assert refusal["message"].startswith("PICK names one of Jev's candidates") and len(refusal["message"]) <= 160
+
+
+def test_a_stale_page_under_the_planners_or_jevs_action_is_in_the_traces_refusals(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    w.browser.act.side_effect = StalePage("Page changed since this decision. Observe again.")
+    script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]), turn("PICK", pick=1))
+    unsure, sure = {"next": ("CLICK", 0.4), "click_target": "Office"}, {"next": "CLICK", "click_target": "Office"}
+    script_jev(monkeypatch, unsure, unsure, sure)  # the plan's look, an unsure step (the planner picks), a sure one
+    jev_checks(monkeypatch)
+    for _ in range(3):
+        w.command("tick")
+    stale = [(r["by"], r["error"], r["op"], r["pick"]) for r in w.trace()["refusals"]]
+    assert stale == [("planner", "stale", "PICK", "1"), ("jev", "stale", "CLICK", "Office")]
+    assert w.trace()["refusals"][0]["message"] == "Page changed since this decision. Observe again."
+
+
+def test_refusals_in_the_trace_are_capped_at_the_last_60(tmp_path, monkeypatch):
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn(subgoals=[sub()]), turn("PICK", pick=9))
+    script_jev(monkeypatch, {"next": "THINK"})
+    jev_checks(monkeypatch)
+    w.state["refusals_log"] = [{"step": 0, "message": "old"}] * 70
+    w.command("tick")
+    w.command("tick")
+    assert len(w.trace()["refusals"]) == 60 and w.trace()["refusals"][-1]["op"] == "PICK"
+
+
+def test_why_the_user_was_asked_im_stuck_is_in_the_trace(tmp_path, monkeypatch):
+    idle = worker_with(tmp_path, replies=[{"text": "keep trying"}])
+    script_planner(monkeypatch, turn(subgoals=[sub("choose the Office address")]), turn())
+    script_jev(monkeypatch, {"next": "THINK"})
+    jev_checks(monkeypatch)
+    while not idle.asked:
+        idle.command("tick")
+    assert idle.trace()["stuck_why"] in {"idle 8 ticks", "refused 6x: CONTINUE::"}
+    loop = worker_with(tmp_path, replies=[{"text": "try Home"}])
+    unchanged = {"operation": "CLICK", "action": "Office", "url": loop.state["page"]["url"], "page_changed": False}
+    loop.state["history"] = [unchanged] * 8
+    loop.track_loop(unchanged)
+    assert loop.trace()["stuck_why"] == "repeats 8: CLICK|Office|/checkout"
+    assert loop.trace()["refusals"][-1]["error"] == "stuck"
+
+
+def test_why_a_task_stopped_going_in_circles_is_in_the_trace(tmp_path):
+    from assistant.errors import Halt
+
+    w = worker_with(tmp_path)
+    w.state["path_steps"] = {"shop.test/checkout": 44}
+    with pytest.raises(Halt, match="going in circles"):
+        w.path_budget({"url": "https://shop.test/checkout"})
+    assert w.trace()["stuck_why"] == "path halt 45: shop.test/checkout"

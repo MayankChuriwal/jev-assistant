@@ -41,6 +41,7 @@ PATH_HALT = 45  # …and here the task stops; an answer in between never resets 
 FRUITLESS = 6  # steps in a row Jev judged failed on one page: the planner hears it, once a streak
 BLANK_WAITS = 3  # reads of a blank page before the planner hears it is blank
 FILE_REFUSALS = 3  # a download's DONE refused this often with no file saved: the next one stops the task
+REFUSALS_KEPT = 60  # refusals the trace keeps (the latest)
 DOWNLOAD_WAIT = 5.0  # seconds a DONE waits for downloads still in flight
 TYPED = {"TYPE_TEXT", "OPEN_URL"}  # what these typed or opened is part of the action
 CONTAINERS = {"", "generic", "group", "region", "main", "document", "presentation", "none", "section", "article",
@@ -225,7 +226,7 @@ class Worker:
             told_at=None, delegated_at=None, relaying=False, skill=None, preauth=False, cap=None, site="",
             cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None, closed=False,
             commit_drops=0, idle_asked=0, circled={}, loops={}, fruitless=None, blank_waits=0, coded=[],
-            file_refusals=0, path_steps={}, path_asked=[],
+            file_refusals=0, path_steps={}, path_asked=[], refusals_log=[], stuck_why=None, acting=None,
         )
 
     # ---- what the user and the models see
@@ -336,6 +337,7 @@ class Worker:
         try:
             return self.tick()
         except Halt as halt:
+            self.log_refusal("halt", halt)
             self.state["status"] = halt.status
             self.clock()
             self.say(str(halt))
@@ -349,15 +351,18 @@ class Worker:
         if s["started_at"] is None:
             s["started_at"] = time.perf_counter()
         before, replies = len(s["history"]), self.replies()
+        s["acting"] = None
         try:
             self.step()
             s["model_errors"] = 0
-        except StalePage:
+        except StalePage as why:
+            self.log_refusal("stale", why)
             s["status"] = "ready"
             self.observe()
         except TabsClosed as error:  # no page left to work on: never a hiccup to retry
             raise Halt("blocked", f"The browser tab closed, so I stopped.{self.pending()}") from error
         except Retry as why:
+            self.log_refusal("retry", why)
             s["feedback"].append(str(why))
             s["reason"] = s["reason"] or "unsure"  # the planner hears it next
             self.refused()
@@ -381,6 +386,16 @@ class Worker:
     def replies(self):
         return sum(m["from"] == "user" for m in self.state["messages"])
 
+    def log_refusal(self, error, message):
+        """One action refused or cut short (a Retry, a stale page, a stop, a question to the user about a loop), for
+        the trace: who chose it (the planner or Jev), what it was, and why. The latest REFUSALS_KEPT are kept."""
+        s = self.state
+        acting = s["acting"] or {}
+        entry = {"step": len(s["history"]) + 1, "by": acting.get("by", "worker"), "error": error,
+                 "op": acting.get("op"), "pick": str(acting.get("pick") or "")[:60],
+                 "text": str(acting.get("text") or "")[:60], "message": str(message)[:160]}  # text: redacted alone
+        s["refusals_log"] = (s["refusals_log"] + [entry])[-REFUSALS_KEPT:]
+
     def count_idle(self, before, replies):
         """A tick that ran no browser step and asked the user nothing (the planner and Jev handing the step back and
         forth): the user is asked at STUCK_AT such ticks in a row, and the task stops at IDLE_HALT."""
@@ -391,12 +406,13 @@ class Worker:
         if s["idle"] > 1:  # the planning tick of every run runs no step; only a second one in a row is idle
             s["idle_ticks"] += 1  # never reset: learning reads it
         if s["idle"] >= IDLE_HALT:
-            raise self.circling()
+            raise self.circling(why=f"idle halt {s['idle']} ticks")
         if s["idle"] == STUCK_AT and not s["idle_asked"]:  # asked already since the last step: no second question
-            self.stuck()
+            self.stuck(f"idle {s['idle']} ticks")
 
-    def circling(self, after_asking=False):
-        """The stop for a task going round in circles."""
+    def circling(self, after_asking=False, why="circling"):
+        """The stop for a task going round in circles; `why` (the guard that stopped it) goes into the trace."""
+        self.state["stuck_why"] = why
         asked = " even after asking you," if after_asking else ""
         return Halt("blocked", f"I'm going in circles on {rules.host(self.state['page']['url'])}{asked} and stopped. "
                                f"Tell me more about what you want, or check the site yourself.{self.pending()}")
@@ -468,7 +484,7 @@ class Worker:
         s["blank_waits"] += 1
         if s["blank_waits"] > BLANK_WAITS + 3:
             s["blank_waits"] = BLANK_WAITS + 1
-            self.loop_stuck(f"blank|{urlparse(page['url']).path}")
+            self.loop_stuck(f"blank|{urlparse(page['url']).path}", f"blank {s['blank_waits']} reads")
             return None
         s["feedback"].append(f"The page has stayed blank (no text and no controls) after {BLANK_WAITS} waits: "
                              "OPEN_URL the address you need, go BACK, or ASK the user.")
@@ -502,6 +518,7 @@ class Worker:
         if s["history"] and step["effect"]:
             s["history"][-1].setdefault("effect", step["effect"])
         s["seen"], s["candidates"] = page, step["candidates"]
+        s["acting"] = {"by": "jev", "op": step["op"], "pick": (step.get("action") or {}).get("label") or step["kind"]}
         if self.fruitless():
             return self.escalate("replan", page)
         if step["kind"] == "blocker":
@@ -723,8 +740,8 @@ class Worker:
         if count >= 6:
             s["refusals"][key] = 0
             if s["idle_asked"]:  # the user was asked since the last step, and still nothing runs
-                raise self.circling(after_asking=True)
-            self.stuck()
+                raise self.circling(after_asking=True, why=f"refused {count}x after asking: {key}")
+            self.stuck(f"refused {count}x: {key}")
 
     # ---- System Two
 
@@ -742,6 +759,8 @@ class Worker:
         s["turns"].append({"step": len(s["history"]) + 1, "reason": reason,
                            "latency_ms": meta.get("latency_ms", 0), **out,
                            "candidates": payload["candidates"][:5], "feedback": payload["feedback"][-5:]})
+        act = out["action"]
+        s["acting"] = {"by": "planner", "op": act["op"], "pick": act["pick"], "text": act["text"]}
         s["reason"], s["feedback"], s["seen"] = None, [], page
         if reason == "replan":
             s["subgoal_steps"] = 0
@@ -762,7 +781,6 @@ class Worker:
                 s["subgoal_steps"] = 0
         if s["replay"] and (reason == "start" or subgoals):  # a plan of another shape, now or later: no replay
             s["replay"]["on"] = s["replay"]["on"] and replay.same_shape(s["plan"], self.habit["plan"])
-        act = out["action"]
         if act["op"] not in {"DONE", "TELL"}:
             self.release()  # a TELL waits one step: when the next move is DONE with the same words, they go once
         if act["op"] in TALKING:
@@ -1401,15 +1419,21 @@ class Worker:
         history = s["history"][s["loop_from"]:]
         text = last.get("text") if last["operation"] in TYPED else None
         spot = last.get("spot")
-        if executor.circles(history, last["operation"], last["action"], spot, text) >= CIRCLE_ASK:
-            self.loop_stuck(f"{last['operation']}|{last['action']}|{text or ''}|{spot}")
-        elif not last["page_changed"] and executor.repeats(history, last["operation"], last["action"],
-                                                           last["url"]) >= STUCK_AT:
-            self.loop_stuck(f"{last['operation']}|{last['action']}|{urlparse(last['url']).path}")
-        elif spot and executor.visits(history, spot) >= VISITS:
-            self.loop_stuck(f"visits|{spot}")
-        elif spot and executor.undos(history) >= UNDOS:
-            self.loop_stuck(f"undos|{spot}")
+        circles = executor.circles(history, last["operation"], last["action"], spot, text)
+        repeats = 0 if last["page_changed"] else executor.repeats(history, last["operation"], last["action"],
+                                                                  last["url"])
+        visits = executor.visits(history, spot) if spot else 0
+        undos = executor.undos(history) if spot else 0
+        if circles >= CIRCLE_ASK:
+            key = f"{last['operation']}|{last['action']}|{text or ''}|{spot}"
+            self.loop_stuck(key, f"circles {circles}: {key}")
+        elif repeats >= STUCK_AT:
+            key = f"{last['operation']}|{last['action']}|{urlparse(last['url']).path}"
+            self.loop_stuck(key, f"repeats {repeats}: {key}")
+        elif visits >= VISITS:
+            self.loop_stuck(f"visits|{spot}", f"visits {visits}: {spot}")
+        elif undos >= UNDOS:
+            self.loop_stuck(f"undos|{spot}", f"undos {undos}: {spot}")
         return None
 
     def path_budget(self, last):
@@ -1421,9 +1445,10 @@ class Worker:
         key = f"{skills.bare(parts.netloc.lower())}{parts.path or '/'}"
         count = s["path_steps"][key] = s["path_steps"].get(key, 0) + 1
         if count >= PATH_HALT:
-            raise self.circling(after_asking=key in s["path_asked"])
+            raise self.circling(after_asking=key in s["path_asked"], why=f"path halt {count}: {key}")
         if count >= PATH_ASK and key not in s["path_asked"]:
-            self.loop_stuck(f"path|{key}")  # a page that moved while asking: asked at the next step instead
+            self.loop_stuck(f"path|{key}", f"path budget {count}: {key}")  # a page that moved while asking: asked
+            # at the next step instead
             s["path_asked"].append(key)
 
     def forbidden(self, operation, label, page, text=None):
@@ -1459,22 +1484,26 @@ class Worker:
             spot = views.signature(page)
             key = f"{operation}|{label}|{text or ''}|{spot}"
             s["circled"][key] = tries = s["circled"].get(key, 0) + 1
-            if executor.circles(s["history"][s["loop_from"]:], operation, label, spot, text) + tries >= CIRCLE_ASK:
-                self.loop_stuck(key)
+            runs = executor.circles(s["history"][s["loop_from"]:], operation, label, spot, text)
+            if runs + tries >= CIRCLE_ASK:
+                self.loop_stuck(key, f"guarded {runs} runs + {tries} refused: {key}")
                 return True
         raise Retry(problem)
 
-    def loop_stuck(self, key):
+    def loop_stuck(self, key, why=None):
         """Ask the user about a loop the guards caught. A reply that helps starts a fresh count; a second reply that
         leaves it to the agent ("you choose") doesn't, so the loop can't go on for ever: once one loop was asked about
-        LOOP_ASKS times, the next time it comes round the task stops."""
+        LOOP_ASKS times, the next time it comes round the task stops. `why` (which guard, at what count) goes into the
+        trace."""
         s = self.state
+        why = why or key
         asked = s["loops"].get(key, 0)
         if asked >= LOOP_ASKS:
-            raise self.circling(after_asking=True)
+            raise self.circling(after_asking=True, why=f"asked {asked}x already: {why}")
+        s["stuck_why"] = why  # recorded even when the page moves before the question
         self.steady(s["page"])
         s["loops"][key] = asked + 1
-        answer = self.stuck()
+        answer = self.stuck(why)
         if not asked or not DELEGATE.search(answer):
             s["loop_from"], s["circled"] = len(s["history"]), {}
 
@@ -1515,8 +1544,11 @@ class Worker:
 
     # ---- the user
 
-    def stuck(self):
+    def stuck(self, why="asked"):
+        """Ask the user what to do; `why` (the guard that asked) goes into the trace."""
         s = self.state
+        s["stuck_why"] = why
+        self.log_refusal("stuck", why)
         sub = self.subgoal()
         title = s["page"]["title"] or rules.host(s["page"]["url"])
         question = f"{STUCK} {title}, trying to {sub['do'] if sub else s['goal']}. What should I do?"
@@ -1592,7 +1624,7 @@ class Worker:
             "steps": [{k: h.get(k) for k in TRACE_STEP} for h in s["history"]],
             "jev": s["jev"], "turns": s["turns"], "meter": s["meter"], "escalations": s["escalations"],
             "margins": s["margins"], "replay": s["replay"], "files": [self.file_name(f) for f in s["files"]],
-            "errors": s["errors"],
+            "errors": s["errors"], "refusals": s["refusals_log"][-REFUSALS_KEPT:], "stuck_why": s["stuck_why"],
             "standing_error": s.get("standing_error"),
         })
 
