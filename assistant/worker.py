@@ -72,6 +72,7 @@ NEGATION = re.compile(r"\b(?:no|not|none|neither|nor|never|nothing|nope|nah|dont
                       r"arent)\b|\b\w+n['’]t\b", re.IGNORECASE)  # "front" or "want" is none
 HERE = re.compile(r"\b(current|present|my) location\b|\bwhere i am\b|\blocate me\b", re.IGNORECASE)
 SEARCHY = re.compile(r"\bsearch", re.IGNORECASE)  # a search control or box
+SLOT_ROW = re.compile(r"\(in “([^”]+)”\)")  # a time slot's row title, as the snapshot adds it
 CHOOSES = re.compile(r"\b(colou?rs?|sizes?|variants?|storage|flavou?rs?|shades?|styles?|models?)\b",
                      re.IGNORECASE)  # a step that picks one version of an item
 STRIP = re.compile(r"(?<!\d)(?:\d{1,2}\s+){3,}\d{1,2}(?!\d)")  # a strip of choices: “1 2 3 4 5 6 7 8 9 10”
@@ -1095,6 +1096,26 @@ class Worker:
             raise Retry(f"“{text}” is the plan's value for “{meant['field']}”: type it into [{right[0]}] "
                         f"“{right[1]['label']}”, not “{action.get('label')}”.")
 
+    def other_item(self, action, page):
+        """Why a time slot is another item's, or None. A page reached by clicking a venue's name ("PVR: Nexus") on an
+        item's own page (a movie's show times) lists every item's slots there, each carrying its row's title (“(in
+        “Doraemon…”)”): a slot whose row names none of the words the item's page title had (and this page's title
+        doesn't) belongs to another item."""
+        row = SLOT_ROW.search(action.get("label") or "")
+        here = urlparse(page["url"]).path
+        came = next((h for h in reversed(self.state["history"]) if urlparse(h.get("url") or "").path != here), None)
+        if not row or not came or came.get("operation") not in {"CLICK", "DOUBLE_CLICK"}:
+            return None
+        title, link = rules.words(page.get("title") or ""), rules.words(came.get("action") or "")
+        if not link or len(link & title) * 2 < len(link):
+            return None  # not opened by clicking this page's own name: the rows may be venues, not items
+        item = {w for w in rules.words(came.get("title") or "") - title if not w.isdigit()}
+        if not item or rules.words(row[1]) & item:
+            return None
+        return (f"“{action.get('label')}” is a show of “{row[1]}”, but this page (“{page.get('title')}”) lists every "
+                f"show there and was opened from “{came.get('title')}”: choose a show of that one (its own show times "
+                "list them), or ASK the user before switching to another.")
+
     def narrows(self, action):
         """The words a click on a search suggestion adds to what was just typed into a search box, that neither the
         goal nor the user's answers say ("anc" in “boat airdopes 141 anc” after “boAt Airdopes 141”): another product
@@ -1401,6 +1422,9 @@ class Worker:
                 raise Retry(f"“{action.get('label')}” is a photo in the item's picture gallery: clicking it only shows "
                             "that photo and chooses nothing. Choose with the page's own control for it (the colour or "
                             "size swatches, or the control naming the current choice), or LOOK for it.")
+            drift = self.other_item(action, page)
+            if drift:
+                raise Retry(drift)
             extra = self.narrows(action)
             if extra:
                 raise Retry(f"“{action.get('label')}” adds {', '.join(sorted(extra))} to the search, which the user "

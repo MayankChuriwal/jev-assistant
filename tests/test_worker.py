@@ -3066,6 +3066,36 @@ GALLERY = [{"id": "g1", "kind": "click", "role": "radio", "checked": "false", "n
            {"id": "c1", "kind": "click", "role": "radio", "checked": "false", "node": 52, "label": "Black ₹799.00"}]
 
 
+def slot(label, node):
+    return {"id": f"t{node}", "kind": "click", "label": label, "role": "button", "node": node}
+
+
+CINEMA = {**fake_page(text="PVR: Nexus\nDoraemon (U)\n07:50 PM\nDrishyam The Conclusion\n04:30 PM",
+                      url="https://in.bookmyshow.com/cinemas/bengaluru/pvr-nexus/buytickets/PVFF/20261003",
+                      actions=[slot("Book 07:50 PM (in “Doraemon: Castle of the Undersea Devil (U)”)", 9),
+                               slot("Book 04:30 PM (in “Drishyam The Conclusion (UA16+)”)", 10)]),
+          "title": "PVR: Nexus (Formerly Forum), Koramangala | Movie Showtimes & Ticket Booking Near You in Bengaluru"}
+CAME = {"step": 8, "subgoal": 4, "operation": "CLICK", "action": "PVR: Nexus (Formerly Forum), Koramangala",
+        "title": "Drishyam The Conclusion Movie Showtimes in Bengaluru & Online Ticket Booking", "page_changed": True,
+        "url": "https://in.bookmyshow.com/movies/bengaluru/drishyam-the-conclusion/buytickets/ET00519396/20261003"}
+
+
+def test_on_a_venue_opened_from_an_items_page_a_slot_of_another_item_is_refused(tmp_path, monkeypatch):
+    jev_checks(monkeypatch, final=("step", 1.0))  # a show's "Book" button is only a step to its seats
+    w = worker_with(tmp_path, page=CINEMA, goal="Book 2 tickets for the most popular Hindi movie tomorrow at a PVR")
+    w.state["history"] = [dict(CAME)]
+    with pytest.raises(Retry, match="is a show of “Doraemon"):  # live bookmyshow: Doraemon booked for Drishyam, 2x
+        w.act("CLICK", CINEMA["actions"][0], CINEMA, sub("choose an evening show at a PVR"))
+    w.act("CLICK", CINEMA["actions"][1], CINEMA, sub("choose an evening show at a PVR"))  # the item's own show
+    assert w.browser.act.call_count == 1
+    movie = {**CINEMA, "url": CAME["url"], "title": CAME["title"],
+             "actions": [slot("06:35 PM (in “INOX: Megaplex Mall of Asia Bangalore”)", 11)]}
+    w.state["history"] = [{**CAME, "action": "SAT 03 OCT", "title": "Drishyam The Conclusion (2026) - Movie",
+                           "url": "https://in.bookmyshow.com/movies/bengaluru/drishyam-the-conclusion/ET00477911"}]
+    w.act("CLICK", movie["actions"][0], movie, sub("choose an evening show"))  # a venue's row on the item's page
+    assert w.browser.act.call_count == 2
+
+
 def test_a_gallery_picture_is_never_clicked_to_choose_a_colour_or_size(tmp_path):
     page = fake_page(text="boAt Airdopes 141\nColour: White", actions=GALLERY)
     w = worker_with(tmp_path, page=page, goal="Buy one boAt Airdopes 141 on Amazon.in")
