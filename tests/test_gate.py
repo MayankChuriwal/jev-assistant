@@ -1616,6 +1616,33 @@ AMAZON_BUY = ("Deliver to Mayank\nMumbai 400098\nboAt Airdopes 141 Gen 2, 4 Mics
               "M.R.P.:\n₹3,990.00\nInclusive of all taxes\nBuy Now\nAdd to Cart")
 
 
+AMAZON_VARIANT = ("Only 1 left in stock.\nShips from\nAmazon\nSold by\nClicktech Retail Private Ltd\nAdd a Protection "
+                  "Plan:\nOnsitego 1 Year Extended Warranty\nfor\n₹199.00\nM.R.P.: ₹5,990.00\nInclusive of all taxes\n"
+                  "EMI\nstarts at ₹128 per month.\nPay on Delivery\nColour:\nBlack\nBuy Now")  # bench: no price read
+
+
+def variant(label, checked):
+    return {"id": label[:6], "kind": "click", "role": "radio", "label": label, "checked": checked, "node": len(label)}
+
+
+VARIANTS = [variant("Active Black ₹799.00 ₹3,990.00 Local Stores", "false"),
+            variant("Black ₹1,399.00 with 77 percent savings ₹5,990.00 Only 1 left in stock.", "true"),
+            variant("Bold Black ₹999.00 with 80 percent savings ₹4,990.00 In stock", "false"),
+            {"id": "bn", "kind": "click", "role": "button", "label": "Buy Now", "node": 99}]
+
+
+def test_a_buy_now_with_no_price_in_the_text_names_the_selected_options_own_price(monkeypatch):
+    page = fake_page(text=AMAZON_VARIANT, url="https://www.amazon.in/dp/B0F5BDRQN3", actions=VARIANTS)
+    found = gate.facts(page, [])
+    assert found["total"] is None and found["chosen"] == ["Black ₹1,399.00"]
+    summary(monkeypatch, ["Product: boAt Airdopes 141 Black, Quantity: 1", "Seller: Clicktech Retail Private Ltd"])
+    lines = gate.summary(Fake(page), page, found)  # live bench: the approval named no price at all
+    assert "Selected: Black ₹1,399.00" in lines and not any("799" in line or "999.00" in line for line in lines)
+    summary(monkeypatch, ["Product: boAt Airdopes 141 Black, Quantity: 1", "Price: ₹1,399.00"])
+    lines = gate.summary(Fake(page), page, found)  # the selected option's price is the page's own: kept, once
+    assert "Price: ₹1,399.00" in lines and not any(line.startswith("Selected:") for line in lines)
+
+
 def test_a_buy_now_summary_keeps_the_products_price_and_drops_a_line_saying_none_is_shown(monkeypatch):
     page = fake_page(text=AMAZON_BUY, url="https://www.amazon.in/dp/B0F8BVSK21")
     summary(monkeypatch, ["boAt Airdopes 141 Gen 2 Active Black, Qty 1", "Delivery address: Mayank Mumbai 400098",

@@ -437,12 +437,17 @@ CART_STEP = re.compile(r"\b(?:cart|basket|bag|bill details|bill summary|order su
 CHOICES = {"radio", "option", "menuitemradio"}
 
 
+def picked_choice(action):
+    """Whether a control is a choice already picked: a checked radio, a selected option."""
+    return action.get("role") in CHOICES and "true" in {str(action.get("checked")).lower(),
+                                                        str(action.get("selected")).lower()}
+
+
 def method_shown(page, goal):
     """Whether the payment may already be set: the page shows a payment method, a "selected" mark, or a choice that
     is already picked, or the goal names how to pay ("pay cash on delivery")."""
     labels = " ".join(a.get("label") or "" for a in page.get("actions") or ())
-    picked = any(a.get("role") in CHOICES and "true" in {str(a.get("checked")).lower(), str(a.get("selected")).lower()}
-                 for a in page.get("actions") or ())
+    picked = any(picked_choice(a) for a in page.get("actions") or ())
     text = flat(page["text"])
     return picked or bool(rules.METHOD.search(text) or rules.METHOD.search(labels) or rules.METHOD.search(goal or "")
                           or SELECTED.search(text))
@@ -536,8 +541,9 @@ def commit_label(w, operation, action, page, key=None, subgoal=None):
 
 def facts(page, recent):
     """What an approval must show, read by code from the page and the pages just before it: the payable total,
-    fees, the delivery address line, the item count, and the values typed into the form. Fees count from an
-    earlier page only while that page's payable total is the current one."""
+    fees, the delivery address line, the item count, the values typed into the form, and each selected choice that
+    names a price, up to that price (a product's variant "Black ₹1,399.00"). Fees count from an earlier page only
+    while that page's payable total is the current one."""
     text = flat(page["text"])
     seen = [text, *(flat(t) for t in reversed(recent[-5:]))]
     total = payable(text)
@@ -550,9 +556,12 @@ def facts(page, recent):
                 if re.search(r"[,\d]", m)]
     found = [m.strip() for m in DELIVERING.findall(text)] + labelled + \
         [m.strip() for t in seen[1:] for m in DELIVERING.findall(t)]  # this page's text, its controls, then before
+    chosen = [rules.normal(a["label"][:rules.PRICE.search(a["label"]).end()]) for a in page["actions"]
+              if picked_choice(a) and rules.PRICE.search(a.get("label") or "")]  # "Black ₹1,399.00", selected
     return {"total": total, "fees": list(dict.fromkeys(f.strip() for t in current for f in FEE.findall(t))),
             "address": next(iter(found), None),
-            "items": next((int(n) for n in ITEMS.findall(text)), 0), "typed": list(dict.fromkeys(typed))}
+            "items": next((int(n) for n in ITEMS.findall(text)), 0), "typed": list(dict.fromkeys(typed)),
+            "chosen": list(dict.fromkeys(chosen))}
 
 
 def drafted(payload):
@@ -649,8 +658,8 @@ def summary(w, page, found):
     payload = {"goal": s["goal"], "fields": (skill or {}).get("summary") or FIELDS, "chat": s["chat"][-10:],
                "facts": found, "page": {"url": page["url"], "title": page["title"], "text": text[:3000]},
                "pages_before": [flat(t)[:1500] for t in s["recent"][-3:]]}
-    host = rules.host(page["url"])
-    lines = [kept for line in drafted(payload) if (kept := corrected(line, text, host)) is not None]
+    host, shows = rules.host(page["url"]), "\n".join([text, *found.get("chosen", [])])  # a selected choice's price
+    lines = [kept for line in drafted(payload) if (kept := corrected(line, shows, host)) is not None]
     if found["total"] is None:
         lines = [line for line in lines if not (TOTAL.search(line) and any(
             remark_only(figure, text) for figure in rules.PRICE.findall(line)))]
@@ -658,6 +667,9 @@ def summary(w, page, found):
     extra = []
     if found["total"] and not shown(found["total"], " ".join(lines)):
         extra.append(f"Total: {tight(found['total'])}")
+    if found["total"] is None:  # no total read: the price of what is selected, unless a line already shows it
+        extra += [f"Selected: {choice}" for choice in found.get("chosen", [])
+                  if not any(shown(price, " ".join(lines)) for price in rules.PRICE.findall(choice))]
     extra += [fee for fee in found["fees"] if fee.split("₹")[0].strip().lower() not in joined]
     if found["address"] and re.sub(r"\W", "", found["address"])[:12].lower() not in re.sub(r"\W", "", joined):
         extra.append(f"Delivering to: {found['address']}")
