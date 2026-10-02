@@ -962,6 +962,8 @@ class Worker:
                 if op == "PICK" and operation == "TYPE_TEXT":  # a field picked with no text: the subgoal's, else focus
                     text = self.subgoal_value(action, self.subgoal())
                     operation = "TYPE_TEXT" if text is not None else "CLICK"  # focused, the site may offer options
+            if operation == "TYPE_TEXT":
+                self.misplaced(action, text, page)
             if self.guard(operation, action.get("label") or operation, page, text):
                 return None
             return self.act(operation, action, page, self.subgoal(), key=key, text=text)
@@ -1044,6 +1046,21 @@ class Worker:
             return None
         elements, _, _ = action_space(page["actions"])
         return bare if any(e["index"] == bare[1] for e in elements) else None
+
+    def misplaced(self, action, text, page):
+        """Refuse the plan's value for one field typed into another ("Indiranagar Metro Station", the drop, into the
+        pickup box) when the page has the field that value is named for: Retry naming it by its number."""
+        values = (self.subgoal() or {}).get("values") or []
+        meant = next((v for v in values if str(v["text"]).strip() == str(text or "").strip()), None)
+        name = executor.words(meant["field"]) - executor.GENERIC if meant else set()
+        if not name or name & executor.words(action.get("label", "")):
+            return
+        _, heads, _ = action_space(page["actions"])
+        right = next(((i, a) for i, a in heads.get("type_text_target", {}).items()
+                      if name & executor.words(a.get("label", ""))), None)
+        if right:
+            raise Retry(f"“{text}” is the plan's value for “{meant['field']}”: type it into [{right[0]}] "
+                        f"“{right[1]['label']}”, not “{action.get('label')}”.")
 
     @staticmethod
     def on_words(click, text, typed=False):

@@ -2733,3 +2733,14 @@ def test_proceed_to_pay_before_the_user_said_how_to_pay_is_a_step_to_the_payment
     w.state["chat"] = [{"from": "agent", "text": "How would you like to pay?\n1. Cash on delivery\n2. UPI"},
                        {"from": "user", "text": "“Cash” → option 1: Cash on delivery"}]
     assert gate.commit_label(w, "CLICK", PROCEED, page) == PROCEED["name"] and len(asked) == 1
+
+
+def test_the_plans_value_for_one_field_typed_into_another_is_refused_with_the_right_field(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text="Pickup\nDrop", actions=RIDE_PAGE))
+    script_planner(monkeypatch, turn(subgoals=[sub("set the drop", values=[("drop", "Indiranagar Metro Station")])]))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    with pytest.raises(Retry, match=r"the plan's value for “drop”: type it into \[3\] “drop”"):
+        w.do({"op": "TYPE", "pick": "[1]", "text": "Indiranagar Metro Station"}, w.state["page"])  # live rapido
+    w.do({"op": "TYPE", "pick": "[3]", "text": "Indiranagar Metro Station"}, w.state["page"])
+    assert w.browser.act.call_args.args[1]["label"] == "drop"
