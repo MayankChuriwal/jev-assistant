@@ -2617,3 +2617,18 @@ def test_a_bare_number_above_jevs_candidates_is_the_page_element_with_that_numbe
     w.state["candidates"] = list(ONLY_CONTINUE)
     w.do({"op": "PICK", "pick": "1", "text": ""}, page)  # a candidate's own number stays the candidate
     assert w.browser.act.call_args.args[1]["label"] == "Continue"
+
+
+def test_an_order_replan_that_moves_past_a_step_never_gets_it_back_after_the_new_ones(tmp_path, monkeypatch):
+    first = [sub("Search for 'Diet Coke 300 ml can' in Instamart"),
+             sub("Open the product that matches Diet Coke 300 ml can exactly or the closest size"),
+             sub("Add quantity 1 of Diet Coke 300 ml can to the cart"), sub("Open the cart and review fees and total"),
+             sub("Choose the payment method user picks", kind="ask"), sub("Place the order", kind="commit"),
+             sub("Report the order number", kind="report")]
+    w, _ = planned_order(tmp_path, monkeypatch, [
+        sub("Open the product that matches Diet Coke 300 ml can exactly or the closest size")], first=first)
+    replan(w)  # live instamart (20261002-165009): the search came back after "open the product", and Jev went round
+    assert [do for do, _ in steps(w)] == [
+        "Open the product that matches Diet Coke 300 ml can exactly or the closest size",
+        "Add quantity 1 of Diet Coke 300 ml can to the cart", "Open the cart and review fees and total",
+        "Choose the payment method user picks", "Place the order", "Report the order number"]

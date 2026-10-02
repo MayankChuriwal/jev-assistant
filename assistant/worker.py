@@ -144,10 +144,15 @@ def with_commit(subgoals, rest):
     has its own; a step written in both is kept once, and as the commit when the old tail has it as one. Each act or
     ask step the old plan still had before the commit is judged on its own: one that no new subgoal rewrites (sharing
     at least half the words of the longer of the two) was dropped rather than replaced, and comes back, in its old
-    order, before the commit. A new question that shares a word or two with one old step never takes the others."""
+    order, before the commit. A new question that shares a word or two with one old step never takes the others. Steps
+    before the last old one the new subgoals rewrite are ones the planner moved past: they never come back after the
+    new ones (a search restored after "open the product" sends Jev round)."""
     first = next(i for i, g in enumerate(rest) if g["kind"] == "commit")
     tail = rest[first:]
-    middle = [g for g in rest[:first] if g["kind"] in {"act", "ask"}
+    rewritten = [i for i, g in enumerate(rest[:first])
+                 if any(shares(new["do"], g["do"], by=max) for new in subgoals)]
+    start = rewritten[-1] + 1 if rewritten else 0
+    middle = [g for g in rest[start:first] if g["kind"] in {"act", "ask"}
               and not any(shares(new["do"], g["do"], by=max) for new in subgoals)]
     end = len(subgoals)
     while end and subgoals[end - 1]["kind"] == "report":
