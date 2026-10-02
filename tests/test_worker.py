@@ -2715,3 +2715,21 @@ def test_a_strip_of_numbers_is_clicked_on_the_planners_choice_never_on_its_middl
     assert "lands on its middle" in seen[-1]["feedback"][-1]
     operation, action = w.browser.act.call_args.args[:2]
     assert (operation, action.get("within")) == ("CLICK", "2")  # the planner's TYPE on the candidate: on “2”
+
+
+PROCEED = {"id": "m", "kind": "click", "label": "Make payment, tap to go to payment (shows “Proceed to Pay”)",
+           "name": "Make payment, tap to go to payment", "shown": "Proceed to Pay", "role": "button", "node": 22}
+
+
+def test_proceed_to_pay_before_the_user_said_how_to_pay_is_a_step_to_the_payment_page(tmp_path, monkeypatch):
+    from assistant import gate
+
+    page = fake_page(text="Cart\nDiet Coke 330 ml\nTo Pay ₹121", actions=[PROCEED])
+    w = worker_with(tmp_path, page=page)
+    asked = []
+    monkeypatch.setattr(jev, "final", lambda *a: asked.append(a) or ("step", 0.5))  # Jev unsure: it used to ask
+    assert gate.commit_label(w, "CLICK", PROCEED, page) is None and asked == []  # live instamart: the yes came first
+    assert w.state["cleared"] == PROCEED["label"]
+    w.state["chat"] = [{"from": "agent", "text": "How would you like to pay?\n1. Cash on delivery\n2. UPI"},
+                       {"from": "user", "text": "“Cash” → option 1: Cash on delivery"}]
+    assert gate.commit_label(w, "CLICK", PROCEED, page) == PROCEED["name"] and len(asked) == 1

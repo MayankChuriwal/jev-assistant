@@ -421,6 +421,17 @@ def only_a_step(operation, action, label, page):
         and not shows_money(page["text"])
 
 
+def unpaid_checkout(w, action):
+    """Whether a control that only opens the payment page ("Proceed to Pay") is pressed before the user said how to
+    pay: it is a step there, where the methods show and the user picks one; the pay control after it is the commit.
+    Recorded as cleared, for the bench's audit."""
+    chosen = getattr(w, "method_chosen", None)
+    if not rules.CHECKOUT_STEP.search(action.get("shown") or own_words(action)) or chosen is None or chosen():
+        return False
+    w.state["cleared"] = action.get("label")
+    return True
+
+
 def accordion(operation, action, label):
     """Whether a click opens or closes a section of the page (a header with an expanded state, such as Amazon's
     "One-time purchase" panel) and names no price: at most a maybe-commit, for Jev's final check."""
@@ -457,7 +468,8 @@ def commit_label(w, operation, action, page, key=None, subgoal=None):
     if label:  # a checkout step ("Proceed to Pay") is not matched outright: it is a maybe-commit below
         if accordion(operation, action, label):
             return None if cleared(w, page, label, goal) else lookup(w, label, sure=False)
-        if only_a_step(operation, action, label, page) and cleared(w, page, label, goal):
+        if only_a_step(operation, action, label, page) and \
+                (unpaid_checkout(w, action) or cleared(w, page, label, goal)):
             return None
         return lookup(w, label, sure=True)
     maybe = rules.maybe_commit_label(operation, action, page, key, focused)
