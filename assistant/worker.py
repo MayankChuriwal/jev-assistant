@@ -1084,7 +1084,9 @@ class Worker:
     def raises_quantity(action):
         """Whether a control is a quantity stepper's + (it shows only "+", or its name says increase): how many the
         user wants is the planner's to read, never Jev's alone."""
-        return (action.get("shown") or "").strip() in {"+", "＋"} or bool(RAISES.search(action.get("name") or ""))
+        plus = {"+", "＋"}
+        return (action.get("shown") or "").strip() in plus or (action.get("name") or "").strip() in plus or \
+            bool(RAISES.search(action.get("name") or ""))
 
     @staticmethod
     def search_opener(op, index, page):

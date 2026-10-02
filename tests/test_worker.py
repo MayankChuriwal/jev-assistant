@@ -2764,3 +2764,9 @@ def test_typing_a_place_waits_for_its_suggestions_before_the_step_is_read(tmp_pa
     w.browser.observe.side_effect = [typed, typed, shown, shown, shown]
     w.run(w.state["page"], "TYPE_TEXT", box[0], {"text": "Kempegowda Terminal 1"}, "Kempegowda Terminal 1")
     assert "Kempegowda International Airport (BLR) Terminal 1" in w.state["history"][-1]["changed"]  # live ola
+
+
+def test_a_plus_named_plus_itself_is_a_stepper_too(tmp_path):
+    plus = {"id": "p", "kind": "click", "label": "+ (Margherita Pizza: − 1 2 3 +)", "name": "+", "role": "button",
+            "node": 2}  # live swiggy: Jev pressed it twice, three pizzas for a goal of one
+    assert Worker.raises_quantity(plus) and not Worker.raises_quantity({**plus, "name": "Add", "label": "Add"})
