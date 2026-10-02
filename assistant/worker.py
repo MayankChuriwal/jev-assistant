@@ -921,7 +921,7 @@ class Worker:
                                 f"{len(s['candidates'])} ({self.listed()}). To act on another control, use its "
                                 "element number in brackets, like [12].")
                 if op == "TYPE" and chosen["operation"] != "TYPE_TEXT":
-                    raise Retry(f"Candidate {chosen['n']} is not a field to type into.")
+                    raise Retry(f"Candidate {chosen['n']} {self.not_a_field(chosen['action'])}")
                 operation, action, key = chosen["operation"], chosen["action"], chosen.get("key")
                 text = act["text"] if op == "TYPE" else None
                 if op == "PICK" and operation == "TYPE_TEXT":  # a field picked with no text: the subgoal's, else focus
@@ -987,7 +987,7 @@ class Worker:
                 raise Retry(f"[{index}] is a dropdown: TYPE [{index}] with the words of one of its options ({names}).")
             return "SELECT", option, None
         if op == "TYPE":
-            raise Retry(f"[{index}] is not a field to type into.")
+            raise Retry(f"[{index}] {self.not_a_field(click)}")
         if fill:  # picked with no text: the subgoal's, else only focused (the site may offer its own options)
             value = self.subgoal_value(fill, self.subgoal())
             return ("TYPE_TEXT" if value is not None else "CLICK"), fill, value
@@ -997,6 +997,14 @@ class Worker:
             raise Retry(f"[{index}] is a dropdown: TYPE [{index}] with the words of the option to choose ({names}).")
         raise Retry(f"[{index}] can't be clicked, typed into, or chosen from. Use another element, or one of Jev's "
                     f"candidates ({self.listed()}).")
+
+    @staticmethod
+    def not_a_field(action):
+        """Why TYPE can't go into this control, and what to do instead: a link or button that may open a field (a
+        search bar drawn as a link) is pressed first."""
+        if action and action.get("kind") == "click":
+            return (f"is a {action.get('role') or 'button'}, not a field: PICK it to open its field, then TYPE there.")
+        return "is not a field to type into."
 
     def talk(self, out, page):
         """ASK, TELL, DONE, or STOP from the planner, its words checked against the universal rules first."""

@@ -2132,7 +2132,7 @@ def test_a_planner_pick_or_type_by_element_number_clicks_selects_and_is_held_to_
     w.do({"op": "TYPE", "pick": "[4]", "text": "Nepal"}, page)  # a dropdown takes one of its options
     operation, action = w.browser.act.call_args.args[:2]
     assert (operation, action["value"]) == ("SELECT", "NP")
-    with pytest.raises(Retry, match="not a field to type into"):
+    with pytest.raises(Retry, match="is a button, not a field: PICK it to open its field"):
         w.do({"op": "TYPE", "pick": "[1]", "text": "hello"}, page)
     pay = fake_page()  # the Pay button is element [6]: a commit by number still needs the user's yes
     w.state["page"], w.state["candidates"] = pay, []
@@ -2540,3 +2540,18 @@ def test_a_comparison_is_judged_with_the_other_sites_page_however_many_reads_ago
         w.command("tick")
     assert w.state["status"] == "done" and any("₹68" in text for text in seen[-1])
     assert len(w.state["recent"]) <= 3  # Zepto's rotating reads are one page, kept as its latest read
+
+
+def test_typing_into_a_search_link_says_to_open_it_first(tmp_path, monkeypatch):
+    link = [{"id": "s", "kind": "click", "label": "Search for atta dal and more", "role": "link", "node": 3}]
+    w = worker_with(tmp_path, page=fake_page(text="Groceries", actions=link))
+    script_planner(monkeypatch, turn(subgoals=[sub("search for atta")]), turn("TYPE", pick="[1]", text="atta"))
+    script_jev(monkeypatch, {"next": ("CLICK", 0.3), "click_target": "Search"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert "[1] is a link, not a field: PICK it to open its field, then TYPE there" in w.state["feedback"][-1]
+    script_planner(monkeypatch, turn("TYPE", pick=1, text="atta"))
+    w.state["reason"] = "unsure"
+    w.command("tick")
+    assert "Candidate 1 is a link, not a field: PICK it to open its field" in w.state["feedback"][-1]
