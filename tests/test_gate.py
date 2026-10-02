@@ -1710,6 +1710,16 @@ def test_a_page_that_may_take_the_payment_never_lets_proceed_to_pay_through_on_a
     assert gate.commit_label(unpaid(page, goal), "CLICK", PLACE_ORDER, page) == "Place order" and len(asked) == 1
 
 
+@pytest.mark.parametrize("name", ["Place order", "Pay now", "Confirm payment", "Book now", "Submit order",
+                                  "Complete purchase"])
+def test_a_control_named_as_a_commit_never_gets_the_cart_pages_lean_from_the_checkout_step_it_shows(monkeypatch,
+                                                                                                    name):
+    control_ = {**PLACE_ORDER, "name": name, "label": f"{name} (shows “Proceed to Pay”)"}
+    cart = fake_page(text=CART_PAGE, actions=[control_])  # a cart page with no method in sight, the user unasked
+    final_check(monkeypatch, ("step", 0.55))  # the review's probe: Jev leans step, as for instamart's own control
+    assert gate.commit_label(unpaid(cart), "CLICK", control_, cart) == name
+
+
 def test_proceed_to_pay_on_the_cart_page_before_a_method_is_a_step_only_when_jev_says_step(monkeypatch):
     cart = fake_page(text=CART_PAGE, actions=[MAKE_PAYMENT])
     w = unpaid(cart)

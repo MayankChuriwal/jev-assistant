@@ -454,12 +454,25 @@ def cart_step(text):
                                              or stepper(text.splitlines()))
 
 
+NAVIGATES = re.compile(r"\bgo(?:es)? to (?:the )?(?:pay|payment|checkout)\b", re.IGNORECASE)  # "tap to go to payment"
+SHOWS = re.compile(r"\s*\(shows “[^”]*”\)$")  # the shown words a label carries after the control's own name
+
+
+def named_as_step(action):
+    """Whether a control's own name lets it be only a step: no commit word in it, or words that say it goes to the
+    payment page ("Make payment, tap to go to payment"). "Place order" or "Pay now" never is, whatever it shows."""
+    name = action.get("name", SHOWS.sub("", action.get("label") or ""))
+    return not rules.COMMIT.search(name) or bool(NAVIGATES.search(name))
+
+
 def unpaid_checkout(w, action, page, goal):
     """Whether a control that only opens the payment page ("Proceed to Pay") is pressed on a cart or bill page before
     the user said how to pay, with no payment method in sight and none named in the goal: the methods show on the
-    next page, where the pay control is the commit. Jev's final check still decides; it only needs to say step."""
+    next page, where the pay control is the commit. Jev's final check still decides; it only needs to say step. A
+    control whose own name commits ("Place order" showing “Proceed to Pay”) never gets this lean."""
     chosen = getattr(w, "method_chosen", None)
-    if chosen is None or chosen() or not rules.CHECKOUT_STEP.search(action.get("shown") or own_words(action)):
+    if chosen is None or chosen() or not named_as_step(action) or \
+            not rules.CHECKOUT_STEP.search(action.get("shown") or own_words(action)):
         return False
     return cart_step(flat(page["text"])) and not method_shown(page, f"{w.state['goal']} {goal}")
 
