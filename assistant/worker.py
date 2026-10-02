@@ -1081,6 +1081,22 @@ class Worker:
             raise Retry(f"“{text}” is the plan's value for “{meant['field']}”: type it into [{right[0]}] "
                         f"“{right[1]['label']}”, not “{action.get('label')}”.")
 
+    def narrows(self, action):
+        """The words a click on a search suggestion adds to what was just typed into a search box, that neither the
+        goal nor the user's answers say ("anc" in “boat airdopes 141 anc” after “boAt Airdopes 141”): another product
+        than the one asked for. Empty for a place box's suggestions, which are picked to set the place."""
+        s = self.state
+        last = s["history"][-1] if s["history"] else {}
+        field = executor.words(last.get("action", ""))
+        if last.get("operation") != "TYPE_TEXT" or not SEARCHY.search(last.get("action", "")) or \
+                field & (executor.PLACE | executor.ROLES | {"landmark", "destination", "street"}):
+            return set()
+        typed, label = executor.words(last.get("text") or ""), executor.words(action.get("label") or "")
+        if not typed & label:
+            return set()  # not a suggestion of what was typed: a search button, another control
+        said = typed | executor.words(s["goal"]) | executor.words(" ".join(self.user_words()))
+        return label - said - FILLER
+
     @staticmethod
     def card_add(action, sub):
         """A card (a clickable container, not a button) whose words hold its ADD, clicked for a step that adds to the
@@ -1354,6 +1370,11 @@ class Worker:
         """One operation through the gate: a commit runs only with an approval or a valid pre-authorisation."""
         if operation == "CLICK":
             action = self.card_add(action, sub)
+            extra = self.narrows(action)
+            if extra:
+                raise Retry(f"“{action.get('label')}” adds {', '.join(sorted(extra))} to the search, which the user "
+                            "never said: press Enter in the search box or its search button to search their own "
+                            "words.")
         inputs, shown = self.inputs(operation, action, page, sub, key, text)
         self.state["cleared"] = None
         label = gate.commit_label(self, operation, action, page, inputs.get("key"), sub)

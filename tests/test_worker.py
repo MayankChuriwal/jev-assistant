@@ -2948,6 +2948,34 @@ CARD = {"id": "c", "kind": "click", "label": "Masala Dosai Masala Dosai ₹195 A
         "role": "clickable", "node": 12}
 
 
+def suggestion(label, node):
+    return {"id": f"s{node}", "kind": "click", "label": label, "role": "button", "node": node}
+
+
+TYPED = {"step": 1, "subgoal": 0, "operation": "TYPE_TEXT", "action": "Search Amazon.in", "text": "boAt Airdopes 141",
+         "url": "https://www.amazon.in/", "page_changed": True, "spot": "a"}
+
+
+@pytest.mark.parametrize("label, field, refused", [
+    ("boat airdopes 141 anc", "Search Amazon.in", True),  # live amazon: the ANC model was bought instead
+    ("boat airdopes 141 in Electronics", "Search Amazon.in", True),
+    ("boat airdopes 141", "Search Amazon.in", False), ("boAt Airdopes", "Search Amazon.in", False),
+    ("HSR Layout, Sector 6, Bengaluru", "Search for area, street name", False),  # a place's suggestion: picked
+])
+def test_a_search_suggestion_that_adds_words_the_user_never_said_is_refused(tmp_path, label, field, refused):
+    page = fake_page(text="Amazon.in", url="https://www.amazon.in/", actions=[suggestion(label, 11)])
+    w = worker_with(tmp_path, page=page, goal="Buy one boAt Airdopes 141 on Amazon.in")
+    w.state["history"] = [{**TYPED, "action": field,
+                           "text": "HSR Layout" if "area" in field else TYPED["text"]}]
+    if refused:
+        with pytest.raises(Retry, match="press Enter in the search box or its search button"):
+            w.act("CLICK", page["actions"][0], page, sub("search for boAt Airdopes 141"))
+        assert not w.browser.act.called
+    else:
+        w.act("CLICK", page["actions"][0], page, sub("search for boAt Airdopes 141"))
+        assert w.browser.act.called
+
+
 def test_adding_from_a_card_presses_the_add_inside_it(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=fake_page(text="Menu", actions=[CARD]), goal="Order one masala dosa on Zomato")
     w.state["plan"] = [sub("Add one masala dosa to the cart")]
