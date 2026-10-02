@@ -78,6 +78,8 @@ PLACE_STEP = re.compile(r"\b(location|address|pin ?code|deliver(y|ing)? (to|area
                         r"drop(-| )?off)\b", re.IGNORECASE)  # a plan step that sets the delivery or pickup place
 DOWNLOADS = re.compile(r"download|invoice|receipt|statement|\bpdf\b|\.pdf\b|\bprint\b|\bexport\b",
                        re.IGNORECASE)  # a step that may have opened the document
+PICK_METHOD = ("ASK which payment method first, listing every method the page shows; a pre-selected saved card is "
+               "not the user's pick.")
 CLEARING = ("TYPE needs the text to type. A field is never cleared first: typing replaces what it holds. PICK the "
             "field to only focus it.")
 
@@ -678,6 +680,11 @@ class Worker:
         if field is None or field.get("value") == "[secret]":  # none, or a code typed that the site hasn't rejected
             return self.escalate("blocker:code", page)
         card = bool(rules.CARD_DETAIL.search(field["label"]))
+        if card and self.unchosen_card(field, page):  # a pre-selected card's CVV box: the user picks the method first
+            s["feedback"].append(PICK_METHOD)
+            if "payment" not in s["situations"]:
+                s["situations"].append("payment")
+            return self.escalate("blocker:payment", page)
         if not card and s["code_asks"] >= CODE_ASKS:  # each code usually means a new one sent to the user's phone
             raise Halt("blocked", f"Signing in to {rules.host(page['url'])} isn't working after {CODE_ASKS} codes, "
                                   "so I stopped rather than send you more. Please sign in once in the agent's "
@@ -1193,8 +1200,7 @@ class Worker:
                         "field.")
         if rules.CARD_DETAIL.search(message) and not self.method_question(message, options) and \
                 not self.method_chosen():
-            raise Retry("ASK which payment method first, listing every method the page shows; a pre-selected saved "
-                        "card is not the user's pick.")
+            raise Retry(PICK_METHOD)
         # A question that asks for (or mentions) a code, password, or card detail goes through the hidden field,
         # options included: a reply typed in the open would reach the models. A picked option is read by code below.
         secret = (rules.asks_for_secret(message) or (rules.code_field(page) and bool(CODE_WORDS.search(message)))
@@ -1253,6 +1259,14 @@ class Worker:
         chat = self.state["chat"]
         return any(q["from"] == "agent" and r["from"] == "user" and not q.get("approval")
                    and self.method_question(q["text"]) for q, r in zip(chat, chat[1:]))
+
+    def unchosen_card(self, field, page):
+        """Whether a card-detail box (card number, CVV, expiry) sits on a page that offers other ways to pay too, while
+        the user hasn't said how to pay, in the chat or the goal: a saved card shown pre-selected is not their pick."""
+        offered = " ".join([page["text"], *(a.get("label") or "" for a in page["actions"])])
+        methods = {m.casefold() for m in rules.METHOD.findall(offered)}
+        return bool(rules.CARD_DETAIL.search(field.get("label") or "")) and len(methods) >= 2 and \
+            not self.method_chosen() and not rules.METHOD.search(self.state["goal"])
 
     def read(self, message, options, answer):
         """The user's reply as the chat keeps it: their words, and the option Jev reads them as."""
@@ -1393,6 +1407,8 @@ class Worker:
         if not str(text or "").strip():
             raise Retry(CLEARING)
         if secret_field(action):
+            if self.unchosen_card(action, page):
+                raise Retry(PICK_METHOD)
             found = re.fullmatch(r"\s*\[secret:(answer\d+)\]\s*", text)
             if not found or found[1] not in s["answers"]:
                 raise Retry(f"“{action['label']}” takes a code or password: the system asks the user for it; type "

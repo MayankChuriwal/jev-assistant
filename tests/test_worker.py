@@ -2273,6 +2273,37 @@ def test_a_card_detail_is_asked_only_after_the_user_chose_how_to_pay(tmp_path, m
     assert len(w.asked) == 1 and w.asked[0]["kind"] == "secret"
 
 
+CVV_BOX = {"id": "cvv", "kind": "fill", "label": "CVV", "role": "textbox", "value": "", "node": 8,
+           "constraints": {"type": "password", "inputmode": "numeric", "maxlength": 3}}
+PAY_WITH_CVV = {**INSTAMART_PAY, "actions": [CVV_BOX, *INSTAMART_PAY["actions"]]}
+CHOSE_HDFC = [{"from": "agent", "text": "How would you like to pay?\n1. HDFC Bank Card\n2. UPI\n3. Pay on Delivery"},
+              {"from": "user", "text": "“card” → option 1: HDFC Bank Card"}]
+
+
+def test_a_card_box_beside_other_methods_takes_nothing_before_the_user_chose_how_to_pay(tmp_path):
+    w = worker_with(tmp_path, page=PAY_WITH_CVV)  # live instamart bench: TYPE [profile:cvv] six times, never asked
+    with pytest.raises(Retry, match="ASK which payment method first"):
+        w.value(CVV_BOX, "[profile:cvv]", PAY_WITH_CVV)
+    w.state["chat"] += [dict(c) for c in CHOSE_HDFC]
+    with pytest.raises(Retry, match="takes a code or password"):  # the method is picked: its CVV is asked hidden
+        w.value(CVV_BOX, "[profile:cvv]", PAY_WITH_CVV)
+    paying = worker_with(tmp_path, page=PAY_WITH_CVV, goal="Order one Diet Coke on Instamart and pay by card")
+    with pytest.raises(Retry, match="takes a code or password"):  # the goal named how to pay
+        paying.value(CVV_BOX, "[profile:cvv]", PAY_WITH_CVV)
+
+
+def test_a_card_box_jev_flags_beside_other_methods_goes_to_the_planner_before_the_user_chose(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=PAY_WITH_CVV, replies=[{"text": "123"}])
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("pay for the order")]))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "CVV", "blocker": "code"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert w.asked == [] and not w.browser.act.called
+    assert seen[-1]["reason"] == "blocker:payment" and any("ASK which payment method first" in f
+                                                           for f in seen[-1]["feedback"])
+
+
 def test_a_question_that_asks_how_to_pay_is_never_held_back(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=INSTAMART_PAY, replies=[{"text": "UPI"}])
     script_planner(monkeypatch, turn("ASK", message="How would you like to pay? Card details are asked hidden.",
