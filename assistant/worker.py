@@ -64,6 +64,7 @@ PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGN
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
 PAYS = re.compile(r"\bpay", re.IGNORECASE)  # a question about paying: pay, payment, paying
 SEARCHY = re.compile(r"\bsearch", re.IGNORECASE)  # a search control or box
+RAISES = re.compile(r"\b(increase|increment)\b", re.IGNORECASE)  # a stepper's +: "Increase quantity"
 PLACE_STEP = re.compile(r"\b(location|address|pin ?code|deliver(y|ing)? (to|area|place)|pick ?-?up (point|place)|"
                         r"drop(-| )?off)\b", re.IGNORECASE)  # a plan step that sets the delivery or pickup place
 DOWNLOADS = re.compile(r"download|invoice|receipt|statement|\bpdf\b|\.pdf\b|\bprint\b|\bexport\b",
@@ -560,6 +561,10 @@ class Worker:
             return self.act(operation, action, page, sub, key=key, text=text)
         if step["kind"] == "think":
             return self.escalate("unsure", page)
+        if step["operation"] in {"CLICK", "DOUBLE_CLICK"} and self.raises_quantity(step["action"]):
+            s["feedback"].append(f"Jev chose “{step['action'].get('label')}”, which raises a quantity: press it only "
+                                 "while the item's count is below what the user asked for; at their count, go on.")
+            return self.escalate("unsure", page)
         label = step["action"].get("label") or step["operation"]
         problem = self.forbidden(step["operation"], label, page)  # ran 3 times from this page, or a 9th scroll
         count = executor.repeats(s["history"][s["loop_from"]:], step["operation"], label, page["url"])
@@ -1022,6 +1027,12 @@ class Worker:
             return None
         elements, _, _ = action_space(page["actions"])
         return bare if any(e["index"] == bare[1] for e in elements) else None
+
+    @staticmethod
+    def raises_quantity(action):
+        """Whether a control is a quantity stepper's + (it shows only "+", or its name says increase): how many the
+        user wants is the planner's to read, never Jev's alone."""
+        return (action.get("shown") or "").strip() in {"+", "＋"} or bool(RAISES.search(action.get("name") or ""))
 
     @staticmethod
     def search_opener(op, index, page):

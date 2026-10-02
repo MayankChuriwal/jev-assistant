@@ -2638,3 +2638,26 @@ def test_a_pick_that_names_an_element_number_in_brackets_anywhere_acts_on_that_e
     w = login_worker(tmp_path)
     w.do({"op": "TYPE", "pick": "3 [3]", "text": "[profile:phone]"}, w.state["page"])  # live: PICK "8 [8]" refused
     assert w.browser.act.call_args.args[1]["label"] == "Enter mobile number"
+
+
+STEPPER = [{"id": "m", "kind": "click", "label": "Remove 1 item from cart (shows “−”)",
+            "name": "Remove 1 item from cart", "shown": "−", "role": "button", "node": 1},
+           {"id": "p", "kind": "click", "label": "Add 1 item to cart (shows “+”)", "name": "Add 1 item to cart",
+            "shown": "+", "role": "button", "node": 2},
+           {"id": "c", "kind": "click", "label": "View cart", "role": "button", "node": 3}]
+
+
+def test_raising_a_quantity_is_the_planners_call_never_jevs_alone(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text="Diet Coke 330 ml\n− 2 +", actions=STEPPER))
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("add one Diet Coke can to the cart")]),
+                          turn("PICK", pick="[1]"))
+    script_jev(monkeypatch, {"next": ("CLICK", 0.95), "click_target": ("Add 1 item", 0.95)})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")  # live instamart: Jev pressed “+” four times on its own, five cans for a goal of one
+    assert pressed(w) == ["Remove 1 item from cart (shows “−”)"] and seen[-1]["reason"] == "unsure"
+    assert "raises a quantity" in seen[-1]["feedback"][-1]
+    w.state["candidates"] = [{"n": 1, "op": "CLICK", "operation": "CLICK", "element": "[2] +", "p": 0.9,
+                              "action": STEPPER[1]}]
+    w.do({"op": "PICK", "pick": "1", "text": ""}, w.state["page"])  # the planner may raise it when the user wants more
+    assert pressed(w)[-1] == "Add 1 item to cart (shows “+”)"
