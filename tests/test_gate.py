@@ -1740,7 +1740,7 @@ def final_check(monkeypatch, verdict):
 def test_a_pay_control_showing_proceed_to_pay_on_the_payment_page_asks_and_jev_is_consulted(monkeypatch):
     page = fake_page(text=PAYMENT_PAGE, actions=[PLACE_ORDER])  # the review's probe: it ran with no yes, unchecked
     asked = final_check(monkeypatch, ("final", 0.99))
-    assert gate.commit_label(unpaid(page), "CLICK", PLACE_ORDER, page) == "Place order" and len(asked) == 1
+    assert gate.commit_label(unpaid(page), "CLICK", PLACE_ORDER, page) == "Place order" and asked == []
 
 
 @pytest.mark.parametrize("text, goal, extra", [
@@ -1755,7 +1755,7 @@ def test_a_pay_control_showing_proceed_to_pay_on_the_payment_page_asks_and_jev_i
 def test_a_page_that_may_take_the_payment_never_lets_proceed_to_pay_through_on_a_lean(monkeypatch, text, goal, extra):
     page = fake_page(text=text, actions=[PLACE_ORDER, *extra])
     asked = final_check(monkeypatch, ("step", 0.6))  # Jev leans step but isn't sure: the user is asked
-    assert gate.commit_label(unpaid(page, goal), "CLICK", PLACE_ORDER, page) == "Place order" and len(asked) == 1
+    assert gate.commit_label(unpaid(page, goal), "CLICK", PLACE_ORDER, page) == "Place order" and asked == []
 
 
 @pytest.mark.parametrize("name", ["Place order", "Pay now", "Confirm payment", "Book now", "Submit order",
@@ -1766,6 +1766,28 @@ def test_a_control_named_as_a_commit_never_gets_the_cart_pages_lean_from_the_che
     cart = fake_page(text=CART_PAGE, actions=[control_])  # a cart page with no method in sight, the user unasked
     final_check(monkeypatch, ("step", 0.55))  # the review's probe: Jev leans step, as for instamart's own control
     assert gate.commit_label(unpaid(cart), "CLICK", control_, cart) == name
+
+
+@pytest.mark.parametrize("sure", [0.85, 0.55])
+@pytest.mark.parametrize("name", ["Place order", "Pay now", "Confirm order"])
+def test_a_control_named_as_a_commit_asks_however_sure_jev_is_that_its_checkout_step_is_a_step(monkeypatch, name,
+                                                                                               sure):
+    control_ = {**PLACE_ORDER, "name": name, "label": f"{name} (shows “Proceed to Pay”)"}
+    cart = fake_page(text=CART_PAGE, actions=[control_])  # the re-review's probe: a sure step cleared "Place order"
+    final_check(monkeypatch, ("step", sure))
+    w = unpaid(cart)
+    assert gate.commit_label(w, "CLICK", control_, cart) == name and "cleared" not in w.state
+
+
+def test_a_control_that_says_it_goes_to_payment_or_names_no_commit_still_goes_to_jev(monkeypatch):
+    cart = fake_page(text=CART_PAGE, actions=[MAKE_PAYMENT])
+    asked = final_check(monkeypatch, ("step", 0.85))
+    assert gate.commit_label(unpaid(cart), "CLICK", MAKE_PAYMENT, cart) is None and len(asked) == 1
+    proceed = {**MAKE_PAYMENT, "name": "Continue", "label": "Continue (shows “Proceed to Pay”)"}
+    asked = final_check(monkeypatch, ("step", 0.85))
+    assert gate.commit_label(unpaid(cart), "CLICK", proceed, cart) is None and len(asked) == 1
+    asked = final_check(monkeypatch, ("final", 0.9))
+    assert gate.commit_label(unpaid(cart), "CLICK", proceed, cart) == "Proceed to Pay" and len(asked) == 1
 
 
 def test_proceed_to_pay_on_the_cart_page_before_a_method_is_a_step_only_when_jev_says_step(monkeypatch):

@@ -412,10 +412,11 @@ ENTRY = {"book", "tickets", "ticket", "buy", "reserve"}  # words that open a boo
 
 def only_a_step(operation, action, label, page):
     """Whether an outright match may still be only a step, so Jev's final check decides as for a maybe-commit: a
-    payment method named “…Pay” with no price; a control whose hidden name pays but whose shown words open checkout
-    ("Make payment, tap to go to payment" showing “Proceed to Pay”); or a control of booking words alone ("Book
-    tickets") on a page that shows no money at all. A price on the control, or a commit word left beside these
-    words, keeps it outright."""
+    payment method named “…Pay” with no price; a control whose shown words open checkout and whose own name either
+    commits to nothing or says it goes to the payment page ("Make payment, tap to go to payment" showing “Proceed to
+    Pay”); or a control of booking words alone ("Book tickets") on a page that shows no money at all. A price on the
+    control, or a commit word left beside these words, keeps it outright: "Place order" or "Pay now" showing “Proceed
+    to Pay” always asks, however sure Jev is."""
     if operation not in CLICKS:
         return False
     words = own_words(action) or label
@@ -425,7 +426,8 @@ def only_a_step(operation, action, label, page):
     if rules.METHOD.search(words) and not rules.COMMIT.search(rest):
         return True
     shown = action.get("shown") or ""
-    if rules.CHECKOUT_STEP.search(shown) and not rules.COMMIT.search(rules.CHECKOUT_STEP.sub("", shown)):
+    if rules.CHECKOUT_STEP.search(shown) and not rules.COMMIT.search(rules.CHECKOUT_STEP.sub("", shown)) and \
+            named_as_step(action):
         return True
     tokens = set(re.findall(r"[^\W_]+", words.lower()))
     return bool(tokens) and tokens <= ENTRY and not PRICES.search(flat(page["text"])) and not PRICES.search(words) \
@@ -503,10 +505,10 @@ def lookup(w, label, sure):
 def commit_label(w, operation, action, page, key=None, subgoal=None):
     """The words the approval names when this action commits, else None. Two tiers: a control the commit rule
     matches outright always commits (Jev clears only one that may be a step: a payment method named “…Pay” with no
-    price, a control showing a checkout step, booking words on a page with no money); a control whose words may
-    commit ("Book Ola Mini", "Submit", "Proceed to Pay", a label the redactor changed) commits unless Jev's final
-    check is sure it is a step. Inside a commit subgoal, Jev's final check also confirms a control neither tier names.
-    A goal that only looks something up never asks: Retry."""
+    price, a control showing a checkout step whose own name commits to nothing or says it goes to payment, booking
+    words on a page with no money); a control whose words may commit ("Book Ola Mini", "Submit", "Proceed to Pay", a
+    label the redactor changed) commits unless Jev's final check is sure it is a step. Inside a commit subgoal, Jev's
+    final check also confirms a control neither tier names. A goal that only looks something up never asks: Retry."""
     if operation not in COMMIT_OPS or (operation == "PRESS_KEY" and key not in {"Enter", "Space"}) or \
             action.get("hover"):
         return None
