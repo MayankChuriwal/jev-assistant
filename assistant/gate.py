@@ -785,6 +785,8 @@ def approved(w, page, action, label, subgoal):
     host = rules.host(page["url"]).removeprefix("www.")
     question = "\n".join([lines[0], *(f"• {line}" for line in lines[1:])]) + \
         f"\n\nI'll press “{label}” on {host}. Reply yes to go ahead, or tell me what to change."
+    if found["total"] is None and shows_money(page["text"]):  # a summary line may hold no amount, or none at all
+        question += "\n(I couldn't read the total on this page — check it on the site before you say yes.)"
     if shadow:
         question += "\n(You said not to ask. I'm asking anyway until pre-approval is switched on: set JEV_PREAUTH=on.)"
     if covered:

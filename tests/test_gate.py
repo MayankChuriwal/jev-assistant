@@ -1787,3 +1787,18 @@ def test_an_approval_holds_only_for_the_spot_inside_the_control_it_was_given_for
     with pytest.raises(Retry, match="did not approve"):  # asked again, and no yes came
         gate.approved(w, page, other, "Pay ₹79", None)
     assert len(w.asked) == 2
+
+
+NO_TOTAL = "(I couldn't read the total on this page — check it on the site before you say yes.)"
+
+
+@pytest.mark.parametrize("text, warned", [(RIDE, True), ("Cart\nDiet Coke 300 ml\nTo pay ₹79\nPay ₹79", False),
+                                          ("Book a demo\nName\nEmail\nSubmit", False)])
+def test_an_approval_on_a_page_with_money_but_no_total_read_says_to_check_the_total(monkeypatch, text, warned):
+    page = fake_page(text=text)
+    summary(monkeypatch, ["Uber Go", "HOUSE OF COMMONS → Kempegowda International Airport Terminal-1"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no"}])
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, PAY, "Request Uber Go", None)
+    assert (NO_TOTAL in w.asked[0]["text"]) is warned
