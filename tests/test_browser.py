@@ -509,3 +509,11 @@ def test_a_price_drawn_hidden_from_screen_readers_is_read_from_its_screen_reader
     text = browser_at("/sr-price.html").observe()["text"]
     assert "₹799.00" in text.splitlines() and "Inclusive of all taxes" in text
     assert text.count("Masala Dosa") == 1  # a visible screen-reader copy is read once, its drawn twin not again
+
+
+def test_time_slots_in_rows_of_several_sections_carry_their_rows_title(browser_at):
+    page = browser_at("/showtimes.html").observe()
+    labels = [a["label"] for a in page["actions"] if a["kind"] == "click" and "PM" in a["label"] or "AM" in a["label"]]
+    assert any(label.startswith("07:50 PM") and "Drishyam The Conclusion" in label for label in labels)
+    assert any(label.startswith("10:30 PM") and "Avengers Endgame" in label for label in labels)
+    assert not any("ENG IMAX" in label and "Drishyam" in label for label in labels)  # each row's own title

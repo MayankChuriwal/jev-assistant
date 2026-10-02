@@ -397,6 +397,21 @@
       a.label += ` (${hint && unique && !a.label.includes(hint) ? hint : `${i + 1} of ${same.length}`})`;
     });
   }
+  // A slot named by its time alone ("07:50 PM") on a page of several sections' slots (a cinema's movies, a clinic's
+  // doctors) carries its row's title: the first line of the nearest ancestor that starts with other text.
+  const TIME = /\b\d{1,2}:\d{2}\s?(?:am|pm)?\b|\b\d{1,2}\.\d{2}\s?(?:am|pm)\b/i;  // never a price: 79.50
+  const rowTitle = e => {
+    const own = (e?.innerText || '').trim();
+    for (let a = e?.parentElement, n = 0; a && n < 6; a = a.parentElement, n++) {
+      const first = (a.innerText || '').split('\n').map(t => t.trim()).find(Boolean) || '';
+      if (first && !own.includes(first) && !TIME.test(first)) return first.slice(0, 60);
+    }
+    return '';
+  };
+  const slots = actions.filter(a => a.kind === 'click' && TIME.test(a.name || a.label) && (a.name || a.label).length <= 40);
+  const titles = slots.map(a => rowTitle(cache.nodes.get(a.node)));
+  if (new Set(titles.filter(Boolean)).size >= 2)
+    slots.forEach((a, i) => { if (titles[i] && !a.label.includes(titles[i])) a.label += ` (in “${titles[i]}”)`; });
   actions.push(...options);
   const omitted_actions = Math.max(0, actions.length - 250);
   actions.splice(250);
