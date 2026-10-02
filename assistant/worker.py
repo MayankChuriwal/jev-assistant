@@ -1715,6 +1715,7 @@ class Worker:
             return []  # a new page: its controls are all new, and Jev reads it afresh
         old = {a.get("label") for a in before["actions"]} | set(seen)
         return [a["label"] for a in after["actions"] if a.get("kind") == "click" and a.get("label") not in old
+                and not a["label"].rstrip().endswith("?")  # a question ("How do I buy …?") is help, no last step
                 and rules.commit_label("CLICK", a, after)][:2]
 
     @staticmethod

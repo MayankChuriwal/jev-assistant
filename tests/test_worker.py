@@ -2388,6 +2388,17 @@ def test_an_address_that_leads_back_to_the_page_it_was_opened_from_tells_the_pla
     assert not any("led back" in f for f in elsewhere.state["feedback"])
 
 
+def test_a_final_control_phrased_as_a_question_is_never_news_to_the_planner(tmp_path):
+    faq = fake_page(text="FAQ", url="https://www.amazon.in/amazonprime", actions=BUTTONS)
+    shown = fake_page(text="FAQ", url="https://www.amazon.in/amazonprime", actions=[
+        *BUTTONS, {"id": "q", "kind": "click", "label": "How do I buy Prime Video ad-free?", "role": "button",
+                   "node": 40}])
+    w = worker_with(tmp_path, page=faq)
+    w.browser.observe.return_value = shown
+    w.run(faq, "SCROLL_DOWN", {"id": "p", "kind": "scroll_down", "label": "Page", "node": None}, {}, None)
+    assert not any("came up after this step" in f for f in w.state["feedback"])  # live cancel-prime: an FAQ
+
+
 def test_a_download_that_was_never_opened_says_so_instead_of_guessing_it_opened(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=ORDER_PAGE, goal=INVOICE)
     script_planner(monkeypatch, turn("DONE", message="You have no recent orders.", text="Your Orders"))
