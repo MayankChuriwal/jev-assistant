@@ -1273,6 +1273,10 @@ class Worker:
             pass
         if not KEY.match(key):
             raise Retry(f"[profile:{key}] isn't an ID name: use lowercase letters, digits, and underscores.")
+        if set(key.split("_")) & executor.PLACE:  # addresses are memory's facts, never hidden IDs
+            raise Retry(f"[profile:{key}]: a place is not an ID, and is never asked hidden. Type the place in words "
+                        "(an address memory lists, or the user's own words), or use the site's detect-location "
+                        "option; ASK where only when neither gives one.")
         values = (self.subgoal() or {}).get("values") or []
         label = (LABELS.get(key) or next((v["field"].strip() for v in values if f"[profile:{key}]" in v["text"]
                                           and v["field"].strip()), None)

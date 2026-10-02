@@ -2494,3 +2494,19 @@ def test_a_commit_on_a_stale_page_is_never_carried_to_a_fresh_read(tmp_path):
     with pytest.raises(StalePage):
         w.run(page, "CLICK", next(a for a in page["actions"] if a["label"] == "Pay ₹79"), {}, None, commit="Pay ₹79")
     assert w.browser.act.call_count == 1 and w.state["history"] == []
+
+
+# ---- a place is never an ID: it is typed in words, or detected by the site
+
+
+@pytest.mark.parametrize("key", ["first_saved_or_current_location", "home_address", "delivery_area", "pincode"])
+def test_a_place_written_as_a_new_id_is_refused_never_asked_hidden(tmp_path, monkeypatch, key):
+    w = worker_with(tmp_path, page=fake_page(text="Change Location", actions=RIDE_PAGE))
+    with pytest.raises(Retry, match="a place is not an ID"):
+        w.value(RIDE_PAGE[0], f"[profile:{key}]", w.state["page"])
+    assert w.asked == []
+
+
+def test_a_saved_id_whose_name_mentions_a_place_is_still_typed(tmp_path):
+    w = worker_with(tmp_path, page=fake_page(text="Pay bill", actions=RIDE_PAGE), profile={"area_code": "080"})
+    assert w.value(RIDE_PAGE[0], "[profile:area_code]", w.state["page"])[0] == {"text": "080"}
