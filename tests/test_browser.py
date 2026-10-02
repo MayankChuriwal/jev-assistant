@@ -517,3 +517,9 @@ def test_time_slots_in_rows_of_several_sections_carry_their_rows_title(browser_a
     assert any(label.startswith("07:50 PM") and "Drishyam The Conclusion" in label for label in labels)
     assert any(label.startswith("10:30 PM") and "Avengers Endgame" in label for label in labels)
     assert not any("ENG IMAX" in label and "Drishyam" in label for label in labels)  # each row's own title
+
+
+def test_same_named_pictures_read_as_pictures_not_as_options(browser_at):
+    labels = [a["label"] for a in browser_at("/gallery.html").observe()["actions"] if a["kind"] == "click"]
+    assert "Diet Coke Can (picture 1 of 3)" in labels and "Diet Coke Can (picture 3 of 3)" in labels
+    assert "Add (1 of 2)" in labels  # buttons with words keep the plain count

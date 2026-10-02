@@ -392,9 +392,12 @@
     if (same.length < 2) continue;
     const els = same.map(a => cache.nodes.get(a.node));
     const hints = same[0].kind === 'fill' ? els.map(e => e?.placeholder) : told(els);
+    // Pictures named only by their alt text (a product's photo gallery) say so: "1 of 3" alone reads like options.
+    const pictured = e => !!e && (e.tagName === 'IMG' || (!(e.innerText || '').trim() && !!e.querySelector('img')));
+    const kind = els.every(pictured) ? 'picture ' : '';
     same.forEach((a, i) => {
       const hint = hints[i], unique = hints.indexOf(hint) === hints.lastIndexOf(hint);
-      a.label += ` (${hint && unique && !a.label.includes(hint) ? hint : `${i + 1} of ${same.length}`})`;
+      a.label += ` (${hint && unique && !a.label.includes(hint) ? hint : `${kind}${i + 1} of ${same.length}`})`;
     });
   }
   // A slot named by its time alone ("07:50 PM") on a page of several sections' slots (a cinema's movies, a clinic's
