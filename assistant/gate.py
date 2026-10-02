@@ -672,8 +672,10 @@ def approved(w, page, action, label, subgoal):
     matched = jev.matches(page, s["goal"], chat, "\n".join(lines)) == "yes"
     if not matched and s["mismatches"] < 2:
         s["mismatches"] += 1  # twice at most: then the user sees the summary and decides
-        raise Retry(f"The order doesn't match what the user asked for ({s['goal']}): keep the product, brand, "
-                    "quantity, and place they named, and never remove items they added. Then do the final step again.")
+        raise Retry(f"The order doesn't match what the user asked for ({s['goal']}): fix the cart first, to the "
+                    "product, brand, size, quantity, and place they named: decrease a quantity you added beyond theirs "
+                    "with the item's − control (scroll to the item when it isn't in view), and never remove items "
+                    "the user added themselves. Press the final control only once the cart matches.")
     if w.moved(page):
         raise StalePage("The page changed while the approval was prepared. Choose again.")
     w.steady(page)

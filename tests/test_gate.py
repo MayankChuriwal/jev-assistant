@@ -1624,3 +1624,13 @@ def test_a_ticket_total_the_summary_rounded_is_the_pages_payable_amount(monkeypa
     lines = gate.summary(Fake(page), page, gate.facts(page, []))
     assert lines[:3] == ["Drishyam 2 · PVR Orion Mall · Sat, 3 Oct 07:30 PM", "2 tickets", "Total ₹670.80"]
     assert not any(line.startswith("Total:") for line in lines)
+
+
+def test_an_order_that_doesnt_match_says_to_fix_the_cart_before_the_final_step(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke 330 ml × 2", "Total ₹79"])
+    checks(monkeypatch, matches="no")
+    with pytest.raises(Retry) as refused:
+        gate.approved(Fake(page), page, PAY, "Pay ₹79", None)
+    said = str(refused.value)  # live instamart: "never remove items… Then do the final step again" → pressed Pay again
+    assert "fix the cart first" in said and "decrease" in said and "do the final step again" not in said
