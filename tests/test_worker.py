@@ -2496,6 +2496,16 @@ def test_a_commit_on_a_stale_page_is_never_carried_to_a_fresh_read(tmp_path):
     assert w.browser.act.call_count == 1 and w.state["history"] == []
 
 
+def test_a_step_jev_cleared_on_a_stale_page_is_decided_again_never_pressed_on_the_fresh_read(tmp_path):
+    rides = [{"id": "o", "kind": "click", "label": "Book Ola Mini", "role": "button", "node": 9}, *BUTTONS]
+    w = worker_with(tmp_path, page=fake_page(actions=rides))
+    w.browser.observe.side_effect = rotating(rides)  # only the text moved: an ordinary click would be pressed again
+    w.browser.act.side_effect = [StalePage("Page changed since this decision. Observe again."), {}]
+    with pytest.raises(StalePage):  # Jev cleared it on the page it saw: it is checked again on the new one
+        w.run(w.state["page"], "CLICK", rides[0], {}, None, cleared="Book Ola Mini")
+    assert w.browser.act.call_count == 1 and w.state["history"] == [] and w.state["cleared_maybe"] == []
+
+
 # ---- a place is never an ID: it is typed in words, or detected by the site
 
 

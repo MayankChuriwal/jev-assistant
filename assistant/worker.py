@@ -1522,8 +1522,9 @@ class Worker:
             try:
                 s["browser"].act(operation, action, page, **inputs)
             except StalePage:  # nothing ran: on a page whose text alone moved, the decision still holds
-                if commit or s["relaying"]:
-                    raise  # a commit runs only on the page the user approved; a captcha square only as picked
+                if commit or cleared or s["relaying"]:
+                    raise  # a commit runs only on the page the user approved, a step Jev cleared only on the page it
+                    # judged (decided again, through the gate), a captcha square only as picked
                 again = self.observe()
                 same = self.still(page, again, operation, action)
                 if same is None:
