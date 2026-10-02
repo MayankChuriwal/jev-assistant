@@ -915,7 +915,7 @@ class Worker:
         WAIT, BACK, or a look."""
         s, op = self.state, act["op"]
         if op in {"PICK", "TYPE"}:
-            number = re.match(r"\s*\[(\d+)\]", act["pick"])
+            number = re.match(r"\s*\[(\d+)\]", act["pick"]) or self.past_candidates(act["pick"], page)
             opener = self.search_opener(op, number[1], page) if number else None
             if opener is not None:
                 return self.type_through(opener, act["text"], page)
@@ -1008,6 +1008,15 @@ class Worker:
             raise Retry(f"[{index}] is a dropdown: TYPE [{index}] with the words of the option to choose ({names}).")
         raise Retry(f"[{index}] can't be clicked, typed into, or chosen from. Use another element, or one of Jev's "
                     f"candidates ({self.listed()}).")
+
+    def past_candidates(self, pick, page):
+        """A bare number above Jev's candidates' that numbers a page element ("14" with five candidates): that element,
+        as if written [14]. A candidate's own number always stays the candidate."""
+        bare = re.fullmatch(r"\s*(\d+)\s*", pick or "")
+        if not bare or int(bare[1]) <= len(self.state["candidates"]):
+            return None
+        elements, _, _ = action_space(page["actions"])
+        return bare if any(e["index"] == bare[1] for e in elements) else None
 
     @staticmethod
     def search_opener(op, index, page):

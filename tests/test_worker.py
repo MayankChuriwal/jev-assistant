@@ -2148,7 +2148,7 @@ def test_an_element_number_that_isnt_on_the_page_and_a_bare_number_that_isnt_a_c
         w.do({"op": "TYPE", "pick": "[99]", "text": "hello"}, page)
     assert "[99]" in str(missing.value) and "candidates: 1 [2] Continue" in str(missing.value)
     with pytest.raises(Retry) as bare:
-        w.do({"op": "PICK", "pick": "3", "text": ""}, page)
+        w.do({"op": "PICK", "pick": "99", "text": ""}, page)
     assert "names one of Jev's candidates by its number" in str(bare.value)
     assert "candidates: 1 [2] Continue" in str(bare.value)
     assert "use its element number in brackets, like [12]" in str(bare.value)
@@ -2606,3 +2606,14 @@ def test_a_link_that_opens_no_search_box_is_pressed_once_and_the_planner_hears_i
     cart = worker_with(tmp_path, page=fake_page(text="Groceries", actions=SEARCH_LINK))
     with pytest.raises(Retry, match="is a button, not a field"):  # only a search control is opened this way
         cart.do({"op": "TYPE", "pick": "[2]", "text": "atta"}, cart.state["page"])
+
+
+def test_a_bare_number_above_jevs_candidates_is_the_page_element_with_that_number(tmp_path):
+    w = login_worker(tmp_path)  # one candidate: Continue
+    page = w.state["page"]
+    w.do({"op": "TYPE", "pick": "3", "text": "[profile:phone]"}, page)  # live: PICK 14, 15 refused until "I'm stuck"
+    operation, action = w.browser.act.call_args.args[:2]
+    assert (operation, action["label"]) == ("TYPE_TEXT", "Enter mobile number")
+    w.state["candidates"] = list(ONLY_CONTINUE)
+    w.do({"op": "PICK", "pick": "1", "text": ""}, page)  # a candidate's own number stays the candidate
+    assert w.browser.act.call_args.args[1]["label"] == "Continue"
