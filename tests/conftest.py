@@ -67,6 +67,7 @@ def no_settling_wait(monkeypatch):
     monkeypatch.setattr(worker.Worker, "outcome_pause", 0)
     monkeypatch.setattr(worker.Worker, "quiet_wait", 0)
     monkeypatch.setattr(worker.Worker, "blank_pause", 0, raising=False)
+    monkeypatch.setattr(worker.Worker, "suggest_wait", 0)
 
 
 TEST_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="  # a fixed Fernet key: tests never see a real one

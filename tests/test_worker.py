@@ -2751,3 +2751,16 @@ def test_words_for_the_users_own_location_are_never_typed_into_a_place_box(tmp_p
     w = worker_with(tmp_path, page=fake_page(text="Pickup\nDrop", actions=RIDE_PAGE))
     with pytest.raises(Retry, match="finds places named so"):  # live rapido: “Track My Location (Coban…)”, Rajasthan
         w.value(RIDE_PAGE[0], text, w.state["page"])
+
+
+def test_typing_a_place_waits_for_its_suggestions_before_the_step_is_read(tmp_path, monkeypatch):
+    box = [{"id": "a", "kind": "fill", "label": "Enter address..", "role": "textbox", "value": "", "node": 3}]
+    w = worker_with(tmp_path, page=fake_page(text="Enter drop location", actions=box))
+    w.suggest_wait = 0.03
+    typed = fake_page(text="Enter drop location", actions=[{**box[0], "value": "Kempegowda Terminal 1"}])
+    shown = fake_page(text="Enter drop location\nKempegowda International Airport (BLR) Terminal 1", actions=[
+        {**box[0], "value": "Kempegowda Terminal 1"},
+        {"id": "s", "kind": "click", "label": "Kempegowda International Airport (BLR) Terminal 1", "node": 9}])
+    w.browser.observe.side_effect = [typed, typed, shown, shown, shown]
+    w.run(w.state["page"], "TYPE_TEXT", box[0], {"text": "Kempegowda Terminal 1"}, "Kempegowda Terminal 1")
+    assert "Kempegowda International Airport (BLR) Terminal 1" in w.state["history"][-1]["changed"]  # live ola

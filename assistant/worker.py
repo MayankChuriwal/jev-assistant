@@ -190,6 +190,7 @@ class Worker:
     outcome_pause = 5.0  # seconds between looks at that commit
     quiet_wait = 1.5  # seconds to keep looking when a step seems to have changed nothing
     blank_pause = 1.0  # seconds before a blank page is read again
+    suggest_wait = 2.5  # seconds a typed place or search waits for its suggestions to come
     bench = False  # a bench run: a pre-authorisation is logged, never used
 
     def __init__(self, url, goal, *, asker=None, notify=None, memory=None, habit=None, sameness=None, browser=None,
@@ -1547,6 +1548,8 @@ class Worker:
                 break
             time.sleep(self.quiet_wait / 3)
             after = self.observe()
+        if operation == "TYPE_TEXT" and self.suggests(action):
+            after = self.suggestions(page, after)
         last = s["history"][-1]
         changed = views.change(page, after)
         if operation == "OPEN_URL" and inputs.get("url") and not self.landed(inputs["url"], after["url"]):
@@ -1579,6 +1582,23 @@ class Worker:
         return next((a for a in again["actions"] if (a.get("frame"), a.get("node"), a.get("kind")) ==
                      (action.get("frame"), action.get("node"), action.get("kind"))
                      and views.calm(a.get("label")) == name and a.get("value") == action.get("value")), None)
+
+    @staticmethod
+    def suggests(action):
+        """Whether a field offers suggestions as it is typed into: a place, an address, or a search."""
+        words = executor.words(action.get("label", ""))
+        return action.get("role") in {"combobox", "searchbox"} or bool(
+            words & (executor.PLACE | executor.ROLES | {"search", "landmark", "destination"}))
+
+    def suggestions(self, page, after):
+        """The page read again until the controls a typed place or search brings (its suggestions) appear, up to
+        suggest_wait seconds: they often come from the network a second or two after the text."""
+        clicks = lambda p: {a.get("label") for a in p["actions"] if a.get("kind") == "click"}  # noqa: E731
+        before, deadline = clicks(page), time.monotonic() + self.suggest_wait
+        while not (clicks(after) - before) and time.monotonic() < deadline:
+            time.sleep(min(0.5, self.suggest_wait / 3))
+            after = self.observe()
+        return after
 
     @staticmethod
     def revealed(before, after):
