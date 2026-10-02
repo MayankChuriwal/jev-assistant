@@ -1532,8 +1532,9 @@ class Worker:
                     # judged (decided again, through the gate), a captcha square only as picked
                 again = self.observe()
                 same = self.still(page, again, operation, action)
-                if same is None:
-                    raise
+                if same is None or rules.commit_label(operation, same, again) or \
+                        rules.maybe_commit_label(operation, same, again):
+                    raise  # a control whose words may commit is decided again, through the gate
                 page, action = again, same
                 entry.update(title=page.get("title", ""), url=page["url"])
                 s["browser"].act(operation, action, page, **inputs)
@@ -1601,7 +1602,8 @@ class Worker:
     def still(page, again, operation, action):
         """The action decided on `page`, on a fresh read `again`: the same control when only the text moved (a
         rotating placeholder, a carousel, a timer) and the controls are as they were (views.signature), else None. A
-        control with a node must still be there under the same name; a spot found by looking is never carried over."""
+        control with a node must still be there under the same name, own name, and shown words (the quoted words the
+        signature drops: “View cart” turned “Place order”); a spot found by looking is never carried over."""
         if operation in {"OPEN_URL", "WAIT"} and action.get("node") is None:
             return action  # an address to open, or a wait, never depends on what the page shows
         if operation == "LOOK" or views.signature(page) != views.signature(again):
@@ -1611,7 +1613,8 @@ class Worker:
         name = views.calm(action.get("label"))
         return next((a for a in again["actions"] if (a.get("frame"), a.get("node"), a.get("kind")) ==
                      (action.get("frame"), action.get("node"), action.get("kind"))
-                     and views.calm(a.get("label")) == name and a.get("value") == action.get("value")), None)
+                     and views.calm(a.get("label")) == name and a.get("value") == action.get("value")
+                     and a.get("name") == action.get("name") and a.get("shown") == action.get("shown")), None)
 
     @staticmethod
     def suggests(action):

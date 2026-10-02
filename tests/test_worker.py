@@ -2506,6 +2506,33 @@ def test_a_step_jev_cleared_on_a_stale_page_is_decided_again_never_pressed_on_th
     assert w.browser.act.call_count == 1 and w.state["history"] == [] and w.state["cleared_maybe"] == []
 
 
+def cart_summary(shown):
+    """A control whose own name stays "Cart summary" while the words it shows change."""
+    return [{"id": "c", "kind": "click", "label": f"Cart summary (shows “{shown}”)", "name": "Cart summary",
+             "shown": shown, "role": "button", "node": 9}, *BUTTONS]
+
+
+def test_a_stale_click_whose_shown_words_changed_is_decided_again_never_pressed_on_the_fresh_read(tmp_path):
+    w = worker_with(tmp_path, page=fake_page(actions=cart_summary("View cart")))
+    w.browser.observe.side_effect = lambda *a, **k: fake_page(text="Cart\nPlace order", actions=cart_summary(
+        "Place order"))  # the quoted words the loop guard drops are the ones that changed
+    w.browser.act.side_effect = [StalePage("Page changed since this decision. Observe again."), {}]
+    with pytest.raises(StalePage):
+        w.run(w.state["page"], "CLICK", cart_summary("View cart")[0], {}, None)
+    assert w.browser.act.call_count == 1 and w.state["history"] == []
+
+
+def test_a_stale_click_that_may_commit_on_the_fresh_read_is_decided_again_through_the_gate(tmp_path):
+    submit = [{"id": "s", "kind": "click", "label": "Submit", "name": "Submit", "role": "button", "node": 9},
+              *BUTTONS]
+    w = worker_with(tmp_path, page=fake_page(actions=submit))
+    w.browser.observe.side_effect = rotating(submit)  # only the text moved, but the control's words may commit
+    w.browser.act.side_effect = [StalePage("Page changed since this decision. Observe again."), {}]
+    with pytest.raises(StalePage):
+        w.run(w.state["page"], "CLICK", submit[0], {}, None)
+    assert w.browser.act.call_count == 1 and w.state["history"] == []
+
+
 # ---- a place is never an ID: it is typed in words, or detected by the site
 
 
