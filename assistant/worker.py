@@ -1001,6 +1001,9 @@ class Worker:
         if int(index) > views.ELEMENTS or not any(e["index"] == index for e in elements):
             raise Retry(f"The page has no element [{index}]. Use the number of an element the page lists, or one of "
                         f"Jev's candidates ({self.listed()}).")
+        spot = self.on_words(click, text, typed=op == "TYPE") if not fill else None
+        if spot is not None:  # "2" in a row of numbers, a day in a strip of dates: the click lands on those words
+            return "CLICK", spot, None
         if op == "TYPE" and fill:
             return "TYPE_TEXT", fill, text
         if op == "TYPE" and options:
@@ -1030,6 +1033,23 @@ class Worker:
             return None
         elements, _, _ = action_space(page["actions"])
         return bare if any(e["index"] == bare[1] for e in elements) else None
+
+    @staticmethod
+    def on_words(click, text, typed=False):
+        """A click control whose name shows these words among others ("2" in “1 2 3 … 10”): the control, clicked on
+        those words (`within`, found and hit-tested by the browser), labelled with them so each is its own step. TYPE
+        gets this only for a number, or a slider or group of choices: words typed at a link are meant for a field.
+        None when there is no such control or no such words."""
+        words = " ".join(str(text or "").split())
+        name = (click or {}).get("label") or ""
+        if typed and not words.isdigit() and (click or {}).get("role") not in {"slider", "radiogroup", "tablist",
+                                                                                  "listbox", "spinbutton"}:
+            return None
+        if not words or not click or re.fullmatch(r"\W*" + re.escape(words) + r"\W*", name, re.IGNORECASE):
+            return None
+        if not re.search(r"(?<![\w])" + re.escape(words) + r"(?![\w])", name, re.IGNORECASE):
+            return None
+        return {**click, "within": words, "label": f"{name} (at “{words}”)"}
 
     @staticmethod
     def raises_quantity(action):

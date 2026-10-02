@@ -52,7 +52,8 @@ Return:
 - action, exactly one:
   CONTINUE: Jev carries on with the plan. It isn't offered when Jev couldn't decide (reason unsure, or a
   blocker): then PICK, TYPE, ASK, OPEN_URL, LOOK, WAIT, or BACK; a new current subgoal for Jev goes with WAIT.
-  PICK with pick n: do Jev's candidate n (or the page element [k]).
+  PICK with pick n: do Jev's candidate n (or the page element [k]); with text, the click lands on those words
+  inside the element (a number in a row of numbers, a date in a strip of dates).
   TYPE with pick n and text: type text into candidate n (or the page element [k]; a dropdown takes the words of
   the option to choose).
   ASK with message (and options): a question for the user.

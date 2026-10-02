@@ -2678,3 +2678,18 @@ def test_an_answer_of_any_or_either_to_a_choice_leaves_that_choice_to_the_agent(
     line = w.read("Please choose a seat category.", ["Classic Rows · ₹570", "Classic Plus Rows · ₹590"], answer)
     assert "the user leaves this choice to you" in line and w.state["delegated_at"] == 0  # live: re-asked 4 times
     assert "leaves this choice" not in w.read("Please choose a seat category.", ["Classic", "Prime"], "Prime rows")
+
+
+SLIDER = [{"id": "s", "kind": "click", "label": "slider in “1 2 3 4 5 6 7 8 9 10”", "role": "slider", "node": 5},
+          {"id": "b", "kind": "click", "label": "Select Seats", "role": "button", "node": 6}]
+
+
+@pytest.mark.parametrize("op", ["PICK", "TYPE"])
+def test_words_given_with_a_control_that_shows_them_click_on_those_words(tmp_path, op):
+    w = worker_with(tmp_path, page=fake_page(text="How many seats?", actions=SLIDER))
+    w.do({"op": op, "pick": "[1]", "text": "2"}, w.state["page"])  # live bookmyshow: the slider's centre picked 6
+    operation, action = w.browser.act.call_args.args[:2]
+    assert (operation, action["within"], action["node"]) == ("CLICK", "2", 5)
+    assert w.state["history"][-1]["action"] == "slider in “1 2 3 4 5 6 7 8 9 10” (at “2”)"
+    with pytest.raises(Retry, match="is a button, not a field"):
+        w.do({"op": "TYPE", "pick": "[2]", "text": "2"}, w.state["page"])  # words the control doesn't show
