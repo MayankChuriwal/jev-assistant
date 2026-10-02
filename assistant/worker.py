@@ -82,6 +82,12 @@ CLEARING = ("TYPE needs the text to type. A field is never cleared first: typing
             "field to only focus it.")
 
 
+def delegates(answer):
+    """Whether a reply leaves the choice to the agent ("you choose", "doesn't matter") and turns nothing down: "any
+    one, but not the window" names what the user won't take."""
+    return bool(DELEGATE.search(answer)) and not NEGATION.search(DELEGATE.sub(" ", answer))
+
+
 def secret_field(action):
     """Whether only the user's hidden answer may go into this field: a code or password, or a card detail. A button
     that merely mentions card details is not a field."""
@@ -1260,11 +1266,11 @@ class Worker:
             return line + (" → the user's own location: click the empty location box and pick the suggestion marked as "
                            "their own location (“Your current location”, “Your location”); a detect button already "
                            "pressed isn't pressed again")
-        if DELEGATE.search(answer) and PLACE.search(message):
+        if delegates(answer) and PLACE.search(message):
             return line + (" → a delivery or pickup place is never chosen for them: use the site's detect-location "
                            "option, or ASK which saved address (use it only if exactly one exists); if neither works, "
                            "STOP and say you need their address")
-        if DELEGATE.search(answer) or (options and ANY_OF.match(answer) and not NEGATION.search(answer)):
+        if delegates(answer) or (options and ANY_OF.match(answer) and not NEGATION.search(answer)):
             s["delegated_at"] = len(s["history"])
             return line + (" → the user leaves this choice to you: pick the option that best fits the goal, TELL "
                            "them which, and carry on")

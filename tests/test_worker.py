@@ -2729,6 +2729,18 @@ def test_a_refusal_or_a_pick_that_mentions_any_or_either_is_never_left_to_the_ag
         w.state["delegated_at"] is None
 
 
+@pytest.mark.parametrize("answer, left", [("any one, but not the window", False), ("You choose, not the aisle", False),
+                                          ("whatever you pick, just don't take the front row", False),
+                                          ("It doesn't matter", True), ("Any one is fine", True),
+                                          ("doesn't matter, you choose", True)])
+def test_a_reply_that_leaves_the_choice_but_turns_some_down_is_never_left_to_the_agent(tmp_path, monkeypatch, answer,
+                                                                                        left):
+    w = worker_with(tmp_path)
+    jev_checks(monkeypatch, read_reply="other")
+    line = w.read("Please choose a seat category.", ["Window · ₹570", "Aisle · ₹590"], answer)
+    assert ("leaves this choice" in line) is left and (w.state["delegated_at"] == 0) is left
+
+
 SLIDER = [{"id": "s", "kind": "click", "label": "slider in “1 2 3 4 5 6 7 8 9 10”", "role": "slider", "node": 5},
           {"id": "b", "kind": "click", "label": "Select Seats", "role": "button", "node": 6}]
 
