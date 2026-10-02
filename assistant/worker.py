@@ -227,6 +227,7 @@ class Worker:
             cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None, closed=False,
             commit_drops=0, idle_asked=0, circled={}, loops={}, fruitless=None, blank_waits=0, coded=[],
             file_refusals=0, path_steps={}, path_asked=[], refusals_log=[], stuck_why=None, acting=None,
+            recent_at=None, last_by_site={},
         )
 
     # ---- what the user and the models see
@@ -456,8 +457,7 @@ class Worker:
         page = self.unblank(page)
         if page is None:
             return None
-        if not s["recent"] or s["recent"][-1] != page["text"]:
-            s["recent"] = (s["recent"] + [page["text"]])[-10:]  # facts may come from a page seen a moment ago
+        self.remember_page(page)
         if s["reason"]:
             return self.think(page)
         sub = self.subgoal()
@@ -468,6 +468,27 @@ class Worker:
             s["feedback"].append(f"{SUBGOAL_STEPS} steps on “{sub['do']}” without finishing it: rewrite the plan.")
             return self.escalate("replan", page)
         return self.system_one(page, sub)
+
+    def remember_page(self, page):
+        """Keep the page's text among the recent ones: facts may come from a page seen a moment ago. A read of the same
+        page state (its address and controls) whose text alone moved (a rotating placeholder) replaces the last one,
+        so it never pushes older pages out; the last page read on each site is kept too, for a comparison."""
+        s = self.state
+        at = (page["url"], views.signature(page))
+        if s["recent"] and s["recent_at"] == at:
+            s["recent"][-1] = page["text"]
+        elif not s["recent"] or s["recent"][-1] != page["text"]:
+            s["recent"] = (s["recent"] + [page["text"]])[-10:]
+        s["recent_at"] = at
+        s["last_by_site"][skills.bare(rules.host(page["url"]).lower())] = page["text"]
+
+    def pages_before(self, page):
+        """The pages a lookup's answer may come from besides this one: the last page read on every other site (a
+        comparison's other side, however many reads ago), then the last two read."""
+        s = self.state
+        here = skills.bare(rules.host(page["url"]).lower())
+        others = [text for site, text in s["last_by_site"].items() if site != here and text != page["text"]]
+        return list(dict.fromkeys(others + [t for t in s["recent"] if t != page["text"]][-2:]))
 
     def unblank(self, page):
         """A blank page (no text, no controls) is no state for Jev or the planner to decide on: it is read again after
@@ -1117,11 +1138,11 @@ class Worker:
                 raise Halt("blocked", f"The document didn't download from {rules.host(page['url'])}: {nothing}. "
                                       "Please save it from the agent's Chrome window, or ask me again.")
             missing = f" The document didn't download, though: {nothing}."
-        quote = self.evidence(act["text"].strip(), message, [page["text"], *reversed(s["recent"])])
+        quote = self.evidence(act["text"].strip(), message, [page["text"], *reversed(s["recent"]),
+                                                             *s["last_by_site"].values()])
         report = (message or "Done.") + missing
-        # a lookup may read its answer across pages (a comparison of two sites): Jev also sees the last two before
-        before = [t for t in s["recent"] if t != page["text"]][-2:] if rules.lookup_goal(s["goal"], s["skill"]) \
-            else []
+        # a lookup may read its answer across pages (a comparison of two sites): Jev also sees those pages
+        before = self.pages_before(page) if rules.lookup_goal(s["goal"], s["skill"]) else []
         if jev.achieved(page, s["goal"], report, before=before) != "yes":
             s["done_refusals"] += 1
             committed = any(h.get("committed") for h in s["history"])

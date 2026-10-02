@@ -2510,3 +2510,33 @@ def test_a_place_written_as_a_new_id_is_refused_never_asked_hidden(tmp_path, mon
 def test_a_saved_id_whose_name_mentions_a_place_is_still_typed(tmp_path):
     w = worker_with(tmp_path, page=fake_page(text="Pay bill", actions=RIDE_PAGE), profile={"area_code": "080"})
     assert w.value(RIDE_PAGE[0], "[profile:area_code]", w.state["page"])[0] == {"text": "080"}
+
+
+# ---- a comparison's answer spans sites: the other site's page is still read when the last one is done
+
+
+def rotating_shop(url, words):
+    """Reads of one page whose search placeholder rotates: the same controls, other text each time."""
+    looks = iter(range(1000))
+    return lambda *a, **k: fake_page(text=f"{words}\nSearch for “item {next(looks)}”", url=url, actions=BUTTONS)
+
+
+def test_a_comparison_is_judged_with_the_other_sites_page_however_many_reads_ago(tmp_path, monkeypatch):
+    goal = "Find the cheaper 1 kg pack of Aashirvaad atta between Zepto and Blinkit"
+    blinkit = fake_page(text="Blinkit\nAashirvaad Atta 1 kg\n₹68", url="https://blinkit.com/prn/atta",
+                        actions=BUTTONS)
+    w = worker_with(tmp_path, page=blinkit, goal=goal)
+    script_planner(monkeypatch, turn(subgoals=[sub("note the price on Zepto")]), turn("OPEN_URL",
+                   text="https://www.zepto.com/search?q=atta"), *[turn("WAIT")] * 4,
+                   turn("DONE", message="₹64 on Zepto, ₹68 on Blinkit: Zepto is cheaper.", text="₹64"))
+    script_jev(monkeypatch, {"next": "THINK"})
+    seen = []
+    monkeypatch.setattr(jev, "achieved", lambda page, goal, report, before=(): seen.append(list(before)) or "yes")
+    w.command("tick")  # the plan, on Blinkit's page
+    w.browser.observe.side_effect = rotating_shop("https://www.zepto.com/search?q=atta", "Zepto\nAtta 1 kg\n₹64")
+    for _ in range(12):
+        if w.state["status"] in STOPPED:
+            break
+        w.command("tick")
+    assert w.state["status"] == "done" and any("₹68" in text for text in seen[-1])
+    assert len(w.state["recent"]) <= 3  # Zepto's rotating reads are one page, kept as its latest read
