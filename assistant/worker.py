@@ -63,6 +63,7 @@ PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGN
                 "name": re.compile(r"\b(your (full )?name|full name)\b", re.IGNORECASE),
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
 PAYS = re.compile(r"\bpay", re.IGNORECASE)  # a question about paying: pay, payment, paying
+SEARCHY = re.compile(r"\bsearch", re.IGNORECASE)  # a search control or box
 PLACE_STEP = re.compile(r"\b(location|address|pin ?code|deliver(y|ing)? (to|area|place)|pick ?-?up (point|place)|"
                         r"drop(-| )?off)\b", re.IGNORECASE)  # a plan step that sets the delivery or pickup place
 DOWNLOADS = re.compile(r"download|invoice|receipt|statement|\bpdf\b|\.pdf\b|\bprint\b|\bexport\b",
@@ -915,6 +916,9 @@ class Worker:
         s, op = self.state, act["op"]
         if op in {"PICK", "TYPE"}:
             number = re.match(r"\s*\[(\d+)\]", act["pick"])
+            opener = self.search_opener(op, number[1], page) if number else None
+            if opener is not None:
+                return self.type_through(opener, act["text"], page)
             if number:  # a control Jev didn't rank, by the number the page view gives it
                 operation, action, text = self.element(op, number[1], act["text"], page)
                 key = None
@@ -924,6 +928,9 @@ class Worker:
                     raise Retry(f"{op} names one of Jev's candidates by its number; there are "
                                 f"{len(s['candidates'])} ({self.listed()}). To act on another control, use its "
                                 "element number in brackets, like [12].")
+                if op == "TYPE" and chosen["operation"] == "CLICK" and \
+                        SEARCHY.search(chosen["action"].get("label") or ""):
+                    return self.type_through(chosen["action"], act["text"], page)
                 if op == "TYPE" and chosen["operation"] != "TYPE_TEXT":
                     raise Retry(f"Candidate {chosen['n']} {self.not_a_field(chosen['action'])}")
                 operation, action, key = chosen["operation"], chosen["action"], chosen.get("key")
@@ -1001,6 +1008,44 @@ class Worker:
             raise Retry(f"[{index}] is a dropdown: TYPE [{index}] with the words of the option to choose ({names}).")
         raise Retry(f"[{index}] can't be clicked, typed into, or chosen from. Use another element, or one of Jev's "
                     f"candidates ({self.listed()}).")
+
+    @staticmethod
+    def search_opener(op, index, page):
+        """The search control drawn as a link or button (no field of its own) that TYPE names by its number, else
+        None."""
+        if op != "TYPE":
+            return None
+        _, heads, _ = action_space(page["actions"])
+        click = heads.get("click_target", {}).get(index)
+        if heads.get("type_text_target", {}).get(index) or click is None:
+            return None
+        return click if SEARCHY.search(click.get("label") or "") else None
+
+    def type_through(self, control, text, page):
+        """TYPE into a search control drawn as a link or button: press it, then type into the one search box it
+        opened, each through the loop guards and the gate. When none (or several) opened, the planner hears it."""
+        s = self.state
+        if not str(text or "").strip():
+            raise Retry(CLEARING)
+        sub, label = self.subgoal(), control.get("label") or "CLICK"
+        if self.guard("CLICK", label, page):
+            return None
+        self.act("CLICK", control, page, sub)
+        if s["status"] in STOPPED or s["commit"] or s["reason"]:  # stopped, committing, or the user was asked
+            return None
+        after = s["page"]
+        boxes = [a for a in after["actions"] if a.get("kind") == "fill"
+                 and (a.get("role") == "searchbox" or SEARCHY.search(a.get("label") or ""))]
+        if len(boxes) > 1:
+            focused = s["browser"].focused_label()
+            boxes = [a for a in boxes if a["label"] == focused]
+        if len(boxes) != 1:
+            s["feedback"].append(f"Pressed “{label}”, but no search box opened (or several did): TYPE into the search "
+                                 "field the page shows now, by its number.")
+            return None
+        if self.guard("TYPE_TEXT", boxes[0]["label"], after, text):
+            return None
+        return self.act("TYPE_TEXT", boxes[0], after, sub, text=text)
 
     @staticmethod
     def not_a_field(action):

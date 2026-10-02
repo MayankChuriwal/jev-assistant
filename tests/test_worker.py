@@ -2542,11 +2542,11 @@ def test_a_comparison_is_judged_with_the_other_sites_page_however_many_reads_ago
     assert len(w.state["recent"]) <= 3  # Zepto's rotating reads are one page, kept as its latest read
 
 
-def test_typing_into_a_search_link_says_to_open_it_first(tmp_path, monkeypatch):
-    link = [{"id": "s", "kind": "click", "label": "Search for atta dal and more", "role": "link", "node": 3}]
+def test_typing_into_a_link_says_to_open_it_first(tmp_path, monkeypatch):
+    link = [{"id": "s", "kind": "click", "label": "Find atta dal and more", "role": "link", "node": 3}]
     w = worker_with(tmp_path, page=fake_page(text="Groceries", actions=link))
     script_planner(monkeypatch, turn(subgoals=[sub("search for atta")]), turn("TYPE", pick="[1]", text="atta"))
-    script_jev(monkeypatch, {"next": ("CLICK", 0.3), "click_target": "Search"})
+    script_jev(monkeypatch, {"next": ("CLICK", 0.3), "click_target": "Find"})
     jev_checks(monkeypatch)
     w.command("tick")
     w.command("tick")
@@ -2572,3 +2572,37 @@ def test_a_plan_step_about_the_place_brings_the_location_skill_to_the_planner(tm
     other.command("tick")
     other.command("tick")
     assert "# Situation: location" not in seen[1]["skill"]
+
+
+SEARCH_LINK = [{"id": "s", "kind": "click", "label": "Search for atta dal and more", "role": "link", "node": 3},
+               {"id": "c", "kind": "click", "label": "Cart", "role": "button", "node": 4}]
+SEARCH_BOX = [{"id": "f", "kind": "fill", "label": "Search for atta dal and more", "role": "textbox", "value": "",
+               "node": 7}, {"id": "c", "kind": "click", "label": "Cart", "role": "button", "node": 4}]
+
+
+@pytest.mark.parametrize("pick", ["[1]", "1"])
+def test_typing_into_a_search_link_presses_it_then_types_into_the_search_box_it_opened(tmp_path, monkeypatch, pick):
+    w = worker_with(tmp_path, page=fake_page(text="Groceries", actions=SEARCH_LINK))
+    script_planner(monkeypatch, turn(subgoals=[sub("search for atta")]), turn("TYPE", pick=pick, text="atta 1 kg"))
+    script_jev(monkeypatch, {"next": ("CLICK", 0.3), "click_target": "Search"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.browser.observe.return_value = fake_page(text="Search", url="https://shop.test/s/", actions=SEARCH_BOX)
+    w.command("tick")
+    calls = [(c.args[0], c.args[1]["label"], c.kwargs.get("text")) for c in w.browser.act.call_args_list]
+    assert calls == [("CLICK", "Search for atta dal and more", None),
+                     ("TYPE_TEXT", "Search for atta dal and more", "atta 1 kg")]
+    assert [h["operation"] for h in w.state["history"]] == ["CLICK", "TYPE_TEXT"]
+
+
+def test_a_link_that_opens_no_search_box_is_pressed_once_and_the_planner_hears_it(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text="Groceries", actions=SEARCH_LINK))
+    script_planner(monkeypatch, turn(subgoals=[sub("search for atta")]), turn("TYPE", pick="[1]", text="atta"))
+    script_jev(monkeypatch, {"next": ("CLICK", 0.3), "click_target": "Search"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert w.browser.act.call_count == 1 and "no search box opened" in " ".join(w.state["feedback"])
+    cart = worker_with(tmp_path, page=fake_page(text="Groceries", actions=SEARCH_LINK))
+    with pytest.raises(Retry, match="is a button, not a field"):  # only a search control is opened this way
+        cart.do({"op": "TYPE", "pick": "[2]", "text": "atta"}, cart.state["page"])
