@@ -1645,3 +1645,12 @@ def test_a_key_pressed_on_a_page_with_nothing_focused_is_never_the_approved_comm
     with pytest.raises(Retry, match="press the final control itself"):  # live uber: “I'll press “The page…””
         gate.commit_label(w, "PRESS_KEY", key, page, key="Enter", subgoal={"do": "request the ride", "kind": "commit"})
     assert gate.commit_label(w, "PRESS_KEY", key, page, key="Enter", subgoal=ACT) is None
+
+
+def test_a_rating_prompt_is_no_money_so_booking_words_beside_it_stay_a_maybe_commit(monkeypatch):
+    page = fake_page(text="Drishyam The Conclusion\n9.1/10\n(6.4K+ Votes)\nRate now\n2h 30m\n•\nDrama\nHindi\n"
+                          "Book tickets\nShare")  # live bookmyshow: approval asked on the movie's own page
+    jev_says(monkeypatch, ("step", 0.9))
+    assert not gate.shows_money(page["text"])
+    assert gate.commit_label(Fake(page), "CLICK", control("Book tickets"), page, subgoal=ACT) is None
+    assert gate.shows_money("Per km\nRate\n12") and gate.shows_money("Rate: 12 per km")

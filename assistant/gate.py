@@ -34,7 +34,8 @@ TOKEN = r"(?:thousands?|lakhs?|lacs?|crores?|cr|millions?|billions?|mn|bn|[KLM])
 SUFFIX = r"(?:\s*" + TOKEN + ")?"
 PRICES = re.compile("(?:" + rules.PRICE.pattern + r"|\bINR\s?" + NUMBER + ")" + SUFFIX, re.IGNORECASE)  # INR too
 WORDS = re.compile(r"\b(?:total|to pay|you pay|you will pay|pay|payable|bill|billed|charged|paid|fees?|fare|price|cost|"
-                   r"charges?|rate|amount|due|grand)\b", re.IGNORECASE)  # words that put a price on their line
+                   r"charges?|rate(?!\s+(?:now|this|it|us|your|the)\b)|amount|due|grand)\b",
+                   re.IGNORECASE)  # words that put a price on their line ("Rate now" asks for a rating: none)
 CURRENCY = re.compile(
     SYMBOLS + r"|\bRs(?![A-Za-z])|\b(?:INR|USD|EUR|GBP|AED|SGD|Rp)(?![A-Za-z])|(?-i:\bRM(?![A-Za-z]))|"
     r"\b(?:rupees?|euros?|dollars?|pounds?|pesos?|baht|riyals?|dirhams?)(?![A-Za-z])|रुपये|रुपया|zł|"
