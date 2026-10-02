@@ -63,6 +63,8 @@ PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGN
                 "name": re.compile(r"\b(your (full )?name|full name)\b", re.IGNORECASE),
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
 PAYS = re.compile(r"\bpay", re.IGNORECASE)  # a question about paying: pay, payment, paying
+PLACE_STEP = re.compile(r"\b(location|address|pin ?code|deliver(y|ing)? (to|area|place)|pick ?-?up (point|place)|"
+                        r"drop(-| )?off)\b", re.IGNORECASE)  # a plan step that sets the delivery or pickup place
 DOWNLOADS = re.compile(r"download|invoice|receipt|statement|\bpdf\b|\.pdf\b|\bprint\b|\bexport\b",
                        re.IGNORECASE)  # a step that may have opened the document
 CLEARING = ("TYPE needs the text to type. A field is never cleared first: typing replaces what it holds. PICK the "
@@ -800,6 +802,8 @@ class Worker:
             moved_on = not (was and now and shares(was["do"], now["do"], by=max))
             if moved_on:  # the same subgoal rewritten keeps counting toward SUBGOAL_STEPS
                 s["subgoal_steps"] = 0
+        if any(PLACE_STEP.search(g["do"]) for g in subgoals) and "location" not in s["situations"]:
+            s["situations"].append("location")  # a step that sets the place: the planner reads the location rules
         if s["replay"] and (reason == "start" or subgoals):  # a plan of another shape, now or later: no replay
             s["replay"]["on"] = s["replay"]["on"] and replay.same_shape(s["plan"], self.habit["plan"])
         if act["op"] not in {"DONE", "TELL"}:

@@ -2555,3 +2555,20 @@ def test_typing_into_a_search_link_says_to_open_it_first(tmp_path, monkeypatch):
     w.state["reason"] = "unsure"
     w.command("tick")
     assert "Candidate 1 is a link, not a field: PICK it to open its field" in w.state["feedback"][-1]
+
+
+def test_a_plan_step_about_the_place_brings_the_location_skill_to_the_planner(tmp_path, monkeypatch):
+    goal = "Find the cheaper 1 kg pack of Aashirvaad atta between Zepto and Blinkit"
+    w = worker_with(tmp_path, goal=goal, skill="lookup")
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("Set the delivery location on Zepto"),
+                                                      sub("Note the atta price on Zepto")]), turn("WAIT"))
+    script_jev(monkeypatch, {"next": "THINK"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert "# Situation: location" not in seen[0]["skill"] and "# Situation: location" in seen[1]["skill"]
+    other = worker_with(tmp_path, goal=goal, skill="lookup")
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("Note the atta price on Zepto")]), turn("WAIT"))
+    other.command("tick")
+    other.command("tick")
+    assert "# Situation: location" not in seen[1]["skill"]
