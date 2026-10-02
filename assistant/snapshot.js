@@ -15,6 +15,11 @@
   // cards (with their ADD buttons) behind a screen-reader copy, so controls count when rendered; text skips them.
   const rendered = e => !e.closest('[inert]') && e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true});
   const visible = e => !e.closest('[aria-hidden="true"]') && rendered(e);
+  // A screen-reader copy of words drawn beside it hidden from screen readers (Amazon's price: "₹799.00" read aloud,
+  // transparent; "₹799" drawn, aria-hidden): the text skips the drawing, so the copy's words are what the user sees.
+  const twin = e => !e.closest('[aria-hidden="true"]') && !e.closest('[inert]') &&
+    e.checkVisibility({checkVisibilityCSS: true}) && [...(e.parentElement?.children || [])]
+      .some(s => s !== e && s.getAttribute('aria-hidden') === 'true' && rendered(s));
   // A see-through text input laid over drawn boxes (one-time-code widgets) is where typing goes.
   const typedThrough = e => e.tagName === 'INPUT' &&
     !['radio', 'checkbox', 'file', 'hidden', 'submit', 'button', 'image', 'reset'].includes(e.type) &&
@@ -178,7 +183,8 @@
     let node;
     while ((node = walker.nextNode()) && length < 6000) {
       const value = node.textContent.trim(), parent = node.parentElement;
-      if (!value || !parent || parent.closest('script,style,noscript,template') || !visible(parent)) continue;
+      if (!value || !parent || parent.closest('script,style,noscript,template') || !(visible(parent) || twin(parent)))
+        continue;
       range.selectNodeContents(node);
       const r = range.getBoundingClientRect(), x = r.x + dx, y = r.y + dy;
       if (!(r.width > 0 && r.height > 0 && y + r.height > 0 && y < innerHeight && x + r.width > 0 && x < innerWidth)) continue;

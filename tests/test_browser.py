@@ -503,3 +503,9 @@ def test_a_rotating_placeholder_never_makes_a_decision_stale(browser_at):
     assert not b.fresh(page)
     b.evaluate("document.getElementById('words').insertAdjacentHTML('beforeend', '<div>Sold out</div>')")
     assert not b.fresh(page, find(page, "Search"))
+
+
+def test_a_price_drawn_hidden_from_screen_readers_is_read_from_its_screen_reader_copy(browser_at):
+    text = browser_at("/sr-price.html").observe()["text"]
+    assert "₹799.00" in text.splitlines() and "Inclusive of all taxes" in text
+    assert text.count("Masala Dosa") == 1  # a visible screen-reader copy is read once, its drawn twin not again
