@@ -1296,6 +1296,13 @@ class Worker:
         return any(q["from"] == "agent" and r["from"] == "user" and not q.get("approval")
                    and self.method_question(q["text"]) for q, r in zip(chat, chat[1:]))
 
+    def unpicked_method(self, page):
+        """Whether the page offers a choice of payment methods (controls naming two or more) while the user hasn't said
+        how to pay, in the chat or the goal: a saved card or method shown pre-selected is not their pick."""
+        methods = {m.casefold() for a in page["actions"] if a.get("kind") == "click"
+                   for m in rules.METHOD.findall(a.get("label") or "")}
+        return len(methods) >= 2 and not self.method_chosen() and not rules.METHOD.search(self.state["goal"])
+
     def unchosen_card(self, field, page):
         """Whether a card-detail box (card number, CVV, expiry) sits on a page that offers other ways to pay too, while
         the user hasn't said how to pay, in the chat or the goal: a saved card shown pre-selected is not their pick."""
@@ -1403,6 +1410,8 @@ class Worker:
         self.state["cleared"] = None
         label = gate.commit_label(self, operation, action, page, inputs.get("key"), sub)
         cleared = self.state.pop("cleared", None)  # a maybe-commit Jev was sure is a step: the bench audits it
+        if label and self.unpicked_method(page):
+            raise Retry(PICK_METHOD)  # the final control beside a payment selector: the user picks how to pay first
         if label:
             gate.approved(self, page, action, label, sub)  # returns True, or raises StalePage or Retry
         return self.run(page, operation, action, inputs, shown, commit=label, goal=(sub or {}).get("do", ""),

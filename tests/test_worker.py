@@ -2323,6 +2323,27 @@ def test_a_card_box_jev_flags_beside_other_methods_goes_to_the_planner_before_th
                                                            for f in seen[-1]["feedback"])
 
 
+METHODS = [{"id": "hd", "kind": "click", "role": "button", "node": 3,
+            "label": "HDFC Bank Card (shows “HDFC Bank Card 0185”)"},
+           {"id": "wl", "kind": "click", "role": "button", "node": 4, "label": "Wallets. PhonePe, Amazon Pay & more"},
+           {"id": "cod", "kind": "click", "role": "button", "node": 5, "label": "Pay on Delivery. Pay in cash"},
+           {"id": "pay", "kind": "click", "role": "button", "node": 6, "label": "Pay ₹127"}]
+SELECTOR = {**INSTAMART_PAY, "actions": METHODS}
+
+
+def test_the_final_pay_control_beside_a_payment_selector_asks_how_to_pay_first(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=SELECTOR, replies=[{"text": "no"}], goal="Order one Diet Coke on Instamart")
+    script_planner(monkeypatch, turn())
+    jev_checks(monkeypatch)
+    with pytest.raises(Retry, match="ASK which payment method first"):  # live instamart: approval for the saved card
+        w.act("CLICK", METHODS[3], SELECTOR, sub("pay for the order", kind="commit"))
+    assert w.asked == [] and not w.browser.act.called
+    w.state["chat"] += [dict(c) for c in CHOSE_HDFC]
+    with pytest.raises(Retry, match="did not approve"):  # the user picked the card: the approval is asked
+        w.act("CLICK", METHODS[3], SELECTOR, sub("pay for the order", kind="commit"))
+    assert len(w.asked) == 1
+
+
 def test_a_question_that_asks_how_to_pay_is_never_held_back(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=INSTAMART_PAY, replies=[{"text": "UPI"}])
     script_planner(monkeypatch, turn("ASK", message="How would you like to pay? Card details are asked hidden.",
