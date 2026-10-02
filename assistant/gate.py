@@ -542,11 +542,21 @@ def commit_label(w, operation, action, page, key=None, subgoal=None):
     return None
 
 
+PRICE_ASIDES = re.compile(r"\b(?:emi|months?|monthly|off|m\.?r\.?p|save[sd]?|saving|savings)\b", re.IGNORECASE)
+
+
+def one_price(label):
+    """Whether a choice's label names exactly one price and no word that puts another beside it (an EMI, a monthly
+    part, an M.R.P., a saving, an "off"): "Black ₹1,999 ₹1,399 30% off" or "Black EMI from ₹67/month ₹1,399" names
+    none that can be told to be the price."""
+    return len(rules.PRICE.findall(label)) == 1 and not PRICE_ASIDES.search(label)
+
+
 def facts(page, recent):
     """What an approval must show, read by code from the page and the pages just before it: the payable total,
-    fees, the delivery address line, the item count, the values typed into the form, and each selected choice that
-    names a price, up to that price (a product's variant "Black ₹1,399.00"). Fees count from an earlier page only
-    while that page's payable total is the current one."""
+    fees, the delivery address line, the item count, the values typed into the form, and each selected choice whose
+    label names one plain price (`one_price`), up to that price (a product's variant "Black ₹1,399.00"). Fees count
+    from an earlier page only while that page's payable total is the current one."""
     text = flat(page["text"])
     seen = [text, *(flat(t) for t in reversed(recent[-5:]))]
     total = payable(text)
@@ -561,7 +571,7 @@ def facts(page, recent):
         [m.strip() for t in seen[1:] for m in DELIVERING.findall(t)]  # this page's text, its controls, then before
     found = [rest for m in found if len(rest := " ".join(HIDDEN.sub(" ", m).split()).strip(" ,;:-")) >= 8]
     chosen = [rules.normal(a["label"][:rules.PRICE.search(a["label"]).end()]) for a in page["actions"]
-              if picked_choice(a) and rules.PRICE.search(a.get("label") or "")]  # "Black ₹1,399.00", selected
+              if picked_choice(a) and one_price(a.get("label") or "")]  # "Black ₹1,399.00", selected
     return {"total": total, "fees": list(dict.fromkeys(f.strip() for t in current for f in FEE.findall(t))),
             "address": next(iter(found), None),
             "items": next((int(n) for n in ITEMS.findall(text)), 0), "typed": list(dict.fromkeys(typed)),

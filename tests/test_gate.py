@@ -1632,7 +1632,8 @@ VARIANTS = [variant("Active Black ₹799.00 ₹3,990.00 Local Stores", "false"),
 
 
 def test_a_buy_now_with_no_price_in_the_text_names_the_selected_options_own_price(monkeypatch):
-    page = fake_page(text=AMAZON_VARIANT, url="https://www.amazon.in/dp/B0F5BDRQN3", actions=VARIANTS)
+    single = [VARIANTS[0], variant("Black ₹1,399.00 Only 1 left in stock.", "true"), *VARIANTS[2:]]  # one price
+    page = fake_page(text=AMAZON_VARIANT, url="https://www.amazon.in/dp/B0F5BDRQN3", actions=single)
     found = gate.facts(page, [])
     assert found["total"] is None and found["chosen"] == ["Black ₹1,399.00"]
     summary(monkeypatch, ["Product: boAt Airdopes 141 Black, Quantity: 1", "Seller: Clicktech Retail Private Ltd"])
@@ -1641,6 +1642,23 @@ def test_a_buy_now_with_no_price_in_the_text_names_the_selected_options_own_pric
     summary(monkeypatch, ["Product: boAt Airdopes 141 Black, Quantity: 1", "Price: ₹1,399.00"])
     lines = gate.summary(Fake(page), page, found)  # the selected option's price is the page's own: kept, once
     assert "Price: ₹1,399.00" in lines and not any(line.startswith("Selected:") for line in lines)
+
+
+@pytest.mark.parametrize("label", [
+    "Black ₹1,999 ₹1,399 30% off",  # the review's probes: the first price was the M.R.P., then an EMI
+    "Black EMI from ₹67/month ₹1,399", "Black EMI from ₹67/month", "Black ₹1,399 30% off", "Black ₹1,399 M.R.P.",
+    "Black ₹1,399 (save ₹600)", "Black ₹1,399.00 with 77 percent savings ₹5,990.00 Only 1 left in stock."])
+def test_a_selected_option_whose_label_holds_more_than_one_plain_price_names_no_price(monkeypatch, label):
+    page = fake_page(text=AMAZON_VARIANT, url="https://www.amazon.in/dp/B0F5BDRQN3",
+                     actions=[variant(label, "true"), VARIANTS[3]])
+    found = gate.facts(page, [])
+    assert found["chosen"] == []
+    summary(monkeypatch, ["Product: boAt Airdopes 141 Black, Quantity: 1"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "no"}])
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, VARIANTS[3], "Buy Now", None)
+    assert "Selected:" not in w.asked[0]["text"] and NO_TOTAL in w.asked[0]["text"]  # the caveat says to check
 
 
 def test_an_approval_never_shows_a_placeholder_for_the_users_own_details(monkeypatch):
