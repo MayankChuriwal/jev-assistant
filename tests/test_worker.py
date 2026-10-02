@@ -2831,3 +2831,10 @@ def test_a_file_arriving_for_a_download_goal_tells_the_planner_it_is_done(tmp_pa
     w.browser.observe.return_value = fake_page(text="invoice.pdf", url="https://www.amazon.in/invoice.pdf")
     w.run(w.state["page"], "CLICK", {"id": "z", "kind": "click", "label": "Zoom in", "node": 5}, {}, None)
     assert w.state["feedback"] == [] and w.state["reason"] is None
+
+
+def test_an_id_named_by_its_key_is_asked_for_in_words(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, replies=[{"text": "1234567890"}])
+    w.state["plan"] = [sub("enter the account", values=[("consumer_number", "[profile:consumer_number]")])]
+    w.profile_value("consumer_number")  # live electricity: “What's your consumer_number?”
+    assert w.asked[0]["text"].startswith("What's your consumer number? It stays hidden")
