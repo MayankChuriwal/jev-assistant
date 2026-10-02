@@ -28,6 +28,9 @@
   const reachable = e => rendered(e) || typedThrough(e);
   const byId = (e, id) => e.getRootNode().getElementById?.(id) || e.ownerDocument.getElementById(id);
   const UNSHOWN = ['style', 'script', 'noscript', 'template'];  // their text is code, never a name
+  // A field the user types or picks into is never named by an alt attribute (only pictures are): Rapido's pickup box
+  // carries alt="Drop" and its drop box alt="PickUp", while their placeholders say what each takes.
+  const entry = e => e.tagName === 'TEXTAREA' || e.tagName === 'SELECT' || (e.tagName === 'INPUT' && e.type !== 'image');
   const name = (e, seen = new Set()) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -35,7 +38,7 @@
       .map(id => name(byId(e, id), seen)).filter(Boolean).join(' ');
     return referenced || e.getAttribute('aria-label') ||
       [...(e.labels || [])].map(l => name(l, seen)).filter(Boolean).join(' ') ||
-      (['button', 'submit', 'reset'].includes(e.type) ? e.value : '') || e.getAttribute('alt') ||
+      (['button', 'submit', 'reset'].includes(e.type) ? e.value : '') || (entry(e) ? '' : e.getAttribute('alt')) ||
       (e.tagName === 'INPUT' ? '' : [...e.childNodes].map(n => n.nodeType === 3 ? n.textContent :
         n.nodeType === 1 && !UNSHOWN.includes(n.localName) && n.getAttribute('aria-hidden') !== 'true' ? name(n, seen) :
         '').join(' ').trim()) ||

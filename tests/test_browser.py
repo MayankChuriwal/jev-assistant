@@ -526,6 +526,12 @@ def test_same_named_pictures_read_as_pictures_not_as_options(browser_at):
     assert "Add (1 of 2)" in labels  # buttons with words keep the plain count
 
 
+def test_a_text_field_is_never_named_by_an_alt_attribute(browser_at):
+    labels = [a["label"] for a in browser_at("/trip.html").observe()["actions"]]
+    assert "Enter pickup" in labels and "Enter drop" in labels  # live rapido: alt="Drop" sat on the pickup box
+    assert "Search rides" in labels  # an image button is named by its alt
+
+
 def test_a_control_that_shows_only_a_picture_is_marked_as_one(browser_at):
     clicks = {a["label"]: a for a in browser_at("/gallery.html").observe()["actions"] if a["kind"] == "click"}
     assert clicks["Black earbuds in an open case"]["picture"] is True  # live amazon: gallery photos are radios
