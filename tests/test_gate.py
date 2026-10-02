@@ -1634,3 +1634,14 @@ def test_an_order_that_doesnt_match_says_to_fix_the_cart_before_the_final_step(m
         gate.approved(Fake(page), page, PAY, "Pay ₹79", None)
     said = str(refused.value)  # live instamart: "never remove items… Then do the final step again" → pressed Pay again
     assert "fix the cart first" in said and "decrease" in said and "do the final step again" not in said
+
+
+def test_a_key_pressed_on_a_page_with_nothing_focused_is_never_the_approved_commit(monkeypatch):
+    page = fake_page(text="Choose a ride\nUber Go AC ₹1,113.06\nCash", actions=[control("Request Uber Go AC")])
+    jev_says(monkeypatch, ("final", 0.9))
+    w = Fake(page)
+    w.state["browser"].focused_label = lambda: ""
+    key = {"id": "key_page", "kind": "press_key", "label": "The page (focused element)", "node": None}
+    with pytest.raises(Retry, match="press the final control itself"):  # live uber: “I'll press “The page…””
+        gate.commit_label(w, "PRESS_KEY", key, page, key="Enter", subgoal={"do": "request the ride", "kind": "commit"})
+    assert gate.commit_label(w, "PRESS_KEY", key, page, key="Enter", subgoal=ACT) is None

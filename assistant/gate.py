@@ -465,6 +465,9 @@ def commit_label(w, operation, action, page, key=None, subgoal=None):
     if maybe:
         return None if cleared(w, page, maybe, goal) else lookup(w, maybe, sure=False)
     if (subgoal or {}).get("kind") == "commit":
+        if page_key and not focused:  # Enter on a page with no control in focus: nothing for a yes to name
+            raise Retry("A key pressed on the page names no control: press the final control itself, by its number "
+                        "(like [12]).")
         name = action.get("label") or action.get("text") or operation.title()
         verdict, sure = jev.final(page, name, goal)
         if verdict == "final" and sure >= 0.5:
