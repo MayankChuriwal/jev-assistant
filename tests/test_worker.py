@@ -2632,3 +2632,9 @@ def test_an_order_replan_that_moves_past_a_step_never_gets_it_back_after_the_new
         "Open the product that matches Diet Coke 300 ml can exactly or the closest size",
         "Add quantity 1 of Diet Coke 300 ml can to the cart", "Open the cart and review fees and total",
         "Choose the payment method user picks", "Place the order", "Report the order number"]
+
+
+def test_a_pick_that_names_an_element_number_in_brackets_anywhere_acts_on_that_element(tmp_path):
+    w = login_worker(tmp_path)
+    w.do({"op": "TYPE", "pick": "3 [3]", "text": "[profile:phone]"}, w.state["page"])  # live: PICK "8 [8]" refused
+    assert w.browser.act.call_args.args[1]["label"] == "Enter mobile number"

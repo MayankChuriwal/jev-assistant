@@ -920,7 +920,7 @@ class Worker:
         WAIT, BACK, or a look."""
         s, op = self.state, act["op"]
         if op in {"PICK", "TYPE"}:
-            number = re.match(r"\s*\[(\d+)\]", act["pick"]) or self.past_candidates(act["pick"], page)
+            number = re.search(r"\[(\d+)\]", act["pick"]) or self.past_candidates(act["pick"], page)
             opener = self.search_opener(op, number[1], page) if number else None
             if opener is not None:
                 return self.type_through(opener, act["text"], page)
