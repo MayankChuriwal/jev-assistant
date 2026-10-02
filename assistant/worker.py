@@ -63,8 +63,13 @@ PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGN
                 "name": re.compile(r"\b(your (full )?name|full name)\b", re.IGNORECASE),
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
 PAYS = re.compile(r"\bpay", re.IGNORECASE)  # a question about paying: pay, payment, paying
-ANY_OF = re.compile(r"\b(any|either|whichever|both (are )?fine)\b", re.IGNORECASE)  # to offered choices: none in
-# particular
+# A whole reply that leaves an offered choice to the agent: it opens with "any", "either", "whichever", or "both are
+# fine" ("Any two seats together", "either is fine"); a reply that only mentions one ("I'd take Prime over any other")
+# names its own pick, and one with a negation ("not any of these", "I don't like either") turns the options down.
+ANY_OF = re.compile(r"^\W*(?:(?:ok(?:ay)?|sure|yes|yeah|fine|just|hmm+|um+|uh+)\W+)*"
+                    r"(?:any|either|whichever|both (?:are )?(?:fine|ok(?:ay)?|good))\b", re.IGNORECASE)
+NEGATION = re.compile(r"\b(?:no|not|none|neither|nor|never|nothing|nope|nah|dont|doesnt|didnt|cant|wont|isnt|"
+                      r"arent)\b|\b\w+n['’]t\b", re.IGNORECASE)  # "front" or "want" is none
 HERE = re.compile(r"\b(current|present|my) location\b|\bwhere i am\b|\blocate me\b", re.IGNORECASE)
 SEARCHY = re.compile(r"\bsearch", re.IGNORECASE)  # a search control or box
 STRIP = re.compile(r"(?<!\d)(?:\d{1,2}\s+){3,}\d{1,2}(?!\d)")  # a strip of choices: “1 2 3 4 5 6 7 8 9 10”
@@ -1259,7 +1264,7 @@ class Worker:
             return line + (" → a delivery or pickup place is never chosen for them: use the site's detect-location "
                            "option, or ASK which saved address (use it only if exactly one exists); if neither works, "
                            "STOP and say you need their address")
-        if DELEGATE.search(answer) or (options and ANY_OF.search(answer)):
+        if DELEGATE.search(answer) or (options and ANY_OF.match(answer) and not NEGATION.search(answer)):
             s["delegated_at"] = len(s["history"])
             return line + (" → the user leaves this choice to you: pick the option that best fits the goal, TELL "
                            "them which, and carry on")

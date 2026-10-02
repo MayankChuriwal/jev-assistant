@@ -2681,13 +2681,25 @@ def test_an_answer_naming_the_users_own_location_points_at_the_suggestion_that_m
     assert "own location" not in w.read("Please tell me your pickup location area.", [], "HSR Layout")
 
 
-@pytest.mark.parametrize("answer", ["Any two seats together", "either is fine", "whichever has seats"])
+@pytest.mark.parametrize("answer", ["Any two seats together", "either is fine", "whichever has seats",
+                                    "Any front row I want", "OK, any"])
 def test_an_answer_of_any_or_either_to_a_choice_leaves_that_choice_to_the_agent(tmp_path, monkeypatch, answer):
     w = worker_with(tmp_path)
     jev_checks(monkeypatch, read_reply="other")
     line = w.read("Please choose a seat category.", ["Classic Rows · ₹570", "Classic Plus Rows · ₹590"], answer)
     assert "the user leaves this choice to you" in line and w.state["delegated_at"] == 0  # live: re-asked 4 times
     assert "leaves this choice" not in w.read("Please choose a seat category.", ["Classic", "Prime"], "Prime rows")
+
+
+@pytest.mark.parametrize("answer", ["Not any of these", "I don't like either", "None of them, any other show?",
+                                    "No, either is too far", "Neither", "Any but not the front rows",
+                                    "I'd take Prime over any other", "Prime, if either is free"])
+def test_a_refusal_or_a_pick_that_mentions_any_or_either_is_never_left_to_the_agent(tmp_path, monkeypatch, answer):
+    w = worker_with(tmp_path)
+    jev_checks(monkeypatch, read_reply="other")
+    line = w.read("Please choose a seat category.", ["Classic Rows · ₹570", "Classic Plus Rows · ₹590"], answer)
+    assert "leaves this choice" not in line and line.endswith("→ none of the options") and \
+        w.state["delegated_at"] is None
 
 
 SLIDER = [{"id": "s", "kind": "click", "label": "slider in “1 2 3 4 5 6 7 8 9 10”", "role": "slider", "node": 5},
