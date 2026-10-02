@@ -2373,6 +2373,21 @@ def test_an_address_that_redirects_elsewhere_is_said_in_the_step_and_the_notes(t
     assert said in w.state["history"][-1]["changed"] and said in w.state["notes"]
 
 
+def test_an_address_that_leads_back_to_the_page_it_was_opened_from_tells_the_planner_it_holds_nothing(
+        tmp_path, monkeypatch):
+    prime = fake_page(text="Amazon Prime\nShopping plans\nJoin Prime", url="https://www.amazon.in/amazonprime")
+    w = worker_with(tmp_path, page=prime, goal="Cancel my Amazon Prime membership")
+    script_planner(monkeypatch, turn("OPEN_URL", text="https://www.amazon.in/mc"))
+    jev_checks(monkeypatch)
+    w.command("tick")  # live cancel-prime: /mc came back to /amazonprime and the planner went round its FAQ
+    assert any("led back to the page it was opened from" in f for f in w.state["feedback"])
+    elsewhere = worker_with(tmp_path, page=fake_page(url="https://www.amazon.in/"), goal="Cancel my Prime")
+    script_planner(monkeypatch, turn("OPEN_URL", text="https://www.amazon.in/mc"))
+    elsewhere.browser.observe.return_value = prime  # a redirect to another page is only said, as before
+    elsewhere.command("tick")
+    assert not any("led back" in f for f in elsewhere.state["feedback"])
+
+
 def test_a_download_that_was_never_opened_says_so_instead_of_guessing_it_opened(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=ORDER_PAGE, goal=INVOICE)
     script_planner(monkeypatch, turn("DONE", message="You have no recent orders.", text="Your Orders"))

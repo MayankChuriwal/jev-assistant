@@ -1648,6 +1648,13 @@ class Worker:
             moved = f"OPEN_URL to {inputs['url']} ended at {after['url']} (redirected)"
             changed = f"{moved}; {changed}"
             s["notes"].append(moved)
+            if self.landed(page["url"], after["url"]) and urlparse(page["url"]).path.strip("/"):
+                # sent back to the page it was opened from (not the site's home, a fallback for a missing location
+                # or sign-in): the site has nothing at that address for this account
+                s["feedback"].append(f"OPEN_URL to {inputs['url']} led back to the page it was opened from "
+                                     f"({after['url']}): that address has nothing for this account. Don't open it "
+                                     "again; go on from what this page shows, or DONE saying what isn't there.")
+                s["reason"] = s["reason"] or "unsure"
         last.update(page_changed=after["fingerprint"] != page["fingerprint"], url=after["url"], changed=changed,
                     after_spot=views.signature(after))
         if operation == "TYPE_TEXT" and self.reads_back(action, after, inputs.get("text"), shown):
