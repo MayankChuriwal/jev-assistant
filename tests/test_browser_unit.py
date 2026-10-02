@@ -199,3 +199,26 @@ def test_the_event_pump_survives_an_unexpected_error(monkeypatch):
         assert until(lambda: seen) and seen[0]["method"] == "Page.frameNavigated"
     finally:
         pump.running = False
+
+
+def test_a_frame_whose_attach_times_out_is_dropped_not_left_half_known(monkeypatch):
+    b = bare()
+    b.opener = {}
+    monkeypatch.setattr(browser, "cdp", Mock(return_value={"sessionId": "FS"}))
+    monkeypatch.setattr(browser.PUMP, "register", Mock())
+    monkeypatch.setattr(browser.PUMP, "unregister", Mock())
+
+    def call(method, session=None, **_):
+        if method == "Page.getFrameTree" and session != "FS":
+            return {"frameTree": {"frame": {"id": "MAIN", "url": "https://a.test/"}}}
+        if session == "FS":
+            raise TimeoutError("Page.enable timed out after 5s waiting for the daemon")
+        return {}
+
+    b.call = call
+    b._sync_frames([{"type": "iframe", "targetId": "F1", "parentFrameId": "MAIN"}])
+    assert "F1" not in b.frames  # a slow ad frame: skipped, its controls come with a later observation
+    b.frames["F2"] = {"session": "FS2"}  # attached by an older build, never finished
+    b._sync_frames([])
+    b._forget("T")  # closing the tab never trips on it either
+    assert b.frames == {}

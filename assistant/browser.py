@@ -437,7 +437,7 @@ class Browser:
         if session:
             PUMP.unregister(session)
             self.dialogs.pop(session, None)
-        for fid in [f for f, info in self.frames.items() if info["tab"] == target]:
+        for fid in [f for f, info in self.frames.items() if info.get("tab", target) == target]:
             PUMP.unregister(self.frames.pop(fid)["session"])
         if target == self.active:
             opener = self.opener.get(target)
@@ -598,7 +598,8 @@ class Browser:
                         self.call("Page.enable", session)
                         self.call("DOM.enable", session)
                     children = self._frame_ids(self.frames[fid]["session"])
-                except RuntimeError:  # the frame went away after Chrome listed it (the page navigated): drop it
+                except (RuntimeError, TimeoutError):  # the frame went away after Chrome listed it (the page
+                    # navigated), or is too slow to answer (an ad still loading): dropped, read with a later look
                     if fid in self.frames:
                         PUMP.unregister(self.frames.pop(fid)["session"])
                     continue
@@ -606,7 +607,8 @@ class Browser:
                 self.frames[fid].update(owner=owner, parent=parent, tab=self.active)
                 for child in children:
                     owners[child] = (self.frames[fid]["session"], fid)
-        for fid in [f for f, info in self.frames.items() if info["tab"] == self.active and f not in seen]:
+        for fid in [f for f, info in self.frames.items() if info.get("tab", self.active) == self.active
+                    and f not in seen]:
             PUMP.unregister(self.frames.pop(fid)["session"])
 
     def _frame_visible(self, fid):
