@@ -1745,6 +1745,26 @@ def test_a_fare_a_few_rupees_off_is_cut_never_swapped_for_another_rides_fare(mon
     assert lines == ["Uber Premier · Fare", "HOUSE OF COMMONS → Kempegowda International Airport Terminal-1"]
 
 
+@pytest.mark.parametrize("url", ["https://shop.test/checkout", "https://m.uber.com/go/product-selection"])
+@pytest.mark.parametrize("line, kept", [("Uber Premier · Fare ₹904", "Uber Premier · Fare"),
+                                        ("Uber Go Plus · ₹904", "Uber Go Plus")])
+def test_a_rounded_fare_is_never_swapped_for_another_options_fare_by_a_word_they_share(monkeypatch, url, line, kept):
+    page = fake_page(text=RIDE, url=url)  # the re-review's probes: "Uber" alone tied them to Go's ₹904.38
+    summary(monkeypatch, [line, "HOUSE OF COMMONS → Kempegowda International Airport Terminal-1"])
+    lines = gate.summary(Fake(page), page, gate.facts(page, []))
+    assert lines == [kept, "HOUSE OF COMMONS → Kempegowda International Airport Terminal-1"]
+
+
+def test_a_rounded_fare_is_swapped_only_for_the_one_option_that_names_everything_the_line_names(monkeypatch):
+    for url in ["https://shop.test/checkout", "https://m.uber.com/go/product-selection"]:
+        page = fake_page(text=RIDE, url=url)
+        summary(monkeypatch, ["Uber Go · Fare: ₹904"])
+        assert gate.summary(Fake(page), page, gate.facts(page, []))[0] == "Uber Go · Fare: ₹904.38"
+    tied = fake_page(text=RIDE.replace("Premier", "Uber Go"))  # two options name it: never guessed
+    summary(monkeypatch, ["Uber Go · Fare: ₹904"])
+    assert gate.summary(Fake(tied), tied, gate.facts(tied, []))[0] == "Uber Go · Fare"
+
+
 def test_a_wrong_fee_is_never_swapped_for_a_saving_and_the_real_fee_is_added(monkeypatch):
     page = fake_page(text="Cart\nDiet Coke 300 ml × 1\n₹40\nDelivery fee ₹30\nYou save ₹4\nTo pay ₹70")
     summary(monkeypatch, ["Diet Coke 300 ml × 1", "Delivery fee ₹5", "Total ₹70"])

@@ -566,23 +566,35 @@ PAISE = 1.0  # a summary amount less than ₹1 from a page amount may be that am
 CURRENCY_WORDS = {"inr", "rupee", "rupees"}
 
 
-def named(line):
-    """The words that say what an amount on a line is for: not its prices, money words ("total", "fee", "fare"),
-    currency, or stop words."""
-    return {word for word in rules.words(rules.PRICE.sub(" ", line)) if not WORDS.fullmatch(word)} - CURRENCY_WORDS
+SHORT_STOP = {"to", "of", "in", "on", "at", "by", "or", "an", "as", "is", "it", "my", "no", "up", "we", "be", "so",
+              "if", "do", "me", "us"}
 
 
-def near(figure, line, text):
+def named(line, host=""):
+    """The words that say what an amount on a line is for, two letters or more ("Go" in "Uber Go"): not its prices,
+    money words ("total", "fee", "fare"), currency, stop words, or the site's own name ("uber" on m.uber.com: every
+    option there may carry it)."""
+    brand = {skills.registrable(host)} if host else set()  # "rapido" for www.rapido.bike: the ride stays "bike"
+    found = set(re.findall(r"[a-z]{2,}", rules.PRICE.sub(" ", str(line)).lower()))
+    return {word for word in found if not WORDS.fullmatch(word)} - CURRENCY_WORDS - rules.STOP_WORDS - SHORT_STOP - \
+        brand
+
+
+def near(figure, line, text, host=""):
     """The page's own spelling of the amount this summary line's figure rounds (₹904 for ₹904.38), or None. Only one
     page amount may be less than ₹1 from it (two ride options a few paise apart: never guessed), and it must sit on a
-    page line that names something the summary line names (a bare price with the lines just above it, up to the
-    price before) and that is no remark (a saving, discount, cashback, or coupon)."""
+    page line (a bare price with the lines just above it, up to the price before) that is no remark (a saving,
+    discount, cashback, or coupon) and names every word the summary line names besides its money words and the site's
+    name, and no other priced line on the page may name them all too: "Uber Premier · ₹904" is never Go's ₹904.38."""
     value = number(figure)
     if value is None:
         return None
-    wanted, lines = named(line), text.splitlines()
-    found, fits = {}, set()
+    wanted, lines = named(line, host), text.splitlines()
+    blocks = []  # (prices on a page line, the words of the line and the lines above a bare price, a remark?)
     for i, here in enumerate(lines):
+        prices = rules.PRICE.findall(here)
+        if not prices:
+            continue
         block = [here]
         if not has_words(here):  # a bare price belongs to the words above it
             for above in reversed(lines[max(i - 3, 0):i]):
@@ -590,22 +602,26 @@ def near(figure, line, text):
                     break
                 block.insert(0, above)
         context = " ".join(block)
-        for price in rules.PRICE.findall(here):
+        blocks.append((prices, named(context, host), bool(REMARK_WORDS.search(context))))
+    naming = [i for i, (_, words, remark) in enumerate(blocks) if wanted and wanted <= words and not remark]
+    found, fits = {}, set()
+    for i, (prices, _, _) in enumerate(blocks):
+        for price in prices:
             other = number(price)
             if other is not None and abs(other - value) < PAISE:
                 found.setdefault(other, tight(price))
-                if wanted & named(context) and not REMARK_WORDS.search(context):
+                if naming == [i]:  # the one priced line that names all the summary line names
                     fits.add(other)
     return next(iter(found.values())) if len(found) == 1 and set(found) == fits else None
 
 
-def corrected(line, text):
+def corrected(line, text, host=""):
     """The line with each amount the page doesn't show replaced by the page amount it rounds (`near`), or cut out when
     there is none; None when a cut leaves nothing but bill words (a "Total" with a wrong amount): the page's own total
     and fees are added from its facts instead. Words, places, and amounts the page shows stay as written."""
     cut = False
     for figure in dict.fromkeys(x for x in rules.PRICE.findall(line) if not shown(x, text)):
-        fix = near(figure, line, text)
+        fix = near(figure, line, text, host)
         cut = cut or fix is None
         line = re.sub(re.escape(figure) + r"(?![\d.,]*\d)", lambda _, f=fix: f" {f} " if f else " ", line)
     line = " ".join(line.split()).strip(" ·•:,;|-–—")
@@ -632,7 +648,8 @@ def summary(w, page, found):
     payload = {"goal": s["goal"], "fields": (skill or {}).get("summary") or FIELDS, "chat": s["chat"][-10:],
                "facts": found, "page": {"url": page["url"], "title": page["title"], "text": text[:3000]},
                "pages_before": [flat(t)[:1500] for t in s["recent"][-3:]]}
-    lines = [kept for line in drafted(payload) if (kept := corrected(line, text)) is not None]
+    host = rules.host(page["url"])
+    lines = [kept for line in drafted(payload) if (kept := corrected(line, text, host)) is not None]
     if found["total"] is None:
         lines = [line for line in lines if not (TOTAL.search(line) and any(
             remark_only(figure, text) for figure in rules.PRICE.findall(line)))]
