@@ -501,21 +501,35 @@ def drafted(payload):
     return [line for line in lines if not PLACEHOLDER.search(line) or rules.PRICE.search(line)]
 
 
-def unshown(lines, text):
-    """The amounts on these lines that the page text doesn't show, each once."""
-    return list(dict.fromkeys(x for x in rules.PRICE.findall(" ".join(lines)) if not shown(x, text)))
+NEAR = (1.0, 0.02)  # a summary amount within ₹1 or 2% of exactly one page amount was meant as that one (rounded)
 
 
-def without(line, text):
-    """The line with every amount the page doesn't show cut out, or None when nothing but bill words would be left (a
-    "Total" with a wrong amount): the page's own total and fees are added from its facts instead."""
-    wrong = [x for x in rules.PRICE.findall(line) if not shown(x, text)]
-    if not wrong:
-        return line
-    for figure in wrong:
-        line = re.sub(re.escape(figure) + r"(?![\d.,]*\d)", " ", line)
+def near(figure, text):
+    """The one amount the page text shows near this one (within NEAR: a rounded or slipped figure), in the page's own
+    spelling; None when there is none, or more than one (two ride options a few rupees apart: never guessed)."""
+    value = number(figure)
+    if value is None:
+        return None
+    found = {}
+    for price in rules.PRICE.findall(text):
+        other = number(price)
+        if other is not None and abs(other - value) <= max(NEAR[0], NEAR[1] * value):
+            found.setdefault(other, tight(price))
+    return next(iter(found.values())) if len(found) == 1 else None
+
+
+def corrected(line, text):
+    """The line with each amount the page doesn't show replaced by the one page amount near it, or cut out when there
+    is none; None when a cut leaves nothing but bill words (a "Total" with a wrong amount): the page's own total and
+    fees are added from its facts instead. Words, places, and amounts the page shows stay as written."""
+    cut = False
+    for figure in dict.fromkeys(x for x in rules.PRICE.findall(line) if not shown(x, text)):
+        fix = near(figure, text)
+        cut = cut or fix is None
+        line = re.sub(re.escape(figure) + r"(?![\d.,]*\d)", lambda _, f=fix: f" {f} " if f else " ", line)
     line = " ".join(line.split()).strip(" ·•:,;|-–—")
-    return None if not has_words(line) or TOTAL.search(line) or bill_line(line) else line
+    bare = all(word in BILL_WORDS or WORDS.fullmatch(word) for word in re.findall(r"[^\W\d_]+", line.lower()))
+    return None if cut and (bare or TOTAL.search(line)) else line  # "Fare", "Total", "Delivery fee": nothing left
 
 
 def remark_only(figure, text):
@@ -527,21 +541,17 @@ def remark_only(figure, text):
 
 def summary(w, page, found):
     """The approval's lines: the summary model's one line per skill field, then every fact it left out, from the
-    page. An amount the page doesn't show goes back to the summary model once, named; one still wrong is left out
-    (the turn planner never wrote these lines, so it can't fix them). With no payable total read from the page, a
-    "Total" whose amount the page shows only on remark lines ("Cashback Rewards ₹100") is left out too."""
+    page. An amount the page doesn't show becomes the one page amount near it, else is cut out (`corrected`): the
+    summary model is asked once, and no line with a place or an item is lost for its amount. With no payable total
+    read from the page, a "Total" whose amount the page shows only on remark lines ("Cashback Rewards ₹100") is left
+    out too."""
     s = w.state
     skill = w.skill()
     text = flat(page["text"])
     payload = {"goal": s["goal"], "fields": (skill or {}).get("summary") or FIELDS, "chat": s["chat"][-10:],
                "facts": found, "page": {"url": page["url"], "title": page["title"], "text": text[:3000]},
                "pages_before": [flat(t)[:1500] for t in s["recent"][-3:]]}
-    lines = drafted(payload)
-    missing = unshown(lines, text)
-    if missing:
-        lines = drafted({**payload, "feedback": f"The page doesn't show {', '.join(missing)}. Copy amounts exactly "
-                                                "as the page shows them, or leave them out."})
-        lines = [kept for line in lines if (kept := without(line, text)) is not None]
+    lines = [kept for line in drafted(payload) if (kept := corrected(line, text)) is not None]
     if found["total"] is None:
         lines = [line for line in lines if not (TOTAL.search(line) and any(
             remark_only(figure, text) for figure in rules.PRICE.findall(line)))]
