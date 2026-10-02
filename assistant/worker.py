@@ -1064,6 +1064,17 @@ class Worker:
                         f"“{right[1]['label']}”, not “{action.get('label')}”.")
 
     @staticmethod
+    def card_add(action, sub):
+        """A card (a clickable container, not a button) whose words hold its ADD, clicked for a step that adds to the
+        cart: the click lands on the ADD inside it, not on the card's middle."""
+        add = re.search(r"\bADD\b|\bAdd to cart\b", action.get("label") or "")
+        wants = re.search(r"\b(add|cart)\b", (sub or {}).get("do") or "", re.IGNORECASE)
+        if not add or not wants or action.get("within") or action.get("role") != "clickable" or \
+                (action.get("label") or "").strip() == add[0]:
+            return action
+        return {**action, "within": add[0], "label": f"{action['label']} (at “{add[0]}”)"}
+
+    @staticmethod
     def on_words(click, text, typed=False):
         """A click control whose name shows these words among others ("2" in “1 2 3 … 10”): the control, clicked on
         those words (`within`, found and hit-tested by the browser), labelled with them so each is its own step. TYPE
@@ -1316,6 +1327,8 @@ class Worker:
 
     def act(self, operation, action, page, sub, key=None, text=None):
         """One operation through the gate: a commit runs only with an approval or a valid pre-authorisation."""
+        if operation == "CLICK":
+            action = self.card_add(action, sub)
         inputs, shown = self.inputs(operation, action, page, sub, key, text)
         self.state["cleared"] = None
         label = gate.commit_label(self, operation, action, page, inputs.get("key"), sub)

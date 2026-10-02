@@ -2838,3 +2838,18 @@ def test_an_id_named_by_its_key_is_asked_for_in_words(tmp_path, monkeypatch):
     w.state["plan"] = [sub("enter the account", values=[("consumer_number", "[profile:consumer_number]")])]
     w.profile_value("consumer_number")  # live electricity: “What's your consumer_number?”
     assert w.asked[0]["text"].startswith("What's your consumer number? It stays hidden")
+
+
+CARD = {"id": "c", "kind": "click", "label": "Masala Dosai Masala Dosai ₹195 ADD customizable Traditional dosa",
+        "role": "clickable", "node": 12}
+
+
+def test_adding_from_a_card_presses_the_add_inside_it(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text="Menu", actions=[CARD]), goal="Order one masala dosa on Zomato")
+    w.state["plan"] = [sub("Add one masala dosa to the cart")]
+    w.act("CLICK", CARD, w.state["page"], w.subgoal())  # live zomato: the card's centre, three times
+    action = w.browser.act.call_args.args[1]
+    assert action["within"] == "ADD" and w.state["history"][-1]["action"].endswith("(at “ADD”)")
+    w.state["plan"] = [sub("Open the dish's details")]
+    w.act("CLICK", CARD, w.state["page"], w.subgoal())
+    assert "within" not in w.browser.act.call_args.args[1]
