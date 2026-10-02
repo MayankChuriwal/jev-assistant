@@ -1577,6 +1577,8 @@ class Worker:
         """The action decided on `page`, on a fresh read `again`: the same control when only the text moved (a
         rotating placeholder, a carousel, a timer) and the controls are as they were (views.signature), else None. A
         control with a node must still be there under the same name; a spot found by looking is never carried over."""
+        if operation in {"OPEN_URL", "WAIT"} and action.get("node") is None:
+            return action  # an address to open, or a wait, never depends on what the page shows
         if operation == "LOOK" or views.signature(page) != views.signature(again):
             return None
         if action.get("node") is None:
@@ -1633,9 +1635,10 @@ class Worker:
 
     def track_loop(self, last):
         """The same step going round: run CIRCLE_ASK times from the same page (whatever each run changed), STUCK_AT
-        times on one path changing nothing, VISITS steps from one page state however far apart, or a step undone and
-        done again UNDOS times (A→B→A). The user is asked (loop_stuck). Every step also spends its page address's
-        budget (path_budget), waits and scrolls included."""
+        times on one path changing nothing, STUCK_AT times on one path whatever each run changed (a menu toggling),
+        VISITS steps from one page state however far apart, or a step undone and done again UNDOS times (A→B→A). The
+        user is asked (loop_stuck). Every step also spends its page address's budget (path_budget), waits and scrolls
+        included."""
         s = self.state
         if s["relaying"]:
             return None
@@ -1656,6 +1659,9 @@ class Worker:
         elif repeats >= STUCK_AT:
             key = f"{last['operation']}|{last['action']}|{urlparse(last['url']).path}"
             self.loop_stuck(key, f"repeats {repeats}: {key}")
+        elif (pressed := executor.presses(history, last["operation"], last["action"], last["url"])) >= STUCK_AT:
+            key = f"{last['operation']}|{last['action']}|{urlparse(last['url']).path}"
+            self.loop_stuck(key, f"presses {pressed}: {key}")  # the same press, whatever the page did in between
         elif visits >= VISITS:
             self.loop_stuck(f"visits|{spot}", f"visits {visits}: {spot}")
         elif undos >= UNDOS:

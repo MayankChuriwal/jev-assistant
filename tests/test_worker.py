@@ -2794,3 +2794,25 @@ def test_words_for_the_users_own_location_are_never_typed_into_a_search_box(tmp_
     w = worker_with(tmp_path, page=fake_page(text="Zomato", actions=[search]))
     with pytest.raises(Retry, match="finds places named so"):
         w.value(search, "current location", w.state["page"])
+
+
+def test_an_address_to_open_never_goes_stale_with_the_page(tmp_path):
+    w = worker_with(tmp_path, page=fake_page(actions=BUTTONS))
+    moved = fake_page(text="Menu open", actions=[*BUTTONS, {"id": "m", "kind": "click", "label": "Close menu",
+                                                            "role": "button", "node": 9}])
+    w.browser.observe.side_effect = [moved] * 5
+    w.browser.act.side_effect = [StalePage("Page changed since this decision. Observe again."), {}]
+    control = {"id": "open_url", "kind": "open_url", "node": None, "label": "Open a web address"}
+    w.run(w.state["page"], "OPEN_URL", control, {"url": "https://www.amazon.in/gp/primecentral"},
+          "https://www.amazon.in/gp/primecentral")  # live cancel-prime: refused stale twice while a menu toggled
+    assert w.browser.act.call_count == 2 and w.state["history"][-1]["operation"] == "OPEN_URL"
+
+
+def test_one_control_pressed_eight_times_on_one_page_address_asks_whatever_each_press_changed(tmp_path):
+    w = worker_with(tmp_path, replies=[{"text": "open the Prime page"}])
+    url = "https://www.amazon.in/gp/css/homepage.html"
+    press = [{"operation": "CLICK", "action": "Hello, [profile:name] Account & Lists", "url": url,
+              "page_changed": True, "spot": f"s{n}"} for n in range(8)]  # live cancel-prime: 15 presses, no guard
+    w.state["history"] = press
+    w.track_loop(press[-1])
+    assert len(w.asked) == 1 and w.state["stuck_why"].startswith("presses 8:")

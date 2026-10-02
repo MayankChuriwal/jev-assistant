@@ -166,6 +166,14 @@ def repeats(history, operation, label, url):
                and h.get("action") == label and urlparse(h.get("url", "")).path == path)
 
 
+def presses(history, operation, label, url):
+    """How often, among the last 20 steps, this operation on this element ran on this URL path, whatever each run
+    changed and whatever else the page showed (a menu that opens and closes, ads that rotate)."""
+    path = urlparse(url).path
+    return sum(1 for h in history[-WINDOW:] if h.get("operation") == operation and h.get("action") == label
+               and urlparse(h.get("url", "")).path == path and not h.get("relayed"))
+
+
 def circles(history, operation, label, spot, text=None):
     """How often, among the last 20 steps, this operation on this element ran from the page `spot` names
     (views.signature: the same URL path and the same controls), whatever each run changed: a page whose text changes
