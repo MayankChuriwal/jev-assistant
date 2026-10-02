@@ -2661,3 +2661,11 @@ def test_raising_a_quantity_is_the_planners_call_never_jevs_alone(tmp_path, monk
                               "action": STEPPER[1]}]
     w.do({"op": "PICK", "pick": "1", "text": ""}, w.state["page"])  # the planner may raise it when the user wants more
     assert pressed(w)[-1] == "Add 1 item to cart (shows “+”)"
+
+
+@pytest.mark.parametrize("answer", ["My current location", "current location", "where I am now"])
+def test_an_answer_naming_the_users_own_location_points_at_the_suggestion_that_marks_it(tmp_path, answer):
+    w = worker_with(tmp_path)
+    line = w.read("Please tell me your pickup location area.", [], answer)  # live uber: STOP after this, twice
+    assert line.startswith(f"“{answer}”") and "the suggestion marked as their own location" in line
+    assert "own location" not in w.read("Please tell me your pickup location area.", [], "HSR Layout")

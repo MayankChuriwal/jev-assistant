@@ -63,6 +63,7 @@ PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGN
                 "name": re.compile(r"\b(your (full )?name|full name)\b", re.IGNORECASE),
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
 PAYS = re.compile(r"\bpay", re.IGNORECASE)  # a question about paying: pay, payment, paying
+HERE = re.compile(r"\b(current|present|my) location\b|\bwhere i am\b|\blocate me\b", re.IGNORECASE)
 SEARCHY = re.compile(r"\bsearch", re.IGNORECASE)  # a search control or box
 RAISES = re.compile(r"\b(increase|increment)\b", re.IGNORECASE)  # a stepper's +: "Increase quantity"
 PLACE_STEP = re.compile(r"\b(location|address|pin ?code|deliver(y|ing)? (to|area|place)|pick ?-?up (point|place)|"
@@ -1186,6 +1187,10 @@ class Worker:
             pick = jev.read_reply(message, options, answer)
             if pick != "other":
                 return line + f" → option {pick}: {options[int(pick) - 1]}"
+        if HERE.search(answer) and PLACE.search(message):
+            return line + (" → the user's own location: click the empty location box and pick the suggestion marked as "
+                           "their own location (“Your current location”, “Your location”); a detect button already "
+                           "pressed isn't pressed again")
         if DELEGATE.search(answer) and PLACE.search(message):
             return line + (" → a delivery or pickup place is never chosen for them: use the site's detect-location "
                            "option, or ASK which saved address (use it only if exactly one exists); if neither works, "
