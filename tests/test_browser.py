@@ -532,6 +532,15 @@ def test_a_text_field_is_never_named_by_an_alt_attribute(browser_at):
     assert "Search rides" in labels  # an image button is named by its alt
 
 
+def test_a_submit_or_button_input_with_no_value_is_named_by_its_alt_so_the_commit_rule_sees_it(browser_at):
+    page = browser_at("/submit-alt.html").observe()
+    clicks = {a["label"]: a for a in page["actions"] if a["kind"] == "click"}
+    assert "Place order" in clicks and "Pay now" in clicks  # nameless before: the commit rule never saw them
+    assert "Clear" in clicks  # a value still comes first
+    assert rules.commit_label("CLICK", clicks["Place order"], page) == "Place order"
+    assert "Add a note" in [a["label"] for a in page["actions"] if a["kind"] == "fill"]  # a text field: never its alt
+
+
 def test_a_control_that_shows_only_a_picture_is_marked_as_one(browser_at):
     clicks = {a["label"]: a for a in browser_at("/gallery.html").observe()["actions"] if a["kind"] == "click"}
     assert clicks["Black earbuds in an open case"]["picture"] is True  # live amazon: gallery photos are radios

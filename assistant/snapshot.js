@@ -29,8 +29,10 @@
   const byId = (e, id) => e.getRootNode().getElementById?.(id) || e.ownerDocument.getElementById(id);
   const UNSHOWN = ['style', 'script', 'noscript', 'template'];  // their text is code, never a name
   // A field the user types or picks into is never named by an alt attribute (only pictures are): Rapido's pickup box
-  // carries alt="Drop" and its drop box alt="PickUp", while their placeholders say what each takes.
-  const entry = e => e.tagName === 'TEXTAREA' || e.tagName === 'SELECT' || (e.tagName === 'INPUT' && e.type !== 'image');
+  // carries alt="Drop" and its drop box alt="PickUp", while their placeholders say what each takes. A button input
+  // (submit, button, reset) is no field: with no value, its alt names it ("Place order"), as an image input's does.
+  const entry = e => e.tagName === 'TEXTAREA' || e.tagName === 'SELECT' ||
+    (e.tagName === 'INPUT' && !['image', 'submit', 'button', 'reset'].includes(e.type));
   const name = (e, seen = new Set()) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
