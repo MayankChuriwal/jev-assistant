@@ -1669,8 +1669,6 @@ def test_a_rating_prompt_is_no_money_so_booking_words_beside_it_stay_a_maybe_com
 
 PLACE_ORDER = {"id": "po", "kind": "click", "label": "Place order (shows “Proceed to Pay”)", "name": "Place order",
                "shown": "Proceed to Pay", "role": "button", "node": 30}
-MAKE_PAYMENT = {"id": "mp", "kind": "click", "label": "Make payment, tap to go to payment (shows “Proceed to Pay”)",
-                "name": "Make payment, tap to go to payment", "shown": "Proceed to Pay", "role": "button", "node": 22}
 PAYMENT_PAGE = "Payment options\nCash on Delivery\nSelected\nUPI\nCards\nTo Pay ₹1,499"
 CART_PAGE = ("Bill Details\nItem Total\n₹50.00\nHandling Fee\n₹12.00\nSmall Cart Fee\n₹20.00\nDelivery Partner Fee\n"
              "₹30.00\nGST and Charges\n₹9.00\nTo Pay\n₹121\nCart total is 121.0 Rupees\nVIEW DETAILED BILL\n"
@@ -1763,3 +1761,13 @@ def test_an_amount_under_a_rupee_off_on_a_line_naming_something_else_is_cut(monk
     summary(monkeypatch, ["Diet Coke 300 ml × 1 · ₹40", "Total ₹85.40"])
     lines = gate.summary(Fake(page), page, gate.facts(page, []))
     assert lines[:2] == ["Diet Coke 300 ml × 1", "Total ₹85.40"]
+
+
+def test_a_control_showing_a_commit_word_under_another_name_asks_for_approval(monkeypatch):
+    summaryish = {"id": "cs", "kind": "click", "name": "Cart summary", "shown": "Place order ₹121", "role": "button",
+                  "label": "Cart summary (shows “Place order ₹121”)", "node": 40}
+    page = fake_page(text=INSTAMART, actions=[summaryish])
+    asked = final_check(monkeypatch, ("step", 1.0))
+    assert gate.commit_label(Fake(page), "CLICK", summaryish, page, subgoal=ACT) == "Place order ₹121" and asked == []
+    spot = {**summaryish, "within": "Place order", "label": "Cart summary (at “Place order”)"}  # the planner's words
+    assert gate.commit_label(Fake(page), "CLICK", spot, page, subgoal=ACT) == "Place order ₹121"

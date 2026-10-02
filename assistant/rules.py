@@ -53,11 +53,14 @@ def host(url):
     return urlparse(url).netloc
 
 
+CLICKS = {"CLICK", "DOUBLE_CLICK"}
+
+
 def control_words(operation, action, page, key=None, focused=""):
     """(label, words shown on it) of the control an operation presses, or None when the operation presses none.
     `focused` names the control a page-level key reaches."""
-    if operation in {"CLICK", "DOUBLE_CLICK"}:  # its own name: context added to tell controls apart isn't what it does
-        return action.get("name", action.get("label", "")) or "", ""
+    if operation in CLICKS:  # its own name and the words it shows: context added to tell controls apart isn't either
+        return action.get("name", action.get("label", "")) or "", action.get("shown") or ""
     if operation == "LOOK":  # found by sight: its name and the words on it
         return action.get("label", "") or "", action.get("text") or ""
     if operation == "PRESS_KEY" and key in {"Enter", "Space"}:
@@ -77,9 +80,10 @@ def commit_label(operation, action, page, key=None, focused=""):
     label, shown = words
     if operation == "LOOK" and COMMIT.search(shown):  # the look's own "commits" flag is a maybe: Jev confirms it
         return label or shown or "the control found on screen"
-    rest = PROCEED_STEP.sub("", label)
-    if operation in {"CLICK", "DOUBLE_CLICK"} and rest != label and not COMMIT.search(rest):
-        return None  # these open the checkout page: a maybe-commit, for Jev's final check
+    if operation in CLICKS:  # a commit word in its name or on show; "Proceed to Pay" opens the checkout page: a maybe
+        if not COMMIT.search(PROCEED_STEP.sub("", f"{label} {shown}")):
+            return None
+        return label if COMMIT.search(PROCEED_STEP.sub("", label)) else shown
     return label if COMMIT.search(label) else None
 
 
@@ -98,6 +102,8 @@ def maybe_commit_label(operation, action, page, key=None, focused=""):
     label, shown = words
     if operation == "LOOK" and (action.get("commits") or maybe_commits(shown)):
         return label or shown or "the control found on screen"
+    if operation in CLICKS and not maybe_commits(label) and maybe_commits(shown):
+        return shown  # "Continue" showing “Proceed to Pay”
     return label if maybe_commits(label) else None
 
 

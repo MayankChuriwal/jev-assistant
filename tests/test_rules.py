@@ -320,3 +320,30 @@ def test_buying_again_opens_a_list_and_is_no_commit(label):
 def test_buy_is_still_a_commit_when_it_is_not_buying_again():
     assert rules.commit_label("CLICK", {"label": "Buy"}, {}) == "Buy"
     assert rules.commit_label("CLICK", {"label": "Buy now"}, {}) == "Buy now"
+
+
+# A click reads the control's own name and the words it shows: a commit word in either is a commit. The context
+# added to a label to tell same-named controls apart is never read.
+
+
+def shows(name, shown, context=""):
+    return {"kind": "click", "name": name, "shown": shown,
+            "label": f"{name} (shows “{shown}”)" + (f" ({context})" if context else "")}
+
+
+def test_a_commit_word_the_control_shows_under_another_name_is_a_commit():
+    probe = shows("Cart summary", "Place order ₹121")  # the review's probe: it ran with no approval
+    assert rules.commit_label("CLICK", probe, {}) == "Place order ₹121"
+    assert rules.commit_label("DOUBLE_CLICK", probe, {}) == "Place order ₹121"
+    assert rules.commit_label("CLICK", shows("Make payment, tap to go to payment", "Proceed to Pay"), {}) == \
+        "Make payment, tap to go to payment"  # the name's own commit word: named as before
+    step = shows("Continue", "Proceed to Pay")
+    assert rules.commit_label("CLICK", step, {}) is None and rules.maybe_commit_label("CLICK", step, {}) == \
+        "Proceed to Pay"  # a checkout step on show: a maybe-commit, for Jev's final check
+
+
+def test_the_context_added_to_tell_controls_apart_is_never_read_as_what_the_control_does():
+    add = {"kind": "click", "name": "ADD", "label": "ADD (Pay ₹79 combo: 1 of 2)"}
+    assert rules.commit_label("CLICK", add, {}) is None and rules.maybe_commit_label("CLICK", add, {}) is None
+    named = {**shows("Sizes", "300 ml", context="in “Place order”"), "name": "Sizes"}
+    assert rules.commit_label("CLICK", named, {}) is None and rules.maybe_commit_label("CLICK", named, {}) is None
