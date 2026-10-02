@@ -73,6 +73,7 @@ ADDRESS_LABEL = re.compile(r"\b(?:selected address|delivering to|deliver to|deli
                            re.IGNORECASE)
 # A summary line that only says the page gave no fact for its field ("form's name: None", "No payment method
 # provided"): left out, and the facts the page shows are added below.
+HIDDEN = re.compile(r"\[(?:profile|secret):[\w.]+\]")  # a user's own detail as the models see it: never shown as such
 PLACEHOLDER = re.compile(r"\b(?:none|null|n/a|unknown|not (?:provided|shown|visible|listed|mentioned))"
                          r"(?![\w/])|\bno\b[^.\n]{0,40}\bprovided\b", re.IGNORECASE)
 FEE = re.compile(r"^[^\n₹]{0,20}?((?:small cart|delivery|handling|platform|packaging|convenience|surge|late night|"
@@ -556,6 +557,7 @@ def facts(page, recent):
                 if re.search(r"[,\d]", m)]
     found = [m.strip() for m in DELIVERING.findall(text)] + labelled + \
         [m.strip() for t in seen[1:] for m in DELIVERING.findall(t)]  # this page's text, its controls, then before
+    found = [rest for m in found if len(rest := " ".join(HIDDEN.sub(" ", m).split()).strip(" ,;:-")) >= 8]
     chosen = [rules.normal(a["label"][:rules.PRICE.search(a["label"]).end()]) for a in page["actions"]
               if picked_choice(a) and rules.PRICE.search(a.get("label") or "")]  # "Black ₹1,399.00", selected
     return {"total": total, "fees": list(dict.fromkeys(f.strip() for t in current for f in FEE.findall(t))),
@@ -639,6 +641,17 @@ def corrected(line, text, host=""):
     return None if cut and (bare or TOTAL.search(line)) else line  # "Fare", "Total", "Delivery fee": nothing left
 
 
+def unhidden(line):
+    """The line without the placeholders the user's own details are hidden as ("Deliver to [profile:name], Mumbai"
+    → "Deliver to Mumbai"); None when nothing but its label is left ("Name: [profile:name]")."""
+    if not HIDDEN.search(line):
+        return line
+    cleaned = " ".join(re.sub(HIDDEN.pattern + r"\s*,?", " ", line).split())
+    if not cleaned.rsplit(":", 1)[-1].strip(" ·•,;|-–—"):
+        return None
+    return cleaned.strip(" ·•:,;|-–—") or None
+
+
 def remark_only(figure, text):
     """Whether every line of the page text that shows this amount is a remark: cashback, rewards, savings, a coupon,
     an offer. Such an amount is never what is payable."""
@@ -659,7 +672,8 @@ def summary(w, page, found):
                "facts": found, "page": {"url": page["url"], "title": page["title"], "text": text[:3000]},
                "pages_before": [flat(t)[:1500] for t in s["recent"][-3:]]}
     host, shows = rules.host(page["url"]), "\n".join([text, *found.get("chosen", [])])  # a selected choice's price
-    lines = [kept for line in drafted(payload) if (kept := corrected(line, shows, host)) is not None]
+    lines = [kept for line in drafted(payload) if (kept := corrected(line, shows, host)) is not None
+             and (kept := unhidden(kept)) is not None]
     if found["total"] is None:
         lines = [line for line in lines if not (TOTAL.search(line) and any(
             remark_only(figure, text) for figure in rules.PRICE.findall(line)))]

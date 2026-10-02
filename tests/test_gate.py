@@ -1643,6 +1643,17 @@ def test_a_buy_now_with_no_price_in_the_text_names_the_selected_options_own_pric
     assert "Price: ₹1,399.00" in lines and not any(line.startswith("Selected:") for line in lines)
 
 
+def test_an_approval_never_shows_a_placeholder_for_the_users_own_details(monkeypatch):
+    page = fake_page(text="Deliver to [profile:name]\nMumbai 400098\nboAt Airdopes 141 ANC\n₹1,499.00\nBuy Now",
+                     url="https://www.amazon.in/dp/B0C7QHHT63")  # live amazon: "Delivering to: [profile:name]"
+    found = gate.facts(page, [])
+    assert found["address"] is None  # a name hidden as a placeholder is no address
+    summary(monkeypatch, ["boAt Airdopes 141 ANC, Quantity: 1", "Deliver to [profile:name], Mumbai 400098",
+                          "Name: [profile:name]", "Price: ₹1,499.00"])
+    assert gate.summary(Fake(page), page, found) == ["boAt Airdopes 141 ANC, Quantity: 1", "Deliver to Mumbai 400098",
+                                                     "Price: ₹1,499.00"]
+
+
 def test_a_buy_now_summary_keeps_the_products_price_and_drops_a_line_saying_none_is_shown(monkeypatch):
     page = fake_page(text=AMAZON_BUY, url="https://www.amazon.in/dp/B0F8BVSK21")
     summary(monkeypatch, ["boAt Airdopes 141 Gen 2 Active Black, Qty 1", "Delivery address: Mayank Mumbai 400098",
