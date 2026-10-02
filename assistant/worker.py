@@ -1635,8 +1635,7 @@ class Worker:
                     # judged (decided again, through the gate), a captcha square only as picked
                 again = self.observe()
                 same = self.still(page, again, operation, action)
-                if same is None or rules.commit_label(operation, same, again) or \
-                        rules.maybe_commit_label(operation, same, again):
+                if same is None or self.may_commit(operation, same, again, inputs.get("key")):
                     raise  # a control whose words may commit is decided again, through the gate
                 page, action = again, same
                 entry.update(title=page.get("title", ""), url=page["url"])
@@ -1707,6 +1706,17 @@ class Worker:
         if s["commit"]:
             return gate.watch(self, s["commit"]["label"], s["commit"].get("goal") or s["goal"])
         return self.track_loop(last)
+
+    def may_commit(self, operation, action, page, key=None):
+        """Whether pressing this control on this page may commit, as the gate reads its words before Jev's check: the
+        control's own words, or for a key pressed on the page, the focused control or the form an Enter submits."""
+        page_key = operation == "PRESS_KEY" and action.get("node") is None
+        focused = self.state["browser"].focused_label() if page_key else ""
+        if rules.commit_label(operation, action, page, key, focused) or \
+                rules.maybe_commit_label(operation, action, page, key, focused):
+            return True
+        return page_key and key == "Enter" and gate.form_submit(
+            page, focused, lambda words: bool(rules.COMMIT.search(words)) or rules.maybe_commits(words)) is not None
 
     @staticmethod
     def still(page, again, operation, action):

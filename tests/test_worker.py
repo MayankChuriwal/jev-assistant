@@ -2630,6 +2630,32 @@ def test_a_stale_click_that_may_commit_on_the_fresh_read_is_decided_again_throug
     assert w.browser.act.call_count == 1 and w.state["history"] == []
 
 
+KEY_PAGE = {"id": "key_page", "kind": "key", "node": None, "role": "page", "label": "The page (focused element)"}
+
+
+def coupon(submit):
+    """A field whose form's submit control is `submit`: Enter in it, or on the page with it focused, presses that."""
+    return [{"id": "f", "kind": "fill", "label": "Coupon code", "role": "textbox", "value": "", "node": 9,
+             "submit": submit}, *BUTTONS, KEY_PAGE]
+
+
+@pytest.mark.parametrize("on_page", [False, True])
+def test_an_enter_on_a_stale_page_whose_form_now_places_the_order_is_decided_again_through_the_gate(tmp_path, on_page):
+    w = worker_with(tmp_path, page=fake_page(actions=coupon("Apply")))
+    w.browser.focused_label.return_value = "Coupon code"
+    w.browser.observe.side_effect = lambda *a, **k: fake_page(text="Cart\nPlace order", actions=coupon("Place order"))
+    w.browser.act.side_effect = [StalePage("Page changed since this decision. Observe again."), {}]
+    with pytest.raises(StalePage):  # the field's form submits "Place order" now: never pressed on the fresh read
+        w.run(w.state["page"], "PRESS_KEY", KEY_PAGE if on_page else coupon("Apply")[0], {"key": "Enter"}, None)
+    assert w.browser.act.call_count == 1 and w.state["history"] == []
+    w = worker_with(tmp_path, page=fake_page(actions=coupon("Apply")))
+    w.browser.focused_label.return_value = "Coupon code"
+    w.browser.observe.side_effect = lambda *a, **k: fake_page(text="Cart\nApply", actions=coupon("Apply"))
+    w.browser.act.side_effect = [StalePage("Page changed since this decision. Observe again."), {}]
+    w.run(w.state["page"], "PRESS_KEY", KEY_PAGE if on_page else coupon("Apply")[0], {"key": "Enter"}, None)
+    assert w.browser.act.call_count == 2  # only the text moved and nothing may commit: pressed on the fresh read
+
+
 # ---- a place is never an ID: it is typed in words, or detected by the site
 
 
