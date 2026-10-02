@@ -63,6 +63,8 @@ PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGN
                 "name": re.compile(r"\b(your (full )?name|full name)\b", re.IGNORECASE),
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
 PAYS = re.compile(r"\bpay", re.IGNORECASE)  # a question about paying: pay, payment, paying
+ANY_OF = re.compile(r"\b(any|either|whichever|both (are )?fine)\b", re.IGNORECASE)  # to offered choices: none in
+# particular
 HERE = re.compile(r"\b(current|present|my) location\b|\bwhere i am\b|\blocate me\b", re.IGNORECASE)
 SEARCHY = re.compile(r"\bsearch", re.IGNORECASE)  # a search control or box
 RAISES = re.compile(r"\b(increase|increment)\b", re.IGNORECASE)  # a stepper's +: "Increase quantity"
@@ -1195,7 +1197,7 @@ class Worker:
             return line + (" → a delivery or pickup place is never chosen for them: use the site's detect-location "
                            "option, or ASK which saved address (use it only if exactly one exists); if neither works, "
                            "STOP and say you need their address")
-        if DELEGATE.search(answer):
+        if DELEGATE.search(answer) or (options and ANY_OF.search(answer)):
             s["delegated_at"] = len(s["history"])
             return line + (" → the user leaves this choice to you: pick the option that best fits the goal, TELL "
                            "them which, and carry on")

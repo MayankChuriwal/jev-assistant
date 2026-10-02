@@ -2669,3 +2669,12 @@ def test_an_answer_naming_the_users_own_location_points_at_the_suggestion_that_m
     line = w.read("Please tell me your pickup location area.", [], answer)  # live uber: STOP after this, twice
     assert line.startswith(f"“{answer}”") and "the suggestion marked as their own location" in line
     assert "own location" not in w.read("Please tell me your pickup location area.", [], "HSR Layout")
+
+
+@pytest.mark.parametrize("answer", ["Any two seats together", "either is fine", "whichever has seats"])
+def test_an_answer_of_any_or_either_to_a_choice_leaves_that_choice_to_the_agent(tmp_path, monkeypatch, answer):
+    w = worker_with(tmp_path)
+    jev_checks(monkeypatch, read_reply="other")
+    line = w.read("Please choose a seat category.", ["Classic Rows · ₹570", "Classic Plus Rows · ₹590"], answer)
+    assert "the user leaves this choice to you" in line and w.state["delegated_at"] == 0  # live: re-asked 4 times
+    assert "leaves this choice" not in w.read("Please choose a seat category.", ["Classic", "Prime"], "Prime rows")
