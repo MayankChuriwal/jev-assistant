@@ -156,7 +156,7 @@ def test_a_summary_may_leave_off_or_add_a_zero_fraction_the_page_shows(monkeypat
     assert not any(line.startswith("Total:") for line in lines)  # ₹121.00 already says the page's ₹121
 
 
-@pytest.mark.parametrize("line, missing, total", [("Total ₹121.50", "₹121.50", "Total ₹121"),
+@pytest.mark.parametrize("line, missing, total", [("Total ₹121.50", "₹121.50", "Total: ₹121"),  # "To Pay": no word
                                                   ("Diet Coke ₹5", "₹5", "Total: ₹121"),
                                                   ("Diet Coke ₹500", "₹500", "Total: ₹121"),
                                                   ("Total ₹12,100", "₹12,100", "Total: ₹121")])
@@ -171,7 +171,7 @@ def test_a_whole_amount_is_never_taken_for_one_with_paise(monkeypatch):
     page = fake_page(text="Checkout\nDiet Coke ₹79.50\nTo pay ₹79.50\nPay")
     summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
     lines = gate.summary(Fake(page), page, gate.facts(page, []))
-    assert "Total ₹79" not in lines and "Total ₹79.50" in lines  # the one page amount that near: the page's own
+    assert "Total ₹79" not in lines and "Total: ₹79.50" in lines  # "To pay" names no word "Total" does: the page's
 
 
 def test_an_order_that_doesnt_match_is_fixed_twice_then_asked(monkeypatch):
@@ -1544,11 +1544,13 @@ def test_a_rounded_fare_becomes_the_one_amount_the_page_shows_near_it(monkeypatc
     page = fake_page(text=RIDE)
     found = gate.facts(page, [])
     assert found["total"] is None  # a fare with no total word: only the summary carries it
-    summary(monkeypatch, ["Uber Go", "HOUSE OF COMMONS → Kempegowda International Airport Terminal-1", "Fare: ₹904",
+    summary(monkeypatch, ["Uber Go · Fare: ₹904", "HOUSE OF COMMONS → Kempegowda International Airport Terminal-1",
                           "Cash"])
     lines = gate.summary(Fake(page), page, found)
-    assert lines == ["Uber Go", "HOUSE OF COMMONS → Kempegowda International Airport Terminal-1", "Fare: ₹904.38",
+    assert lines == ["Uber Go · Fare: ₹904.38", "HOUSE OF COMMONS → Kempegowda International Airport Terminal-1",
                      "Cash"]
+    summary(monkeypatch, ["Uber Go", "Fare: ₹904"])  # a fare line naming no ride: nothing ties it to Go's fare
+    assert gate.summary(Fake(page), page, found) == ["Uber Go"]
 
 
 def test_an_amount_with_two_page_amounts_near_it_is_never_guessed(monkeypatch):
@@ -1613,12 +1615,14 @@ def test_a_buy_now_summary_keeps_the_products_price_and_drops_a_line_saying_none
                      "Price: ₹799"]
 
 
-def test_a_bike_fare_off_by_a_rupee_is_the_pages_and_the_drop_stays(monkeypatch):
+def test_a_bike_fare_off_by_a_rupee_is_cut_and_the_drop_stays(monkeypatch):
     page = fake_page(text="Bike\n₹45\n3 mins\nAuto\n₹92\nPickup: Mandpura\nDrop: Indiranagar Metro Station\n"
                           "Book Bike", url="https://www.rapido.bike/Home")
     summary(monkeypatch, ["Rapido Bike · ₹46", "Mandpura → Indiranagar Metro Station"])
-    assert gate.summary(Fake(page), page, gate.facts(page, [])) == ["Rapido Bike · ₹45",
+    assert gate.summary(Fake(page), page, gate.facts(page, [])) == ["Rapido Bike",  # ₹1 off is no rounding
                                                                     "Mandpura → Indiranagar Metro Station"]
+    summary(monkeypatch, ["Rapido Bike · ₹45.40"])
+    assert gate.summary(Fake(page), page, gate.facts(page, []))[0] == "Rapido Bike · ₹45"
 
 
 def test_a_ticket_total_the_summary_rounded_is_the_pages_payable_amount(monkeypatch):
@@ -1626,8 +1630,8 @@ def test_a_ticket_total_the_summary_rounded_is_the_pages_payable_amount(monkeypa
                           "₹70.80\nAmount Payable ₹670.80\nProceed To Pay", url="https://in.bookmyshow.com/buytickets")
     summary(monkeypatch, ["Drishyam 2 · PVR Orion Mall · Sat, 3 Oct 07:30 PM", "2 tickets", "Total ₹670"])
     lines = gate.summary(Fake(page), page, gate.facts(page, []))
-    assert lines[:3] == ["Drishyam 2 · PVR Orion Mall · Sat, 3 Oct 07:30 PM", "2 tickets", "Total ₹670.80"]
-    assert not any(line.startswith("Total:") for line in lines)
+    assert lines[:3] == ["Drishyam 2 · PVR Orion Mall · Sat, 3 Oct 07:30 PM", "2 tickets", "Total: ₹670.80"]
+    assert "Total ₹670" not in lines  # "Amount Payable" names no word "Total" does: the page's own total is added
 
 
 def test_an_order_that_doesnt_match_says_to_fix_the_cart_before_the_final_step(monkeypatch):
@@ -1720,3 +1724,42 @@ def test_proceed_to_pay_on_the_cart_page_before_a_method_is_a_step_only_when_jev
     asked = final_check(monkeypatch, ("step", 0.6))
     assert gate.commit_label(unpaid(payment), "CLICK", MAKE_PAYMENT, payment) == MAKE_PAYMENT["name"]
     assert len(asked) == 1
+
+
+# ---- a summary amount is swapped for the page's only when it was the page's own, rounded: under ₹1, on a line that
+# names the same thing, never a saving
+
+
+def test_a_fare_a_few_rupees_off_is_cut_never_swapped_for_another_rides_fare(monkeypatch):
+    page = fake_page(text=RIDE)  # the review's probe: Premier's fare became Go's ₹904.38
+    summary(monkeypatch, ["Uber Premier · Fare ₹910", "HOUSE OF COMMONS → Kempegowda International Airport Terminal-1"])
+    lines = gate.summary(Fake(page), page, gate.facts(page, []))
+    assert lines == ["Uber Premier · Fare", "HOUSE OF COMMONS → Kempegowda International Airport Terminal-1"]
+
+
+def test_a_wrong_fee_is_never_swapped_for_a_saving_and_the_real_fee_is_added(monkeypatch):
+    page = fake_page(text="Cart\nDiet Coke 300 ml × 1\n₹40\nDelivery fee ₹30\nYou save ₹4\nTo pay ₹70")
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Delivery fee ₹5", "Total ₹70"])
+    lines = gate.summary(Fake(page), page, gate.facts(page, []))
+    assert "Delivery fee ₹30" in lines and not any("₹4" in line or "₹5" in line for line in lines)
+
+
+def test_a_wrong_total_is_never_swapped_for_an_item_price_beside_the_real_one(monkeypatch):
+    page = fake_page(text="Cart\nAtta 5 kg × 1\n₹120\nDelivery fee ₹25\nTo pay ₹145")
+    summary(monkeypatch, ["Atta 5 kg × 1", "Total ₹121"])
+    lines = gate.summary(Fake(page), page, gate.facts(page, []))
+    assert "Total: ₹145" in lines and not any("₹120" in line or "₹121" in line for line in lines)
+
+
+def test_an_amount_under_a_rupee_off_on_a_saving_line_is_cut(monkeypatch):
+    page = fake_page(text="Cart\nDiet Coke 300 ml × 1 ₹45.00\nYou saved ₹39.50 on Diet Coke\nTo pay ₹45.00")
+    summary(monkeypatch, ["Diet Coke 300 ml × 1 · ₹39"])
+    lines = gate.summary(Fake(page), page, gate.facts(page, []))
+    assert lines[0] == "Diet Coke 300 ml × 1" and not any("39" in line for line in lines)
+
+
+def test_an_amount_under_a_rupee_off_on_a_line_naming_something_else_is_cut(monkeypatch):
+    page = fake_page(text="Cart\nPepsi 300 ml × 1 ₹40.40\nDiet Coke 300 ml × 1 ₹45.00\nTo pay ₹85.40")
+    summary(monkeypatch, ["Diet Coke 300 ml × 1 · ₹40", "Total ₹85.40"])
+    lines = gate.summary(Fake(page), page, gate.facts(page, []))
+    assert lines[:2] == ["Diet Coke 300 ml × 1", "Total ₹85.40"]

@@ -549,30 +549,50 @@ def drafted(payload):
     return [line for line in lines if not PLACEHOLDER.search(line) or rules.PRICE.search(line)]
 
 
-NEAR = (1.0, 0.02)  # a summary amount within ₹1 or 2% of exactly one page amount was meant as that one (rounded)
+PAISE = 1.0  # a summary amount less than ₹1 from a page amount may be that amount with its paise rounded away
+CURRENCY_WORDS = {"inr", "rupee", "rupees"}
 
 
-def near(figure, text):
-    """The one amount the page text shows near this one (within NEAR: a rounded or slipped figure), in the page's own
-    spelling; None when there is none, or more than one (two ride options a few rupees apart: never guessed)."""
+def named(line):
+    """The words that say what an amount on a line is for: not its prices, money words ("total", "fee", "fare"),
+    currency, or stop words."""
+    return {word for word in rules.words(rules.PRICE.sub(" ", line)) if not WORDS.fullmatch(word)} - CURRENCY_WORDS
+
+
+def near(figure, line, text):
+    """The page's own spelling of the amount this summary line's figure rounds (₹904 for ₹904.38), or None. Only one
+    page amount may be less than ₹1 from it (two ride options a few paise apart: never guessed), and it must sit on a
+    page line that names something the summary line names (a bare price with the lines just above it, up to the
+    price before) and that is no remark (a saving, discount, cashback, or coupon)."""
     value = number(figure)
     if value is None:
         return None
-    found = {}
-    for price in rules.PRICE.findall(text):
-        other = number(price)
-        if other is not None and abs(other - value) <= max(NEAR[0], NEAR[1] * value):
-            found.setdefault(other, tight(price))
-    return next(iter(found.values())) if len(found) == 1 else None
+    wanted, lines = named(line), text.splitlines()
+    found, fits = {}, set()
+    for i, here in enumerate(lines):
+        block = [here]
+        if not has_words(here):  # a bare price belongs to the words above it
+            for above in reversed(lines[max(i - 3, 0):i]):
+                if rules.PRICE.search(above):
+                    break
+                block.insert(0, above)
+        context = " ".join(block)
+        for price in rules.PRICE.findall(here):
+            other = number(price)
+            if other is not None and abs(other - value) < PAISE:
+                found.setdefault(other, tight(price))
+                if wanted & named(context) and not REMARK_WORDS.search(context):
+                    fits.add(other)
+    return next(iter(found.values())) if len(found) == 1 and set(found) == fits else None
 
 
 def corrected(line, text):
-    """The line with each amount the page doesn't show replaced by the one page amount near it, or cut out when there
-    is none; None when a cut leaves nothing but bill words (a "Total" with a wrong amount): the page's own total and
-    fees are added from its facts instead. Words, places, and amounts the page shows stay as written."""
+    """The line with each amount the page doesn't show replaced by the page amount it rounds (`near`), or cut out when
+    there is none; None when a cut leaves nothing but bill words (a "Total" with a wrong amount): the page's own total
+    and fees are added from its facts instead. Words, places, and amounts the page shows stay as written."""
     cut = False
     for figure in dict.fromkeys(x for x in rules.PRICE.findall(line) if not shown(x, text)):
-        fix = near(figure, text)
+        fix = near(figure, line, text)
         cut = cut or fix is None
         line = re.sub(re.escape(figure) + r"(?![\d.,]*\d)", lambda _, f=fix: f" {f} " if f else " ", line)
     line = " ".join(line.split()).strip(" ·•:,;|-–—")
@@ -589,7 +609,7 @@ def remark_only(figure, text):
 
 def summary(w, page, found):
     """The approval's lines: the summary model's one line per skill field, then every fact it left out, from the
-    page. An amount the page doesn't show becomes the one page amount near it, else is cut out (`corrected`): the
+    page. An amount the page doesn't show becomes the page amount it rounds, else is cut out (`corrected`): the
     summary model is asked once, and no line with a place or an item is lost for its amount. With no payable total
     read from the page, a "Total" whose amount the page shows only on remark lines ("Cashback Rewards ₹100") is left
     out too."""
