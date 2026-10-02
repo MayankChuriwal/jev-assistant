@@ -50,6 +50,10 @@
     .replace(/\b\d{1,2}:\d{2}\s+(left|remaining)\b/gi, '#:## $1')
     .replace(/\b(in|within)\s+\d+\s?(s|secs?|seconds)\b/gi, '$1 # $2')
     .replace(/\b\d+\s?(s|secs?|seconds)\s+(left|remaining)\b/gi, '# $1 $2');
+  // Text as a decision's freshness reads it: a rotating placeholder (Search "milk", then Search "bread") and the lines
+  // it shows in turn are no change, so its quoted words are dropped and each distinct line counts once.
+  const calm = t => [...new Set(steady(t).replace(/["\u201c][^"\u201d\n]{0,60}["\u201d]/g, '""').split('\n')
+    .map(l => l.trim()).filter(Boolean))].join('\n');
   const roles = ['button', 'link', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemradio',
     'menuitemcheckbox', 'option', 'gridcell', 'combobox', 'textbox', 'searchbox', 'spinbutton', 'slider', 'treeitem'];
   const semantic = 'a[href],button,input,textarea,select,summary,[contenteditable="true"],[contenteditable=""],' +
@@ -337,8 +341,8 @@
   cache.guard = (e, memo = new Map()) => {
     if (!e?.isConnected || !reachable(e)) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
-    if (scope && !memo.has(scope)) memo.set(scope, steady(scope.innerText?.slice(0, 6000)));
-    return [identity(e), role(e), steady(name(e)), safe(e) ? e.value ?? null : null, e.checked ?? null, e.selectedIndex ?? null,
+    if (scope && !memo.has(scope)) memo.set(scope, calm(scope.innerText?.slice(0, 6000)));
+    return [identity(e), role(e), calm(name(e)), safe(e) ? e.value ?? null : null, e.checked ?? null, e.selectedIndex ?? null,
       e.readOnly ?? null, e.matches(':disabled'), e.getAttribute('aria-disabled'), e.getAttribute('aria-expanded'),
       e.getAttribute('aria-checked'), e.getAttribute('aria-selected'), e.getAttribute('href'), memo.get(scope) ?? ''];
   };
@@ -394,9 +398,9 @@
   for (const a of actions) if (!(a.node in guards)) guards[a.node] = cache.guard(cache.nodes.get(a.node), memo);
   const page_key = cache.pageKey();
   // Compare meaning and identity. Geometry is always resolved and hit-tested just before input.
-  const semantics = actions.map(({rect, ...action}) => action);
+  const semantics = actions.map(({rect, ...action}) => ({...action, label: calm(action.label)}));
   const marker = [performance.timeOrigin, location.href, scrollX, scrollY, innerWidth, innerHeight,
-    document.title, steady(text), steady(JSON.stringify(semantics)), page_key[6]];
+    document.title, calm(text), steady(JSON.stringify(semantics)), page_key[6]];
   actions.forEach((a, i) => a.id = 'e' + (i + 1));
   const height = document.documentElement.scrollHeight, width = document.documentElement.scrollWidth;
   const page = (direction, more) => more && actions.push(

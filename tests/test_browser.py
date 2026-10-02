@@ -488,3 +488,18 @@ def test_same_named_buttons_in_different_sections_carry_their_sections_heading(b
     adds = [a["label"] for a in page["actions"] if a["label"].startswith("ADD")]
     assert len(adds) == 2 and "Margherita" in adds[0] and "Farmhouse" in adds[1]
     assert "Margherita" not in adds[1]  # a heading in another card is never borrowed
+
+
+def test_a_rotating_placeholder_never_makes_a_decision_stale(browser_at):
+    b = browser_at("/rotating.html")
+    page = b.observe()
+    search = find(page, "Search")
+    time.sleep(0.5)  # the placeholder shows other words, and fewer or more of them
+    assert b.fresh(page) and b.fresh(page, search)
+    b.act("CLICK", search, page)
+    assert b.evaluate("location.hash") == "#search"
+    page = b.observe()
+    b.evaluate("document.getElementById('total').textContent = 'Cart ₹110'")
+    assert not b.fresh(page)
+    b.evaluate("document.getElementById('words').insertAdjacentHTML('beforeend', '<div>Sold out</div>')")
+    assert not b.fresh(page, find(page, "Search"))

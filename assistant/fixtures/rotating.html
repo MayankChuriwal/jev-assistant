@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Groceries</title>
+<style>#words div { height: 20px; } .off { display: none; }</style></head>
+<body>
+<a href="#search" id="search"><span>!</span><div id="words"></div></a>
+<p id="banner">Fresh deals today</p>
+<p id="total">Cart ₹55</p>
+<a href="#atta">Atta, Rice &amp; Dal</a>
+<script>
+  // A search bar whose placeholder rotates: a window of quoted words shown in turn, the rest hidden.
+  const words = ['milk', 'bread', 'sugar', 'butter', 'paneer', 'chocolate', 'curd', 'rice', 'egg', 'chips'];
+  const box = document.getElementById('words');
+  for (const w of words) box.insertAdjacentHTML('beforeend', `<div>Search "${w}"</div>`);
+  let at = 0;
+  const show = () => [...box.children].forEach((d, i) => d.classList.toggle('off', i < at || i > at + 7));
+  show();
+  setInterval(() => { at = (at + 1) % words.length; show(); }, 100);
+</script>
+</body>
+</html>
