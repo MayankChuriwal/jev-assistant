@@ -2724,15 +2724,27 @@ PROCEED = {"id": "m", "kind": "click", "label": "Make payment, tap to go to paym
 def test_proceed_to_pay_before_the_user_said_how_to_pay_is_a_step_to_the_payment_page(tmp_path, monkeypatch):
     from assistant import gate
 
-    page = fake_page(text="Cart\nDiet Coke 330 ml\nTo Pay ₹121", actions=[PROCEED])
+    page = fake_page(text="Cart\nDiet Coke 330 ml\nItem Total ₹50\nTo Pay ₹121", actions=[PROCEED])
     w = worker_with(tmp_path, page=page)
     asked = []
-    monkeypatch.setattr(jev, "final", lambda *a: asked.append(a) or ("step", 0.5))  # Jev unsure: it used to ask
-    assert gate.commit_label(w, "CLICK", PROCEED, page) is None and asked == []  # live instamart: the yes came first
-    assert w.state["cleared"] == PROCEED["label"]
+    monkeypatch.setattr(jev, "final", lambda *a: asked.append(a) or ("step", 0.5))  # Jev says step, unsure
+    assert gate.commit_label(w, "CLICK", PROCEED, page) is None and len(asked) == 1  # live instamart: Jev still checks
+    assert w.state["cleared"] == PROCEED["name"]
     w.state["chat"] = [{"from": "agent", "text": "How would you like to pay?\n1. Cash on delivery\n2. UPI"},
                        {"from": "user", "text": "“Cash” → option 1: Cash on delivery"}]
-    assert gate.commit_label(w, "CLICK", PROCEED, page) == PROCEED["name"] and len(asked) == 1
+    assert gate.commit_label(w, "CLICK", PROCEED, page) == PROCEED["name"] and len(asked) == 2
+
+
+def test_a_step_jev_cleared_is_recorded_with_its_own_words_and_the_audit_reads_it(tmp_path, monkeypatch):
+    from assistant import bench
+
+    page = fake_page(text="Cart\nDiet Coke 330 ml\nItem Total ₹50\nTo Pay ₹121", actions=[PROCEED])
+    w = worker_with(tmp_path, page=page)
+    jev_checks(monkeypatch, final=("step", 0.6))
+    w.act("CLICK", PROCEED, page, sub("open the payment page"))
+    ran = w.state["history"][-1]
+    assert ran["own"] == "Make payment, tap to go to payment Proceed to Pay" and ran["cleared"] == PROCEED["name"]
+    assert not ran["committed"] and bench.audit(w.state) == [] and w.state["cleared_maybe"] == [PROCEED["name"]]
 
 
 def test_the_plans_value_for_one_field_typed_into_another_is_refused_with_the_right_field(tmp_path, monkeypatch):

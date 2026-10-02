@@ -1658,3 +1658,65 @@ def test_a_rating_prompt_is_no_money_so_booking_words_beside_it_stay_a_maybe_com
     assert not gate.shows_money(page["text"])
     assert gate.commit_label(Fake(page), "CLICK", control("Book tickets"), page, subgoal=ACT) is None
     assert gate.shows_money("Per km\nRate\n12") and gate.shows_money("Rate: 12 per km")
+
+
+# ---- a control that opens the payment page is a step only on a cart page with no method in sight, and Jev decides
+
+
+PLACE_ORDER = {"id": "po", "kind": "click", "label": "Place order (shows “Proceed to Pay”)", "name": "Place order",
+               "shown": "Proceed to Pay", "role": "button", "node": 30}
+MAKE_PAYMENT = {"id": "mp", "kind": "click", "label": "Make payment, tap to go to payment (shows “Proceed to Pay”)",
+                "name": "Make payment, tap to go to payment", "shown": "Proceed to Pay", "role": "button", "node": 22}
+PAYMENT_PAGE = "Payment options\nCash on Delivery\nSelected\nUPI\nCards\nTo Pay ₹1,499"
+CART_PAGE = ("Bill Details\nItem Total\n₹50.00\nHandling Fee\n₹12.00\nSmall Cart Fee\n₹20.00\nDelivery Partner Fee\n"
+             "₹30.00\nGST and Charges\n₹9.00\nTo Pay\n₹121\nCart total is 121.0 Rupees\nVIEW DETAILED BILL\n"
+             "Proceed to Pay")  # live instamart's cart page, at the bottom
+
+
+def unpaid(page, goal="Order one Diet Coke on Instamart"):
+    """A worker whose user hasn't said how to pay."""
+    w = Fake(page)
+    w.state["goal"] = goal
+    w.method_chosen = lambda: False
+    return w
+
+
+def final_check(monkeypatch, verdict):
+    asked = []
+    monkeypatch.setattr(gate.jev, "final", lambda *a: asked.append(a) or verdict)
+    return asked
+
+
+def test_a_pay_control_showing_proceed_to_pay_on_the_payment_page_asks_and_jev_is_consulted(monkeypatch):
+    page = fake_page(text=PAYMENT_PAGE, actions=[PLACE_ORDER])  # the review's probe: it ran with no yes, unchecked
+    asked = final_check(monkeypatch, ("final", 0.99))
+    assert gate.commit_label(unpaid(page), "CLICK", PLACE_ORDER, page) == "Place order" and len(asked) == 1
+
+
+@pytest.mark.parametrize("text, goal, extra", [
+    (PAYMENT_PAGE, "Order a lamp", []),  # the methods are on the page
+    (CART_PAGE, "Order a lamp and pay cash on delivery", []),  # the goal names how to pay
+    (CART_PAGE + "\nPay on delivery", "Order a lamp", []),
+    (CART_PAGE.replace("Bill Details", "Paying with\nSelected"), "Order a lamp", []),  # a method already chosen
+    (CART_PAGE, "Order a lamp", [{"id": "r", "kind": "click", "label": "Saved option ending 4242", "role": "radio",
+                                  "node": 31, "checked": "true"}]),  # a pre-selected choice
+    ("Deliver to Home\nProceed to Pay", "Order a lamp", []),  # no bill at all: not a cart step
+])
+def test_a_page_that_may_take_the_payment_never_lets_proceed_to_pay_through_on_a_lean(monkeypatch, text, goal, extra):
+    page = fake_page(text=text, actions=[PLACE_ORDER, *extra])
+    asked = final_check(monkeypatch, ("step", 0.6))  # Jev leans step but isn't sure: the user is asked
+    assert gate.commit_label(unpaid(page, goal), "CLICK", PLACE_ORDER, page) == "Place order" and len(asked) == 1
+
+
+def test_proceed_to_pay_on_the_cart_page_before_a_method_is_a_step_only_when_jev_says_step(monkeypatch):
+    cart = fake_page(text=CART_PAGE, actions=[MAKE_PAYMENT])
+    w = unpaid(cart)
+    asked = final_check(monkeypatch, ("step", 0.6))
+    assert gate.commit_label(w, "CLICK", MAKE_PAYMENT, cart) is None and len(asked) == 1  # live instamart's flow
+    assert w.state["cleared"] == MAKE_PAYMENT["name"]  # kept for the bench's audit
+    asked = final_check(monkeypatch, ("final", 0.7))
+    assert gate.commit_label(unpaid(cart), "CLICK", MAKE_PAYMENT, cart) == MAKE_PAYMENT["name"] and len(asked) == 1
+    payment = fake_page(text=PAYMENT_PAGE, actions=[MAKE_PAYMENT])  # the same control on the payment page
+    asked = final_check(monkeypatch, ("step", 0.6))
+    assert gate.commit_label(unpaid(payment), "CLICK", MAKE_PAYMENT, payment) == MAKE_PAYMENT["name"]
+    assert len(asked) == 1

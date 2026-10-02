@@ -373,6 +373,16 @@ def own_words(action):
     return " ".join(filter(None, [action.get("name", action.get("label") or ""), action.get("shown")]))
 
 
+def pressed(operation, action, key=None):
+    """The words of the control an operation presses, for the bench's audit: a click's own name and shown words, a
+    look's name and words (not a hover), the form an Enter submits; "" for anything else."""
+    if operation in CLICKS:
+        return own_words(action)
+    if operation == "LOOK" and not action.get("hover"):
+        return " ".join(filter(None, [action.get("label"), action.get("text")]))
+    return (action.get("submit") or "") if operation == "PRESS_KEY" and key == "Enter" else ""
+
+
 def form_submit(page, focused, commits):
     """The submit label of the form a page-level Enter submits (the focused field's, else the first) when `commits`
     says it may commit, else None."""
@@ -381,11 +391,11 @@ def form_submit(page, focused, commits):
     return field["submit"] if field else None
 
 
-def cleared(w, page, label, goal):
-    """Whether Jev is sure (step ≥ 0.8) that pressing this control is only a step on the way. A cleared label is
-    kept (state "cleared") so the bench can audit what ran without a yes."""
+def cleared(w, page, label, goal, sure_enough=0.8):
+    """Whether Jev is sure (step ≥ 0.8, or `sure_enough`) that pressing this control is only a step on the way. A
+    cleared label is kept (state "cleared") so the bench can audit what ran without a yes."""
     verdict, sure = jev.final(page, label, goal)
-    if verdict == "step" and sure >= 0.8:
+    if verdict == "step" and sure >= sure_enough:
         w.state["cleared"] = label
         return True
     return False
@@ -421,15 +431,37 @@ def only_a_step(operation, action, label, page):
         and not shows_money(page["text"])
 
 
-def unpaid_checkout(w, action):
-    """Whether a control that only opens the payment page ("Proceed to Pay") is pressed before the user said how to
-    pay: it is a step there, where the methods show and the user picks one; the pay control after it is the commit.
-    Recorded as cleared, for the bench's audit."""
+SELECTED = re.compile(r"\b(?:pre-?)?selected\b", re.IGNORECASE)  # "Cash on Delivery · Selected": a method is set
+CART_STEP = re.compile(r"\b(?:cart|basket|bag|bill details|bill summary|order summary|items? total|sub ?total)\b",
+                       re.IGNORECASE)
+CHOICES = {"radio", "option", "menuitemradio"}
+
+
+def method_shown(page, goal):
+    """Whether the payment may already be set: the page shows a payment method, a "selected" mark, or a choice that
+    is already picked, or the goal names how to pay ("pay cash on delivery")."""
+    labels = " ".join(a.get("label") or "" for a in page.get("actions") or ())
+    picked = any(a.get("role") in CHOICES and "true" in {str(a.get("checked")).lower(), str(a.get("selected")).lower()}
+                 for a in page.get("actions") or ())
+    text = flat(page["text"])
+    return picked or bool(rules.METHOD.search(text) or rules.METHOD.search(labels) or rules.METHOD.search(goal or "")
+                          or SELECTED.search(text))
+
+
+def cart_step(text):
+    """Whether the page is a cart or bill: a total, and the items or the cart's own words ("Item Total", "Cart")."""
+    return bool(TOTAL.search(text)) and bool(CART_STEP.search(text) or cart(text) or ITEMS.search(text)
+                                             or stepper(text.splitlines()))
+
+
+def unpaid_checkout(w, action, page, goal):
+    """Whether a control that only opens the payment page ("Proceed to Pay") is pressed on a cart or bill page before
+    the user said how to pay, with no payment method in sight and none named in the goal: the methods show on the
+    next page, where the pay control is the commit. Jev's final check still decides; it only needs to say step."""
     chosen = getattr(w, "method_chosen", None)
-    if not rules.CHECKOUT_STEP.search(action.get("shown") or own_words(action)) or chosen is None or chosen():
+    if chosen is None or chosen() or not rules.CHECKOUT_STEP.search(action.get("shown") or own_words(action)):
         return False
-    w.state["cleared"] = action.get("label")
-    return True
+    return cart_step(flat(page["text"])) and not method_shown(page, f"{w.state['goal']} {goal}")
 
 
 def accordion(operation, action, label):
@@ -469,8 +501,8 @@ def commit_label(w, operation, action, page, key=None, subgoal=None):
         if accordion(operation, action, label):
             return None if cleared(w, page, label, goal) else lookup(w, label, sure=False)
         if only_a_step(operation, action, label, page) and \
-                (unpaid_checkout(w, action) or cleared(w, page, label, goal)):
-            return None
+                cleared(w, page, label, goal, 0.5 if unpaid_checkout(w, action, page, goal) else 0.8):
+            return None  # never without Jev's check: a step to the payment page needs only its "step"
         return lookup(w, label, sure=True)
     maybe = rules.maybe_commit_label(operation, action, page, key, focused)
     if not maybe and page_key and key == "Enter":

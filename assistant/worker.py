@@ -1516,7 +1516,8 @@ class Worker:
                  "kind": action.get("kind"), "text": shown, "key": inputs.get("key"),
                  "files": [self.file_name(f) for f in inputs["files"]] if "files" in inputs else None,
                  "page_changed": None, "url": page["url"], "committed": bool(commit),
-                 "approved": (s["approval"] or {}).get("by") if commit else None, "spot": views.signature(page)}
+                 "approved": (s["approval"] or {}).get("by") if commit else None, "spot": views.signature(page),
+                 "own": gate.pressed(operation, action, inputs.get("key")), "cleared": cleared}  # for the audit
         try:
             try:
                 s["browser"].act(operation, action, page, **inputs)
