@@ -41,7 +41,8 @@
         '').join(' ').trim()) ||
       e.getAttribute('title') || e.getAttribute('placeholder') || '';
   };
-  const label = e => name(e).replace(/\s+/g, ' ').trim().slice(0, 160);
+  // A name a site wrote as markup ('<span class="…">Buy for </span>…' in an aria-label) reads as its words.
+  const label = e => name(e).replace(/<\/?[a-z][^<>]*>/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
   // A control with no name of its own (an icon button on a product card) is named by the nearest text around it.
   const context = (e, own = '') => {
     for (let a = e.parentElement, n = 0; a && n < 4; a = a.parentElement, n++) {

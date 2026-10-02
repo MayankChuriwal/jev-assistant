@@ -523,3 +523,9 @@ def test_same_named_pictures_read_as_pictures_not_as_options(browser_at):
     labels = [a["label"] for a in browser_at("/gallery.html").observe()["actions"] if a["kind"] == "click"]
     assert "Diet Coke Can (picture 1 of 3)" in labels and "Diet Coke Can (picture 3 of 3)" in labels
     assert "Add (1 of 2)" in labels  # buttons with words keep the plain count
+
+
+def test_a_name_written_as_markup_reads_as_its_words(browser_at):
+    labels = [a["label"] for a in browser_at("/markup.html").observe()["actions"] if a["kind"] == "click"]
+    assert any(label.startswith("Buy for ₹799 + cashback") for label in labels)  # live amazon: “<span class=…”
+    assert any(label.startswith("Size < 10") for label in labels)
