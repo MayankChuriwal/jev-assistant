@@ -72,6 +72,8 @@ NEGATION = re.compile(r"\b(?:no|not|none|neither|nor|never|nothing|nope|nah|dont
                       r"arent)\b|\b\w+n['’]t\b", re.IGNORECASE)  # "front" or "want" is none
 HERE = re.compile(r"\b(current|present|my) location\b|\bwhere i am\b|\blocate me\b", re.IGNORECASE)
 SEARCHY = re.compile(r"\bsearch", re.IGNORECASE)  # a search control or box
+CHOOSES = re.compile(r"\b(colou?rs?|sizes?|variants?|storage|flavou?rs?|shades?|styles?|models?)\b",
+                     re.IGNORECASE)  # a step that picks one version of an item
 STRIP = re.compile(r"(?<!\d)(?:\d{1,2}\s+){3,}\d{1,2}(?!\d)")  # a strip of choices: “1 2 3 4 5 6 7 8 9 10”
 RAISES = re.compile(r"\b(increase|increment)\b", re.IGNORECASE)  # a stepper's +: "Increase quantity"
 PLACE_STEP = re.compile(r"\b(location|address|pin ?code|deliver(y|ing)? (to|area|place)|pick ?-?up (point|place)|"
@@ -1370,6 +1372,10 @@ class Worker:
         """One operation through the gate: a commit runs only with an approval or a valid pre-authorisation."""
         if operation == "CLICK":
             action = self.card_add(action, sub)
+            if action.get("picture") and action.get("role") != "link" and CHOOSES.search((sub or {}).get("do") or ""):
+                raise Retry(f"“{action.get('label')}” is a photo in the item's picture gallery: clicking it only shows "
+                            "that photo and chooses nothing. Choose with the page's own control for it (the colour or "
+                            "size swatches, or the control naming the current choice), or LOOK for it.")
             extra = self.narrows(action)
             if extra:
                 raise Retry(f"“{action.get('label')}” adds {', '.join(sorted(extra))} to the search, which the user "

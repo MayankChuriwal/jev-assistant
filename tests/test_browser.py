@@ -526,6 +526,13 @@ def test_same_named_pictures_read_as_pictures_not_as_options(browser_at):
     assert "Add (1 of 2)" in labels  # buttons with words keep the plain count
 
 
+def test_a_control_that_shows_only_a_picture_is_marked_as_one(browser_at):
+    clicks = {a["label"]: a for a in browser_at("/gallery.html").observe()["actions"] if a["kind"] == "click"}
+    assert clicks["Black earbuds in an open case"]["picture"] is True  # live amazon: gallery photos are radios
+    assert clicks["Three cases in white, teal and black"]["picture"] is True
+    assert "picture" not in clicks["Black ₹799.00"] and "picture" not in clicks["Add (1 of 2)"]
+
+
 def test_a_name_written_as_markup_reads_as_its_words(browser_at):
     labels = [a["label"] for a in browser_at("/markup.html").observe()["actions"] if a["kind"] == "click"]
     assert any(label.startswith("Buy for ₹799 + cashback") for label in labels)  # live amazon: “<span class=…”

@@ -236,6 +236,8 @@
     }
     return null;
   };
+  // A control that shows a picture and no words (a product's photo gallery, Amazon's thumbnails drawn as radios).
+  const pictureOnly = e => e.tagName === 'IMG' || (!(e.innerText || '').trim() && !!e.querySelector('img'));
   const states = (e, base) => {
     for (const key of ['checked', 'selected', 'expanded']) {
       const value = e.getAttribute('aria-' + key);
@@ -308,7 +310,8 @@
         (e.innerText || '').replace(/\s+/g, ' ').trim() : '';
       const shown = words && words.length <= 40 && !own.toLowerCase().includes(words.toLowerCase()) ? words : '';
       const base = states(e, {node, role: rname, label: shown ? `${own} (shows “${shown}”)` :
-        own || (near ? `${rname} in “${near}”` : rname), name: own, rect, ...(shown ? {shown} : {})});
+        own || (near ? `${rname} in “${near}”` : rname), name: own, rect, ...(shown ? {shown} : {}),
+        ...(!typing && pictureOnly(e) ? {picture: true} : {})});
       if (e.tagName === 'SELECT') {
         const current = [...e.selectedOptions].map(o => o.label).join(', ');
         for (const o of e.options) if (!o.selected && !o.disabled && !o.closest('optgroup[disabled]'))

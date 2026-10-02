@@ -2976,6 +2976,22 @@ def test_a_search_suggestion_that_adds_words_the_user_never_said_is_refused(tmp_
         assert w.browser.act.called
 
 
+GALLERY = [{"id": "g1", "kind": "click", "role": "radio", "checked": "false", "node": 31, "picture": True,
+            "label": "Three boAt cases in white, dark teal and black on gold pedestals (picture 1 of 2)"},
+           {"id": "c1", "kind": "click", "role": "radio", "checked": "false", "node": 52, "label": "Black ₹799.00"}]
+
+
+def test_a_gallery_picture_is_never_clicked_to_choose_a_colour_or_size(tmp_path):
+    page = fake_page(text="boAt Airdopes 141\nColour: White", actions=GALLERY)
+    w = worker_with(tmp_path, page=page, goal="Buy one boAt Airdopes 141 on Amazon.in")
+    with pytest.raises(Retry, match="a photo"):  # live amazon: pressed 4 times for "black", then White was bought
+        w.act("CLICK", GALLERY[0], page, sub("choose the Black colour variant"))
+    assert not w.browser.act.called
+    w.act("CLICK", GALLERY[1], page, sub("choose the Black colour variant"))  # the colour's own control
+    w.act("CLICK", GALLERY[0], page, sub("open the listing for boAt Airdopes 141"))  # no choice to make: clicked
+    assert w.browser.act.call_count == 2
+
+
 def test_adding_from_a_card_presses_the_add_inside_it(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=fake_page(text="Menu", actions=[CARD]), goal="Order one masala dosa on Zomato")
     w.state["plan"] = [sub("Add one masala dosa to the cart")]
