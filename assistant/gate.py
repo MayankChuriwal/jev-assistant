@@ -72,8 +72,8 @@ ADDRESS_LABEL = re.compile(r"\b(?:selected address|delivering to|deliver to|deli
                            re.IGNORECASE)
 # A summary line that only says the page gave no fact for its field ("form's name: None", "No payment method
 # provided"): left out, and the facts the page shows are added below.
-PLACEHOLDER = re.compile(r"\b(?:none|null|n/a|unknown|not provided)(?![\w/])|\bno\b[^.\n]{0,40}\bprovided\b",
-                         re.IGNORECASE)
+PLACEHOLDER = re.compile(r"\b(?:none|null|n/a|unknown|not (?:provided|shown|visible|listed|mentioned))"
+                         r"(?![\w/])|\bno\b[^.\n]{0,40}\bprovided\b", re.IGNORECASE)
 FEE = re.compile(r"^[^\n₹]{0,20}?((?:small cart|delivery|handling|platform|packaging|convenience|surge|late night|"
                  r"rain|service)\s+(?:fee|charges?)[^\n₹]{0,10}₹\s?[\d,]+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
 ITEMS = re.compile(r"\b(\d+) items?\b", re.IGNORECASE)

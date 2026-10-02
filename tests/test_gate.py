@@ -1590,3 +1590,37 @@ def test_an_accordion_header_with_no_price_is_at_most_a_maybe_commit(monkeypatch
     assert gate.commit_label(Fake(page), "CLICK", plain, page, subgoal=ACT) == plain["label"]  # no state: outright
     priced = {**header, "label": "One-time purchase ₹1,099"}
     assert gate.commit_label(Fake(page), "CLICK", priced, page, subgoal=ACT) == priced["label"]
+
+
+# ---- round-3 approval shapes: the summary keeps the page's price, total, and destination
+
+
+AMAZON_BUY = ("Deliver to Mayank\nMumbai 400098\nboAt Airdopes 141 Gen 2, 4 Mics ENx Tech (Active Black)\n"
+              "Visit the boAt Store\n₹799.00\nFREE delivery in 10 minutes on orders over ₹149\n-80%\n₹799.00\n"
+              "M.R.P.:\n₹3,990.00\nInclusive of all taxes\nBuy Now\nAdd to Cart")
+
+
+def test_a_buy_now_summary_keeps_the_products_price_and_drops_a_line_saying_none_is_shown(monkeypatch):
+    page = fake_page(text=AMAZON_BUY, url="https://www.amazon.in/dp/B0F8BVSK21")
+    summary(monkeypatch, ["boAt Airdopes 141 Gen 2 Active Black, Qty 1", "Delivery address: Mayank Mumbai 400098",
+                          "Price: ₹799", "Total: Not shown"])
+    lines = gate.summary(Fake(page), page, gate.facts(page, []))
+    assert lines == ["boAt Airdopes 141 Gen 2 Active Black, Qty 1", "Delivery address: Mayank Mumbai 400098",
+                     "Price: ₹799"]
+
+
+def test_a_bike_fare_off_by_a_rupee_is_the_pages_and_the_drop_stays(monkeypatch):
+    page = fake_page(text="Bike\n₹45\n3 mins\nAuto\n₹92\nPickup: Mandpura\nDrop: Indiranagar Metro Station\n"
+                          "Book Bike", url="https://www.rapido.bike/Home")
+    summary(monkeypatch, ["Rapido Bike · ₹46", "Mandpura → Indiranagar Metro Station"])
+    assert gate.summary(Fake(page), page, gate.facts(page, [])) == ["Rapido Bike · ₹45",
+                                                                    "Mandpura → Indiranagar Metro Station"]
+
+
+def test_a_ticket_total_the_summary_rounded_is_the_pages_payable_amount(monkeypatch):
+    page = fake_page(text="PVR Orion Mall\nSat, 3 Oct 07:30 PM\n2 Tickets\nSubtotal ₹600.00\nConvenience fees "
+                          "₹70.80\nAmount Payable ₹670.80\nProceed To Pay", url="https://in.bookmyshow.com/buytickets")
+    summary(monkeypatch, ["Drishyam 2 · PVR Orion Mall · Sat, 3 Oct 07:30 PM", "2 tickets", "Total ₹670"])
+    lines = gate.summary(Fake(page), page, gate.facts(page, []))
+    assert lines[:3] == ["Drishyam 2 · PVR Orion Mall · Sat, 3 Oct 07:30 PM", "2 tickets", "Total ₹670.80"]
+    assert not any(line.startswith("Total:") for line in lines)
