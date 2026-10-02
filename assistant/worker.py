@@ -1526,6 +1526,10 @@ class Worker:
                     after_spot=views.signature(after))
         if operation == "TYPE_TEXT" and self.reads_back(action, after, inputs.get("text"), shown):
             last.update(effect="worked", typed_ok=True)  # the field shows it: Jev's later look can't undo that
+        finals = [] if commit else self.revealed(page, after)
+        if finals:  # seats picked on a canvas, a cart filled: the page may now be ready for its last step
+            s["feedback"].append(f"“{finals[0]}” came up after this step: the choices on this page may be done; "
+                                 "check them, then go on to it.")
         s["status"] = "ready"
         if s["commit"]:
             return gate.watch(self, s["commit"]["label"], s["commit"].get("goal") or s["goal"])
@@ -1544,6 +1548,15 @@ class Worker:
         return next((a for a in again["actions"] if (a.get("frame"), a.get("node"), a.get("kind")) ==
                      (action.get("frame"), action.get("node"), action.get("kind"))
                      and views.calm(a.get("label")) == name and a.get("value") == action.get("value")), None)
+
+    @staticmethod
+    def revealed(before, after):
+        """The final controls (ones the commit rule names outright) a step brought onto the same page."""
+        if urlparse(before["url"]).path != urlparse(after["url"]).path:
+            return []  # a new page: its controls are all new, and Jev reads it afresh
+        old = {a.get("label") for a in before["actions"]}
+        return [a["label"] for a in after["actions"] if a.get("kind") == "click" and a.get("label") not in old
+                and rules.commit_label("CLICK", a, after)][:2]
 
     @staticmethod
     def landed(wanted, url):

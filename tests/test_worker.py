@@ -2693,3 +2693,13 @@ def test_words_given_with_a_control_that_shows_them_click_on_those_words(tmp_pat
     assert w.state["history"][-1]["action"] == "slider in “1 2 3 4 5 6 7 8 9 10” (at “2”)"
     with pytest.raises(Retry, match="is a button, not a field"):
         w.do({"op": "TYPE", "pick": "[2]", "text": "2"}, w.state["page"])  # words the control doesn't show
+
+
+def test_a_step_that_brings_up_a_final_control_tells_the_planner(tmp_path, monkeypatch):
+    seats = [{"id": "z", "kind": "click", "label": "The layout can be zoomed in/out", "role": "button", "node": 7}]
+    w = worker_with(tmp_path, page=fake_page(text="Select seats", actions=seats))
+    w.browser.observe.return_value = fake_page(text="Select seats\nPay\n₹ 1200", actions=[
+        *seats, {"id": "p", "kind": "click", "label": "Pay ₹ 1200", "role": "button", "node": 8}])
+    w.run(w.state["page"], "LOOK", {"id": "look", "kind": "look", "node": None, "label": "Seats 03 04",
+                                    "point": [10, 10]}, {"point": [10, 10]}, "Seats 03 04")
+    assert any("“Pay ₹ 1200” came up after this step" in f for f in w.state["feedback"])  # live bookmyshow #6
