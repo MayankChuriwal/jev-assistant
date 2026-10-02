@@ -2703,3 +2703,15 @@ def test_a_step_that_brings_up_a_final_control_tells_the_planner(tmp_path, monke
     w.run(w.state["page"], "LOOK", {"id": "look", "kind": "look", "node": None, "label": "Seats 03 04",
                                     "point": [10, 10]}, {"point": [10, 10]}, "Seats 03 04")
     assert any("“Pay ₹ 1200” came up after this step" in f for f in w.state["feedback"])  # live bookmyshow #6
+
+
+def test_a_strip_of_numbers_is_clicked_on_the_planners_choice_never_on_its_middle_by_jev(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text="How many seats?", actions=SLIDER))
+    seen = script_planner(monkeypatch, turn(subgoals=[sub("choose 2 tickets")]), turn("TYPE", pick=1, text="2"))
+    script_jev(monkeypatch, {"next": ("CLICK", 0.95), "click_target": ("slider", 0.95)})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")  # live bookmyshow: Jev's own clicks landed on the strip's middle, 6 tickets
+    assert "lands on its middle" in seen[-1]["feedback"][-1]
+    operation, action = w.browser.act.call_args.args[:2]
+    assert (operation, action.get("within")) == ("CLICK", "2")  # the planner's TYPE on the candidate: on “2”

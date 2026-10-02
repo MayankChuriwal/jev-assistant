@@ -67,6 +67,7 @@ ANY_OF = re.compile(r"\b(any|either|whichever|both (are )?fine)\b", re.IGNORECAS
 # particular
 HERE = re.compile(r"\b(current|present|my) location\b|\bwhere i am\b|\blocate me\b", re.IGNORECASE)
 SEARCHY = re.compile(r"\bsearch", re.IGNORECASE)  # a search control or box
+STRIP = re.compile(r"(?<!\d)(?:\d{1,2}\s+){3,}\d{1,2}(?!\d)")  # a strip of choices: “1 2 3 4 5 6 7 8 9 10”
 RAISES = re.compile(r"\b(increase|increment)\b", re.IGNORECASE)  # a stepper's +: "Increase quantity"
 PLACE_STEP = re.compile(r"\b(location|address|pin ?code|deliver(y|ing)? (to|area|place)|pick ?-?up (point|place)|"
                         r"drop(-| )?off)\b", re.IGNORECASE)  # a plan step that sets the delivery or pickup place
@@ -564,6 +565,11 @@ class Worker:
             return self.act(operation, action, page, sub, key=key, text=text)
         if step["kind"] == "think":
             return self.escalate("unsure", page)
+        if step["operation"] in {"CLICK", "DOUBLE_CLICK"} and STRIP.search(step["action"].get("label") or "") \
+                and not step["action"].get("within"):
+            s["feedback"].append(f"Jev chose “{step['action'].get('label')}”: clicking it lands on its middle. PICK it "
+                                 "with the words of the choice to click, like PICK [k] with text 2.")
+            return self.escalate("unsure", page)
         if step["operation"] in {"CLICK", "DOUBLE_CLICK"} and self.raises_quantity(step["action"]):
             s["feedback"].append(f"Jev chose “{step['action'].get('label')}”, which raises a quantity: press it only "
                                  "while the item's count is below what the user asked for; at their count, go on.")
@@ -941,9 +947,14 @@ class Worker:
                     raise Retry(f"{op} names one of Jev's candidates by its number; there are "
                                 f"{len(s['candidates'])} ({self.listed()}). To act on another control, use its "
                                 "element number in brackets, like [12].")
-                if op == "TYPE" and chosen["operation"] == "CLICK" and \
+                spot = self.on_words(chosen["action"], act["text"], typed=op == "TYPE") \
+                    if chosen["operation"] == "CLICK" else None
+                if spot is None and op == "TYPE" and chosen["operation"] == "CLICK" and \
                         SEARCHY.search(chosen["action"].get("label") or ""):
                     return self.type_through(chosen["action"], act["text"], page)
+                if spot is not None:  # a candidate clicked on the planner's words: “2” in “1 2 3 … 10”
+                    chosen = {**chosen, "operation": "CLICK", "action": spot}
+                    op = "PICK"
                 if op == "TYPE" and chosen["operation"] != "TYPE_TEXT":
                     raise Retry(f"Candidate {chosen['n']} {self.not_a_field(chosen['action'])}")
                 operation, action, key = chosen["operation"], chosen["action"], chosen.get("key")
