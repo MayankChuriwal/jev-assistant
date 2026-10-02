@@ -72,7 +72,7 @@ id = "uber"
 category = "rides"
 goal = "Book an Uber from my current location to Kempegowda International Airport Terminal 1"
 end = "gate"
-require = ["Terminal 1", "₹"]
+require = ["Terminal", "₹"]  # Uber names the drop "Terminal-1"; the rule's judge still checks it is Terminal 1
 rule = "The approval summary is an Uber ride to Kempegowda Airport Terminal 1 with a ride type and its fare."
 answers = [['\bdrop|destination|where to|\bgoing\b', "Kempegowda International Airport Terminal 1"],
            ["which (ride|option|one)|ride type|type of ride|select a ride|ride option", "The cheapest one"],
