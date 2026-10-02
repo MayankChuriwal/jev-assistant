@@ -1418,7 +1418,8 @@ class Worker:
         or pattern field), or a field named for a phone number that the text is no phone number for."""
         problem = rules.format_error(text, action)
         label = action.get("label") or ""
-        if problem is None and HERE.search(text) and executor.words(label) & (executor.PLACE | executor.ROLES):
+        if problem is None and HERE.search(text) and (executor.words(label) & (executor.PLACE | executor.ROLES)
+                                                       or SEARCHY.search(label)):
             problem = ("Typing words for the user's own location finds places named so. Press the site's detect "
                        "option, or click the empty box and pick the suggestion marked as their own location.")
         if problem is None and PROFILE_ASKS["phone"].search(label) and not re.search(r"e-?mail", label, re.I) \

@@ -153,7 +153,8 @@ def value(action, values):
         return best["text"]
     name = words(values[0]["field"]) - GENERIC
     if len(values) != 1 or label & PERSONAL or (label & PLACE and not words(values[0]["field"]) & PLACE) or \
-            (label & ROLES and name & ROLES and not label & name):  # the drop never goes into the pickup box
+            (label & ROLES and name & ROLES and not label & name) or \
+            (name & (PLACE | ROLES) and not label & (PLACE | ROLES)):  # a place never goes into a dish search
         return None
     return values[0]["text"]
 

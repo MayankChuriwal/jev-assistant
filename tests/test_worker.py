@@ -2786,3 +2786,11 @@ def views_signature(page):
     from assistant import views
 
     return views.signature(page)
+
+
+def test_words_for_the_users_own_location_are_never_typed_into_a_search_box(tmp_path):
+    search = {"id": "s", "kind": "fill", "label": "Search for restaurant, cuisine or a dish", "role": "textbox",
+              "value": "", "node": 4}
+    w = worker_with(tmp_path, page=fake_page(text="Zomato", actions=[search]))
+    with pytest.raises(Retry, match="finds places named so"):
+        w.value(search, "current location", w.state["page"])

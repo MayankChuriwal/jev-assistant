@@ -192,3 +192,9 @@ def test_a_value_named_for_one_place_never_goes_by_default_into_another_place_fi
     assert executor.value({"label": "drop"}, drop) == "Indiranagar Metro Station"
     location = [{"field": "location", "text": "HSR Layout"}]
     assert executor.value({"label": "Search for area, street name"}, location) == "HSR Layout"
+
+
+def test_a_place_value_never_goes_by_default_into_a_field_that_names_no_place():
+    location = [{"field": "location", "text": "current location"}]
+    assert executor.value({"label": "Search for restaurant, cuisine or a dish"}, location) is None  # live zomato
+    assert executor.value({"label": "Enter your delivery location"}, location) == "current location"
