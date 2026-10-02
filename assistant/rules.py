@@ -9,7 +9,7 @@ COMMIT = re.compile(  # outright: Jev can never clear these. "Buy it again" open
     r"|request (ride|uber\w*|trip)|cancel (my )?(order|booking|subscription|ride|membership)|delete"
     r"|submit (complaint|dispute|claim|request)|book (a )?(ride|cab|bike|auto|table|tickets?|room|hotel|flight)"
     r"|end (my )?(membership|subscription)|submit (the )?order|order now|recharge now|make (a )?payment"
-    r"|complete (the )?(payment|order|booking|purchase))\b",
+    r"|complete (the )?(payment|order|booking|purchase)|continue (to )?booking)\b",
     re.IGNORECASE,
 )
 # Words that may commit ("Book Ola Mini", "Confirm UberGo", "Submit", "Proceed to Pay"): Jev's final check clears

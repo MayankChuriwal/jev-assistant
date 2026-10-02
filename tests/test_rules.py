@@ -168,6 +168,11 @@ def test_final_controls_of_the_bench_sites_are_outright_commits(label):
     assert rules.commit_label("CLICK", {"label": label}, {}) == label
 
 
+@pytest.mark.parametrize("label", ["Continue Booking", "Continue booking", "Continue to booking"])
+def test_continuing_a_booking_is_an_outright_commit(label):  # live rapido: the last control under the fares and "Cash"
+    assert rules.commit_label("CLICK", {"label": label}, {}) == label
+
+
 @pytest.mark.parametrize("label", MAYBE)
 def test_words_that_may_commit_are_maybe_commits_not_outright_ones(label):
     assert rules.commit_label("CLICK", {"label": label}, {}) is None
