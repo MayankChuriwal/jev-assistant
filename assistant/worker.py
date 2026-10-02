@@ -1694,9 +1694,11 @@ class Worker:
             return None
         count = executor.circles(history, operation, label, views.signature(page),
                                  text if operation in TYPED else None)
+        inside = (" To press words inside it (its ADD, a size), PICK it with those words as text."
+                  if operation == "CLICK" and len(label.split()) > 4 else "")  # a card's centre isn't its ADD
         return None if count < CIRCLE_AT else (
             f"“{label}” already ran {count} times from this same page without getting anywhere: don't repeat it. "
-            "Pick another candidate, LOOK, OPEN_URL the address you need, ASK the user, or rewrite the plan.")
+            f"Pick another candidate, LOOK, OPEN_URL the address you need, ASK the user, or rewrite the plan.{inside}")
 
     def guard(self, operation, label, page, text=None):
         """The loop guard on one of the planner's actions: a Retry (counted) when it may not run from this page again;

@@ -2770,3 +2770,19 @@ def test_a_plus_named_plus_itself_is_a_stepper_too(tmp_path):
     plus = {"id": "p", "kind": "click", "label": "+ (Margherita Pizza: − 1 2 3 +)", "name": "+", "role": "button",
             "node": 2}  # live swiggy: Jev pressed it twice, three pizzas for a goal of one
     assert Worker.raises_quantity(plus) and not Worker.raises_quantity({**plus, "name": "Add", "label": "Add"})
+
+
+def test_a_card_clicked_again_and_again_is_refused_with_how_to_press_words_inside_it(tmp_path):
+    card = "Masala Dosai ₹195 ADD customizable Traditional dosa stuffed with potato mixture."
+    w = worker_with(tmp_path)
+    page = w.state["page"]
+    w.state["history"] = [{"operation": "CLICK", "action": card, "spot": views_signature(page), "url": page["url"]}] * 3
+    assert "PICK it with those words as text" in w.forbidden("CLICK", card, page)  # live zomato: ADD never pressed
+    w.state["history"] = [{"operation": "CLICK", "action": "Office", "spot": views_signature(page)}] * 3
+    assert "with those words" not in w.forbidden("CLICK", "Office", page)
+
+
+def views_signature(page):
+    from assistant import views
+
+    return views.signature(page)
