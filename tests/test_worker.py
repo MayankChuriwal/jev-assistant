@@ -2344,6 +2344,29 @@ def test_the_final_pay_control_beside_a_payment_selector_asks_how_to_pay_first(t
     assert len(w.asked) == 1
 
 
+@pytest.mark.parametrize("question", ["Shall I proceed to payment?", "Shall I proceed to pay?",
+                                      "Can I go ahead with the payment of ₹127?", "How much will I pay?"])
+def test_a_yes_to_going_on_to_payment_is_never_the_users_pick_of_how_to_pay(tmp_path, monkeypatch, question):
+    w = worker_with(tmp_path, page=SELECTOR, replies=[{"text": "no"}], goal="Order one Diet Coke on Instamart")
+    w.state["chat"] += [{"from": "agent", "text": question}, {"from": "user", "text": "“yes”"}]
+    script_planner(monkeypatch, turn())
+    jev_checks(monkeypatch)
+    with pytest.raises(Retry, match="ASK which payment method first"):  # the review's probe: any "pay" counted
+        w.act("CLICK", METHODS[3], SELECTOR, sub("pay for the order", kind="commit"))
+    with pytest.raises(Retry, match="ASK which payment method first"):
+        w.value(CVV_BOX, "[profile:cvv]", PAY_WITH_CVV)
+    assert w.asked == [] and not w.browser.act.called
+
+
+@pytest.mark.parametrize("question", ["How would you like to pay?", "Which payment method should I use?",
+                                      "What would you like to pay with?", "Pay by UPI or card?",
+                                      "Which one: UPI, a card, or cash on delivery?"])
+def test_a_question_that_asks_how_to_pay_or_lists_the_methods_is_the_users_pick(tmp_path, question):
+    w = worker_with(tmp_path, page=SELECTOR)
+    w.state["chat"] += [{"from": "agent", "text": question}, {"from": "user", "text": "“UPI”"}]
+    assert w.method_chosen() and not w.unpicked_method(SELECTOR)
+
+
 def test_a_question_that_asks_how_to_pay_is_never_held_back(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=INSTAMART_PAY, replies=[{"text": "UPI"}])
     script_planner(monkeypatch, turn("ASK", message="How would you like to pay? Card details are asked hidden.",

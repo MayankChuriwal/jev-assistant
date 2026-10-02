@@ -62,7 +62,12 @@ PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGN
                 "email": re.compile(r"\b(your e-?mail|e-?mail (address|id))\b", re.IGNORECASE),
                 "name": re.compile(r"\b(your (full )?name|full name)\b", re.IGNORECASE),
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
-PAYS = re.compile(r"\bpay", re.IGNORECASE)  # a question about paying: pay, payment, paying
+# A question that asks how to pay: "How would you like to pay?", "Which payment method…?", "What will you pay with?".
+# A yes/no about going on to pay ("Shall I proceed to payment?") or "how much" asks no such thing.
+HOW_TO_PAY = re.compile(r"\bhow\b(?!\s+(?:much|many|long|soon|often)\b)(?:\s+[\w']+){0,6}?\s+pay(?:ing|ment)?\b|"
+                        r"\b(?:which|what)\b(?:\s+[\w']+){0,2}?\s+(?:payment|pay(?:ing)?\s+(?:method|option|mode)s?)\b|"
+                        r"\b(?:which|what)\b(?:\s+[\w']+){0,4}?\s+pay\s+(?:with|by|using|through|via)\b",
+                        re.IGNORECASE)
 # A whole reply that leaves an offered choice to the agent: it opens with "any", "either", "whichever", or "both are
 # fine" ("Any two seats together", "either is fine"); a reply that only mentions one ("I'd take Prime over any other")
 # names its own pick, and one with a negation ("not any of these", "I don't like either") turns the options down.
@@ -1305,11 +1310,11 @@ class Worker:
 
     @staticmethod
     def method_question(message, options=()):
-        """Whether a question asks how to pay: it lists two or more payment methods, or asks about paying without
-        asking for a card detail."""
+        """Whether a question asks how to pay: it lists two or more payment methods, or asks which payment or how to
+        pay (`HOW_TO_PAY`) without asking for a card detail. A yes to "Shall I proceed to payment?" picks nothing."""
         text = "\n".join([message, *options])
         methods = {m.casefold() for m in rules.METHOD.findall(text)}
-        return len(methods) >= 2 or bool(PAYS.search(text) and not rules.CARD_DETAIL.search(text))
+        return len(methods) >= 2 or bool(HOW_TO_PAY.search(text) and not rules.CARD_DETAIL.search(text))
 
     def method_chosen(self):
         """Whether the chat holds the user's answer to a question about how to pay (never an approval's yes)."""
