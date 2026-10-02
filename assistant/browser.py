@@ -28,7 +28,7 @@ INCOMING = HOME / "downloads" / ".incoming"
 # Atomically read visible content and controls, preserving actual DOM node identity.
 READ_STATE = Path(__file__).with_name("snapshot.js").read_text()
 MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})()"
-VIEWPORT = {"width": 1120, "height": 780}
+VIEWPORT = {"width": 1280, "height": 800}  # a common laptop: sites laid out for it keep their right column in view
 MAX_SHOWN_PDF = 25 * 1024 * 1024  # a PDF Chrome shows in its viewer (no download) is kept up to this size
 DATE_TYPES = {"date", "time", "datetime-local", "month", "week"}
 KEYS = {  # name: (key, code, keyCode, text, modifiers)

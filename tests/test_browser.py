@@ -9,6 +9,7 @@ import time
 import pytest
 from helpers import find, log
 
+import assistant.browser as browser
 from assistant import rules
 from assistant.browser import StalePage
 
@@ -185,7 +186,7 @@ def test_screenshots_crop_to_an_element_and_blur_secret_fields(browser_at):
     assert plain == masked  # a filled field is hidden in every capture, registered as a secret or not (P2-04)
     assert b.evaluate("document.getElementById('card').style.filter") == ""
     whole = base64.b64decode(b.screenshot())
-    assert struct.unpack(">II", whole[16:24]) == (1120, 780)
+    assert struct.unpack(">II", whole[16:24]) == (browser.VIEWPORT["width"], browser.VIEWPORT["height"])
 
 
 def test_the_focused_control_can_be_named(browser_at):
@@ -529,3 +530,8 @@ def test_a_name_written_as_markup_reads_as_its_words(browser_at):
     labels = [a["label"] for a in browser_at("/markup.html").observe()["actions"] if a["kind"] == "click"]
     assert any(label.startswith("Buy for ₹799 + cashback") for label in labels)  # live amazon: “<span class=…”
     assert any(label.startswith("Size < 10") for label in labels)
+
+
+def test_a_page_laid_out_for_a_common_laptop_width_shows_its_right_column(browser_at):
+    page = browser_at("/wide.html").observe()  # live invoice: Amazon's Invoice link sat at x=1157, off a 1120 view
+    assert find(page, "Invoice")
