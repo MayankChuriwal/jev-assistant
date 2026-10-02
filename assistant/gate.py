@@ -637,19 +637,21 @@ def summary(w, page, found):
 
 
 def matches(approval, action, label):
-    """Whether this is the action the user approved: the same control, or the same words when none was named."""
+    """Whether this is the action the user approved: the same control clicked on the same words inside it (none: its
+    middle), or the same words when no control was named."""
     if approval.get("look") or action.get("point"):  # a spot found by sight matches only the spot approved
         return bool(approval.get("look")) and action.get("point") == approval["look"]["point"]
     if approval.get("target"):
-        return (action.get("frame"), action.get("node")) == approval["target"]
+        return (action.get("frame"), action.get("node")) == approval["target"] and \
+            action.get("within") == approval.get("within")
     return bool(label) and rules.overlap(label, approval["action_label"])
 
 
 def bind(state, action, label, total, page, by):
-    """The approval holds this control, host, and amount; it lapses when any of them changes."""
+    """The approval holds this control, the spot inside it, host, and amount; it lapses when any of them changes."""
     target = (action.get("frame"), action["node"]) if action.get("node") is not None else None
     state["approval"] = {"action_label": label, "amount": total or "", "host": rules.host(page["url"]),
-                         "step": len(state["history"]), "target": target, "by": by,
+                         "step": len(state["history"]), "target": target, "within": action.get("within"), "by": by,
                          "cart": cart(page["text"]), "snapshot": snapshot(page["text"])}
     if action.get("point"):
         state["approval"]["look"] = {"point": action["point"]}

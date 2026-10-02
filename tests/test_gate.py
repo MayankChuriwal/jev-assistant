@@ -1771,3 +1771,19 @@ def test_a_control_showing_a_commit_word_under_another_name_asks_for_approval(mo
     assert gate.commit_label(Fake(page), "CLICK", summaryish, page, subgoal=ACT) == "Place order ₹121" and asked == []
     spot = {**summaryish, "within": "Place order", "label": "Cart summary (at “Place order”)"}  # the planner's words
     assert gate.commit_label(Fake(page), "CLICK", spot, page, subgoal=ACT) == "Place order ₹121"
+
+
+def test_an_approval_holds_only_for_the_spot_inside_the_control_it_was_given_for(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "yes"}])
+    on = {**PAY, "within": "Pay", "label": "Pay ₹79 (at “Pay”)"}
+    with pytest.raises(StalePage):
+        gate.approved(w, page, on, "Pay ₹79", None)
+    assert gate.approved(w, page, on, "Pay ₹79", None) is True and w.state["approval"]["within"] == "Pay"
+    assert not gate.matches(w.state["approval"], PAY, "Pay ₹79")  # the control's middle is another spot
+    other = {**PAY, "within": "₹79", "label": "Pay ₹79 (at “₹79”)"}
+    with pytest.raises(Retry, match="did not approve"):  # asked again, and no yes came
+        gate.approved(w, page, other, "Pay ₹79", None)
+    assert len(w.asked) == 2
