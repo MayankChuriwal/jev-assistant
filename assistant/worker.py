@@ -1545,6 +1545,7 @@ class Worker:
         if shown and str(shown).startswith("[secret:"):
             for node in action.get("group") or [action.get("node")]:
                 self.secrets.nodes.add((action.get("frame"), node))
+        saved = len(s["files"])
         after = self.observe()
         for _ in range(3):  # a dropdown or dialog can render a moment after the click: look again before "nothing"
             if operation == "WAIT" or views.change(page, after) != "nothing changed" or self.expected_on(after):
@@ -1563,6 +1564,10 @@ class Worker:
                     after_spot=views.signature(after))
         if operation == "TYPE_TEXT" and self.reads_back(action, after, inputs.get("text"), shown):
             last.update(effect="worked", typed_ok=True)  # the field shows it: Jev's later look can't undo that
+        if len(s["files"]) > saved and rules.download_goal(s["goal"]):  # the document the goal asks for came
+            s["feedback"].append(f"“{self.file_name(s['files'][-1])}” was saved for the user (files_saved): the "
+                                 "download is done; finish with DONE, naming the file.")
+            s["reason"] = s["reason"] or "next"
         finals = [] if commit else self.revealed(page, after)
         if finals:  # seats picked on a canvas, a cart filled: the page may now be ready for its last step
             s["feedback"].append(f"“{finals[0]}” came up after this step: the choices on this page may be done; "

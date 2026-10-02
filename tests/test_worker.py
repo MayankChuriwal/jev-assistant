@@ -2816,3 +2816,18 @@ def test_one_control_pressed_eight_times_on_one_page_address_asks_whatever_each_
     w.state["history"] = press
     w.track_loop(press[-1])
     assert len(w.asked) == 1 and w.state["stuck_why"].startswith("presses 8:")
+
+
+def test_a_file_arriving_for_a_download_goal_tells_the_planner_it_is_done(tmp_path):
+    w = worker_with(tmp_path, page=ORDER_PAGE, goal=INVOICE)
+    w.state["reason"] = None  # mid-task: Jev is doing the steps
+    pdf = tmp_path / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    w.browser.observe.return_value = {**fake_page(text="invoice.pdf", url="https://www.amazon.in/invoice.pdf"),
+                                      "downloads": [str(pdf)]}
+    w.run(w.state["page"], "CLICK", {"id": "d", "kind": "click", "label": "Download", "node": 4}, {}, None)
+    assert "“invoice.pdf” was saved for the user" in w.state["feedback"][-1] and w.state["reason"] == "next"
+    w.state["feedback"], w.state["reason"] = [], None  # live invoice: four copies saved, the planner never said done
+    w.browser.observe.return_value = fake_page(text="invoice.pdf", url="https://www.amazon.in/invoice.pdf")
+    w.run(w.state["page"], "CLICK", {"id": "z", "kind": "click", "label": "Zoom in", "node": 5}, {}, None)
+    assert w.state["feedback"] == [] and w.state["reason"] is None
