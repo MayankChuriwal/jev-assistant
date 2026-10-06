@@ -5,9 +5,9 @@ Date: 2026-10-05. Branch: `mini-jev-agent`. Builds on the Phase A spec
 (`docs/superpowers/specs/2026-10-01-phase-b-learning-design.md`): everything they specify stays unless this spec changes
 it. Phase A §14 listed Phase C as "reaches out"; this spec is its first milestone.
 
-Research basis: a code-level teardown of CopilotKit/OpenDots and Anil-matcha/open-dots, with CopilotKit/OpenBot and
-OpenMuse as further references (published privately at https://claude.ai/artifact/Ct2MnfYsdjUGdVvt1eaPFE). We borrow
-patterns, not code (Section 17).
+Research basis: a code-level teardown of CopilotKit/OpenDots, Anil-matcha/open-dots and mariagorskikh/open-instinct,
+with CopilotKit/OpenBot and OpenMuse as further references (published privately at
+https://claude.ai/artifact/Ct2MnfYsdjUGdVvt1eaPFE). We borrow patterns, not code (Section 17).
 
 ## 1. Goal and decisions
 
@@ -19,7 +19,7 @@ code to macOS.
 | # | Topic | Decision |
 |---|---|---|
 | 1 | Audience | The owner only. One browser with your logins, one channel, no sign-up. Tables keep room for more users later |
-| 2 | v1 behaviours | WhatsApp reach, background tasks, schedules and watches, proactive suggestions. No voice |
+| 2 | v1 behaviours | WhatsApp reach, background tasks, schedules and watches, proactive suggestions. Voice notes in are transcribed (decision 13); no voice calls or spoken replies |
 | 3 | Channel | WhatsApp Cloud API, dogfooded on Meta's test number. Approved templates for messages outside the 24-hour window |
 | 4 | Hosting | Everything on your Mac. A tunnel with a stable HTTPS hostname reaches one tunnel-facing port. Schedules and watches fire only while the Mac is awake. The code stays portable |
 | 5 | Payment | Jev presses the final control after your yes, bound to that exact cart (Phase A's gate). UPI still needs your PIN in your UPI app; cash on delivery moves no money; card details never |
@@ -30,6 +30,9 @@ code to macOS.
 | 10 | Missed runs | A schedule or watch that fell due while the Mac slept runs once on wake if it is less than 12 hours late; older ones are skipped and listed in one note. Missed suggestions are dropped |
 | 11 | Sequencing | Interleaved with task-reliability work: a bench round after each build step (Section 15). The bench never falls below 6/22 with 0 unsafe |
 | 12 | Done | Scripted offline scenarios plus a two-week dogfood with fixed thresholds (Section 2) |
+| 13 | Voice notes | WhatsApp voice notes are transcribed and handled as text. The transcript is kept, the audio is not. A voice note never approves a commit |
+| 14 | Progress | A task that has said nothing for 3 minutes sends one line on what it is doing, at most every 3 minutes |
+| 15 | Safety additions | From the Open Instinct review: Section 12, rules 9–15 |
 | — | Approach | Grow today's server: one `jev` process, no new frameworks. The scheduler and the channel reach the task runner only through Core and Postgres, so splitting them out later is a deployment change |
 
 ## 2. Done bar
@@ -90,10 +93,12 @@ for development and the bench. Showing the conversation in both places is out of
 
 1. Meta POSTs a webhook to `JEV_PUBLIC_URL/webhook`. `public.py` checks `X-Hub-Signature-256` (HMAC-SHA256 of the raw body
    with `WHATSAPP_APP_SECRET`); a bad or missing signature is 403.
-2. Each message in the body is inserted into `inbox` by its WhatsApp message id; a repeat id is ignored. The handler
-   answers 200 before any model runs. Status updates (sent, delivered, read) are dropped.
-3. The inbox reader thread takes rows in order and calls `Core.receive_webhook`. Only `JEV_OWNER_WA` is heard (Phase A
-   already ignores other senders). The row's body is wiped once handled; the id stays 7 days for de-duplication.
+2. Each message in the body is inserted into `inbox` by its WhatsApp message id, with status `queued`; a repeat id is
+   ignored. The handler answers 200 before any model runs. Status updates (sent, delivered, read) are dropped.
+3. The inbox reader thread takes rows in order, marks each `running`, and calls `Core.receive_webhook`. Only
+   `JEV_OWNER_WA` is heard (Phase A already ignores other senders), and a message that carries group context is dropped.
+   The row then becomes `done` and its body is wiped; the id stays 7 days for de-duplication. A voice note is
+   transcribed first (Section 4.1).
 4. Control words are handled in code (Section 8). Everything else goes to Jev's router as today, with SCHEDULE added.
 5. Agent messages leave through `Core.send` → `messages.render` → `WhatsAppChannel.send`, which writes the payload to
    `outbox`. The sender thread posts it to the Graph API and records the WhatsApp id.
@@ -109,6 +114,7 @@ for development and the bench. Showing the conversation in both places is out of
 | `JEV_OWNER_WA` | Your number as WhatsApp writes it in `from` (country code, digits only) |
 | `JEV_PUBLIC_URL` | The tunnel's stable HTTPS origin; links are built from it |
 | `JEV_PUBLIC_PORT` | The public listener's port, default 8767 |
+| `JEV_STT_MODEL` | The speech-to-text model for voice notes |
 | `WHATSAPP_GRAPH_VERSION` | The pinned Graph API version: the one Meta's dashboard shows when the app is created. Upgrading it is a deliberate change |
 
 WhatsApp is configured when the first five are set. A partial set stops `jev` at start with a message naming what is
@@ -123,6 +129,8 @@ start, every `tasks` row still active becomes `interrupted` and you get one mess
 - "I restarted while doing {title}. Retry?" with **Retry** and **Leave it**. Retry starts the same goal as a new task.
 - When the row says a commit was in flight (pressed, result not yet read): "{label} may have gone through; check it
   before retrying." The task is never retried automatically.
+- An `inbox` row still `running` becomes `uncertain`, and you get one line: "I may have missed your message from {time}.
+  Please send it again if it still matters." It is never re-run.
 
 Automatic resume is out of scope (Section 16).
 
@@ -132,8 +140,13 @@ Automatic resume is out of scope (Section 16).
 
 - Message types read: text, button and list replies, images and documents (downloaded through the Graph media URL into
   the channel's private media folder, as the web channel stores uploads).
-- Any other type (voice note, sticker, reaction, location, contact) gets one reply: "I can read text, buttons, images and
-  documents for now." It is never an error, because a rejected webhook makes Meta resend it.
+- Voice notes (`audio`) are downloaded, transcribed by `JEV_STT_MODEL` (an OpenAI transcription model; English, Hindi
+  or a mix), and handled as text. The audio is deleted once transcribed, and the transcript goes through the `Secrets`
+  matcher before any model sees it. A note longer than 5 minutes, or an empty or failed transcription, gets "I couldn't
+  make that out; could you type it?" The speech model only turns your voice into text: it never chooses a step or writes
+  a reply.
+- Any other type (sticker, reaction, location, contact) gets one reply: "I can read text, voice notes, buttons, images
+  and documents for now." It is never an error, because a rejected webhook makes Meta resend it.
 - `GET /webhook` answers Meta's `hub.challenge` only when `hub.verify_token` matches.
 
 ### 4.2 Outbound
@@ -163,6 +176,13 @@ messages go out in order.
 
 Variables carry only task titles and one-word states ("done", "stopped", "needs you"), never amounts, addresses or IDs.
 
+### 4.4 Progress
+
+A task that has sent you nothing for 3 minutes sends one line, "Still on {title}: {its current subgoal}", and then at
+most one line every 3 minutes, up to 10 per task. The subgoal text is the planner's own words. No progress line is sent
+while the task's question is open, or between 22:00 and 08:00 for a run that a schedule, watch or suggestion started.
+The web channel shows the same lines.
+
 ## 5. Approvals over WhatsApp
 
 - The gate's approval question is unchanged in content: shop, items, total, address and payment method, from
@@ -174,6 +194,11 @@ Variables carry only task titles and one-word states ("done", "stopped", "needs 
 - **Unattended runs.** For a task whose `source` is `schedule`, `watch` or `suggestion`, standing approvals are skipped
   (decision 8) and an unanswered approval cancels the task after 60 minutes: "No answer, so I stopped {title}." The next
   run of that schedule happens as normal.
+- **What counts as a yes.** A tap on **Yes, place it**. A typed reply counts only when exactly one approval is open,
+  that approval was the last message Jev sent, and the text is an explicit yes ("yes", "yes, place it", "go ahead",
+  "confirm"). "ok", "sure", an emoji or a voice note never approve; Jev asks you to tap the button.
+- **The confirmed total.** When the order or payment confirmation loads, code compares its total with the approved total.
+  A difference marks the audit row `mismatch` and tells you at once.
 - Every commit writes an `audit` row (Section 11) before the control is pressed and updates it when the result is read.
 
 ## 6. Codes and IDs by link
@@ -189,6 +214,9 @@ Variables carry only task titles and one-word states ("done", "stopped", "needs 
 - `POST /s/<token>` checks the token (unused, unexpired), marks it used, and hands the value to `Core.answer` through the
   same path the web chat's hidden field uses: never logged, never stored in clear, never shown to a model. IDs are then
   saved encrypted as Phase B saves them. The page then says "Got it. You can close this page."
+- A code or a known ID typed into WhatsApp anyway is caught in code before any model sees it: a reply of 4–8 digits
+  while a code link is open, or any text the `Secrets` matcher recognises. Jev wipes it from the inbox, doesn't use it,
+  and answers "Please use the link; I haven't used what you typed." with the link again.
 - Typing `stop` in WhatsApp still cancels the task while its link is open. An expired link gets a new one only if you ask
   ("send the link again").
 
@@ -202,13 +230,14 @@ Variables carry only task titles and one-word states ("done", "stopped", "needs 
 - **Page.** `GET /wheel/<token>` serves the live tab. `frame` returns the latest JPEG from CDP `Page.startScreencast`
   (about 3 frames a second, quality 60, at most 1280 px wide). `input` takes one of: a tap (x and y as fractions of the
   frame), text (CDP `Input.insertText` into the focused field), a key (Enter, Backspace, Tab, Escape), or a scroll.
-  `done` ends the session.
+  **Done** and **Failed** end the session. The page shows why Jev asked for help.
 - **While you drive.** The worker does not act: each tick waits, and the gate refuses any commit Jev would press. A
-  control you press yourself is your action, not Jev's; Jev reports what the page shows afterwards. Typed text is never
-  stored, logged or put in a trace; the trace records only that you typed and how many characters. Frames are never
-  stored.
-- **After.** On `done`, or when the link expires, the worker marks its page view stale, takes a fresh observation, and
-  carries on from what the page now shows.
+  control you press yourself is your action, not Jev's; Jev reports what the page shows afterwards. No page observation
+  goes to any model until you finish. Typed text is never stored, logged or put in a trace; the trace records only that
+  you typed and how many characters. Frames are never stored.
+- **After.** On **Done**, or when the link expires, the worker marks its page view stale, takes a fresh observation,
+  and carries on from what the page now shows. On **Failed**, the step fails and the planner is told you marked it
+  failed; it stops the task or asks you what next. It never retries that step on its own.
 
 ## 8. Control words and the kill switch
 
@@ -248,6 +277,8 @@ the gate also checks it immediately before pressing a commit.
 - For each due row: if it is less than 12 hours late, start one task; otherwise skip it and add it to one note sent after
   the pass ("Skipped while your Mac was asleep: …"). Either way, `next_at` moves to the next time after now, so missed
   runs never pile up.
+- `next_at` and `last_run_at` are written in the same transaction that claims the row, before the task starts, so a run
+  happens at most once even if `jev` stops mid-start.
 - A run is `Core.new_task(goal, source=…, schedule_id=…)`: the same thread, gate, skills, memory and approval path as a
   task you start. Runs queue behind others under the existing rules (at most 3 at once, never two on one site).
 - Three failed runs in a row pause the row and tell you why, with **Resume** and **Stop**. A failure is a task that ends
@@ -289,14 +320,14 @@ All tables live in the schema `Memory` opens, created by the same migration path
 
 | Table | Columns |
 |---|---|
-| `tasks` | id, goal (placeholders only), title, source (`chat`, `schedule`, `watch`, `suggestion`), schedule_id, status, last_step, commit_label, commit_in_flight, handoffs, created_at, updated_at, ended_at |
-| `inbox` | wamid (primary key), body (wiped once handled), received_at, handled_at |
+| `tasks` | id, goal (placeholders only), title, source (`chat`, `schedule`, `watch`, `suggestion`), schedule_id, status, last_step, commit_label, commit_in_flight, handoffs, progress_lines, created_at, updated_at, ended_at |
+| `inbox` | wamid (primary key), body (wiped once handled), status (`queued`, `running`, `done`, `uncertain`), received_at, handled_at |
 | `outbox` | id, payload, status (`queued`, `sent`, `failed`, `held` for the 24-hour window), attempts, next_at, wamid, created_at |
 | `links` | token_hash (primary key), kind (`secret`, `wheel`), task_id, question_id, created_at, expires_at, used_at |
 | `schedules` | id, kind, goal (placeholders only), rule, condition, readback, status (`live`, `paused`, `stopped`), next_at, last_run_at, last_result_hash, alert_on, failures, created_at |
 | `habit_runs` | habit_id, at |
 | `suggestions` | habit_id, offered_at, answer (`yes`, `not_now`, `stop`) |
-| `audit` | id, at, task_id, label, total, host, channel, approval (`explicit`, `standing`), approved_at, outcome (`pressed`, `confirmed`, `failed`, `unknown`) |
+| `audit` | id, at, task_id, label, total, host, channel, approval (`explicit`, `standing`), approved_at, outcome (`pressed`, `confirmed`, `mismatch`, `failed`, `unknown`) |
 | `settings` | key, value: `paused`, `wa_last_inbound_at` |
 
 `habits` gains `suggest boolean NOT NULL DEFAULT true` and `snoozed_until timestamptz`.
@@ -315,6 +346,15 @@ All tables live in the schema `Memory` opens, created by the same migration path
 7. A commit that was pressed and then interrupted is marked `unknown` in `audit` and reported to you. It is never
    retried automatically.
 8. Inbound WhatsApp text is your words only when it comes from `JEV_OWNER_WA`. Page text stays untrusted, as in Phase A.
+9. Opening a page never reaches a loopback, private, link-local or carrier-grade NAT address, or a `.local` host,
+   checked on the resolved address. Today's `browser.py` checks only the scheme; C1 closes this.
+10. Changing a password, an account's phone number or email, or its 2FA, or deleting an account, is a commit that needs
+    your explicit instruction in the goal and a yes. Without the instruction, the gate refuses it.
+11. A rule value or setting that code doesn't recognise means deny.
+12. Jev sends files only from its own media folder.
+13. A confirmed total that differs from the approved total is reported at once (Section 5).
+14. A voice note, "ok" or an emoji never approves a commit (Section 5).
+15. An inbox message interrupted by a restart is never re-run (Section 3.5).
 
 ## 13. Failures
 
@@ -355,6 +395,17 @@ injected clock, and throwaway Postgres schemas. Each scenario is one test, faili
 15. Restart: active rows become `interrupted` with a Retry message; a commit in flight adds "may have gone through".
 16. Voice notes get the one-line reply; a bad signature is 403; a repeated message id is handled once.
 17. `jev report` flags a planted hidden value in a trace and a commit without an explicit yes.
+18. A voice note is transcribed and routed as text; its audio is deleted; a failed transcription asks you to type.
+19. A voice note saying "yes" while an approval is open does not approve; neither does a typed "ok"; a typed "yes"
+    approves only when the approval was Jev's last message.
+20. A 6-digit reply while a code link is open never reaches a model, is wiped, and gets the link again.
+21. An inbox row left `running` by a crash becomes `uncertain` and is reported, never re-run.
+22. Take the wheel's **Failed** fails the step and the planner hears it; no observation reaches a model while you drive.
+23. OPEN_URL to 127.0.0.1:9333, 192.168.1.1, 169.254.169.254, or a name that resolves to a private address, is refused.
+24. A goal without the instruction cannot change a password; with it, the change still asks.
+25. Progress: one line after 3 minutes of silence on the fake clock; none while a question is open; none at 23:00 for a
+    scheduled run; at most 10 per task.
+26. A confirmed total that differs from the approved one marks the audit row `mismatch` and messages you.
 
 `uv run ruff check . && uv run pytest && uv run pytest -m browser && node --check assistant/snapshot.js` stays green.
 
@@ -366,15 +417,15 @@ traces goes in before the next step starts.
 
 | Step | Delivers |
 |---|---|
-| C1 | `ledger.py` (tasks, outbox, inbox, audit, settings), task `source`, the restart notice, control words, the pause flag, the one-hour refresh, the unattended-approval rules. All on today's web channel |
-| C2 | `channel_whatsapp.py`, `public.py` (webhook, signatures, inbox), templates and the 24-hour window, button approvals, `/s/` links, setup checks |
-| C3 | `wheel.py`, the browser screencast and input, wheel offers |
-| C4 | `scheduler.py`, the SCHEDULE intent, `planner.schedule`, watch results, alerts, the missed-run rule, `jev schedules` |
+| C1 | `ledger.py` (tasks, outbox, inbox, audit, settings), task `source`, the restart notice, control words, the pause flag, the one-hour refresh, the unattended-approval rules, the typed-yes rule, the confirmed-total check, progress lines, the private-address guard for OPEN_URL, the account-security rule, deny by default. All on today's web channel |
+| C2 | `channel_whatsapp.py`, `public.py` (webhook, signatures, inbox), templates and the 24-hour window, button approvals, `/s/` links, setup checks, inbox statuses and `uncertain`, voice notes, typed codes caught |
+| C3 | `wheel.py`, the browser screencast and input, wheel offers, **Done** and **Failed** |
+| C4 | `scheduler.py`, the SCHEDULE intent, `planner.schedule`, watch results, alerts, the missed-run rule, `next_at` written before each run, `jev schedules` |
 | C5 | `habit_runs`, suggestions, `jev report`, then the two-week dogfood |
 
 ## 16. Out of scope for v1
 
-Voice; iMessage (it needs a Mac, which breaks "deployable"); a cloud browser and a browser per user; automatic resume
+Voice calls and spoken replies; iMessage (it needs a Mac, which breaks "deployable"); a cloud browser and a browser per user; automatic resume
 after a restart; reading codes from SMS or an inbox, and TOTP; showing the conversation in both web chat and WhatsApp;
 Telegram; more than one user; event triggers other than watches (webhooks, email); using OpenBot's or OpenDots' code.
 
@@ -392,9 +443,16 @@ Patterns borrowed, no code copied:
 | Routine guardrails: a floor, a cap, a pause after failures, missed runs skipped | OpenBot routines |
 | Watches with de-duplicated alerts | OpenMuse goals and tracking |
 | Signed webhooks, hashed single-use tokens, metadata-only audit | OpenDots, open-dots, OpenBot |
+| Webhooks saved before the acknowledgement; interrupted work marked uncertain, never replayed | open-instinct `inbox.ts`, `runtime.ts` |
+| Approvals bound to the exact request and used once; a typed yes only under strict rules | open-instinct `approvals.ts` |
+| Takeover with the agent blind, ending in Done or Failed | open-instinct `desktopd.ts` |
+| A guard against loopback and private addresses | open-instinct `net-guard.ts` |
+| Voice notes in, transcript kept and audio not; progress every 3 minutes | open-instinct requirements US-M-5 and B-8 |
+| Account-security changes only on instruction | Instinct incidents, as reported in open-instinct's research notes |
 
 Avoided: purchase guards written only in a prompt (OpenDots), approving every keystroke (open-dots), a keyword-only
-payment hand-off that also blocks OTP entry (OpenBot), and a hosted thread store (CopilotKit Intelligence).
+payment hand-off that also blocks OTP entry (OpenBot), a hosted thread store (CopilotKit Intelligence), and card details
+in the model's context and logs with a checkout stop written only in the prompt (open-instinct).
 
 ## 18. Setup checklist (you)
 
@@ -420,3 +478,4 @@ payment hand-off that also blocks OTP entry (OpenBot), and a hosted thread store
 | Meta classes `jev_suggestion` as marketing | Send suggestions only inside the 24-hour window if the template is refused |
 | A message arrives for the wrong task | Button ids carry question ids; one question open at a time; messages name the task when several run |
 | Inbound messages carry prompt injection | Only the owner's number is heard; the gate, not a model, decides commits |
+| A voice note is misheard (English, Hindi or a mix) | The approval shows exactly what will be bought; a voice note never approves; "I couldn't make that out" when unsure |
