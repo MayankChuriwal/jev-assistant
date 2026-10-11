@@ -270,7 +270,7 @@ class Worker:
             cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None, closed=False,
             commit_drops=0, idle_asked=0, circled={}, loops={}, fruitless=None, blank_waits=0, coded=[],
             file_refusals=0, path_steps={}, path_asked=[], refusals_log=[], stuck_why=None, acting=None,
-            recent_at=None, last_by_site={},
+            recent_at=None, last_by_site={}, payees=[], wrong_cards=0,
         )
 
     # ---- what the user and the models see
@@ -336,6 +336,10 @@ class Worker:
     def observe(self):
         page = self.clean(self.state["browser"].observe())
         self.state["page"] = page
+        for action in page["actions"]:  # MyUPI's mandates, as their cards scroll by
+            card = rules.CARD_ACTION.match(action.get("label") or "")
+            if card and card[1] not in self.state["payees"]:
+                self.state["payees"].append(card[1])
         self.state["files"].extend(page.get("downloads", []))
         self.forget_accepted(page)
         return page
@@ -1449,8 +1453,12 @@ class Worker:
             drift = self.other_item(action, page)
             if drift:
                 raise Retry(drift)
-            payee = rules.wrong_card(self.state["goal"], action)
+            s, payee = self.state, rules.wrong_card(self.state["goal"], action)
             if payee:
+                s["wrong_cards"] += 1
+                if s["wrong_cards"] >= 2 and all(rules.wrong_card(s["goal"], {"label": f"Cancel (in “{p}”)"})
+                                                 for p in s["payees"]):
+                    return self.no_mandate()
                 raise Retry(f"“{action.get('label')}” is on {payee}'s card, and the goal doesn't name {payee}: press "
                             "only the card whose payee is the merchant the goal names, or the company that bills for "
                             "it. When no card's is, DONE saying so and list every payee; press nothing.")
@@ -1469,6 +1477,15 @@ class Worker:
             gate.approved(self, page, action, label, sub)  # returns True, or raises StalePage or Retry
         return self.run(page, operation, action, inputs, shown, commit=label, goal=(sub or {}).get("do", ""),
                         cleared=cleared)
+
+    def no_mandate(self):
+        """The planner reached again for a mandate the goal doesn't name, and no card seen is the goal's: the task ends
+        saying so, with the payees seen and nothing pressed (MyUPI: “Netflix billed by OPENAI LLC”, refused six times
+        over, and the planner never gave up on it)."""
+        s = self.state
+        self.say(f"None of your UPI AutoPay mandates is for what you asked (“{s['goal']}”), so nothing was changed. "
+                 f"Your mandates: {', '.join(s['payees'])}.", kind="result")
+        s["status"] = "done"
 
     def inputs(self, operation, action, page, sub, key=None, text=None):
         """(browser inputs, what the history shows) for one operation."""

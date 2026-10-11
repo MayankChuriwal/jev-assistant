@@ -368,6 +368,21 @@ def test_cancel_on_a_card_whose_payee_the_goal_doesnt_name_is_refused(tmp_path):
     assert not w.browser.act.called
 
 
+def test_reaching_again_for_a_mandate_the_goal_doesnt_name_ends_with_the_payees(tmp_path):
+    # MyUPI: “Netflix billed by OPENAI LLC”, refused six times over, then stuck
+    cards = [{"id": f"c{n}", "kind": "click", "label": f"Cancel (in “{payee}”)", "role": "button", "node": n}
+             for n, payee in enumerate(["OPENAI LLC", "AISLE", "GOOGLE PLAY"], 1)]
+    w = worker_with(tmp_path, page=fake_page(actions=cards), goal="cancel my netflix subscription")
+    w.observe()
+    with pytest.raises(Retry):
+        w.act("CLICK", cards[0], w.state["page"], sub("cancel the Netflix mandate"))
+    w.act("CLICK", cards[0], w.state["page"], sub("cancel the Netflix mandate"))
+    assert w.state["status"] == "done" and not w.browser.act.called
+    assert w.told[-1]["text"] == ("None of your UPI AutoPay mandates is for what you asked (“cancel my netflix "
+                                  "subscription”), so nothing was changed. Your mandates: OPENAI LLC, AISLE, "
+                                  "GOOGLE PLAY.")
+
+
 MANDATE_QR = ("To cancel, you'll need to authenticate via your UPI app.\nOpen in your UPI App\nRevoking this mandate "
               "will stop all future payments to Netflix. Scan the QR below to revoke your mandate for Netflix")
 
