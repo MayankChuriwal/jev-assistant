@@ -286,9 +286,13 @@ def test_an_order_named_as_a_thing_the_user_has_is_not_commerce(goal):
     ("Compare the price of the Apple iPhone 16 128 GB on Flipkart and Amazon.in and tell me which is cheaper", None),
     ("Find the cheaper 1 kg pack of Aashirvaad atta between Zepto and Blinkit", "groceries"),
     ("What is the price of the Apple iPhone 16 128 GB on Flipkart?", "shopping"),
-    ("Where is my latest Flipkart order?", "account"), ("Prices of atta on Zepto and Blinkit", "lookup")])
+    ("Where is my latest Flipkart order?", "account"), ("Prices of atta on Zepto and Blinkit", "lookup"),
+    ("What all autopay I have right now?", "account"), ("what subscriptions am I paying for?", "account"),
+    ("how much do I pay for ChatGPT every month?", "account"), ("Show my autopays", "account"),
+    ("List my UPI mandates", "account")])
 def test_a_goal_that_only_finds_or_compares_is_a_lookup(goal, skill):
     assert rules.lookup_goal(goal, skill)
+    assert not rules.commerce_goal(goal)  # “do I pay”, “am I paying”: a question about payments, none to make
 
 
 @pytest.mark.parametrize("goal, skill", [
@@ -296,7 +300,8 @@ def test_a_goal_that_only_finds_or_compares_is_a_lookup(goal, skill):
     ("Fill the web form at https://www.selenium.dev/selenium/web/web-form.html with the text Hello and submit it",
      "forms"), ("Cancel my latest undelivered Flipkart order", "account"), ("Cancel my Amazon Prime membership", None),
     ("Find the feedback form on shop.test and send it", "lookup"), ("Download the invoice for my last order", None),
-    ("Recharge my Jio number with the ₹299 plan on Paytm", "bills-recharges")])
+    ("Recharge my Jio number with the ₹299 plan on Paytm", "bills-recharges"), ("Pay my BESCOM bill", None),
+    ("cancel my ChatGPT subscription", "account"), ("Show me how to pay my BESCOM bill and pay it", None)])
 def test_a_goal_that_orders_submits_or_cancels_is_no_lookup(goal, skill):
     assert not rules.lookup_goal(goal, skill)
 
@@ -373,11 +378,14 @@ def test_a_tab_listing_revoked_mandates_is_no_commit():
     assert rules.commit_label("CLICK", {"label": "Revoked", "name": "Revoked"}, {"text": ""}) is None
 
 
-@pytest.mark.parametrize("goal, cancels", [("Cancel my Netflix subscription", True), ("stop my Spotify autopay", True),
-                                          ("Revoke the YouTube Premium UPI mandate", True),
-                                          ("Cancel my Amazon Prime membership", False), ("Order one Diet Coke", False)])
-def test_a_goal_that_cancels_a_subscription_is_recognised(goal, cancels):
-    assert bool(rules.SUBSCRIPTION_CANCEL.search(goal)) is cancels
+@pytest.mark.parametrize("goal, mandates", [
+    ("Cancel my Netflix subscription", True), ("stop my Spotify autopay", True), ("cancel my netflix", True),
+    ("Revoke the YouTube Premium UPI mandate", True), ("What all autopay I have right now?", True),
+    ("what subscriptions am I paying for?", True), ("pause my Google Play autopay", True),
+    ("how much do I pay for ChatGPT every month?", True), ("resume my Spotify", True),
+    ("Cancel my Amazon Prime membership", False), ("Order one Diet Coke", False), ("find a movie on Netflix", False)])
+def test_a_goal_about_the_users_upi_mandates_is_recognised(goal, mandates):
+    assert bool(rules.MANDATE_GOAL.search(goal)) is mandates
 
 
 TEN_DIGITS = {"constraints": {"type": "tel", "maxlength": 10, "pattern": "[0-9]{10}", "autocomplete": "tel-national"}}

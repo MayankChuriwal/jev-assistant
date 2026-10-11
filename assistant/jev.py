@@ -54,7 +54,8 @@ def achieved(page, goal, report, before=()):
                  "only from the page and those pages. ")
     extra = {"pages_before": [bearing(text, report) for text in before]} if before else {}
     return ask(page, "achieved", {"yes": "The page shows what the goal asks for: the outcome done, or the "
-                                         "information it asks to find.",
+                                         "information it asks to find; or, when the report says what the goal "
+                                         "names isn't there, the page's own list shows it isn't.",
                                   "no": "The page doesn't show that yet."},
                {"goal": goal, "rules": rules + DATA_NOTE}, report=report, **extra)["choice"]
 
@@ -140,7 +141,8 @@ INTENTS = {
     "AMEND": "Changes something about an existing task: quantity, item, address, payment, time, or destination.",
     "NEW_TASK": "Asks for a new, separate task, including cancelling, returning, or changing something the user has on "
                 "a site or app (a subscription, order, booking, ride, membership, or mandate) that no running task is "
-                "about.",
+                "about. A question about the user's own accounts, subscriptions, AutoPay mandates, orders, or "
+                "payments is a task too: it is looked up on a site.",
     "CANCEL": "Tells the assistant to stop one of its own running tasks, or what a running task is doing (\"stop\", "
               "\"cancel it\", \"never mind\").",
     "STATUS": "Asks how a task is going or what is happening.",

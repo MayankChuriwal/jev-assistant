@@ -742,8 +742,8 @@ class Core:
         sites = self.library["sites"]
         skill = self.library["skills"].get(task.skill) if task.skill else None
         note = skills.named(task.goal, sites)
-        if note is None and MANDATES in sites and rules.SUBSCRIPTION_CANCEL.search(task.goal):
-            note = sites[MANDATES]  # no site of its own: the subscription's UPI AutoPay mandate is revoked at NPCI
+        if note is None and MANDATES in sites and rules.MANDATE_GOAL.search(task.goal):
+            note = sites[MANDATES]  # no site of its own: the subscription's UPI AutoPay mandate is managed at NPCI
         if note is None:
             url, title, named = self.hidden(self.start, task.goal)
             if named or not (skill and skill["sites"]):

@@ -279,6 +279,11 @@ DAEMON = threading.Lock()  # tasks starting together must not each spawn or rest
 OPENERS = {}  # pop-up target id -> the target that opened it
 POPUP_DOWNLOADS = set()  # guids of downloads that started in a pop-up
 WATCH = {"session": None}  # the browser-level session that sees those downloads
+KEPT = {}  # site -> the tab a finished task left open there, signed in, for the next task on that site
+
+
+def site_of(url):
+    return (urlparse(url).hostname or "").removeprefix("www.")
 
 
 def watch_popups():
@@ -373,12 +378,21 @@ class Browser:
                 cdp("Browser.setPermission", permission={"name": permission}, setting=setting)
             except RuntimeError:
                 pass  # ponytail: an unsupported permission keeps Chrome's prompt, which cannot block CDP
-        self.active = self._adopt(cdp("Target.createTarget", url="about:blank", background=True)["targetId"])
+        self.active = self._kept(url) or self._adopt(
+            cdp("Target.createTarget", url="about:blank", background=True)["targetId"])
         try:
             self.navigate(url)
         except Exception:
             self.close()
             raise
+
+    def _kept(self, url):
+        """The tab a finished task kept open on this site (its sign-in lives in the tab), if it is still open."""
+        target = KEPT.pop(site_of(url), None)
+        try:
+            return self._adopt(target) if target else None
+        except (RuntimeError, TimeoutError):  # closed since
+            return None
 
     @property
     def session(self):
@@ -1104,13 +1118,33 @@ class Browser:
     def _do_dismiss_dialog(self, action, **_):
         self._close_dialog(False)
 
-    def close(self):
+    def close(self, keep=False):
+        """Close the task's tabs. With `keep` the active tab stays open for the next task on its site, in place of any
+        tab kept there before: MyUPI keeps its sign-in in the tab, so closing it signed the user out."""
+        kept, session = (self.active, self.tabs.get(self.active)) if keep else (None, None)
+        try:
+            site = site_of(cdp("Target.getTargetInfo", targetId=kept)["targetInfo"]["url"]) if kept else None
+        except (RuntimeError, TimeoutError):
+            kept = None
         for target in list(self.tabs):
+            if target != kept:
+                try:
+                    cdp("Target.closeTarget", targetId=target)
+                except (RuntimeError, TimeoutError):
+                    pass
+            self._forget(target)
+        if kept:
             try:
-                cdp("Target.closeTarget", targetId=target)
+                cdp("Target.detachFromTarget", sessionId=session)
             except (RuntimeError, TimeoutError):
                 pass
-            self._forget(target)
+            old = KEPT.pop(site, None)
+            if old and old != kept:
+                try:
+                    cdp("Target.closeTarget", targetId=old)
+                except (RuntimeError, TimeoutError):
+                    pass
+            KEPT[site] = kept
 
 
 def merge(parts):

@@ -324,6 +324,18 @@ def test_a_first_code_box_that_takes_a_pasted_code_is_one_of_the_code_boxes(brow
     assert b.evaluate("[...document.querySelectorAll('[id^=otp-]')].map(i => i.value).join('')") == "482913"
 
 
+def test_a_kept_tab_carries_its_sign_in_to_the_next_task_on_the_site(browser_at):
+    # MyUPI keeps its sign-in in the tab's sessionStorage: closing the tab signed the user out after every request
+    first = browser_at("/next.html")
+    first.evaluate("sessionStorage.setItem('accessToken', 'signed-in')")
+    first.close(keep=True)
+    second = browser_at("/ops.html")
+    assert second.evaluate("sessionStorage.getItem('accessToken')") == "signed-in"
+    assert second.evaluate("location.pathname") == "/ops.html"  # the task's own start, in the kept tab
+    second.close()
+    assert browser_at("/next.html").evaluate("sessionStorage.getItem('accessToken')") is None  # not kept: a fresh tab
+
+
 def test_a_cards_own_action_names_its_card_even_when_one_card_shows(browser_at):
     # MyUPI shows one mandate card at a time, each with Pause and Cancel: a bare "Cancel" was pressed for the wrong one
     card = ("<div><div><div>{payee}</div><div>₹{amount}</div><div>Active on GOOGLE PAY</div></div>"

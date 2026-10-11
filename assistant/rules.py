@@ -42,7 +42,9 @@ HAD = re.compile(r"\b(?:my|our|last|latest|previous|recent|past|undelivered|pend
 ORDER_NOUN = re.compile(r"\s+(?:status|history|details?|id|number|tracking|summary|invoice)\b", re.IGNORECASE)
 # A goal that only finds out: it asks, finds, compares, or checks, and names no commit of any kind.
 LOOKS = re.compile(r"^\W*(?:please\s+)?(?:find|compare|search|look\s*up|check(?!\s*-?\s*out)|what|which|where|when|"
-                   r"how|who|is|are|tell me|show me)\b", re.IGNORECASE)
+                   r"how|who|is|are|tell me|show|list)\b", re.IGNORECASE)
+PAYING_ASKED = re.compile(r"\b(?:am|are)\s+(?:i|we)\s+paying\b|\b(?:do|did|will)\s+(?:i|we)\s+pay\b",
+                          re.IGNORECASE)  # a payment asked about ("how much do I pay for ChatGPT"), none to make
 COMMITS = re.compile(r"\b(?:cancel|submit|send|delete|remove|end|request|subscribe|unsubscribe|transfer|confirm|"
                      r"recharge|fill|apply|register|complete|payment|checkout|check\s*-?\s*out|renew|activate|upgrade|"
                      r"sign\s*up|join|message|reply|claim|return(?!\s+polic)|exchange(?!\s+rate)|refund|ordering|"
@@ -50,11 +52,14 @@ COMMITS = re.compile(r"\b(?:cancel|submit|send|delete|remove|end|request|subscri
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 QR = re.compile(r"\bQR\b")  # a page showing a code to scan with the user's phone
 # Cancelling something that bills on its own: with no site note for the merchant, its UPI AutoPay mandate is the handle.
-# or by its brand alone ("cancel my Netflix"): services people pay by UPI AutoPay with no site note of their own.
-SUBSCRIPTION_CANCEL = re.compile(r"\b(?:cancel|stop|end|revoke|unsubscribe)\b.{0,40}\b(?:subscription|auto ?pay|"
-                                 r"mandate|recurring payment|netflix|spotify|youtube (?:premium|music)|jio ?hotstar|"
-                                 r"hotstar|disney|zee5|sony ?liv|prime video|apple (?:music|tv|one)|google one|audible|"
-                                 r"linkedin premium|gaana|jio ?saavn|wynk|jio ?cinema|chat ?gpt)s?\b", re.IGNORECASE)
+# or a subscription by its brand alone ("cancel my Netflix", "pause my Spotify", "how much do I pay for ChatGPT"):
+# services people pay by UPI AutoPay with no site note of their own; or the mandates themselves ("what autopays do I
+# have", "what subscriptions am I paying for").
+BRANDS = (r"netflix|spotify|youtube (?:premium|music)|jio ?hotstar|hotstar|disney|zee5|sony ?liv|prime video|"
+          r"apple (?:music|tv|one)|google one|audible|linkedin premium|gaana|jio ?saavn|wynk|jio ?cinema|chat ?gpt")
+MANDATE_GOAL = re.compile(rf"\b(?:cancel|stop|end|revoke|unsubscribe|pause|resume|pay|paying|paid)\b.{{0,40}}"
+                          rf"\b(?:{BRANDS})\b|\b(?:auto ?pays?|mandates?|subscriptions?|recurring payments?)\b",
+                          re.IGNORECASE)
 INDIAN_MOBILE = re.compile(r"(?:\+?91)?[\s-]*([6-9]\d{4})[\s-]*(\d{5})")
 
 
@@ -187,8 +192,9 @@ PRICE = re.compile(r"[₹$€£]\s?\d(?:[\d,]*\d)?(?:\.\d+)?|\bRs\.?\s?\d(?:[\d,
 
 def commerce_goal(goal):
     """Whether the goal is finished only by a booking, an order, or a payment going through. An order the user
-    already has ("my last Swiggy order", "did I order", "order status") is a thing to look up, not a verb."""
-    goal = goal or ""
+    already has ("my last Swiggy order", "did I order", "order status") is a thing to look up, not a verb; so is a
+    payment asked about ("how much do I pay for ChatGPT", "what am I paying for")."""
+    goal = PAYING_ASKED.sub(" ", goal or "")
     for match in COMMERCE.finditer(goal):
         if match[1].lower() == "order" and (HAD.search(goal[:match.start()]) or ORDER_NOUN.match(goal, match.end())):
             continue
@@ -199,7 +205,7 @@ def commerce_goal(goal):
 def lookup_goal(goal, skill=None):
     """Whether the goal only finds, compares, or checks something: no order, booking, or payment, and no other commit
     word (submit, send, cancel, fill...). Such a goal never asks to press a commit."""
-    goal = goal or ""
+    goal = PAYING_ASKED.sub(" ", goal or "")
     if commerce_goal(goal) or COMMITS.search(goal):
         return False
     return skill == "lookup" or bool(LOOKS.match(goal))  # never by a "?" alone: "Can you get me a coffee?" orders

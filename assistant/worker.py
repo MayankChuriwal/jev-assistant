@@ -1389,8 +1389,10 @@ class Worker:
                 raise Halt("blocked", f"The document didn't download from {rules.host(page['url'])}: {nothing}. "
                                       "Please save it from the agent's Chrome window, or ask me again.")
             missing = f" The document didn't download, though: {nothing}."
-        quote = self.evidence(act["text"].strip(), message, [page["text"], *reversed(s["recent"]),
-                                                             *s["last_by_site"].values()])
+        texts, quote = [page["text"], *reversed(s["recent"]), *s["last_by_site"].values()], act["text"].strip()
+        if not message and quote and not any(rules.verbatim(quote, text) for text in texts):
+            message, quote = quote, ""  # the report written where the quote goes: it is the report
+        quote = self.evidence(quote, message, texts)
         report = (message or "Done.") + missing
         # a lookup may read its answer across pages (a comparison of two sites): Jev also sees those pages
         before = self.pages_before(page) if rules.lookup_goal(s["goal"], s["skill"]) else []
@@ -2061,7 +2063,9 @@ class Worker:
         except OSError as error:  # a trace is a record: never a reason to leave the tabs open
             print(f"jev: trace not saved: {error}", file=sys.stderr)
         finally:
-            self.browser.close()
+            url = (self.state.get("page") or {}).get("url") or ""
+            note = skills.site_for(url, self.library["sites"]) if url else None
+            self.browser.close(keep=(note or {}).get("keep") == "tab")  # MyUPI: its sign-in lives in the tab
 
     def steps(self):
         """Tick until the task stops, yielding the state after each step (for scripts)."""

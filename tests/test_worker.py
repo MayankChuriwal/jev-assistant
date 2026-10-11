@@ -125,6 +125,16 @@ def test_done_needs_a_quote_and_stop_ends_the_task(tmp_path, monkeypatch):
     assert w.state["status"] == "blocked" and w.told[-1]["text"] == "The shop is closed today."
 
 
+def test_a_report_written_where_the_quote_goes_is_the_report(tmp_path, monkeypatch):  # MyUPI: no Netflix mandate
+    page = fake_page(text="UPI Autopay\nGOOGLE PLAY\n₹299\nActive on NAVI APP\nAISLE\n₹499\nActive on GOOGLE PAY APP")
+    w = worker_with(tmp_path, page=page, goal="cancel my netflix subscription")
+    script_planner(monkeypatch, turn("DONE", text="No Netflix UPI AutoPay mandate was found. Your mandates: GOOGLE "
+                                                  "PLAY ₹299, AISLE ₹499."))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.state["status"] == "done" and w.told[-1]["text"].startswith("No Netflix UPI AutoPay mandate was found.")
+
+
 def test_a_commit_waits_for_a_clear_yes_then_runs_and_is_watched(tmp_path, monkeypatch):
     w = worker_with(tmp_path, replies=[{"text": "yes"}])
     seen = script_planner(monkeypatch, turn(subgoals=[sub("place the order", kind="commit")]),
@@ -364,6 +374,14 @@ def test_telling_the_user_to_scan_a_qr_the_page_shows_sends_the_qr(tmp_path, mon
     w.command("tick")
     w.release()  # a TELL without a QR is held a step
     assert [m.get("image") for m in w.told] == [image]
+
+
+@pytest.mark.parametrize("url, keep", [("https://www.upihelp.npci.org.in/", True),
+                                       ("https://shop.test/checkout", False)])
+def test_a_site_whose_sign_in_lives_in_its_tab_keeps_the_tab_for_the_next_task(tmp_path, url, keep):
+    w = worker_with(tmp_path, page=fake_page(url=url))
+    w.close()
+    assert w.browser.close.call_args.kwargs == {"keep": keep}
 
 
 def test_a_code_ask_names_the_site_by_its_note_not_its_page_title(tmp_path, monkeypatch):
