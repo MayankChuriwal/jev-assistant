@@ -383,6 +383,38 @@ def test_reaching_again_for_a_mandate_the_goal_doesnt_name_ends_with_the_payees(
                                   "GOOGLE PLAY.")
 
 
+OPENAI_CANCEL = {"id": "c1", "kind": "click", "label": "Cancel (in “OPENAI LLC”)", "role": "button", "node": 4}
+
+
+@pytest.mark.parametrize("reply, result", [
+    ({"option": "o2"}, "Nothing was changed: OPENAI LLC's UPI AutoPay stays active."),
+    ({"option": "o1"}, "Done: you approved cancelling OPENAI LLC's UPI AutoPay in your UPI app, so its future payments "
+                       "stop. NPCI's list can take a few minutes to show it, and the account with the merchant itself "
+                       "isn't closed.")])
+def test_after_a_mandates_cancel_the_worker_hands_the_user_its_qr_and_ends(tmp_path, reply, result):
+    # MyUPI: the planner hunted for a “final” button past the QR and pressed the chat box's Send
+    w = worker_with(tmp_path, page=fake_page(actions=[OPENAI_CANCEL]), goal="cancel my ChatGPT subscription",
+                    replies=[reply])
+    w.browser.qr_screenshot = Mock(return_value="cXI=")
+    w.act("CLICK", OPENAI_CANCEL, w.state["page"], sub("cancel the ChatGPT mandate"))
+    assert w.asked[0]["image"] == "cXI=" and w.asked[0]["text"].startswith("To cancel OPENAI LLC's UPI AutoPay, scan")
+    assert [o["label"] for o in w.asked[0]["options"]] == ["I approved it", "Not now"]
+    assert w.state["status"] == "done" and w.told[-1]["text"] == result
+
+
+def test_the_planners_own_word_on_a_missing_mandate_goes_out_once(tmp_path, monkeypatch):
+    cards = [{"id": f"c{n}", "kind": "click", "label": f"Cancel (in “{payee}”)", "role": "button", "node": n}
+             for n, payee in enumerate(["OPENAI LLC", "AISLE"], 1)]
+    w = worker_with(tmp_path, page=fake_page(actions=cards), goal="cancel my netflix subscription")
+    w.observe()
+    script_planner(monkeypatch, turn("TELL", message="No Netflix mandate was found among your mandates."),
+                   turn("ASK", message="Do you want to cancel any of these instead?"))
+    jev_checks(monkeypatch)
+    for _ in range(2):
+        w.command("tick")
+    assert [m["text"][:28] for m in w.told] == ["None of your UPI AutoPay man"]
+
+
 MANDATE_QR = ("To cancel, you'll need to authenticate via your UPI app.\nOpen in your UPI App\nRevoking this mandate "
               "will stop all future payments to Netflix. Scan the QR below to revoke your mandate for Netflix")
 

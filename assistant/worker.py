@@ -29,6 +29,9 @@ IDLE_HALT = 16  # ticks in a row with no browser step and no question to the use
 CODE_ASKS = 3
 COMMIT_DROPS = 3  # an order's replan with no commit (none left in the old plan either): refused this often, then taken
 CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
+QR_TRIES = 5  # seconds a mandate's QR may take to render after its Cancel
+MANDATE_CANCEL = re.compile(r"(?:cancel|revoke)\b", re.IGNORECASE)  # a card's Cancel: the UPI app does the rest
+APPROVED = re.compile(r"\s*(?:yes|done|approved|i approved|i did|ok)\b", re.IGNORECASE)
 QUIET = executor.QUIET  # waits and scrolls: repeating these is not going in circles…
 SCROLLS = 8  # …until this many scrolls in a row on one page: then scrolling has stopped finding anything
 CIRCLE_AT = 3  # one action run this often from the same page (its path and controls) is not run from it again…
@@ -1478,8 +1481,12 @@ class Worker:
             raise Retry(PICK_METHOD)  # the final control beside a payment selector: the user picks how to pay first
         if label:
             gate.approved(self, page, action, label, sub)  # returns True, or raises StalePage or Retry
-        return self.run(page, operation, action, inputs, shown, commit=label, goal=(sub or {}).get("do", ""),
-                        cleared=cleared)
+        ran = self.run(page, operation, action, inputs, shown, commit=label, goal=(sub or {}).get("do", ""),
+                       cleared=cleared)
+        card = rules.CARD_ACTION.match(action.get("label") or "") if operation == "CLICK" else None
+        if card and MANDATE_CANCEL.match(action["label"]) and rules.MANDATE_GOAL.search(self.state["goal"]):
+            return self.hand_off(card[1])  # the rest is the user's, in their UPI app
+        return ran
 
     def no_card_named(self):
         """A cancel, pause, or resume of a mandate that none of the cards seen is for (MyUPI: Netflix)."""
@@ -1492,8 +1499,31 @@ class Worker:
         saying so, with the payees seen and nothing pressed (MyUPI: “Netflix billed by OPENAI LLC”, refused six times
         over, and the planner never gave up on it)."""
         s = self.state
+        s["held"] = None  # the planner's own word on it, held a step: this answer says it
         self.say(f"None of your UPI AutoPay mandates is for what you asked (“{s['goal']}”), so nothing was changed. "
                  f"Your mandates: {', '.join(s['payees'])}.", kind="result")
+        s["status"] = "done"
+
+    def hand_off(self, payee):
+        """After a mandate's Cancel, MyUPI shows a QR that only the user's UPI app approves, with their UPI PIN: the
+        worker sends it with two buttons and ends the task on the answer. Left to the planner, it hunted past the QR
+        for a final button and pressed the chat box's Send."""
+        s = self.state
+        qr = None
+        for _ in range(QR_TRIES):  # the QR renders a moment after the panel
+            qr = s["browser"].qr_screenshot(masked=self.secrets.nodes, hide=self.hidden_details())
+            if qr:
+                break
+            time.sleep(1)
+        where = "scan this QR with your UPI app" if qr else "scan the QR in the agent's MyUPI window with your UPI app"
+        reply = self.ask({"kind": "choice", "image": qr,
+                          "text": f"To cancel {payee}'s UPI AutoPay, {where} and approve it there with your UPI PIN. "
+                                  "Nothing changes until you do.",
+                          "options": [{"id": "o1", "label": "I approved it"}, {"id": "o2", "label": "Not now"}]})
+        approved = reply.get("option") == "o1" or bool(APPROVED.match(str(reply.get("text") or "")))
+        self.say(f"Done: you approved cancelling {payee}'s UPI AutoPay in your UPI app, so its future payments stop. "
+                 "NPCI's list can take a few minutes to show it, and the account with the merchant itself isn't "
+                 "closed." if approved else f"Nothing was changed: {payee}'s UPI AutoPay stays active.", kind="result")
         s["status"] = "done"
 
     def inputs(self, operation, action, page, sub, key=None, text=None):
