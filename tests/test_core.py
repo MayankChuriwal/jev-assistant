@@ -1206,3 +1206,32 @@ def test_an_exception_that_escapes_the_worker_is_kept_in_its_trace_errors(world)
     assert until(lambda: world.core.tasks["t1"].status == "failed")
     assert world.agents["Order Diet Coke"].state["errors"] == [{"step": 0, "error": "KeyError: 'tab-1'"}]
     assert any("I couldn't carry on with" in b for b in bodies(world)) and "never" not in bodies(world)
+
+
+# ---- Demo flows: a subscription with no site of its own
+
+
+def test_a_subscription_with_no_site_of_its_own_is_cancelled_at_the_upi_mandate_portal(tmp_path):
+    from assistant import skills
+
+    def no_start_job(goal):
+        raise AssertionError("the start job isn't needed")
+
+    c = conversation.Core(WebChannel(tmp_path / "media"), memory=store(), start=no_start_job,
+                          library={"skills": {}, "sites": skills.load_sites()}, poll=0.01)
+    url, title = c.start_page(conversation.Task("t1", "Cancel my Netflix subscription"))
+    assert url == "https://www.upihelp.npci.org.in/" and title.startswith("NPCI UPI Help · ")
+    url, _ = c.start_page(conversation.Task("t2", "cancel my Netflix autopay"))  # its alias names it too
+    assert url == "https://www.upihelp.npci.org.in/"
+    url, _ = c.start_page(conversation.Task("t3", "Cancel my Amazon Prime membership"))  # a site of its own
+    assert "amazon.in" in url
+
+
+def test_an_experian_dispute_starts_on_its_dispute_page(tmp_path):
+    from assistant import skills
+
+    c = conversation.Core(WebChannel(tmp_path / "media"), memory=store(), library={"skills": {}, "sites":
+                          skills.load_sites()}, poll=0.01)
+    url, _ = c.start_page(conversation.Task("t1", "Raise a dispute on my Experian credit report: the HDFC Bank card "
+                                                  "ending 1234 shows ACTIVE but it was closed in March 2025"))
+    assert url == "https://consumer.experian.in/ECSINDIA-DCE/view/angular/index.html#!/"

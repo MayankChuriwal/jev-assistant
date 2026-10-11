@@ -27,6 +27,7 @@ FIRST = {"secret", "confirm"}  # asked before anything older
 STOP_WORDS = {"cancel", "stop", "/cancel"}  # stop a task even at a hidden prompt, without any model
 ACTIVE = {"starting", "waiting", "running", "paused"}
 MAX_NOTES_SHOWN = 10  # learned site notes the chat lists
+MANDATES = "upihelp.npci.org.in"  # NPCI's portal listing every UPI AutoPay mandate, across all UPI apps
 LOOKS_LIKE_AN_ID = ("That looks like an ID. Tell me what it is called (like “my BESCOM account number is …”) so I "
                     "can keep it hidden.")
 PLACEHOLDER = re.compile(r"\[(?:profile|secret):[\w.]+\]")
@@ -726,11 +727,14 @@ class Core:
             return None
 
     def start_page(self, task):
-        """(start URL, title): the site the goal names; else the one the start job finds when the goal names a site
-        without a note; else the skill's saved or asked default app."""
+        """(start URL, title): the site the goal names; else, for cancelling a subscription whose merchant has no note,
+        NPCI's UPI mandate portal; else the one the start job finds when the goal names a site without a note; else the
+        skill's saved or asked default app."""
         sites = self.library["sites"]
         skill = self.library["skills"].get(task.skill) if task.skill else None
         note = skills.named(task.goal, sites)
+        if note is None and MANDATES in sites and rules.SUBSCRIPTION_CANCEL.search(task.goal):
+            note = sites[MANDATES]  # no site of its own: the subscription's UPI AutoPay mandate is revoked at NPCI
         if note is None:
             url, title, named = self.hidden(self.start, task.goal)
             if named or not (skill and skill["sites"]):

@@ -25,7 +25,8 @@ VERSION = 1
 KEY = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
 SCHEMA_NAME = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 FACT_KINDS = ("address", "preference", "default_app", "fact")
-LABELS = {"name": "full name", "phone": "phone number", "email": "email address", "upi_id": "UPI ID"}
+LABELS = {"name": "full name", "phone": "phone number", "email": "email address", "upi_id": "UPI ID",
+          "experian_ern": "Experian Reference Number (ERN)", "experian_uti": "Experian Unique Transaction ID (UTI)"}
 RECALL_FACTS, RECALL_CHARS, CLOSE = 12, 1500, 0.2
 NOTES_PER_SITE = 30
 RULE_DAYS = 30

@@ -6,7 +6,8 @@ from urllib.parse import urlparse
 COMMIT = re.compile(  # outright: Jev can never clear these. "Buy it again" opens a list of past items to choose from
     r"\b(pay|place (your )?order|buy(?!\s+(?:things\s+|it\s+)?again\b)|purchase|book now"
     r"|confirm (order|booking|ride|payment|purchase)"
-    r"|request (ride|uber\w*|trip)|cancel (my )?(order|booking|subscription|ride|membership)|delete"
+    r"|request (ride|uber\w*|trip)|cancel (my )?(order|booking|subscription|ride|membership|mandate|auto ?pay)|delete"
+    r"|revoke|pause (my )?(mandate|auto ?pay)"
     r"|submit (complaint|dispute|claim|request)|book (a )?(ride|cab|bike|auto|table|tickets?|room|hotel|flight)"
     r"|end (my )?(membership|subscription)|submit (the )?order|order now|recharge now|make (a )?payment"
     r"|complete (the )?(payment|order|booking|purchase)|continue (to )?booking)\b",
@@ -29,7 +30,7 @@ SECRET_ASK = re.compile(r"\b(otp|one[- ]?time (pass(word|code)?|code)|verificati
 TO_RECEIVE = re.compile(r"\b(phone|mobile|e-?mail)\b.*\b(to|for) (receive|get)\b", re.IGNORECASE)
 CHALLENGE = re.compile(r"i'?m not a robot|select all (the )?(images|squares)|click verify once|"
                        r"type the (text|characters|word)|verify (that )?you are (a )?human|press and hold|"
-                       r"are you a robot", re.IGNORECASE)
+                       r"are you a robot|refresh captcha|enter (the )?captcha|captcha code", re.IGNORECASE)
 # Payment methods named with "pay" (UPI Scan and Pay, Pay on Delivery): choosing one pays nothing by itself.
 METHOD = re.compile(r"\b(upi|cash|card|wallets?|net ?banking|pay later|pay on delivery|cash on delivery|scan and pay|"
                     r"amazon pay|google pay|gpay|phonepe|paytm)\b", re.IGNORECASE)
@@ -47,6 +48,10 @@ COMMITS = re.compile(r"\b(?:cancel|submit|send|delete|remove|end|request|subscri
                      r"sign\s*up|join|message|reply|claim|return(?!\s+polic)|exchange(?!\s+rate)|refund|ordering|"
                      r"booking(?!\.)|buying|paying|purchasing|reserving|renting|hiring)\b", re.IGNORECASE)
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+# Cancelling something that bills on its own: with no site note for the merchant, its UPI AutoPay mandate is the handle.
+SUBSCRIPTION_CANCEL = re.compile(r"\b(?:cancel|stop|end|revoke)\b.{0,40}\b(?:subscription|auto ?pay|mandate|"
+                                 r"recurring payment)s?\b", re.IGNORECASE)
+INDIAN_MOBILE = re.compile(r"(?:\+?91)?[\s-]*([6-9]\d{4})[\s-]*(\d{5})")
 
 
 def host(url):
@@ -225,6 +230,16 @@ def clean(value, action):
     """The answer as it should be typed: trimmed, and without spaces or dashes in codes and number fields."""
     value = str(value).strip()
     return re.sub(r"[\s-]", "", value) if action.get("group") or numeric(action) or tel_code(action) else value
+
+
+def fit_phone(value, action):
+    """An Indian mobile number as a 10-digit phone box takes it: "+91 98765 43210" becomes "9876543210" when the box
+    holds 10 characters, expects 10 digits, or asks for the national number. Anything else is left as it is."""
+    constraints = action.get("constraints") or {}
+    national = str(constraints.get("maxlength")) == "10" or constraints.get("pattern") in ("[0-9]{10}", r"\d{10}") \
+        or constraints.get("autocomplete") == "tel-national"
+    found = INDIAN_MOBILE.fullmatch(str(value).strip())
+    return found[1] + found[2] if national and found else value
 
 
 def format_error(value, action):

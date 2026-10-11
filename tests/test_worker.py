@@ -3182,3 +3182,13 @@ def test_adding_from_a_card_presses_the_add_inside_it(tmp_path, monkeypatch):
     w.state["plan"] = [sub("Open the dish's details")]
     w.act("CLICK", CARD, w.state["page"], w.subgoal())
     assert "within" not in w.browser.act.call_args.args[1]
+
+
+# ---- Demo flows: a saved phone in a 10-digit box
+
+
+def test_a_saved_phone_goes_into_a_ten_digit_box_without_the_country_code(tmp_path):
+    w = worker_with(tmp_path)  # the saved phone is "+91 98765 43210"
+    box = {"id": "m", "kind": "fill", "label": "Eg. 9876543210", "role": "textbox", "value": "", "node": 30,
+           "constraints": {"type": "tel", "maxlength": 10, "pattern": "[0-9]{10}", "autocomplete": "tel-national"}}
+    assert w.value(box, "[profile:phone]", w.state["page"]) == ({"text": "9876543210"}, "[profile:phone]")

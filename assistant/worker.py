@@ -1526,7 +1526,7 @@ class Worker:
                 return s["answers"][key]
             raise Retry(f"[secret:{key}] isn't one of the user's answers.")
 
-        typed = PLACEHOLDER.sub(real, text)
+        typed = rules.fit_phone(PLACEHOLDER.sub(real, text), action)  # +91 98765 43210 in a 10-digit box: 9876543210
         limit = (action.get("constraints") or {}).get("maxlength")
         if limit and not action.get("group") and len(typed) > int(limit):  # the field would cut it short
             raise Retry(f"“{action['label']}” takes at most {limit} characters, so “{text}” would be cut short: type "

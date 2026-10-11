@@ -352,3 +352,39 @@ def test_the_context_added_to_tell_controls_apart_is_never_read_as_what_the_cont
     assert rules.commit_label("CLICK", add, {}) is None and rules.maybe_commit_label("CLICK", add, {}) is None
     named = {**shows("Sizes", "300 ml", context="in “Place order”"), "name": "Sizes"}
     assert rules.commit_label("CLICK", named, {}) is None and rules.maybe_commit_label("CLICK", named, {}) is None
+
+
+# ---- Demo flows: NPCI mandates and Experian disputes
+
+
+def test_a_text_captcha_with_a_refresh_button_is_a_captcha():
+    page = {"text": "Please enter a mobile number\nSecurity Verification\nContinue",
+            "actions": [{"label": "Refresh CAPTCHA"}, {"label": "Security Verification"}]}
+    assert rules.captcha_challenge(page)
+    assert not rules.captcha_challenge({"text": "This site is protected by reCAPTCHA.", "actions": []})
+
+
+@pytest.mark.parametrize("label", ["Revoke", "Revoke mandate", "Cancel mandate", "Cancel AutoPay", "Pause autopay"])
+def test_revoking_or_cancelling_a_mandate_always_asks(label):
+    assert rules.commit_label("CLICK", {"label": label, "name": label}, {"text": ""}) == label
+
+
+def test_a_tab_listing_revoked_mandates_is_no_commit():
+    assert rules.commit_label("CLICK", {"label": "Revoked", "name": "Revoked"}, {"text": ""}) is None
+
+
+@pytest.mark.parametrize("goal, cancels", [("Cancel my Netflix subscription", True), ("stop my Spotify autopay", True),
+                                          ("Revoke the YouTube Premium UPI mandate", True),
+                                          ("Cancel my Amazon Prime membership", False), ("Order one Diet Coke", False)])
+def test_a_goal_that_cancels_a_subscription_is_recognised(goal, cancels):
+    assert bool(rules.SUBSCRIPTION_CANCEL.search(goal)) is cancels
+
+
+TEN_DIGITS = {"constraints": {"type": "tel", "maxlength": 10, "pattern": "[0-9]{10}", "autocomplete": "tel-national"}}
+
+
+@pytest.mark.parametrize("value, typed", [("+91 98765 43210", "9876543210"), ("+919876543210", "9876543210"),
+                                         ("98765 43210", "9876543210"), ("+1 415 555 0100", "+1 415 555 0100")])
+def test_an_indian_mobile_fits_a_ten_digit_phone_box(value, typed):
+    assert rules.fit_phone(value, TEN_DIGITS) == typed
+    assert rules.fit_phone("+91 98765 43210", {"constraints": {"type": "tel"}}) == "+91 98765 43210"  # no limit
