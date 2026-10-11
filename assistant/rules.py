@@ -61,6 +61,10 @@ MANDATE_GOAL = re.compile(rf"\b(?:cancel|stop|end|revoke|unsubscribe|pause|resum
                           rf".{{0,40}}\b(?:{BRANDS})\b|"
                           r"\b(?:auto ?pays?|mandates?|subscriptions?|recurring payments?)\b", re.IGNORECASE)
 MANDATE_ACTION = re.compile(r"\b(?:cancel|stop|end|revoke|unsubscribe|pause|resume)\b", re.IGNORECASE)
+# The user's UPI itself, with no site named: their UPI ID or number, PIN, payments, complaints, payees, frauds (MyUPI).
+UPI_TOPIC = re.compile(r"\bupi\s+(?:id|number|pin|transactions?|payments?|history|complaints?|disputes?)\b|\bvpa\b|"
+                       r"\b(?:my|recent|last\s+\d+)\s+(?:upi\s+)?(?:payments|transactions)\b|\bcomplaints?\b|"
+                       r"\bfrauds?\b|\bscams?\b", re.IGNORECASE)
 BRAND = re.compile(rf"\b(?:{BRANDS})\b", re.IGNORECASE)
 INDIAN_MOBILE = re.compile(r"(?:\+?91)?[\s-]*([6-9]\d{4})[\s-]*(\d{5})")
 

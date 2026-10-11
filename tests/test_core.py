@@ -1285,6 +1285,9 @@ def test_a_subscription_with_no_site_of_its_own_is_cancelled_at_the_upi_mandate_
     for goal in ("cancel my netflix", "Stop my Spotify", "unsubscribe from JioHotstar", "stop paying for YouTube "
                  "Premium", "cancel my ChatGPT"):  # a subscription named by its brand alone
         assert c.start_page(conversation.Task("t4", goal))[0] == "https://www.upihelp.npci.org.in/", goal
+    for goal in ("What is my UPI ID?", "show my last 5 UPI payments", "What's the status of my complaints?",
+                 "What should I do if I forget my UPI PIN?", "Is the UPI ID abc@okicici safe to pay?"):
+        assert c.start_page(conversation.Task("t6", goal))[0] == "https://www.upihelp.npci.org.in/", goal
     c.payees.update(["AISLE", "OPENAI LLC"])  # read off the user's mandate list earlier this session
     assert c.start_page(conversation.Task("t5", "Can you cancel the aisle?"))[0] == "https://www.upihelp.npci.org.in/"
 

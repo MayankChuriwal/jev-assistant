@@ -760,7 +760,8 @@ class Core:
         note = skills.named(task.goal, sites)
         payee = rules.MANDATE_ACTION.search(task.goal) and any(rules.words(p) & rules.words(task.goal)
                                                                for p in self.payees)
-        if note is None and MANDATES in sites and (rules.MANDATE_GOAL.search(task.goal) or payee):
+        if note is None and MANDATES in sites and (rules.MANDATE_GOAL.search(task.goal) or payee
+                                                   or rules.UPI_TOPIC.search(task.goal)):
             note = sites[MANDATES]  # no site of its own: the subscription's UPI AutoPay mandate is managed at NPCI
         if note is None:
             url, title, named = self.hidden(self.start, task.goal)

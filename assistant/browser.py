@@ -283,6 +283,7 @@ WATCH = {"session": None}  # the browser-level session that sees those downloads
 # until they log out, jev stops, or SESSION_IDLE passes with no task there.
 SESSION_IDLE = 5 * 60
 KEPT = {}  # (owner, site) -> the tab a finished task left signed in, for that user's next task on that site
+TOKENS = {}  # (owner, site) -> the latest keep's token: an earlier keep's timer then does nothing
 ENDED = {}  # owner (None: everyone) -> when they logged out: a task begun before then keeps no tab
 KEEPING = threading.Lock()
 LOG_OUT = r"""(() => {
@@ -320,6 +321,8 @@ def end_sessions(owner=None):
     with KEEPING:
         ended = [key for key in KEPT if owner is None or key[0] == owner]
         targets = [KEPT.pop(key) for key in ended]
+        for key in ended:
+            TOKENS.pop(key, None)
         ENDED[owner] = time.monotonic()
     for target in targets:
         end_session(target)
@@ -339,11 +342,12 @@ def end_leftovers(sites):
     return len(left)
 
 
-def expire(key, target):
+def expire(key, target, token):
     with KEEPING:
-        if KEPT.get(key) != target:
-            return  # taken by the user's next task, or ended already
+        if KEPT.get(key) != target or TOKENS.get(key) is not token:
+            return  # taken by the user's next task, kept again since (a newer timer runs), or ended already
         KEPT.pop(key)
+        TOKENS.pop(key)
     end_session(target)
 
 
@@ -452,6 +456,7 @@ class Browser:
         """The tab this user's last task kept signed in on this site, if it is still open."""
         with KEEPING:
             target = KEPT.pop((self.owner, site_of(url)), None)
+            TOKENS.pop((self.owner, site_of(url)), None)  # its timer does nothing now
         try:
             return self._adopt(target) if target else None
         except (RuntimeError, TimeoutError):  # closed since
@@ -1206,12 +1211,12 @@ class Browser:
             pass
         if max(ENDED.get(self.owner, -1.0), ENDED.get(None, -1.0)) >= self.started:
             return end_session(kept)
-        key = (self.owner, site)
+        key, token = (self.owner, site), object()
         with KEEPING:
-            old, KEPT[key] = KEPT.get(key), kept
+            old, KEPT[key], TOKENS[key] = KEPT.get(key), kept, token
         if old and old != kept:
             end_session(old)
-        timer = threading.Timer(SESSION_IDLE, expire, args=(key, kept))
+        timer = threading.Timer(SESSION_IDLE, expire, args=(key, kept, token))
         timer.daemon = True
         timer.start()
 

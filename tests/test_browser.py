@@ -353,6 +353,19 @@ def test_a_kept_sign_in_ends_when_idle_by_the_sites_own_logout(browser_at, monke
     assert fresh.evaluate(TOKEN) is None and fresh.evaluate(LOGGED_OUT)  # the site's own Logout was pressed
 
 
+def test_a_sign_in_kept_again_lasts_from_its_last_task_not_its_first(browser_at, monkeypatch):
+    # each task's idle timer outlived the next task's reuse: the first one signed the user out mid-session
+    monkeypatch.setattr(browser, "SESSION_IDLE", 1.0)
+    first = browser_at("/next.html", owner="u7")
+    first.evaluate(SIGN_IN)
+    first.close(keep=True)  # its timer: 1 s from now
+    time.sleep(0.6)
+    second = browser_at("/ops.html", owner="u7")  # the next task picks the tab up, then ends: 1 s from then
+    second.close(keep=True)
+    time.sleep(0.6)  # past the first timer, inside the second
+    assert browser_at("/next.html", owner="u7").evaluate(TOKEN) == "signed-in"
+
+
 def test_logging_out_ends_kept_sign_ins_and_those_of_tasks_still_running(browser_at):
     first = browser_at("/next.html", owner="u4")
     first.evaluate(SIGN_IN)
