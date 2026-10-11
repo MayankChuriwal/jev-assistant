@@ -528,6 +528,13 @@ def test_an_empty_captcha_on_screen_goes_to_the_user_before_the_planner_wanders(
     assert all(s.get("reason") != "start" for s in seen)  # the planner wasn't asked first
 
 
+def test_a_captcha_still_loading_is_not_sent_yet(tmp_path, monkeypatch):  # MyUPI: the picture showed “Loading...”
+    w = worker_with(tmp_path, page=fake_page(text="Security Verification\nLoading...", actions=SIGN_IN_PAGE))
+    assert not w.captcha_unasked(w.state["page"])
+    w.state["page"]["text"] = "Security Verification"
+    assert w.captcha_unasked(w.state["page"])
+
+
 def test_the_captcha_text_the_user_gave_is_typed_by_the_worker(tmp_path, monkeypatch):
     # MyUPI: the user answered “84D0”, the planner never typed it, and Continue stayed disabled
     w = worker_with(tmp_path, page=fake_page(actions=SIGN_IN_PAGE))

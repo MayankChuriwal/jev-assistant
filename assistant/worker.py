@@ -33,6 +33,7 @@ QR_TRIES = 5  # seconds a mandate's QR may take to render after its Cancel
 MANDATE_CANCEL = re.compile(r"(?:cancel|revoke)\b", re.IGNORECASE)  # a card's Cancel: the UPI app does the rest
 APPROVED = re.compile(r"\s*(?:yes|done|approved|i approved|i did|ok)\b", re.IGNORECASE)
 AGREE = re.compile(r"\b(?:i (?:have read and )?agree|i accept)\b", re.IGNORECASE)  # a terms box
+LOADING = re.compile(r"\bloading\b", re.IGNORECASE)  # a part of the page not drawn yet
 POLICY = re.compile(r"\s*(?:terms(?: of use| (?:&|and) conditions)?|privacy(?: policy)?|disclaimer|faqs?)\b",
                     re.IGNORECASE)  # a site's own policy or help pages
 QUIET = executor.QUIET  # waits and scrolls: repeating these is not going in circles…
@@ -781,7 +782,8 @@ class Worker:
     def captcha_unasked(self, page):
         """A captcha on screen with its box empty and none of the user's text for it still to type: it goes to them
         first, before anything else on the page."""
-        return bool(self.captcha_box(page)) and rules.captcha_challenge(page) and not self.captcha_pending()
+        return bool(self.captcha_box(page)) and rules.captcha_challenge(page) and not self.captcha_pending() and \
+            not LOADING.search(page["text"])  # MyUPI: its picture still said “Loading...”: sent once it shows
 
     def relay_captcha(self, page):
         """A captcha only the user may solve: they see it with its squares numbered, and the worker clicks exactly
