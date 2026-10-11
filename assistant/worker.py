@@ -203,6 +203,12 @@ def plain(text):
     return text
 
 
+def repeats(message, earlier):
+    """Whether `message` says again what `earlier` said: most of the shorter one's words are in both."""
+    said, before = (set(re.findall(r"[a-z0-9]+", t.lower())) for t in (message, earlier))
+    return bool(said and before) and len(said & before) / min(len(said), len(before)) >= 0.6
+
+
 class Worker:
     interrupted = None  # set by the chat: true once the user cancelled or changed the task during a step
     trace_dir = HOME / "traces"
@@ -1245,8 +1251,11 @@ class Worker:
             if s["told_at"] == len(s["history"]):
                 raise Retry("You just told the user something. Do an action next, or finish with DONE: the answer "
                             "the user asked for goes in DONE's message, never in another TELL.")
+            if any(repeats(message, c["text"]) for c in s["chat"][-8:] if c["from"] == "agent"):
+                raise Retry("You told the user this already: don't repeat it. WAIT for the page, act, or ASK something "
+                            "new.")
             qr = s["browser"].qr_screenshot(masked=self.secrets.nodes, hide=self.hidden_details()) \
-                if rules.QR.search(page["text"]) else None
+                if rules.QR.search(page["text"]) or rules.QR.search(message) else None  # its words may scroll off
             if qr:  # a QR for the user's phone (a UPI app's mandate or payment) goes out now, as its picture
                 self.say(message, image=qr)
             else:
@@ -1404,9 +1413,7 @@ class Worker:
                 raise Retry("The page doesn't show the goal done yet. Keep going until it does; the answer goes in "
                             "DONE, never in a TELL.")
             report += " (I couldn't fully confirm this on the page, so please double-check it.)"
-        held = set(re.findall(r"[a-z0-9]+", (s["held"] or "").lower()))
-        said = set(re.findall(r"[a-z0-9]+", report.lower()))
-        if held and said and len(held & said) / min(len(held), len(said)) >= 0.6:
+        if s["held"] and repeats(report, s["held"]):
             s["held"] = None  # the answer, told a step early: it goes out once, here
         self.say(report, kind="result", evidence=quote)
         s["status"] = "done"
@@ -1442,6 +1449,11 @@ class Worker:
             drift = self.other_item(action, page)
             if drift:
                 raise Retry(drift)
+            payee = rules.wrong_card(self.state["goal"], action)
+            if payee:
+                raise Retry(f"“{action.get('label')}” is on {payee}'s card, and the goal doesn't name {payee}: press "
+                            "only the card whose payee is the merchant the goal names, or the company that bills for "
+                            "it. When no card's is, DONE saying so and list every payee; press nothing.")
             extra = self.narrows(action)
             if extra:
                 raise Retry(f"“{action.get('label')}” adds {', '.join(sorted(extra))} to the search, which the user "

@@ -360,14 +360,25 @@ def test_a_code_field_is_asked_hidden_and_typed_without_the_planner(tmp_path, mo
     assert w.browser.act.call_args.kwargs["text"] == "481516" and w.state["history"][-1]["text"] == "[secret:answer1]"
 
 
+def test_cancel_on_a_card_whose_payee_the_goal_doesnt_name_is_refused(tmp_path):  # Netflix: GOOGLE PLAY's pressed
+    card = {"id": "c1", "kind": "click", "label": "Cancel (in “GOOGLE PLAY”)", "role": "button", "node": 4}
+    w = worker_with(tmp_path, page=fake_page(actions=[card]), goal="cancel my netflix subscription")
+    with pytest.raises(Retry, match="GOOGLE PLAY"):
+        w.act("CLICK", card, w.state["page"], sub("cancel the Netflix mandate"))
+    assert not w.browser.act.called
+
+
 MANDATE_QR = ("To cancel, you'll need to authenticate via your UPI app.\nOpen in your UPI App\nRevoking this mandate "
               "will stop all future payments to Netflix. Scan the QR below to revoke your mandate for Netflix")
 
 
-@pytest.mark.parametrize("text, image", [(MANDATE_QR, "cXI="), ("Checkout\nPay ₹79", None)])
-def test_telling_the_user_to_scan_a_qr_the_page_shows_sends_the_qr(tmp_path, monkeypatch, text, image):
+@pytest.mark.parametrize("text, shot, image", [
+    (MANDATE_QR, "cXI=", "cXI="),
+    ("Got it — cancelling GOOGLE PLAY mandate.", "cXI=", "cXI="),  # the QR's own words scrolled off the screen
+    ("Checkout\nPay ₹79", None, None)])
+def test_telling_the_user_to_scan_a_qr_the_page_shows_sends_the_qr(tmp_path, monkeypatch, text, shot, image):
     w = worker_with(tmp_path, page=fake_page(text=text))
-    w.browser.qr_screenshot = Mock(return_value="cXI=")
+    w.browser.qr_screenshot = Mock(return_value=shot)
     script_planner(monkeypatch, turn("TELL", message="Scan this QR with your UPI app and enter your UPI PIN to cancel "
                                                      "Netflix's AutoPay."))
     jev_checks(monkeypatch)
@@ -382,6 +393,17 @@ def test_a_site_whose_sign_in_lives_in_its_tab_keeps_the_tab_for_the_next_task(t
     w = worker_with(tmp_path, page=fake_page(url=url))
     w.close()
     assert w.browser.close.call_args.kwargs == {"keep": keep}
+
+
+def test_the_same_update_is_told_once(tmp_path, monkeypatch):  # MyUPI: “Please scan the QR …” three times over
+    w = worker_with(tmp_path)
+    script_planner(monkeypatch, turn("TELL", message="Scan the QR with your UPI app and approve the cancellation."),
+                   turn("WAIT"), turn("TELL", message="Please scan the QR with your UPI app and approve it."))
+    jev_checks(monkeypatch)
+    for _ in range(3):
+        w.command("tick")
+    w.release()
+    assert len(w.told) == 1 and "told the user this already" in w.state["feedback"][-1]
 
 
 def test_a_code_ask_names_the_site_by_its_note_not_its_page_title(tmp_path, monkeypatch):

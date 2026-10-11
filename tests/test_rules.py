@@ -388,6 +388,18 @@ def test_a_goal_about_the_users_upi_mandates_is_recognised(goal, mandates):
     assert bool(rules.MANDATE_GOAL.search(goal)) is mandates
 
 
+@pytest.mark.parametrize("goal, label, wrong", [
+    ("cancel my netflix subscription", "Cancel (in “GOOGLE PLAY”)", "GOOGLE PLAY"),  # guessed: Netflix via the store
+    ("cancel my netflix subscription", "Cancel (in “AISLE”)", "AISLE"),
+    ("cancel my ChatGPT subscription", "Cancel (in “OPENAI LLC”)", None),  # the company that bills for it
+    ("pause my Google Play autopay", "Pause (in “GOOGLE PLAY”)", None),
+    ("cancel my aisle", "Cancel (in “AISLE”)", None),
+    ("cancel my netflix subscription", "Back", None),  # no card's action
+    ("cancel my latest Flipkart order", "Cancel (in “Order #OD123”)", None)])  # not about a mandate
+def test_a_mandates_action_on_a_payee_the_goal_doesnt_name_is_caught(goal, label, wrong):
+    assert rules.wrong_card(goal, {"label": label}) == wrong
+
+
 TEN_DIGITS = {"constraints": {"type": "tel", "maxlength": 10, "pattern": "[0-9]{10}", "autocomplete": "tel-national"}}
 
 
