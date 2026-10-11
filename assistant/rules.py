@@ -54,7 +54,7 @@ QR = re.compile(r"\bQR\b")  # a page showing a code to scan with the user's phon
 SUBSCRIPTION_CANCEL = re.compile(r"\b(?:cancel|stop|end|revoke|unsubscribe)\b.{0,40}\b(?:subscription|auto ?pay|"
                                  r"mandate|recurring payment|netflix|spotify|youtube (?:premium|music)|jio ?hotstar|"
                                  r"hotstar|disney|zee5|sony ?liv|prime video|apple (?:music|tv|one)|google one|audible|"
-                                 r"linkedin premium|gaana|jio ?saavn|wynk|jio ?cinema)s?\b", re.IGNORECASE)
+                                 r"linkedin premium|gaana|jio ?saavn|wynk|jio ?cinema|chat ?gpt)s?\b", re.IGNORECASE)
 INDIAN_MOBILE = re.compile(r"(?:\+?91)?[\s-]*([6-9]\d{4})[\s-]*(\d{5})")
 
 

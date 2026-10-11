@@ -405,6 +405,22 @@
     const texts = apart(els) || [], heads = sections(els);
     return heads ? heads.map((h, i) => !texts[i] ? h : texts[i].includes(h) ? texts[i] : `${h}: ${texts[i]}`) : texts;
   };
+  // A card's own action ("Pause", "Cancel" on each mandate; "Remove" on each cart line) carries its card's title, even
+  // when one card shows at a time (MyUPI): a bare "Cancel" was pressed for the wrong mandate. Lines of nothing but
+  // such actions ("PauseCancel", the card's button row) are no title.
+  const ACT = /^(?:cancel|pause|resume|remove|delete|edit|revoke|stop|manage)$/i;
+  const ACTS = /cancel|pause|resume|remove|delete|edit|revoke|stop|manage/gi;
+  const cardTitle = e => {
+    for (let a = e?.parentElement, n = 0; a && n < 6; a = a.parentElement, n++) {
+      const first = (a.innerText || '').split('\n').map(t => t.trim()).find(t => t.replace(ACTS, '').trim());
+      if (first) return first.slice(0, 60);
+    }
+    return '';
+  };
+  for (const a of actions) {
+    const title = a.kind === 'click' && ACT.test(a.label) ? cardTitle(cache.nodes.get(a.node)) : '';
+    if (title) a.label += ` (in “${title}”)`;
+  }
   const byLabel = {};
   for (const a of actions) if (a.kind === 'fill' || a.kind === 'click') (byLabel[a.kind + a.label] ||= []).push(a);
   for (const same of Object.values(byLabel)) {

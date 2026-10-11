@@ -709,8 +709,7 @@ class Worker:
             raise Halt("blocked", f"Signing in to {rules.host(page['url'])} isn't working after {CODE_ASKS} codes, "
                                   "so I stopped rather than send you more. Please sign in once in the agent's "
                                   "Chrome window, then ask me again.")
-        note = skills.site_for(page["url"], self.library["sites"])  # “NPCI UPI Help”, not the page's long title
-        site = note["name"] if note else page["title"] or rules.host(page["url"])
+        site = self.site_name(page)
         question = (f"{site} is asking for your card's {field['label']}. Type it here; it stays hidden." if card else
                     f"{site} is asking for a code or password. Type it here; it stays hidden.")
         self.steady(page)  # a page still switching screens gets read again first
@@ -1940,13 +1939,18 @@ class Worker:
 
     # ---- the user
 
+    def site_name(self, page):
+        """The site as the user knows it: its note's name (“NPCI UPI Help”), else the page's title, else its host."""
+        note = skills.site_for(page["url"], self.library["sites"])
+        return note["name"] if note else page["title"] or rules.host(page["url"])
+
     def stuck(self, why="asked"):
         """Ask the user what to do; `why` (the guard that asked) goes into the trace."""
         s = self.state
         s["stuck_why"] = why
         self.log_refusal("stuck", why)
         sub = self.subgoal()
-        title = s["page"]["title"] or rules.host(s["page"]["url"])
+        title = self.site_name(s["page"])
         question = f"{STUCK} {title}, trying to {sub['do'] if sub else s['goal']}. What should I do?"
         coded = any(secret_field(a) for a in s["page"]["actions"])  # the reply may be a code or card detail: hide it
         reply = self.ask({"kind": "secret" if coded else "text", "text": question})

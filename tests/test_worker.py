@@ -369,13 +369,15 @@ def test_telling_the_user_to_scan_a_qr_the_page_shows_sends_the_qr(tmp_path, mon
 def test_a_code_ask_names_the_site_by_its_note_not_its_page_title(tmp_path, monkeypatch):
     page = fake_page(url="https://www.upihelp.npci.org.in/")
     page["title"] = "MyUPI | Raise UPI Complaints, Check Transaction Status & Resolve Transaction Issues | NPCI"
-    w = worker_with(tmp_path, page=page, replies=[{"text": "481516"}])
+    w = worker_with(tmp_path, page=page, replies=[{"text": "481516"}, {"text": "go on"}])
     script_planner(monkeypatch, turn(subgoals=[sub("sign in")]))
     script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Code", "blocker": "code"})
     jev_checks(monkeypatch)
     w.command("tick")
     w.command("tick")
     assert w.asked[0]["text"] == "NPCI UPI Help is asking for a code or password. Type it here; it stays hidden."
+    w.stuck()
+    assert w.asked[-1]["text"].startswith("I'm stuck on NPCI UPI Help, trying to ")
 
 
 def test_a_fourth_code_stops_instead_of_sending_more(tmp_path, monkeypatch):

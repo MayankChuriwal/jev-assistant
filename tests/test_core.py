@@ -1248,7 +1248,7 @@ def test_a_subscription_with_no_site_of_its_own_is_cancelled_at_the_upi_mandate_
     url, _ = c.start_page(conversation.Task("t3", "Cancel my Amazon Prime membership"))  # a site of its own
     assert "amazon.in" in url
     for goal in ("cancel my netflix", "Stop my Spotify", "unsubscribe from JioHotstar", "stop paying for YouTube "
-                 "Premium"):  # a subscription named by its brand alone
+                 "Premium", "cancel my ChatGPT"):  # a subscription named by its brand alone
         assert c.start_page(conversation.Task("t4", goal))[0] == "https://www.upihelp.npci.org.in/", goal
 
 

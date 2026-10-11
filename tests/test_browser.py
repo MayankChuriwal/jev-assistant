@@ -324,6 +324,19 @@ def test_a_first_code_box_that_takes_a_pasted_code_is_one_of_the_code_boxes(brow
     assert b.evaluate("[...document.querySelectorAll('[id^=otp-]')].map(i => i.value).join('')") == "482913"
 
 
+def test_a_cards_own_action_names_its_card_even_when_one_card_shows(browser_at):
+    # MyUPI shows one mandate card at a time, each with Pause and Cancel: a bare "Cancel" was pressed for the wrong one
+    card = ("<div><div><div>{payee}</div><div>₹{amount}</div><div>Active on GOOGLE PAY</div></div>"
+            "<div><button>Pause</button><button>Cancel</button></div></div>")
+    b = browser_at("/next.html")
+    b.evaluate(f"document.body.insertAdjacentHTML('afterbegin', '{card.format(payee='AISLE', amount=499)}')")
+    labels = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click"]
+    assert "Cancel (in “AISLE”)" in labels and "Pause (in “AISLE”)" in labels
+    b.evaluate(f"document.body.insertAdjacentHTML('afterbegin', '{card.format(payee='OPENAI LLC', amount=399)}')")
+    labels = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click"]
+    assert "Cancel (in “AISLE”)" in labels and "Cancel (in “OPENAI LLC”)" in labels
+
+
 def test_a_qr_to_scan_is_cut_out_and_enlarged_and_a_page_without_one_gives_none(browser_at):
     b = browser_at("/next.html")
     assert b.qr_screenshot() is None
