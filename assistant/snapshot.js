@@ -410,13 +410,15 @@
   // such actions ("PauseCancel", the card's button row) are no title.
   const ACT = /^(?:cancel|pause|resume|remove|delete|edit|revoke|stop|manage)$/i;
   const ACTS = /cancel|pause|resume|remove|delete|edit|revoke|stop|manage/gi;
-  const cardTitle = e => {
+  // The card a control sits on: its lines that aren't only actions; the first is its title.
+  const cardOf = e => {
     for (let a = e?.parentElement, n = 0; a && n < 6; a = a.parentElement, n++) {
-      const first = (a.innerText || '').split('\n').map(t => t.trim()).find(t => t.replace(ACTS, '').trim());
-      if (first) return first.slice(0, 60);
+      const lines = (a.innerText || '').split('\n').map(t => t.trim()).filter(t => t.replace(ACTS, '').trim());
+      if (lines.length) return lines;
     }
-    return '';
+    return [];
   };
+  const cardTitle = e => (cardOf(e)[0] || '').slice(0, 60);
   for (const a of actions) {
     const title = a.kind === 'click' && ACT.test(a.label) ? cardTitle(cache.nodes.get(a.node)) : '';
     if (title) a.label += ` (in “${title}”)`;
@@ -471,9 +473,15 @@
   actions.push({id: 'wait', kind: 'wait', node: null, label: 'Wait for the page to update'});
   // Every card that carries its own Cancel or Pause, on screen or scrolled out of view (MyUPI shows a few mandates at
   // a time): whose cards the page holds.
-  const cards = [...new Set([...document.querySelectorAll('button,[role="button"]')]
-    .filter(e => /^(?:cancel|pause|resume|revoke)$/i.test((e.innerText || '').trim()) && rendered(e))
-    .map(cardTitle).filter(Boolean))];
-  return {url: location.href, title: document.title, text, cards, scroll: {x: scrollX, y: scrollY, height, width},
+  const lined = new Map();  // title -> the card's own words, in one line
+  for (const e of document.querySelectorAll('button,[role="button"]')) {
+    if (!/^(?:cancel|pause|resume|revoke)$/i.test((e.innerText || '').trim()) || !rendered(e)) continue;
+    const lines = cardOf(e);
+    if (lines.length && !lined.has(lines[0].slice(0, 60)))
+      lined.set(lines[0].slice(0, 60), lines.join(' ').replace(/\s+/g, ' ').slice(0, 200));
+  }
+  const cards = [...lined.keys()], card_lines = [...lined.values()];
+  return {url: location.href, title: document.title, text, cards, card_lines,
+    scroll: {x: scrollX, y: scrollY, height, width},
     actions, marker, page_key, guards, omitted_actions};
 })()

@@ -499,6 +499,21 @@ def test_a_list_of_mandates_that_missed_cards_off_screen_is_sent_back_once_then_
                                   "OPENAI LLC, AISLE, GOOGLE PLAY.")
 
 
+def test_a_list_of_mandates_is_told_from_the_cards_never_the_planners_words(tmp_path, monkeypatch):
+    # MyUPI: “… and another ₹499 also on GOOGLE PAY app”, where OPENAI LLC's ₹399 on NAVI was
+    page = mandate_page(["GOOGLE PLAY", "AISLE", "OPENAI LLC"], shown=["GOOGLE PLAY", "AISLE"])
+    page["card_lines"] = ["GOOGLE PLAY ₹299 Active on NAVI APP", "AISLE ₹499 Active on GOOGLE PAY APP",
+                          "OPENAI LLC ₹399 Active on NAVI APP"]
+    page["text"] = "UPI Autopay\nGOOGLE PLAY\n₹299\nAISLE\n₹499"
+    w = worker_with(tmp_path, page=page, goal="What all autopay I have right now?")
+    script_planner(monkeypatch, turn("DONE", message="GOOGLE PLAY ₹299, AISLE ₹499, and another ₹499 on GOOGLE PAY.",
+                                     text="₹299"))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.told[-1]["text"] == ("Your UPI AutoPay mandates:\n• GOOGLE PLAY ₹299 Active on NAVI APP\n• AISLE ₹499 "
+                                  "Active on GOOGLE PAY APP\n• OPENAI LLC ₹399 Active on NAVI APP")
+
+
 def test_a_question_about_one_mandate_gets_no_list_of_the_others(tmp_path, monkeypatch):
     page = mandate_page(["OPENAI LLC", "AISLE", "GOOGLE PLAY"])
     page["text"] = "UPI Autopay\nOPENAI LLC\n₹399"

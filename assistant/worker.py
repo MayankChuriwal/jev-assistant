@@ -1458,7 +1458,9 @@ class Worker:
             message, quote = quote, ""  # the report written where the quote goes: it is the report
         quote = self.evidence(quote, message, texts)
         report = (message or "Done.") + missing
-        cards = page.get("cards") or []
+        cards, lines = page.get("cards") or [], page.get("card_lines") or []
+        if lines and rules.lists_mandates(s["goal"], cards):  # the cards' own words: the planner made one up
+            report = "Your UPI AutoPay mandates:\n" + "\n".join(f"• {line}" for line in lines)
         missing = [card for card in cards if card.lower() not in report.lower()]
         if missing and rules.lists_mandates(s["goal"], cards):  # MyUPI: “two active …” with three on the list
             s["list_refusals"] += 1

@@ -387,6 +387,7 @@ def test_every_cards_title_is_read_even_off_screen(browser_at):  # MyUPI: GOOGLE
                f"'<div style=\"height:90px;overflow:auto\">{cards}</div>')")
     page = b.observe()
     assert page["cards"] == ["OPENAI LLC", "AISLE", "GOOGLE PLAY"]
+    assert page["card_lines"][2] == "GOOGLE PLAY ₹299 Active on GOOGLE PAY"  # its own words, off screen too
     assert "Cancel (in “GOOGLE PLAY”)" not in [a["label"] for a in page["actions"]]  # off screen: not offered
 
 
