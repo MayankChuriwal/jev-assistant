@@ -1,0 +1,1199 @@
+<title>Jev Brain and Hands</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,750&family=JetBrains+Mono:wght@400;600&family=Public+Sans:ital,wght@0,400;0,600;0,700;1,400&display=swap">
+<style>
+/* Layout: a sticky contents rail beside one reading column; diagrams, tables and code scroll inside their own frames.
+   Colours name the four layers of the system: Core (UPI green), Brain (indigo), Hands (saffron), Jev (violet). */
+:root {
+  --bg: #F3F6F2; --surface: #FFFFFF; --sunk: #E9EEE8; --ink: #15211B; --muted: #55645B; --line: #D5DDD6;
+  --core: #0A7650; --core-soft: #DBEFE4;
+  --brain: #3546C4; --brain-soft: #E5E8FA;
+  --hands: #A9520E; --hands-soft: #F8E7D8;
+  --jev: #7A35A8; --jev-soft: #EFE3F6;
+  --good: #1B7446; --good-soft: #DDF0E4; --warn: #8C5A00; --warn-soft: #F7ECD4; --bad: #A8261D; --bad-soft: #F8E0DD;
+  --chat: #E4EBE4; --bub-in: #FFFFFF; --bub-out: #D2F1D5; --btn: #0A7650;
+  --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body: "Public Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0D1310; --surface: #141C18; --sunk: #101814; --ink: #E3EBE6; --muted: #9AA99F; --line: #28332D;
+    --core: #4CC795; --core-soft: #12301F;
+    --brain: #93A0FF; --brain-soft: #1D2243;
+    --hands: #F19B57; --hands-soft: #33231A;
+    --jev: #CB9DEC; --jev-soft: #2A1C36;
+    --good: #5DCF90; --good-soft: #143222; --warn: #EBB44B; --warn-soft: #33270F; --bad: #FF8B80; --bad-soft: #3A1714;
+    --chat: #0F1714; --bub-in: #1B2520; --bub-out: #1D4331; --btn: #4CC795;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0D1310; --surface: #141C18; --sunk: #101814; --ink: #E3EBE6; --muted: #9AA99F; --line: #28332D;
+  --core: #4CC795; --core-soft: #12301F;
+  --brain: #93A0FF; --brain-soft: #1D2243;
+  --hands: #F19B57; --hands-soft: #33231A;
+  --jev: #CB9DEC; --jev-soft: #2A1C36;
+  --good: #5DCF90; --good-soft: #143222; --warn: #EBB44B; --warn-soft: #33270F; --bad: #FF8B80; --bad-soft: #3A1714;
+  --chat: #0F1714; --bub-in: #1B2520; --bub-out: #1D4331; --btn: #4CC795;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font: 400 16px/1.6 var(--body); }
+* { box-sizing: border-box; }
+a { color: var(--brain); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--brain); outline-offset: 2px; border-radius: 4px; }
+code, .mono { font-family: var(--mono); font-size: .86em; }
+:not(pre) > code { background: var(--sunk); padding: .08em .35em; border-radius: 4px; overflow-wrap: anywhere; }
+h1, h2, h3, h4 { text-wrap: balance; margin: 0; }
+h1 { font: 750 clamp(2.3rem, 1.4rem + 3.2vw, 3.6rem)/1.02 var(--display); letter-spacing: -.025em; }
+h2 { font: 700 1.7rem/1.15 var(--display); letter-spacing: -.01em; display: flex; gap: .55rem; align-items: baseline; }
+h2 .num { font: 600 .95rem var(--mono); color: var(--muted); }
+h3 { font: 700 1.13rem/1.3 var(--body); }
+h4 { font: 700 .98rem/1.35 var(--body); }
+p, ul, ol { margin: 0; }
+ul, ol { padding-left: 1.25rem; display: grid; gap: .35rem; }
+.eyebrow { font: 600 .74rem/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+
+.hero { max-width: 1240px; margin: 0 auto; padding-inline: clamp(16px, 4vw, 40px); padding-block: 48px 36px; display: grid; gap: 18px; }
+.lede { font-size: 1.16rem; max-width: 68ch; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 0; font: .8rem/1.4 var(--mono); color: var(--muted); }
+.meta div { display: flex; gap: 6px; min-width: 0; }
+.meta dt { color: var(--muted); }
+.meta dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 12px; font-size: .86rem; }
+.chip b { font-weight: 600; }
+.chip.decided::before, .chip.proposed::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+.chip.proposed::before { background: var(--warn); }
+
+.layout { max-width: 1240px; margin: 0 auto; padding-inline: clamp(16px, 4vw, 40px); padding-block: 0 96px; display: grid; gap: 40px; }
+@media (min-width: 1080px) { .layout { grid-template-columns: 210px minmax(0, 1fr); } }
+.toc { font-size: .88rem; display: grid; gap: 4px; align-content: start; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--surface); }
+.toc .eyebrow { margin-bottom: 6px; }
+.toc a { color: var(--muted); text-decoration: none; padding: 2px 0; display: flex; gap: 8px; }
+.toc a span { font-family: var(--mono); font-size: .78rem; min-width: 1.4em; }
+.toc a:hover, .toc a[aria-current="true"] { color: var(--ink); }
+.toc a[aria-current="true"] span { color: var(--brain); }
+@media (min-width: 1080px) {
+  .toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 20px); max-height: calc(100vh - 40px); overflow: auto; border: 0; background: transparent; padding: 0; }
+}
+@media (max-width: 1079px) { .toc { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); } .toc .eyebrow { grid-column: 1 / -1; } }
+main { min-width: 0; display: grid; gap: 72px; }
+section { display: grid; gap: 18px; min-width: 0; scroll-margin-top: 20px; }
+.prose { max-width: 74ch; display: grid; gap: 12px; }
+.muted { color: var(--muted); }
+.small { font-size: .88rem; }
+
+.grid2 { display: grid; gap: 16px; }
+@media (min-width: 760px) { .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.card .when { font: .78rem var(--mono); color: var(--muted); }
+.said { background: var(--bad-soft); border-radius: 8px; padding: 10px 12px; font-size: .93rem; }
+.should { background: var(--good-soft); border-radius: 8px; padding: 10px 12px; font-size: .93rem; }
+.box { border-radius: 12px; padding: 16px 18px; display: grid; gap: 8px; min-width: 0; }
+.box.core { background: var(--core-soft); } .box.brain { background: var(--brain-soft); } .box.hands { background: var(--hands-soft); } .box.jev { background: var(--jev-soft); }
+.box.warn { background: var(--warn-soft); }
+.label { font: 600 .72rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.box.core .label { color: var(--core); } .box.brain .label { color: var(--brain); } .box.hands .label { color: var(--hands); } .box.jev .label { color: var(--jev); } .box.warn .label { color: var(--warn); }
+
+.tag { display: inline-block; font: 600 .74rem/1.5 var(--mono); padding: 0 .5em; border-radius: 4px; white-space: nowrap; }
+.tag.core { background: var(--core-soft); color: var(--core); } .tag.brain { background: var(--brain-soft); color: var(--brain); }
+.tag.hands { background: var(--hands-soft); color: var(--hands); } .tag.jev { background: var(--jev-soft); color: var(--jev); }
+.st { display: inline-block; font: 600 .72rem/1.6 var(--mono); padding: 0 .55em; border-radius: 999px; white-space: nowrap; }
+.st.decided { background: var(--good-soft); color: var(--good); } .st.proposed { background: var(--warn-soft); color: var(--warn); }
+.st.new { background: var(--brain-soft); color: var(--brain); } .st.changed { background: var(--hands-soft); color: var(--hands); }
+.st.removed { background: var(--bad-soft); color: var(--bad); } .st.same { background: var(--sunk); color: var(--muted); }
+
+.tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: .91rem; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+th { font: 600 .72rem/1.3 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); background: var(--sunk); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+tr.mark td { background: var(--good-soft); font-weight: 600; }
+
+.diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; overflow-x: auto; min-width: 0; }
+.diagram pre.mermaid { margin: 0; background: transparent; font: .8rem/1.4 var(--mono); }
+.cap { font-size: .86rem; color: var(--muted); margin-top: -8px; }
+pre.code { margin: 0; background: var(--sunk); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; font: .8rem/1.55 var(--mono); color: var(--ink); white-space: pre; }
+
+.stack { display: grid; gap: 6px; }
+.layer { border-radius: 10px; padding: 12px 14px; display: grid; gap: 4px; border: 1px solid var(--line); background: var(--surface); }
+.layer .eyebrow { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.layer.static { background: var(--sunk); }
+.layer.snap { background: var(--brain-soft); border-color: transparent; }
+
+.phones { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); }
+.phone { background: var(--chat); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; display: grid; align-content: start; min-width: 0; }
+.phone-top { display: flex; gap: 10px; align-items: center; padding: 10px 14px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--core); color: var(--bg); display: grid; place-items: center; font: 700 .9rem var(--display); flex: none; }
+.phone-top b { display: block; font-size: .92rem; line-height: 1.2; }
+.phone-top small { color: var(--muted); font-size: .74rem; }
+.scenario { font: 600 .74rem var(--mono); color: var(--muted); padding: 10px 14px 0; letter-spacing: .04em; }
+.thread { display: grid; gap: 7px; padding: 12px 12px 16px; font-size: .86rem; line-height: 1.45; }
+.msg { max-width: 88%; padding: 7px 10px; border-radius: 10px; background: var(--bub-in); justify-self: start; box-shadow: 0 1px 0 rgba(0,0,0,.06); overflow-wrap: anywhere; }
+.msg.out { background: var(--bub-out); justify-self: end; }
+.msg.note { background: transparent; box-shadow: none; color: var(--muted); font-style: italic; font-size: .8rem; justify-self: center; text-align: center; padding: 2px 8px; }
+.msg.info { color: var(--muted); }
+.msg.tap { font-style: italic; }
+.btns { display: grid; margin: 8px -10px -7px; border-top: 1px solid var(--line); }
+.btns span { text-align: center; color: var(--btn); font-weight: 600; padding: 7px 6px; border-bottom: 1px solid var(--line); }
+.btns span:last-child { border-bottom: 0; }
+.pic { display: block; border-radius: 6px; margin-bottom: 6px; }
+.pic.qr { width: 96px; height: 96px; background: repeating-conic-gradient(var(--ink) 0 25%, var(--bub-in) 0 50%) 0 0 / 12px 12px; border: 6px solid var(--bub-in); outline: 1px solid var(--line); }
+.pic.captcha { width: 120px; height: 40px; background: var(--sunk); color: var(--muted); display: grid; place-items: center; font: italic 600 1.05rem var(--mono); letter-spacing: .3em; }
+
+.plan td:first-child { font: 600 .82rem var(--mono); color: var(--muted); }
+.qs { display: grid; gap: 14px; counter-reset: q; padding: 0; list-style: none; }
+.qs li { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; display: grid; gap: 6px; }
+.qs li h4::before { counter-increment: q; content: counter(q) ". "; color: var(--muted); font-family: var(--mono); }
+.rec { color: var(--good); font-weight: 600; }
+footer { color: var(--muted); font-size: .84rem; border-top: 1px solid var(--line); padding-top: 18px; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<header class="hero">
+  <p class="eyebrow">Design spec · draft for your review</p>
+  <h1>Jev brain and hands</h1>
+  <p class="lede">Jev reads your chat with a seven-label classifier and lets a small model click inside one task at a time, so a vague request can only be guessed or dropped. This spec gives the conversation to a model with tools (the <b>brain</b>) and turns today's browser worker into those tools (the <b>hands</b>). Jev keeps choosing each next click on a page, and also judges your typed yes before a mandate is touched.</p>
+  <dl class="meta">
+    <div><dt>Date</dt><dd>12 Oct 2026</dd></div>
+    <div><dt>Branch</dt><dd>mini-jev-agent</dd></div>
+    <div><dt>Short spec</dt><dd>docs/superpowers/specs/2026-10-12-brain-and-hands-design.md</dd></div>
+    <div><dt>Demo</dt><dd>cancel a UPI AutoPay mandate · raise an Experian dispute</dd></div>
+  </dl>
+  <div class="chips" aria-label="Decisions">
+    <span class="chip decided"><b>Approach</b> brain + hands</span>
+    <span class="chip decided"><b>Brain model</b> gpt-5.6-luna</span>
+    <span class="chip decided"><b>Cancel rule</b> named → QR · inferred → confirm</span>
+    <span class="chip decided"><b>Experian</b> live, with your ERN + UTI</span>
+    <span class="chip proposed"><b>For review</b> Jev judges a typed yes</span>
+    <span class="chip proposed"><b>For review</b> verify after you approve</span>
+  </div>
+</header>
+
+<div class="layout">
+<nav class="toc" aria-label="Contents">
+  <p class="eyebrow">Contents</p>
+  <a href="#why"><span>1</span>Why it failed</a>
+  <a href="#change"><span>2</span>What changes</a>
+  <a href="#decisions"><span>3</span>Decisions</a>
+  <a href="#experience"><span>4</span>What you'll see</a>
+  <a href="#routing"><span>5</span>Message routing</a>
+  <a href="#brain"><span>6</span>The brain</a>
+  <a href="#tools"><span>7</span>Tools</a>
+  <a href="#gate"><span>8</span>Confirmation gate</a>
+  <a href="#sequences"><span>9</span>Sequences</a>
+  <a href="#hands"><span>10</span>The hands</a>
+  <a href="#data"><span>11</span>Data shapes</a>
+  <a href="#safety"><span>12</span>Safety</a>
+  <a href="#failures"><span>13</span>When things go wrong</a>
+  <a href="#testing"><span>14</span>Tests and evals</a>
+  <a href="#plan"><span>15</span>Build plan</a>
+  <a href="#later"><span>16</span>Later</a>
+  <a href="#references"><span>17</span>References</a>
+  <a href="#extend"><span>18</span>Other Rivo use cases</a>
+  <a href="#review"><span>19</span>Questions for you</a>
+</nav>
+
+<main>
+
+<!-- 1 -->
+<section id="why">
+  <h2><span class="num">1</span>Why it failed on your two runs</h2>
+  <div class="grid2">
+    <article class="card">
+      <p class="when">02:02:52 · 34.6 s · trace …-cancel-my-subscriptions</p>
+      <h3>“Cancel my subscriptions”</h3>
+      <ul>
+        <li>Signed in with the captcha and code, opened UPI Autopay, and saw all three: OPENAI LLC, GOOGLE PLAY, AISLE.</li>
+        <li>The planner then planned <b>“Press Cancel on the OPENAI LLC mandate card”</b>. Nobody asked for that.</li>
+        <li>The wrong-card guard refused, and the <code>no_mandate</code> rule ended the task (<code>worker.py:1608</code>, site note line 20).</li>
+      </ul>
+      <p class="said">“None of your UPI AutoPay mandates is for what you asked (“Cancel my subscriptions”), so nothing was changed.”</p>
+      <p class="should">Should have listed the three and asked which, with buttons.</p>
+    </article>
+    <article class="card">
+      <p class="when">02:03:29 · 6.7 s · trace …-cancel-my-aisle-subscripti</p>
+      <h3>“Cancel my aisle subscription”</h3>
+      <ul>
+        <li>Reused the sign-in and opened UPI Autopay.</li>
+        <li>Read the list <b>while it was still drawing</b>: GOOGLE PLAY's card had blank Frequency, Executed and Valid till, and AISLE's card wasn't drawn yet.</li>
+        <li>Jev's done-check said yes (0.95) on a read that showed only the page header.</li>
+      </ul>
+      <p class="said">“No UPI AutoPay mandate for “aisle” subscription was found.”</p>
+      <p class="should">AISLE was on the list 37 seconds earlier, and nothing was cancelled in between. It still exists.</p>
+    </article>
+  </div>
+  <div class="prose">
+    <h3>The cause: the layers are the wrong way round</h3>
+    <p>You described the model as the intelligence and Jev as the decision layer for the next action. What's built is the reverse:</p>
+    <ul>
+      <li>Jev, which picks one of seven labels, plus regexes decide what each chat message means.</li>
+      <li>The model (<code>gpt-4.1-mini</code>, not 5.1-mini) works only inside one browser task. It sees your raw words as the goal, and one page. It never sees the conversation.</li>
+      <li>Every message starts a task from zero. Between messages Core keeps only a set of payee names (<code>core.py:165</code>).</li>
+    </ul>
+    <p>So a vague request has nowhere to go. The task can guess (it pressed wrong cards earlier today) or end. I blocked the guessing, so it ends: that's the lockdown. Today's 34 fix commits were all symptoms of this one flaw.</p>
+  </div>
+  <div class="grid2">
+    <div class="box jev"><p class="label">Is Jev the issue?</p><p>It's in the wrong job. A label-picker can't hold a dialogue like “you have three, which one?”. Its right job is inside the browser: choosing the next click and checking the page, fast and cheap. It stays there, and gains one more yes-or-no job in the confirmation gate.</p></div>
+    <div class="box brain"><p class="label">Is the model the issue?</p><p>Partly. <code>gpt-4.1-mini</code> made the random OPENAI pick and the early “done”. But a better model in the same seat would still be blind to the conversation. Swapping the model alone won't fix it; moving the model up to the conversation does.</p></div>
+  </div>
+</section>
+
+<!-- 2 -->
+<section id="change">
+  <h2><span class="num">2</span>What changes</h2>
+  <div class="grid2">
+    <div class="diagram" aria-label="Today's flow">
+      <p class="eyebrow">Today</p>
+<pre class="mermaid">
+flowchart TB
+  A["Your message"] --> B{"Jev picks 1 of 7 labels, regexes pick the site"}
+  B -->|new task| C["Task goal = your raw words"]
+  B -->|stop, status, other| D["Stop a task, or small talk"]
+  C --> E["Worker sees one goal and one page"]
+  E --> F{"gpt-4.1-mini decides"}
+  F -->|click or type| E
+  F -->|done or stop| G["Task ends. Only payee names are kept"]
+</pre>
+    </div>
+    <div class="diagram" aria-label="Proposed flow">
+      <p class="eyebrow">Proposed</p>
+<pre class="mermaid">
+flowchart TB
+  A["Your message"] --> B["Core: answers, stop, log out"]
+  B --> C{"Brain gpt-5.6-luna sees the whole chat and what you have"}
+  C -->|unclear| D["Asks with your real options"]
+  C -->|clear| E["Tool with an exact goal"]
+  E --> F["Worker: Jev picks each click"]
+  F -->|result and list| C
+  C -->|answer| G["Replies, keeps it for the next message"]
+</pre>
+    </div>
+  </div>
+  <div class="diagram" aria-label="Architecture">
+    <p class="eyebrow">Architecture</p>
+<pre class="mermaid">
+flowchart TB
+  U(["You: web chat today, WhatsApp later"])
+  subgraph CO["Core: code only, no model"]
+    R["receive(): answer, stop, log out, or brain"]
+    Q["Question queue: captcha, code, QR, final yes"]
+    X["execute(goal): one task, result captured"]
+  end
+  subgraph BR["Brain: gpt-5.6-luna"]
+    L["Turn loop, up to 8 steps"]
+    S[("Snapshot: time, saved ID names, mandates and read time")]
+    H[("Conversation items")]
+    G["Gate: payee named or confirmed"]
+    JC["Jev: does this reply confirm?"]
+  end
+  subgraph HA["Hands: today's worker"]
+    W["Worker step loop"]
+    J["Jev: next action, done-check"]
+    P["Planner: gpt-4.1-mini"]
+    CH["Agent Chrome :9333 with MyUPI, Experian, other sites"]
+  end
+  U --> R
+  R -->|an answer| Q
+  R -->|everything else| L
+  S -.-> L
+  H -.-> L
+  L -->|tool call| G
+  G -.->|typed yes| JC
+  G -->|allowed| X
+  X --> W
+  W --> J
+  W --> P
+  W --> CH
+  W -->|asks you| Q
+  Q -->|question| U
+  L -->|reply and options| U
+</pre>
+  </div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Layer</th><th>Its job</th><th>Model</th><th>Code</th></tr></thead>
+      <tbody>
+        <tr><td><span class="tag core">Core</span></td><td>The channel. Answers to an open question (captcha, code, QR, final yes) go straight to it. “Log out”, “stop”, and queueing while a tool runs.</td><td>None</td><td><code>core.py</code></td></tr>
+        <tr><td><span class="tag brain">Brain</span></td><td>Holds the conversation and what you have. Each step: answer, ask with options, or call a tool.</td><td><code>gpt-5.6-luna</code></td><td><code>brain.py</code> (new)</td></tr>
+        <tr><td><span class="tag hands">Hands</span></td><td>Do one exact job on one site: sign in, read, press, hand you the QR.</td><td>Jev + <code>gpt-4.1-mini</code></td><td><code>worker.py</code>, <code>browser.py</code>, <code>gate.py</code></td></tr>
+        <tr><td><span class="tag jev">Jev</span></td><td>Next click and done-checks inside the hands; in the gate, whether a typed reply confirms a card.</td><td>TypeSafe <code>jev-latest</code></td><td><code>jev.py</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>File</th><th></th><th>Change</th></tr></thead>
+      <tbody>
+        <tr><td><code>assistant/brain.py</code></td><td><span class="st new">new</span></td><td>Turn loop, instructions, snapshot, history, tools, gate, reply options, trace</td></tr>
+        <tr><td><code>assistant/brain_eval.py</code></td><td><span class="st new">new</span></td><td>Your demo phrasings run against the real model with fake tools</td></tr>
+        <tr><td><code>skills/playbooks/*.md</code></td><td><span class="st new">new</span></td><td>The brain's MyUPI and bureau-dispute playbooks, as files</td></tr>
+        <tr><td><code>assistant/model.py</code></td><td><span class="st changed">changed</span></td><td><code>agent_turn()</code>: one Responses API call, redacted and leak-checked like every model call</td></tr>
+        <tr><td><code>assistant/core.py</code></td><td><span class="st changed">changed</span></td><td><code>receive()</code> and <code>tapped()</code> hand chat to the brain; new <code>execute()</code> runs a tool's task and captures its result</td></tr>
+        <tr><td><code>assistant/worker.py</code></td><td><span class="st changed">changed</span></td><td>The mandate list settles before it's read; <code>state["outcome"]</code> records approved, not_approved, not_found</td></tr>
+        <tr><td><code>assistant/jev.py</code></td><td><span class="st changed">changed</span></td><td>New <code>confirms()</code>. <code>route()</code>, <code>ambiguous()</code> and <code>INTENTS</code> removed</td></tr>
+        <tr><td><code>assistant/messages.py</code></td><td><span class="st changed">changed</span></td><td>Option ids for brain replies</td></tr>
+        <tr><td><code>skills/sites/upihelp.npci.org.in.md</code></td><td><span class="st changed">changed</span></td><td>A <code>list:</code> marker for the mandate list page</td></tr>
+        <tr><td><code>assistant/planner.py</code></td><td><span class="st removed">removed parts</span></td><td><code>chat()</code> and <code>split()</code> go: the brain answers and splits errands itself</td></tr>
+        <tr><td><code>browser.py</code>, <code>snapshot.js</code>, <code>gate.py</code>, <code>memory.py</code>, <code>executor.py</code>, <code>channel_web.py</code></td><td><span class="st same">same</span></td><td>Unchanged. The tested sign-in, captcha and code relay, card guards and QR hand-off are reused as they are.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 3 -->
+<section id="decisions">
+  <h2><span class="num">3</span>Decisions</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>#</th><th>Topic</th><th>Decision</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Approach</td><td>Brain + hands: a tool-calling conversation agent; each tool runs today's worker with an exact goal.</td><td><span class="st decided">decided</span></td></tr>
+        <tr><td>2</td><td>Brain model</td><td><code>gpt-5.6-luna</code> on the Responses API, reasoning effort <code>low</code>. <code>BRAIN_MODEL</code> and <code>BRAIN_EFFORT</code> override it.</td><td><span class="st decided">decided</span></td></tr>
+        <tr><td>3</td><td>Planner model</td><td>The worker's planner stays <code>gpt-4.1-mini</code>. It's tuned, and the brain removes the vague goals that tripped it.</td><td><span class="st decided">decided</span></td></tr>
+        <tr><td>4</td><td>Cancel rule</td><td>A payee you named (“cancel aisle”) goes straight to the cancel QR: your UPI PIN is the real confirmation. A payee the brain inferred (“cancel chatgpt” → OPENAI LLC) needs your yes first.</td><td><span class="st decided">decided</span></td></tr>
+        <tr><td>5</td><td>Enforcing the cancel rule</td><td>In code (section 8). Code sends the confirmation card; a tap names the payee exactly; a typed reply passes a regex, else Jev judges it.</td><td><span class="st proposed">for review</span></td></tr>
+        <tr><td>6</td><td>Verify after you approve</td><td>After “I approved it”, the tool reads MyUPI once more and reports whether the mandate is gone. A tap in chat is never proof.</td><td><span class="st proposed">for review</span></td></tr>
+        <tr><td>7</td><td>Experian</td><td>Tested live. The worker types your ERN and UTI from saved IDs or asks for them in the hidden field. The final submit asks your yes; the brain adds no second confirmation.</td><td><span class="st decided">decided</span></td></tr>
+        <tr><td>8</td><td>Codes and IDs</td><td>Never reach the brain or any model, as today.</td><td><span class="st decided">unchanged</span></td></tr>
+        <tr><td>9</td><td>Old router</td><td>Jev's chat labels, the which-task buttons, task amendments, <code>planner.chat</code> and <code>planner.split</code> are deleted as the last task, after the live run.</td><td><span class="st proposed">for review</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 4 -->
+<section id="experience">
+  <h2><span class="num">4</span>What you'll see</h2>
+  <p class="prose muted small">Illustrative transcripts with example data, written to the spec. Reply buttons appear as rows under a message, as on WhatsApp; four or more options become a list.</p>
+  <div class="phones">
+    <div class="phone">
+      <div class="phone-top"><span class="avatar">J</span><div><b>Jev</b><small>web chat · WhatsApp later</small></div></div>
+      <p class="scenario">A · VAGUE REQUEST</p>
+      <div class="thread">
+        <p class="msg out">Cancel my subscriptions</p>
+        <p class="msg info">Checking your UPI AutoPay mandates on MyUPI…</p>
+        <div class="msg"><span class="pic captcha" aria-hidden="true">K7Q2</span>The site wants a check solved. Type the text it shows.</div>
+        <p class="msg out">K7Q2</p>
+        <p class="msg">NPCI UPI Help sent you a code. Type it here; it stays hidden.</p>
+        <p class="msg out">••••••</p>
+        <div class="msg">You have 3 UPI AutoPay mandates:<br>• <b>OPENAI LLC</b> ₹399<br>• <b>GOOGLE PLAY</b> ₹299<br>• <b>AISLE</b> ₹499<br>Which should I cancel?<div class="btns"><span>OPENAI LLC</span><span>GOOGLE PLAY</span><span>AISLE</span></div></div>
+        <p class="msg out tap">AISLE</p>
+        <p class="msg info">Cancelling AISLE's AutoPay on MyUPI…</p>
+        <div class="msg"><span class="pic qr" aria-hidden="true"></span>To cancel AISLE's UPI AutoPay, scan this QR with your UPI app and approve it there with your UPI PIN. Nothing changes until you do.<div class="btns"><span>I approved it</span><span>Not now</span></div></div>
+        <p class="msg out tap">I approved it</p>
+        <p class="msg">Done. MyUPI no longer lists AISLE, so its AutoPay payments stop. Your account with AISLE itself stays open.</p>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="phone-top"><span class="avatar">J</span><div><b>Jev</b><small>web chat · WhatsApp later</small></div></div>
+      <p class="scenario">B · BRAND BILLED BY A COMPANY</p>
+      <div class="thread">
+        <p class="msg out">cancel chatgpt</p>
+        <div class="msg">ChatGPT bills as OPENAI LLC. Cancel <b>OPENAI LLC</b> (₹399)? You'll approve it in your UPI app with your PIN.<div class="btns"><span>Cancel OPENAI LLC</span><span>No, keep it</span></div></div>
+        <p class="msg out">haan kar do</p>
+        <p class="msg note">Jev judges that this confirms the card</p>
+        <p class="msg info">Cancelling OPENAI LLC's AutoPay on MyUPI…</p>
+        <div class="msg"><span class="pic qr" aria-hidden="true"></span>To cancel OPENAI LLC's UPI AutoPay, scan this QR with your UPI app and approve it there with your UPI PIN.<div class="btns"><span>I approved it</span><span>Not now</span></div></div>
+        <p class="msg out tap">Not now</p>
+        <p class="msg">OK, nothing changed: OPENAI LLC's AutoPay stays active. Say the word when you want to do it.</p>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="phone-top"><span class="avatar">J</span><div><b>Jev</b><small>web chat · WhatsApp later</small></div></div>
+      <p class="scenario">C · NOTHING MATCHES</p>
+      <div class="thread">
+        <p class="msg out">cancel my netflix subscription</p>
+        <div class="msg">There's no Netflix AutoPay on your UPI. Netflix may bill through GOOGLE PLAY, which covers many apps, or through a card. Cancel one of these?<div class="btns"><span>OPENAI LLC · ₹399</span><span>GOOGLE PLAY · ₹299</span><span>AISLE · ₹499</span><span>None of these</span></div></div>
+        <p class="msg out">what does google play cover?</p>
+        <p class="msg">MyUPI only shows the payee, GOOGLE PLAY ₹299, not which apps it pays for. Your Google Play subscriptions page lists them.</p>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="phone-top"><span class="avatar">J</span><div><b>Jev</b><small>web chat · WhatsApp later</small></div></div>
+      <p class="scenario">D · EXPERIAN DISPUTE (EXAMPLE ACCOUNT)</p>
+      <div class="thread">
+        <p class="msg out">I want to dispute something on my Experian report</p>
+        <div class="msg">What's wrong on it?<div class="btns"><span>An account's details</span><span>My personal details</span><span>An enquiry I didn't make</span></div></div>
+        <p class="msg out">HDFC card ending 4321 shows ₹12,000 overdue, I paid it in full</p>
+        <p class="msg">Raising it now: HDFC credit card ••4321, Amount overdue ₹12,000 → ₹0.</p>
+        <p class="msg info">Opening Experian's dispute page…</p>
+        <p class="msg">Experian needs your Experian Reference Number (ERN). Type it here; it stays hidden.</p>
+        <p class="msg out">••••••••••</p>
+        <div class="msg">Ready to submit to Experian: HDFC credit card ••4321, Amount overdue ₹12,000 → ₹0. Submit?<div class="btns"><span>Yes, submit</span><span>No</span></div></div>
+        <p class="msg out tap">Yes, submit</p>
+        <p class="msg">Dispute raised with Experian. They'll email you an acknowledgement.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 5 -->
+<section id="routing">
+  <h2><span class="num">5</span>Message routing</h2>
+  <div class="prose"><p><code>Core.receive()</code> decides in code, in this order. No model sees a captcha answer, a code, or a tap on a task's question.</p></div>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart TD
+  A["A message arrives"] --> B{"A tap?"}
+  B -->|on a brain reply's options| BI["Brain inbox: the option's full words"]
+  B -->|on a task's question| QA["Answer that question"]
+  B -->|no| C{"A task's question open?"}
+  C -->|yes, and it's a stop word| ST["Cancel the task that asked"]
+  C -->|yes| QA
+  C -->|no| D{"Log out?"}
+  D -->|yes| LO["End your kept sign-ins"]
+  D -->|no| E{"A tool running?"}
+  E -->|yes, a stop word| ST
+  E -->|yes| QN["Queue it, say once: I'll get to that next"]
+  E -->|no| BI
+</pre>
+  </div>
+  <div class="prose small">
+    <ul>
+      <li><b>A task's question</b> is one the hands asked: the captcha, the SMS code, the QR's two buttons, a final yes. Today Jev decided whether text answered it; now it does by rule, because only a running tool asks.</li>
+      <li><b>Stop words</b>: stop, cancel, never mind, abort, ruko, bas. They cancel the task after its current step, as today.</li>
+      <li><b>Option taps</b> carry an id; Core maps it back to the option's full words (a WhatsApp button shows only 20 characters).</li>
+      <li>The brain works one message at a time on its own thread. Typing shows while it thinks.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 6 -->
+<section id="brain">
+  <h2><span class="num">6</span>The brain</h2>
+  <h3>Turn loop</h3>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart TD
+  IN["Next inbox message"] --> A["Add it to the conversation, typing on"]
+  A --> M["Model step: instructions, tools, conversation, snapshot"]
+  M -->|model error| ER["Say it couldn't, drop this turn's items"]
+  M --> K{"Which tool?"}
+  K -->|reply| RP["Send text and options, end the turn"]
+  K -->|another tool| G{"Gate and guards"}
+  G -->|rejected| RJ["Result: rejected, with a next hint"]
+  G -->|needs your yes| CC["Code sends the confirmation card, end the turn"]
+  G -->|pass| T["Run it: progress line, worker task, captured result"]
+  RJ --> N{"Steps left?"}
+  T --> N
+  N -->|yes| M
+  N -->|last step| MR["Model step, reply only"]
+  MR --> RP
+</pre>
+  </div>
+  <div class="prose small">
+    <ul>
+      <li>Up to <b>8 model steps</b> a turn. Each step must call exactly one tool (<code>tool_choice: required</code>, no parallel calls). <code>reply</code> ends the turn; the last step offers only <code>reply</code>.</li>
+      <li>No time limit on a turn: a tool may wait minutes for you to type a code. The step cap bounds the model, not you.</li>
+      <li>If a model call fails, the turn's items are dropped so the conversation stays valid, and you get one plain line saying so.</li>
+    </ul>
+  </div>
+
+  <h3>Model and settings</h3>
+  <div class="prose small"><p>Chat Completions refuses function tools with reasoning for both <code>gpt-5.6-luna</code> and <code>gpt-5.4-mini</code> (“Function tools with reasoning_effort are not supported … use /v1/responses or set reasoning_effort to 'none'”). The Responses API takes both, so reasoning stays one setting.</p></div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Setting</th><th>Value</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Endpoint</td><td><code>POST /v1/responses</code></td><td>Function tools with reasoning</td></tr>
+        <tr><td>Model</td><td><code>BRAIN_MODEL</code>, default <code>gpt-5.6-luna</code></td><td>Your pick; best wording in the probe</td></tr>
+        <tr><td>Reasoning</td><td><code>BRAIN_EFFORT</code>, default <code>low</code></td><td>About 1 s a turn more than none; raise it without code</td></tr>
+        <tr><td>Tool choice</td><td><code>required</code>; last step: <code>reply</code> only</td><td>The brain always acts or answers</td></tr>
+        <tr><td>Parallel tool calls</td><td><code>false</code></td><td>One browser task at a time</td></tr>
+        <tr><td>Storage</td><td><code>store: false</code>, with <code>reasoning.encrypted_content</code> included</td><td>Nothing kept at OpenAI; reasoning carried within the turn</td></tr>
+        <tr><td>Output cap</td><td><code>max_output_tokens: 4000</code></td><td>Room for reasoning plus one call</td></tr>
+        <tr><td>Redaction</td><td>Saved IDs redacted; <code>post_json</code> refuses a leak</td><td>Same path as every model call today</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="cap">Probe on 12 Oct: real model, a fake mandate list, no browser. Times are model time for the whole turn.</p>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>You say</th><th>luna · reasoning off</th><th>luna · reasoning low</th><th>5.4-mini · reasoning low</th></tr></thead>
+      <tbody>
+        <tr><td>Cancel my subscriptions</td><td>Lists 3, asks which, 3 buttons · 3.0 s</td><td>Same · 3.9 s</td><td>Same · 2.7 s</td></tr>
+        <tr><td>Cancel my netflix subscription</td><td>“I don't see a Netflix mandate”, warns GOOGLE PLAY covers many apps, asks · 3.0 s</td><td>“No mandate named Netflix”, asks · 3.7 s</td><td>Same idea · 2.8 s</td></tr>
+        <tr><td>cancel chatgpt</td><td>“OPENAI LLC ₹399 may be ChatGPT. Cancel?” · 2.7 s</td><td>Same · 3.3 s</td><td>Asks to confirm · 3.2 s</td></tr>
+        <tr><td>Cancel my aisle subscription</td><td>Cancels AISLE, sends the QR · 3.7 s</td><td>Same · 4.7 s</td><td>Same · 4.7 s</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small muted">No <code>gpt-6-luna</code> or <code>gpt-5.1-mini</code> exists on your key. OpenInstinct's default, <code>openai/gpt-6.1-sol-fast</code>, is a Vercel AI Gateway model and isn't on your OpenAI key either; the nearest is <code>gpt-5.6-sol</code>.</p>
+
+  <h3>What the model reads each step</h3>
+  <div class="stack">
+    <div class="layer static"><p class="eyebrow"><span>1 · Instructions</span><span>static, cached</span></p><p>Who Jev is · asking rules · message style · MyUPI playbook · Experian playbook · other sites and memory · never-list.</p></div>
+    <div class="layer static"><p class="eyebrow"><span>2 · Tools</span><span>static, cached</span></p><p>Eight strict function schemas (section 7).</p></div>
+    <div class="layer"><p class="eyebrow"><span>3 · Conversation</span><span>grows; last 60 items</span></p><p>Your messages, the brain's tool calls and their results, its replies. Trimmed only at one of your messages, so a call and its result always travel together. Reasoning from earlier turns is dropped.</p></div>
+    <div class="layer snap"><p class="eyebrow"><span>4 · Snapshot</span><span>rebuilt every step, never stored</span></p><p class="mono small">Context (not from the user): Monday 12 Oct 2026, 02:41 IST. Saved IDs: phone number, Experian Reference Number (ERN), Experian Unique Transaction ID (UTI). UPI AutoPay mandates, read at 02:03: OPENAI LLC ₹399 · GOOGLE PLAY ₹299 · AISLE ₹499. Waiting for your yes: cancel OPENAI LLC.</p></div>
+  </div>
+  <p class="small muted">Saved IDs appear by name only, from <code>memory.ids()</code>. Their values never enter the brain.</p>
+
+  <h3>Instructions, in outline</h3>
+  <div class="grid2">
+    <div class="card"><h4>Who you are</h4><p class="small">You are Jev, the user's personal-finance assistant on WhatsApp. You act for them on real websites through your tools. You alone talk to them, and only through <code>reply</code>.</p></div>
+    <div class="card"><h4>Asking <span class="muted small">(from OpenInstinct)</span></h4><p class="small">Before asking, reread the conversation and the snapshot; never ask for what you know or can read with a tool. Ask only when the evidence conflicts, nothing matches, it's a personal preference, or acting would be unsafe. Offer their real choices as options. A request you can't match never ends the conversation: say what you found, and ask.</p></div>
+    <div class="card"><h4>Acting</h4><p class="small">If the intent is clear and allowed, act; don't ask whether to act. Never say something is underway or done unless a tool did it in this turn.</p></div>
+    <div class="card"><h4>Style <span class="muted small">(from OpenInstinct)</span></h4><p class="small">Lead with the answer. One to four short lines. Plain text, with *bold* only for names and amounts. One question per message, with options when there are choices.</p></div>
+    <div class="card"><h4>MyUPI playbook</h4><ul class="small">
+      <li>MyUPI shows the user's AutoPay mandates across all their UPI apps, 60 days of transactions, complaints, UPI ID, payee checks and UPI help.</li>
+      <li>Reading it needs a sign-in: a captcha picture and an SMS code for the user. That's expected; it lasts a few minutes between requests.</li>
+      <li>Use the list in the snapshot. Re-read after a change, or when the user asks for fresh data.</li>
+      <li>Cancel: <code>upi_cancel</code> with the payee exactly as listed. The user approves with their UPI PIN by scanning a QR; nothing changes until they do.</li>
+      <li>ChatGPT bills as OPENAI LLC; YouTube Premium and Google One as GOOGLE. An app store's mandate (GOOGLE PLAY, APPLE) pays for many apps: never assume it is a brand's.</li>
+      <li>No mandate for a brand: say so plainly, mention an app store or a card, and offer their mandates.</li>
+      <li>Pause needs a date: the 15th, a month end, or one they give.</li>
+      <li>Transactions, complaints, UPI ID, checking a payee, UPI questions: <code>upi_task</code> with one clear instruction.</li>
+    </ul></div>
+    <div class="card"><h4>Experian playbook</h4><ul class="small">
+      <li>A dispute needs its kind (an account's details, personal details, or a credit enquiry), the account's lender and last 4 digits, what the report shows, and what it should show.</li>
+      <li>Ask only for what's missing, one short question with options where possible. Then call <code>bureau_dispute</code> without asking again: Experian's final submit asks their yes.</li>
+      <li>The ERN and UTI come from a report pulled in the last 30 days. The tool types them or asks in a hidden field. Never ask for them in chat.</li>
+      <li>If Experian says they're too old, tell the user a fresh report is needed.</li>
+    </ul></div>
+    <div class="card"><h4>Other sites and memory</h4><p class="small"><code>browse</code> for any other task, in the user's words plus details from the chat. <code>memory</code> when they ask you to remember or forget something about them.</p></div>
+    <div class="card"><h4>Never</h4><p class="small">Ask for codes, PINs, passwords, card numbers or IDs in chat. Claim a result a tool didn't report. Promise work you didn't start. Act on a page yourself: only tools act.</p></div>
+  </div>
+</section>
+
+<!-- 7 -->
+<section id="tools">
+  <h2><span class="num">7</span>Tools</h2>
+  <div class="prose small"><p>Each tool returns JSON with a <code>status</code> and, when useful, a <code>next</code> hint for the model, as the companion harness does. When a tool starts a browser task, Core sends you one fixed progress line; no model writes it.</p></div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Tool</th><th>Arguments</th><th>What runs</th><th>Returns</th><th>Progress line</th></tr></thead>
+      <tbody>
+        <tr><td><code>upi_mandates</code></td><td>none</td><td>Worker on MyUPI: “List all my UPI AutoPay mandates”</td><td><code>done</code> + <code>mandates</code> + <code>read_at</code></td><td>Checking your UPI AutoPay mandates on MyUPI…</td></tr>
+        <tr><td><code>upi_cancel</code></td><td><code>payee</code>, <code>reason</code>?</td><td>“Cancel the UPI AutoPay mandate whose payee is {payee}”, then one re-read to verify</td><td><code>approved</code> (+ <code>verified</code>), <code>not_approved</code>, <code>not_found</code> (+ list), <code>needs_confirmation</code>, <code>rejected</code>, <code>stopped</code>, <code>failed</code></td><td>Cancelling {payee}'s AutoPay on MyUPI…</td></tr>
+        <tr><td><code>upi_pause</code></td><td><code>payee</code>, <code>until</code>, <code>reason</code>?</td><td>“Pause the UPI AutoPay mandate whose payee is {payee} until {until}”</td><td>As <code>upi_cancel</code></td><td>Pausing {payee}'s AutoPay on MyUPI…</td></tr>
+        <tr><td><code>upi_task</code></td><td><code>goal</code></td><td>The goal on MyUPI: transactions, complaints, UPI ID, payee check, UPI help</td><td><code>done</code> + <code>report</code></td><td>Working on it on MyUPI…</td></tr>
+        <tr><td><code>bureau_dispute</code></td><td><code>bureau</code> (Experian today), <code>kind</code>, <code>account</code>, <code>wrong</code>, <code>correct</code></td><td>“Raise a dispute on my Experian credit report. Dispute type: … Account: … The report shows: … It should be: …”</td><td><code>done</code> + <code>report</code></td><td>Opening Experian's dispute page…</td></tr>
+        <tr><td><code>browse</code></td><td><code>goal</code></td><td>Today's path: intake, habit match, start page</td><td><code>done</code> + <code>report</code></td><td>On it: {title}…</td></tr>
+        <tr><td><code>memory</code></td><td><code>words</code></td><td>Today's memory chat flow; it replies to you itself</td><td><code>done</code></td><td>none</td></tr>
+        <tr><td><code>reply</code></td><td><code>text</code>, <code>options</code> (up to 10)</td><td>Sends the message and ends the turn. Empty text sends nothing (after <code>memory</code>)</td><td>none</td><td>none</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Status</th><th>Meaning</th><th>Hint to the model</th></tr></thead>
+      <tbody>
+        <tr><td><code>done</code></td><td>The task finished; report and data attached</td><td>none</td></tr>
+        <tr><td><code>approved</code></td><td>You tapped “I approved it”; <code>verified</code> says what MyUPI shows now: <code>gone</code> or <code>still_listed</code></td><td>still_listed: “NPCI can take a few minutes to update; offer to check again”</td></tr>
+        <tr><td><code>not_approved</code></td><td>You tapped “Not now”; nothing changed</td><td>none</td></tr>
+        <tr><td><code>not_found</code></td><td>No card's payee matches; nothing pressed; the list is attached</td><td>“Tell the user plainly and offer their mandates”</td></tr>
+        <tr><td><code>needs_confirmation</code></td><td>Code sent you the confirmation card</td><td>“The user sees the card. Write nothing more this turn.”</td></tr>
+        <tr><td><code>rejected</code></td><td>A guard refused before anything ran</td><td>The reason, and what to do instead</td></tr>
+        <tr><td><code>stopped</code> · <code>failed</code></td><td>You said stop · an error ended it</td><td>“Say what happened; nothing else changed” · “Say what failed; offer to try again”</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 8 -->
+<section id="gate">
+  <h2><span class="num">8</span>Confirmation gate</h2>
+  <div class="prose"><p>Decision 4 is enforced in code before <code>upi_cancel</code> or <code>upi_pause</code> runs, the way the companion harness enforces data changes: a guard's refusal comes back to the model as the tool's result, and a confirmation card is written by code, never by the model.</p></div>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart TD
+  A["upi_cancel or upi_pause, with a payee"] --> B{"Mandates read in this chat?"}
+  B -->|yes, payee not on the list| R1["rejected: not on your list, here is the list"]
+  B -->|no, or it is on the list| C{"Your message names the payee?"}
+  C -->|yes| GO["Run it"]
+  C -->|no| D{"A card for this payee waiting?"}
+  D -->|no| CARD["Code sends the card: Cancel PAYEE, amount? Buttons Cancel PAYEE and No, keep it. Turn ends"]
+  D -->|yes| E{"Your reply says yes? Regex first, else Jev"}
+  E -->|yes| GO
+  E -->|no| R2["rejected: you didn't confirm"]
+</pre>
+  </div>
+  <div class="grid2">
+    <div class="box core"><p class="label">Names the payee</p><p class="small">Every distinctive word of the payee appears in your message (company suffixes like LLC, LTD, PVT, INDIA don't count). “cancel aisle” names AISLE; “cancel google play” names GOOGLE PLAY; “cancel google” doesn't. A tap on <b>Cancel OPENAI LLC</b> names it, because Core passes the option's full words.</p></div>
+    <div class="box jev"><p class="label">Jev's new job</p><p class="small">Only when a card is waiting and your typed reply isn't a plain yes (yes, ok, sure, go ahead, do it, confirm, haan, ha, theek hai). Jev answers one question: “Does this reply confirm: Cancel OPENAI LLC?” A failed Jev call counts as no; the card's buttons still work. This is the job Vercel's eve framework gives Jev by default: approving tool calls.</p></div>
+  </div>
+  <div class="box warn"><p class="label">Why not leave it to the prompt</p><p class="small">OpenInstinct keeps irreversible-action rules in the prompt; our review of it flagged that as the gap not to copy. A cancel here is low-stakes, since your UPI PIN still decides, but a QR for the wrong mandate in a VC demo is exactly the failure we had today. Code makes it impossible.</p></div>
+</section>
+
+<!-- 9 -->
+<section id="sequences">
+  <h2><span class="num">9</span>Sequences</h2>
+  <p class="prose small muted">Brain replies reach you through Core; the diagrams draw them straight to you for space.</p>
+
+  <h3>A · “Cancel my subscriptions”, signed out, end to end</h3>
+  <div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+  autonumber
+  actor U as You
+  participant C as Core
+  participant B as Brain
+  participant W as Worker
+  participant M as MyUPI
+  U->>C: Cancel my subscriptions
+  C->>B: to the inbox
+  Note over B: vague, and no list in the snapshot yet
+  B->>C: upi_mandates()
+  C-->>U: Checking your UPI AutoPay mandates on MyUPI…
+  C->>W: execute: List all my UPI AutoPay mandates
+  W->>M: open, type your phone from your profile
+  W->>C: question: captcha picture
+  C-->>U: picture, type the text it shows
+  U->>C: K7Q2
+  C->>W: answer, no model sees it
+  W->>M: captcha, tick agree, Continue
+  W->>C: question: SMS code, hidden field
+  U->>C: ••••••
+  C->>W: answer
+  W->>M: code, Proceed, open UPI Autopay
+  loop until two reads match, at most 6
+    W->>M: read the list again
+  end
+  W-->>C: done, 3 cards
+  C-->>B: status done, 3 mandates
+  B-->>U: You have 3 AutoPay mandates. Which should I cancel? [OPENAI LLC] [GOOGLE PLAY] [AISLE]
+  U->>C: tap AISLE
+  C->>B: AISLE
+  B->>C: upi_cancel(AISLE)
+  Note over C: gate passes, you named AISLE
+  C-->>U: Cancelling AISLE's AutoPay on MyUPI…
+  C->>W: execute: Cancel the UPI AutoPay mandate whose payee is AISLE
+  W->>M: press Cancel (in AISLE)
+  M-->>W: QR
+  W->>C: question: QR picture [I approved it] [Not now]
+  C-->>U: QR and buttons
+  Note over U: you approve in your UPI app with your PIN
+  U->>C: tap I approved it
+  C->>W: answer, outcome approved
+  C->>W: execute: List all my UPI AutoPay mandates, to verify
+  W-->>C: AISLE no longer listed
+  C-->>B: status approved, verified gone
+  B-->>U: Done. MyUPI no longer lists AISLE, so its AutoPay stops.
+</pre>
+  </div>
+
+  <h3>B · “cancel chatgpt”: an inferred payee</h3>
+  <div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+  actor U as You
+  participant C as Core
+  participant B as Brain
+  participant J as Jev
+  U->>C: cancel chatgpt
+  C->>B: to the inbox
+  Note over B: snapshot has your list from 02:03
+  B->>C: upi_cancel(OPENAI LLC, reason ChatGPT bills as OPENAI LLC)
+  Note over C: gate: you didn't name OPENAI LLC, no card waiting
+  C-->>U: ChatGPT bills as OPENAI LLC. Cancel OPENAI LLC (₹399)? [Cancel OPENAI LLC] [No, keep it]
+  Note over B: turn ends, a card waits for OPENAI LLC
+  alt you tap Cancel OPENAI LLC
+    U->>C: tap
+    C->>B: Cancel OPENAI LLC
+    B->>C: upi_cancel(OPENAI LLC)
+    Note over C: named, so the QR flow runs
+  else you type haan kar do
+    U->>C: haan kar do
+    C->>B: haan kar do
+    B->>C: upi_cancel(OPENAI LLC)
+    C->>J: does this reply confirm Cancel OPENAI LLC?
+    J-->>C: yes
+    Note over C: confirmed, so the QR flow runs
+  else you tap No, keep it
+    U->>C: tap
+    C->>B: No, keep it
+    B-->>U: OK, OPENAI LLC stays active.
+  end
+</pre>
+  </div>
+
+  <h3>C · “cancel my netflix subscription”: nothing matches</h3>
+  <div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+  actor U as You
+  participant C as Core
+  participant B as Brain
+  U->>C: cancel my netflix subscription
+  C->>B: to the inbox
+  opt no list in the snapshot yet
+    B->>C: upi_mandates()
+    C-->>B: 3 mandates, none for Netflix
+  end
+  B-->>U: No Netflix AutoPay on your UPI. It may bill through GOOGLE PLAY, which covers many apps, or a card. Cancel one of these? [OPENAI LLC] [GOOGLE PLAY] [AISLE] [None of these]
+  Note over B: nothing pressed, the conversation stays open
+</pre>
+  </div>
+
+  <h3>D · Experian dispute</h3>
+  <div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+  actor U as You
+  participant C as Core
+  participant B as Brain
+  participant W as Worker
+  participant E as Experian
+  U->>C: I want to dispute something on my Experian report
+  C->>B: to the inbox
+  B-->>U: What's wrong on it? [An account's details] [My personal details] [An enquiry I didn't make]
+  U->>C: HDFC card ending 4321 shows ₹12,000 overdue, I paid it (example)
+  C->>B: to the inbox
+  B->>C: bureau_dispute(Experian, Account Details, HDFC card 4321, ₹12,000 overdue, ₹0)
+  C-->>U: Opening Experian's dispute page…
+  C->>W: execute on Experian's start page
+  W->>C: question: ERN in the hidden field, if not saved
+  U->>C: ••••••••••
+  C->>W: answer
+  W->>C: question: UTI in the hidden field, if not saved
+  U->>C: ••••••••••
+  C->>W: answer
+  W->>E: ERN, UTI, Verify, Account Details, find HDFC 4321, type 0 beside Amount overdue
+  E-->>W: pop-up listing the correction
+  W->>C: final submit needs your yes
+  C-->>U: Submit to Experian: HDFC card 4321, Amount overdue ₹12,000 to ₹0? [Yes, submit] [No]
+  U->>C: tap Yes, submit
+  C->>W: approved
+  W->>E: submit
+  E-->>W: acknowledgement
+  W-->>C: done, report
+  C-->>B: status done, report
+  B-->>U: Dispute raised with Experian. They'll email an acknowledgement.
+</pre>
+  </div>
+
+  <h3>E · A message while a tool runs, then stop</h3>
+  <div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+  actor U as You
+  participant C as Core
+  participant B as Brain
+  participant W as Worker
+  B->>C: upi_mandates()
+  C->>W: execute
+  U->>C: what's my UPI ID?
+  C-->>U: I'll get to that as soon as this finishes.
+  Note over C: queued for the brain
+  U->>C: stop
+  C->>W: cancel after the current step
+  W-->>C: stopped
+  C-->>B: status stopped
+  B-->>U: Stopped. Nothing was changed.
+  C->>B: next in the inbox: what's my UPI ID?
+  B->>C: upi_task(Show my UPI ID)
+</pre>
+  </div>
+</section>
+
+<!-- 10 -->
+<section id="hands">
+  <h2><span class="num">10</span>The hands</h2>
+  <h3><code>Core.execute(goal, url=None, skill=None)</code></h3>
+  <div class="prose small">
+    <ul>
+      <li>Runs one task to its end on the brain's thread and returns <code>{status, outcome, report, mandates}</code>.</li>
+      <li>With a <code>url</code> (MyUPI, Experian) it skips intake and the start page, and never carries pre-authorisation. Without one, <code>prepare()</code> runs as today (intake, habit, start page).</li>
+      <li>Captured instead of posted: the task's result message, its “Stopped …” line, and any error that escaped. The brain says these in its own words.</li>
+      <li>Still posted live: questions (captcha, code, QR, final yes), pictures and info lines.</li>
+      <li><code>mandates</code> come from the final page's <code>cards</code> and <code>card_lines</code>, which the snapshot reads off the whole page, on screen or not.</li>
+    </ul>
+  </div>
+  <div class="diagram">
+<pre class="mermaid">
+stateDiagram-v2
+  [*] --> Waiting: execute()
+  Waiting --> Running: no other task on the site
+  Running --> Asking: captcha, code, QR, final yes
+  Asking --> Running: you answered
+  Running --> Done: report and outcome
+  Running --> Stopped: you said stop
+  Asking --> Stopped: stop, or no answer for a day
+  Running --> Failed: 3 problems in a row
+  Done --> [*]
+  Stopped --> [*]
+  Failed --> [*]
+</pre>
+  </div>
+  <h3>Outcomes</h3>
+  <div class="prose small"><p>The worker records <code>state["outcome"]</code>: <code>approved</code> or <code>not_approved</code> in <code>hand_off()</code> from your QR answer, and <code>not_found</code> in <code>no_mandate()</code>. <code>no_mandate</code> still presses nothing; its result now goes to the brain, which asks.</p></div>
+  <h3>The list settles before it's read</h3>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart TD
+  O["observe()"] --> S{"Site note says cards: payee?"}
+  S -->|no| U["Use this read"]
+  S -->|yes| L{"Cards on the page, or the list marker text?"}
+  L -->|no| U
+  L -->|yes| W["Wait 0.7 s, read again"]
+  W --> E{"Same cards with the same words, at least one card?"}
+  E -->|yes| U
+  E -->|no, under 6 reads| W
+  E -->|6 reads done| U
+</pre>
+  </div>
+  <p class="small">The MyUPI note gains <code>list: Manage recurring payments</code>, the line MyUPI shows above its mandate cards. Run 2 would have waited until AISLE's card was drawn and GOOGLE PLAY's values filled in.</p>
+</section>
+
+<!-- 11 -->
+<section id="data">
+  <h2><span class="num">11</span>Data shapes</h2>
+  <div class="grid2">
+    <div class="card"><h4><code>upi_mandates</code> → done</h4>
+<pre class="code">{
+  "status": "done",
+  "read_at": "02:03",
+  "mandates": [
+    {"payee": "OPENAI LLC", "details": "OPENAI LLC ₹ 399 Active on … Frequency Custom …"},
+    {"payee": "GOOGLE PLAY", "details": "GOOGLE PLAY ₹ 299 …"},
+    {"payee": "AISLE", "details": "AISLE ₹ 499 …"}
+  ]
+}</pre></div>
+    <div class="card"><h4><code>upi_cancel</code> → approved</h4>
+<pre class="code">{
+  "status": "approved",
+  "verified": "gone",
+  "report": "Done: you approved cancelling AISLE's UPI AutoPay …"
+}</pre>
+    <h4><code>upi_cancel</code> → needs_confirmation</h4>
+<pre class="code">{
+  "status": "needs_confirmation",
+  "card": "ChatGPT bills as OPENAI LLC. Cancel OPENAI LLC (₹399)?",
+  "next": "The user sees the card. Write nothing more this turn."
+}</pre></div>
+    <div class="card"><h4><code>upi_cancel</code> → not_found</h4>
+<pre class="code">{
+  "status": "not_found",
+  "mandates": [{"payee": "OPENAI LLC", "details": "…"},
+               {"payee": "GOOGLE PLAY", "details": "…"}],
+  "next": "Nothing was pressed. Tell the user no mandate
+           matches, and offer these."
+}</pre>
+    <h4><code>upi_cancel</code> → rejected</h4>
+<pre class="code">{
+  "status": "rejected",
+  "reason": "NETFLIX isn't on the user's list.",
+  "next": "Use a payee exactly as listed, or ask the user."
+}</pre></div>
+    <div class="card"><h4>One brain step (request body)</h4>
+<pre class="code">{
+  "model": "gpt-5.6-luna",
+  "instructions": "&lt;static instructions&gt;",
+  "input": ["…conversation items…",
+            {"role": "developer",
+             "content": "Context (not from the user): …"}],
+  "tools": ["&lt;8 strict function tools&gt;"],
+  "tool_choice": "required",
+  "parallel_tool_calls": false,
+  "reasoning": {"effort": "low"},
+  "store": false,
+  "include": ["reasoning.encrypted_content"],
+  "max_output_tokens": 4000
+}</pre></div>
+  </div>
+  <div class="card"><h4>Brain trace: one line per turn in <code>~/.jev/traces/brain-YYYYMMDD.jsonl</code> (redacted)</h4>
+<pre class="code">{"at": "2026-10-12T02:41:07+05:30", "heard": "Cancel my subscriptions",
+ "steps": [{"tool": "upi_mandates", "args": {}, "status": "done", "ms": 41230},
+           {"tool": "reply", "args": {"text": "You have 3 …", "options": ["OPENAI LLC", "GOOGLE PLAY", "AISLE"]}, "ms": 1880}],
+ "model_ms": 3420}</pre></div>
+</section>
+
+<!-- 12 -->
+<section id="safety">
+  <h2><span class="num">12</span>Safety</h2>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  U["You"] -->|captcha text, codes, IDs| Q["Core: the open question"]
+  Q --> W["Worker: hidden field"]
+  W --> P["The page"]
+  U -->|everything else| R["Core"]
+  R --> X["Redact saved IDs, refuse any leak"]
+  X --> B["Brain model"]
+  W -->|page text| Y["Redact"]
+  Y --> J["Jev and the planner"]
+</pre>
+  </div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Rule</th><th>How it holds</th></tr></thead>
+      <tbody>
+        <tr><td>Captcha text, codes, PINs, passwords and saved IDs never reach the brain</td><td>Core answers the open question directly; the chat log keeps •••• for secrets; every brain call is redacted and leak-checked in <code>post_json</code></td></tr>
+        <tr><td>The brain can't act on a page</td><td>Tools take exact goals; only the worker presses or types</td></tr>
+        <tr><td>Anything that commits needs your yes</td><td>The worker's gate is unchanged: Experian's final submit, a complaint's submit</td></tr>
+        <tr><td>A mandate changes only with your UPI PIN</td><td>MyUPI's QR is approved in your UPI app; Jev never scans or approves it</td></tr>
+        <tr><td>No QR for a mandate you didn't choose</td><td>The confirmation gate (section 8)</td></tr>
+        <tr><td>Brain tasks never skip a confirmation</td><td>No pre-authorisation on <code>execute()</code> tasks</td></tr>
+        <tr><td>Sign-ins end per conversation</td><td>Unchanged: idle 5 minutes, “log out”, or jev stopping</td></tr>
+        <tr><td>NPCI Terms 4.1(k)</td><td>Your own account only, low volume, as you chose</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 13 -->
+<section id="failures">
+  <h2><span class="num">13</span>When things go wrong</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>What happens</th><th>What Jev does</th></tr></thead>
+      <tbody>
+        <tr><td>A brain model call fails after retries</td><td>Says “I couldn't work that out just now: {error}. Please try again.” Drops the turn's items.</td></tr>
+        <tr><td>The model sends invalid arguments</td><td>The tool result says so; it costs a step; the last step can only reply</td></tr>
+        <tr><td>Wrong captcha or an expired code</td><td>The worker refreshes and asks again (unchanged)</td></tr>
+        <tr><td>MyUPI's session timed out (it idles out in 2–3 minutes)</td><td>The next tool call signs in again (unchanged)</td></tr>
+        <tr><td>The list is still drawing</td><td>Read again until two reads match, at most 6 reads 0.7 s apart</td></tr>
+        <tr><td>The payee isn't on your list</td><td><code>rejected</code> with the list; the brain asks</td></tr>
+        <tr><td>You tap “I approved it” but MyUPI still lists it</td><td><code>verified: still_listed</code>; the brain says NPCI can take a few minutes and offers to check again</td></tr>
+        <tr><td>The worker fails 3 times, or its models stop answering</td><td><code>failed</code>; the brain says what failed and offers to retry</td></tr>
+        <tr><td>You say stop mid-task</td><td>Cancelled after the current step; the brain confirms nothing else changed</td></tr>
+        <tr><td>You write while a tool runs</td><td>Queued, one notice, handled next</td></tr>
+        <tr><td>Experian says the ERN or UTI is too old</td><td>The brain says a fresh Experian report is needed</td></tr>
+        <tr><td>The Jev confirmation call fails</td><td>Counts as no; the card's buttons still work</td></tr>
+        <tr><td>jev restarts mid-conversation</td><td>The conversation is forgotten (known limit); kept sign-ins end at startup, as today</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 14 -->
+<section id="testing">
+  <h2><span class="num">14</span>Tests and evals</h2>
+  <div class="grid2">
+    <div class="card"><h4>Unit tests (pytest, no paid APIs)</h4><ul class="small">
+      <li><b>test_model</b>: the Responses body (model, tools, tool choice, reasoning, store, include); redaction; a leak refused; an incomplete reply raises.</li>
+      <li><b>test_brain</b>: a vague cancel reads the list, then replies with options; a named payee cancels; an inferred payee gets the card and the turn ends; a typed yes after the card passes; “haan kar do” passes through a fake Jev; a payee off the list is rejected; the step cap forces a reply; a model error drops the turn; the snapshot has ID names, never values; a tap's words reach the next turn; the trace line is redacted.</li>
+      <li><b>test_core</b>: an open question takes text; stop words; one busy notice; option taps carry full words; <code>execute()</code> captures the result, the stop line and errors; progress lines go out.</li>
+      <li><b>test_worker</b>: the list settles (cards grow, then hold); outcomes are recorded.</li>
+      <li>Tests of the deleted router go with it.</li>
+    </ul></div>
+    <div class="card"><h4>Brain evals (real model, fake tools, run by hand, about $0.05)</h4><ul class="small">
+      <li>“Cancel my subscriptions” → <code>upi_mandates</code>, then <code>reply</code> with 3 options</li>
+      <li>“Cancel my aisle subscription” → <code>upi_cancel(AISLE)</code></li>
+      <li>“cancel chatgpt” → <code>upi_cancel(OPENAI LLC)</code> → gate card</li>
+      <li>“cancel my netflix subscription” → no cancel; options offered</li>
+      <li>“What AutoPays do I have?” → <code>upi_mandates</code>, list in the reply</li>
+      <li>“the second one” after a list → that payee</li>
+      <li>“pause google play till month end” → <code>upi_pause</code> with a date</li>
+      <li>“what's my UPI ID?” → <code>upi_task</code></li>
+      <li>“dispute my Experian report” → asks what's wrong; no tool yet</li>
+      <li>“thanks” → <code>reply</code> only</li>
+    </ul></div>
+  </div>
+  <div class="card"><h4>Live acceptance with you, in the web chat</h4><ol class="small">
+    <li>“What AutoPays do I have?”: captcha and code once, then the full list.</li>
+    <li>“Cancel my subscriptions” → tap AISLE → QR → <b>Not now</b> → “nothing changed”.</li>
+    <li>“cancel chatgpt” → card → type “yes” → QR → <b>Not now</b>.</li>
+    <li>“cancel netflix” → no mandate, options, nothing pressed.</li>
+    <li>“stop” during a read → stopped, then a queued question answered.</li>
+    <li>“dispute my Experian report” → details → ERN and UTI in the hidden field → the final yes → acknowledgement.</li>
+    <li>“log out” → MyUPI's Logout pressed; the next request signs in fresh.</li>
+  </ol></div>
+</section>
+
+<!-- 15 -->
+<section id="plan">
+  <h2><span class="num">15</span>Build plan</h2>
+  <div class="prose small"><p>Test first, one commit per task. Demo-ready after task 7; task 8 lands after the demo.</p></div>
+  <div class="tbl plan">
+    <table>
+      <thead><tr><th>#</th><th>Task</th><th>Files</th><th class="num">Est.</th><th class="num">Running</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Responses API call for the brain</td><td><code>model.py</code>, <code>test_model.py</code></td><td class="num">15 min</td><td class="num">0:15</td></tr>
+        <tr><td>2</td><td>Hands: the list settles, outcomes, the note's marker</td><td><code>worker.py</code>, MyUPI note, <code>test_worker.py</code></td><td class="num">20 min</td><td class="num">0:35</td></tr>
+        <tr><td>3</td><td><code>Core.execute()</code>: run a tool's task, capture its result, progress lines</td><td><code>core.py</code>, <code>test_core.py</code></td><td class="num">25 min</td><td class="num">1:00</td></tr>
+        <tr><td>4</td><td>Brain: loop, instructions, snapshot, tools, gate, options, trace</td><td><code>brain.py</code>, <code>jev.py</code>, <code>skills/playbooks/</code>, <code>test_brain.py</code></td><td class="num">60 min</td><td class="num">2:00</td></tr>
+        <tr><td>5</td><td>Chat to the brain: routing, busy, stop, option taps</td><td><code>core.py</code>, <code>messages.py</code>, <code>server.py</code>, tests</td><td class="num">25 min</td><td class="num">2:25</td></tr>
+        <tr><td>6</td><td>Brain evals with the real model</td><td><code>brain_eval.py</code></td><td class="num">10 min</td><td class="num">2:35</td></tr>
+        <tr class="mark"><td>7</td><td>Live run with you: MyUPI, then Experian</td><td>none</td><td class="num">30 min</td><td class="num">3:05</td></tr>
+        <tr><td>8</td><td>Delete the old router and its tests</td><td><code>jev.py</code>, <code>planner.py</code>, <code>core.py</code>, tests</td><td class="num">20 min</td><td class="num">3:25</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 16 -->
+<section id="later">
+  <h2><span class="num">16</span>Later</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Known limit now</th><th>Later</th><th>From</th></tr></thead>
+      <tbody>
+        <tr><td>One tool at a time; the brain waits for it</td><td>Background tasks: a receipt, one acknowledgement, the result arriving as a new turn threaded to your request; a new message steers or cancels the task</td><td>OpenInstinct</td></tr>
+        <tr><td>The conversation lives in memory; a restart forgets it</td><td>Conversation items in Postgres, beside Phase B's memory</td><td>Companion's event log</td></tr>
+        <tr><td>“What we're in the middle of” lasts one session</td><td>Workstreams: objective, status, next step and sources, recalled every turn (an Experian dispute open for weeks)</td><td>OpenInstinct</td></tr>
+        <tr><td>Web chat only</td><td>WhatsApp: templates for messages after the 24-hour window; QR and captcha as image messages</td><td>OpenInstinct's channel notes</td></tr>
+        <tr><td>No checks on their own</td><td>“Tell me when my dispute's status changes”: a weekly check that stays quiet unless something changed</td><td>OpenInstinct schedules</td></tr>
+        <tr><td><code>gpt-5.6-luna</code>'s price not checked</td><td>Measure cost per turn from the brain trace</td><td>none</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 17 -->
+<section id="references">
+  <h2><span class="num">17</span>What we took from the references</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Source</th><th>We take</th><th>We don't</th></tr></thead>
+      <tbody>
+        <tr><td>Rivo companion harness<br><span class="small muted">src/harness</span></td><td>A step loop with a cap and reply-only last steps. A snapshot message rebuilt each turn. Asking ends the turn and the tapped label comes back as the next message. Guards return refusals as tool results with a next move. Confirmation cards written by code and matched exactly. Tool results that coach the next step.</td><td>Turn state that never reloads (its “never ask twice” guard can't fire in production). Questions code asked that the model never sees. Process-wide globals. The async stack and Rivo-specific tools.</td></tr>
+        <tr><td>OpenInstinct<br><span class="small muted">Merit Systems</span></td><td>One coordinator is the only voice. The worker gets one self-contained assignment and returns a typed result; blockers come back as results. Its asking rules and message style, nearly word for word. Verifying an out-of-band approval instead of trusting chat. Jev as the judge of a tool call.</td><td>OTPs passing through the coordinator model (ours never reach a model). Prompt-only gates for irreversible actions. Background tasks, for now. Live view as the captcha path.</td></tr>
+        <tr><td>Open Instinct, OpenBot, OpenDots<br><span class="small muted">earlier research</span></td><td>Approvals enforced in code. Logins kept in the agent's browser. Codes and login walls handed to the user.</td><td>Hosted thread services; US-only channels and payments.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small muted">Earlier research page: <a href="https://claude.ai/artifact/Ct2MnfYsdjUGdVvt1eaPFE">claude.ai/artifact/Ct2MnfYsdjUGdVvt1eaPFE</a></p>
+</section>
+
+<!-- 18 -->
+<section id="extend">
+  <h2><span class="num">18</span>Beyond the demo: other Rivo use cases</h2>
+  <div class="prose">
+    <p><b>The split holds.</b> Core, the brain's loop and the worker know nothing about mandates or bureaus. The demo hard-wires its two domains in four places: its tools, the two playbooks in the brain's instructions, the payee gate, and tools that make the brain wait. Each new use case adds to the six extension points below; none of them reopens the core.</p>
+  </div>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart TB
+  U(["You"]) --> CO["Core: channel, questions, secrets"]
+  CO --> BR["Brain: conversation, snapshot, the plan for this request"]
+  BR --> PB["Playbooks, loaded when needed"]
+  BR --> AP["Approval policy by action class"]
+  BR --> LL["Long-lived work: background tasks, workstreams, schedules"]
+  BR --> T{"Tools, one contract: status, data, report, next"}
+  T --> RD["Rivo data: rewards, bills, subscriptions, credit report, card facts, spend"]
+  T --> API["Rails and APIs: BBPS bill fetch and pay, issuer and bureau APIs"]
+  T --> BW["Browser hands: bank portals, Accor, airlines, bureaus, ACT, Dish TV"]
+  T --> K["calc: points value, ratios, totals"]
+  BW --> SN["A site note and bench runs per site"]
+</pre>
+  </div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Extension point</th><th>In the demo</th><th>For the full list</th></tr></thead>
+      <tbody>
+        <tr><td><b>1 · Tools: three backends, one contract</b></td><td>Six domain tools, all browser-backed</td><td>Rivo's own data first: the companion harness already computes rewards balances, bills, subscriptions, credit reports and card facts. Then rails and APIs: BESCOM, Bharat Gas and ACT are BBPS billers, so fetching their bills is an API call, not three websites. The browser only for what has neither. Typed tools where structure or guarantees matter (balances, transfers, payments); a generic <code>site_task(site, goal, returns)</code> for the rest.</td></tr>
+        <tr><td><b>2 · Playbooks on demand</b></td><td>Two playbooks inside the instructions</td><td>A one-line index of playbooks, always visible; <code>playbook(name)</code> loads one when needed, as the companion's <code>skill</code> tool and OpenInstinct's skills do. Each says what the flow needs from you, which Rivo data to check first, where the point of no return is, and what to verify after. Site notes stay the worker's knowledge.</td></tr>
+        <tr><td><b>3 · Approval policy by action class</b></td><td>“Payee named or confirmed” for MyUPI</td><td>Read: no approval. Message on your behalf (fee waiver, escalation, a negotiation offer): show the draft, your yes. Value move (points to miles, points to a hotel): exact terms and “can't be undone”, your yes bound to those terms. Money (bills, gift cards, bookings): exact amount and payee, your yes, and your OTP, PIN or 3-D Secure. Credit (a card application): explicit consent; KYC and video KYC stay yours. The worker stops at the boundary and returns the exact terms; changed terms ask again.</td></tr>
+        <tr><td><b>4 · Money math in code</b></td><td>Not needed</td><td>A <code>calc</code> tool for value per point, transfer ratios and totals. Figures come only from tool results, read live with the time and source, never from the model's memory.</td></tr>
+        <tr><td><b>5 · Long-lived work</b></td><td>One tool at a time; the brain waits</td><td>Background tasks with progress lines and threaded results; workstreams for what's in progress (a dispute open 30 days, a fee waiver awaiting the bank); schedules and watches (a milestone reached, a dispute's status changed). Section 16's “later” items become required here.</td></tr>
+        <tr><td><b>6 · Sign-ins and terms per site</b></td><td>MyUPI and Experian, your own account</td><td>Passwords and codes never reach a model: you type into the hidden field that goes straight to the page, or take the wheel. Kept sign-ins per you and site, as today. Each new site gets a terms check before its tool ships, as NPCI's 4.1(k) did; prefer APIs and partnerships where a bank offers them.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3>Your list, mapped</h3>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Use case</th><th>Reads first</th><th>Hands</th><th>Approval class</th><th>Outlives a chat</th><th>New pieces</th></tr></thead>
+      <tbody>
+        <tr><td>Bureau disputes: CIBIL, Experian, CRIF, Equifax</td><td>Rivo credit report: find the wrong item</td><td>Browser, each bureau's dispute page</td><td>Submit: your yes</td><td>Yes, about 30 days</td><td>A site note per bureau; <code>bureau_dispute</code> gains a bureau; status checks</td></tr>
+        <tr><td>Bill payments</td><td>Rivo bills, BBPS fetch</td><td>BBPS pay, else the biller's site</td><td>Money</td><td>No</td><td>A BBPS tool</td></tr>
+        <tr><td>Subscription management</td><td>Rivo subscriptions, MyUPI mandates</td><td>MyUPI (built), merchant account pages</td><td>Cancel: named or confirmed</td><td>No</td><td>Merchant site notes</td></tr>
+        <tr><td>Gift cards from bank portals</td><td>Rivo rewards balance</td><td>Browser, the bank's rewards portal</td><td>Value move or money</td><td>No</td><td>Bank site notes; payment OTP by you</td></tr>
+        <tr><td>Annual fee waiver</td><td>Rivo spend for the card year; card facts (the waiver rule)</td><td>Net banking service request, or a drafted email</td><td>Message on your behalf</td><td>Yes, the bank replies in days</td><td>Workstream and a follow-up check</td></tr>
+        <tr><td>Claim card benefits</td><td>Rivo spend against milestones; card facts</td><td>Bank claim page or voucher site</td><td>Claim: your yes</td><td>Yes, a milestone is reached later</td><td>A watch that tells you when you qualify</td></tr>
+        <tr><td>Credit card application</td><td>Card catalogue: which card fits</td><td>The bank's application journey</td><td>Credit: explicit consent</td><td>Yes, approval takes days</td><td>Consent gate; KYC and video KYC handed to you</td></tr>
+        <tr><td>Fetch bills and escalate (BESCOM, Bharat Gas, ACT)</td><td>BBPS fetch</td><td>Complaint portal or support chat</td><td>Message on your behalf</td><td>Yes, a complaint's life</td><td>BBPS tool; a workstream per complaint</td></tr>
+        <tr><td>Negotiate with ACT or Dish TV</td><td>Rivo spend on the plan; competitor plans from the web</td><td>The provider's support chat in the browser</td><td>Each offer: your yes, or within limits you set</td><td>Yes, several rounds</td><td>A negotiation mode for the worker with your limits; phone calls out of scope</td></tr>
+        <tr><td>Points to miles</td><td>Rivo rewards balance; the ratio read live</td><td>The bank's rewards portal</td><td>Value move: can't be undone</td><td>No</td><td>Your frequent-flyer number as a saved ID; verify after</td></tr>
+        <tr><td>Points to a hotel (your HSBC and Accor example)</td><td>Rivo rewards balance</td><td>HSBC rewards and Accor, read in parallel</td><td>Value move, then money</td><td>Minutes, two sites</td><td><code>calc</code>; background tasks</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3>Your example: HSBC points to a hotel</h3>
+  <div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+  actor U as You
+  participant B as Brain
+  participant R as Rivo data
+  participant H as HSBC rewards
+  participant A as Accor
+  participant K as calc
+  U->>B: I have HSBC points, find me a hotel in Goa for 12 to 14 Nov
+  B->>R: rewards balance for HSBC
+  R-->>B: 5,000 points, as of the last statement
+  Note over B: loads the points-redemption playbook
+  par both read in the background, with progress lines
+    B->>H: site_task: hotel and transfer options, live ratios
+    H-->>B: options and ratios, with the time read
+  and
+    B->>A: site_task: Goa hotels 12 to 14 Nov, points and cash prices
+    A-->>B: hotels with both prices
+  end
+  B->>K: value per point for each route
+  K-->>B: routes ranked by ₹ per point
+  B-->>U: Best value first, with what your points cover. [Route A] [Route B] [Neither]
+  U->>B: Route A
+  B-->>U: Transfer 5,000 HSBC points at the ratio read at 14:02? This can't be undone. [Transfer] [No]
+  U->>B: Transfer
+  B->>H: act: transfer, the OTP goes to you
+  H-->>B: done, with a reference
+  B-->>U: Book at points plus ₹ cash? [Book] [No]
+  U->>B: Book
+  B->>A: act: book, you complete the payment OTP
+  A-->>B: confirmed
+  B-->>U: Booked, with the reference and what it cost in points and cash.
+</pre>
+  </div>
+  <p class="small muted">Whether HSBC lists a given hotel partner, and at what ratio, is read live from its rewards portal. Nothing here assumes a partner or a ratio.</p>
+  <div class="grid2">
+    <div class="box core"><p class="label">Built today to keep doors open</p><ul class="small">
+      <li>Tools sit in a registry: name, schema, function, approval class. A new tool is an entry, not a new branch.</li>
+      <li>The two playbooks are files under <code>skills/playbooks/</code>, inlined while there are only a few; on-demand loading arrives with the fifth.</li>
+      <li>The dispute tool is <code>bureau_dispute</code>, with Experian its only bureau. CIBIL, CRIF and Equifax are a site note and an enum value each.</li>
+      <li>Every tool result already uses one contract: status, data or report, next.</li>
+    </ul></div>
+    <div class="box warn"><p class="label">The hard parts</p><ul class="small">
+      <li>Bank portals: terms may forbid automated access or using your credentials, and device binding and an OTP on every login slow things down. A terms check per bank comes first; APIs and partnerships beat scraping.</li>
+      <li>Every new site is a site note plus bench runs, and upkeep when the site changes.</li>
+      <li>Points transfers can't be undone: approval bound to exact terms, and a check afterwards.</li>
+      <li>Video KYC and consent screens can't be automated; Jev hands them to you.</li>
+      <li>Negotiation works through a provider's chat only; phone calls are out of scope.</li>
+    </ul></div>
+  </div>
+</section>
+
+<!-- 19 -->
+<section id="review">
+  <h2><span class="num">19</span>Questions for you</h2>
+  <ol class="qs">
+    <li><h4>A typed yes after the card</h4><p class="small">A plain yes passes by rule; anything else (“haan kar do”, “yes the openai one”) goes to Jev. The alternative is buttons only, with typed replies ignored.</p><p class="small rec">Recommended: rule, then Jev.</p></li>
+    <li><h4>Verify after “I approved it”</h4><p class="small">Read MyUPI once more and say what it shows. Costs about 5–8 seconds. If NPCI is slow, the demo shows “still listed, can take a few minutes”. The alternative trusts the tap.</p><p class="small rec">Recommended: verify. A tap is never proof.</p></li>
+    <li><h4>No second confirmation for Experian</h4><p class="small">The brain gathers the details and calls the tool; the worker's gate asks your yes on Experian's own summary before the final submit.</p><p class="small rec">Recommended: one yes, at the submit.</p></li>
+    <li><h4>Delete the old router after the demo</h4><p class="small">Task 8 runs after the live run, so a cleanup can't put the demo at risk.</p><p class="small rec">Recommended: after.</p></li>
+    <li><h4>Wording for the VC demo</h4><p class="small">Anything in section 4's transcripts you'd say differently? The brain's style rules and Core's fixed lines come from there.</p></li>
+  </ol>
+</section>
+
+<footer>
+  <p>Draft for review, 12 Oct 2026. Sources: your traces of 02:02:52 and 02:03:29, the probe runs of 12 Oct, the Rivo companion harness, and OpenInstinct at commit 0c2a7c6.</p>
+</footer>
+
+</main>
+</div>
+
+<script>
+(function () {
+  try {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+    var byId = {};
+    links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+    if (!('IntersectionObserver' in window)) return;
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (!e.isIntersecting) return;
+        links.forEach(function (a) { a.removeAttribute('aria-current'); });
+        var a = byId[e.target.id];
+        if (a) a.setAttribute('aria-current', 'true');
+      });
+    }, { rootMargin: '-15% 0px -75% 0px' });
+    document.querySelectorAll('main section[id]').forEach(function (s) { io.observe(s); });
+  } catch (e) { /* contents still work as plain links */ }
+})();
+</script>

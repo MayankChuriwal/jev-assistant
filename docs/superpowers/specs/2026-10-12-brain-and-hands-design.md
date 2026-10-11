@@ -1,6 +1,6 @@
 # Jev — Brain and hands: a conversation agent over the browser worker
 
-Date: 2026-10-12. Branch: `mini-jev-agent`. Builds on the Phase A and B specs; everything they specify stays unless this
+Date: 2026-10-12. Branch: `mini-jev-agent`. Review page with diagrams: `2026-10-12-brain-and-hands-design.html` (https://claude.ai/artifact/XvzrMMEwuv5KSG1bj7rpZ8). Builds on the Phase A and B specs; everything they specify stays unless this
 spec changes it. Demo target: today — cancel a UPI AutoPay mandate on NPCI MyUPI, and raise an Experian credit-report
 dispute, from chat, with the agent keeping the conversation's context.
 
@@ -27,7 +27,10 @@ existing worker into its tools (the hands). Jev keeps its right job: picking the
 | 3 | Planner model | The worker's planner stays `gpt-4.1-mini` (tuned; the brain removes the ambiguous goals that tripped it) |
 | 4 | Cancel rule | A payee the user named ("cancel aisle") goes straight to the cancel QR: their UPI PIN is the real confirmation. A payee the brain inferred ("cancel chatgpt" → OPENAI LLC) needs the user's yes first. Enforced in code (§5.3) |
 | 5 | Experian | Built and tested live: the user has a fresh report's ERN and UTI; the worker asks for them in the hidden field |
-| 6 | Old router | Jev's chat intents, the which-task buttons, task amendments, `planner.chat` and `planner.split` are deleted (POC: no legacy paths) |
+| 6 | Old router | Core's routing, which-task buttons and task amendments are deleted with the wiring; `jev.route`/`INTENTS`, `planner.chat` and `planner.split` go after the demo (POC: no legacy paths) |
+| 7 | Typed yes | A plain yes or no is read by rule; anything else ("chalo kar dete hain") by `jev.confirms` |
+| 8 | Verify | After "I approved it", the tool reads MyUPI again and reports `gone`, `still_listed` or `unchecked` |
+| 9 | Extensibility | Tools in one list with one result contract; playbooks are files (`skills/playbooks/`); the dispute tool is `bureau_dispute` with Experian its only bureau |
 
 ## 3. Architecture
 
@@ -68,8 +71,8 @@ The brain processes its inbox one message at a time on its own thread. The typin
 - `turn`: append the user item; up to `STEPS = 8` model calls. Each call must call exactly one tool
   (`tool_choice: required`, `parallel_tool_calls: false`). `reply` ends the turn; any other tool runs, and its result goes
   back as a `function_call_output`. The last step offers only `reply`.
-- A model error: say "I couldn't work that out just now ({error}). Please try again." and end the turn. The items of a
-  failed turn are dropped, so the history stays valid.
+- A model error: say "I couldn't work that out just now ({error}). Please try again." and end the turn. Each call's
+  result follows it at once, so the conversation stays valid however a turn ends.
 
 ### 5.2 Context
 
@@ -96,7 +99,7 @@ Each returns JSON with a `status` and, when useful, a `next` hint, as the compan
 | `upi_cancel` | `payee` | "Cancel the UPI AutoPay mandate whose payee is {payee}" | `approved` / `not_approved` / `not_found` (+ `mandates`) / `stopped` / `failed` |
 | `upi_pause` | `payee`, `until` | "Pause the UPI AutoPay mandate whose payee is {payee} until {until}" | as `upi_cancel` |
 | `upi_task` | `goal` | the goal on MyUPI (transactions, complaints, UPI ID, payee check, UPI questions) | `done` + `report` |
-| `experian_dispute` | `kind` (Account Details / Personal Details / Credit Enquiry), `account`, `wrong`, `correct` | "Raise a dispute on my Experian credit report: …" on the Experian note's start page | `done` + `report` |
+| `bureau_dispute` | `bureau` (Experian today), `kind` (Account Details / Personal Details / Credit Enquiry), `account`, `wrong`, `correct` | "Raise a dispute on my Experian credit report. Dispute type: … Account: … The report shows: … It should be: …" on the bureau note's start page | `done` + `report`; `rejected` when a detail is missing |
 | `browse` | `goal` | today's path: intake, habit, start page | `done` + `report` |
 | `memory` | `words` | today's memory chat flow (it replies itself) | `done` |
 | `reply` | `text`, `options` (≤ 10 labels) | sends the message; ends the turn. Empty text sends nothing (after `memory`) | — |
@@ -108,6 +111,10 @@ Guards (code, returned as `rejected` with `next`, never raised):
   do it, haan, a tap on an option naming it). Otherwise: `next` = ask "Cancel {payee}?" with options naming it.
 - **Known list**: when mandates were read, the payee must be one of them (case-insensitive); otherwise `rejected` with
   the list.
+- **A dispute's details**: `bureau_dispute` is refused while the account (for Account Details), what the report shows,
+  or what it should show is empty (the first eval raised one with none).
+- **No repeats**: the same call with the same arguments twice in a turn returns `repeat` (the first eval ran the same
+  MyUPI task three times).
 
 Progress: when a tool starts a browser task, Core sends one fixed line (e.g. "Checking your UPI AutoPay mandates on
 MyUPI…"). No model writes it.
@@ -153,8 +160,11 @@ arguments, status and milliseconds, the reply and options, the model's latency. 
 - `tests/test_core.py`: routing per §4 (open question takes text; stop words; busy notice; brain inbox); `execute`
   captures the result and doesn't post it; brain option taps. Tests of the deleted router go.
 - `tests/test_worker.py`: the list settles (a fake browser whose cards grow, then hold); outcomes.
-- `tests/test_model.py`: the Responses payload (model, tools, `tool_choice`, reasoning, `store: false`, encrypted
-  reasoning included, redaction).
+- `tests/test_model.py`: the Responses payload (model, tools, `tool_choice`, reasoning, `store: false`, redaction).
+  Reasoning items never come back into the conversation (redaction could rewrite an encrypted blob), and a call goes
+  back without its id.
+- `assistant/brain_eval.py` (by hand, paid): the demo's phrasings against the real model with Core faked; 11/11 on
+  12 Oct.
 - Live acceptance (the user, in the web chat): "What AutoPays do I have?"; "Cancel my subscriptions" → pick AISLE → QR →
   Not now; "cancel chatgpt" → confirm → QR → Not now; "cancel netflix" → no mandate, options; "dispute my Experian
   report" → details → ERN/UTI hidden → yes at the final submit.
