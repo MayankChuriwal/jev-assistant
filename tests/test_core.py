@@ -875,6 +875,18 @@ def test_after_a_task_its_notes_and_guesses_are_offered_and_decided_once(world):
     assert saved["text"] == "You prefer Diet Coke 300 ml" and saved["tags"] == ["groceries", "shop.test"]
 
 
+def test_a_site_whose_note_says_learn_no_offers_nothing_learned(world):  # MyUPI: a wrong lesson after each request
+    world.core.library = {"skills": {}, "sites": {"shop.test": {"host": "shop.test", "name": "Shop", "aliases": [],
+                                                                "learn": "no"}}}
+    world.learned = {"host": "shop.test", "habit": None, "notes": [(1, "Search appears after the pop-up closes")],
+                     "guesses": [{"text": "You prefer Diet Coke 300 ml", "tags": ["groceries"]}]}
+    world.scripts["Order Diet Coke"] = [tell("Ordered.")]
+    text(world, "Order Diet Coke")
+    assert until(lambda: world.core.tasks["t1"].status not in conversation.ACTIVE)
+    time.sleep(0.1)
+    assert not any(b.startswith(("I learned about", "Should I remember this?")) for b in bodies(world))
+
+
 def test_skip_and_no_keep_nothing(world):
     ids = world.core.memory.draft_notes("shop.test", ["Search appears after the pop-up closes"])
     world.learned = {"host": "shop.test", "habit": None, "notes": [(ids[0], "Search appears after the pop-up closes")],

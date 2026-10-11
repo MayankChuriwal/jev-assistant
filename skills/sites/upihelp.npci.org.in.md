@@ -3,6 +3,7 @@ host: upihelp.npci.org.in
 name: NPCI UPI Help
 aliases: NPCI, UPI Help, MyUPI, UPI AutoPay, autopay, UPI mandate, UPI mandates
 start: https://www.upihelp.npci.org.in/
+learn: no
 keep: tab
 ---
 - NPCI's MyUPI portal lists every UPI AutoPay mandate (subscriptions paid by UPI: Netflix, Spotify, ChatGPT, …) across all the user's UPI apps, and starts cancelling, pausing or resuming one. The user may ask what mandates they have, about one of them (amount, app, how often, how much paid so far), or to cancel, pause or resume one.

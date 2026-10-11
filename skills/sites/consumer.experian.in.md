@@ -3,6 +3,7 @@ host: consumer.experian.in
 name: Experian
 aliases: Experian India, Experian credit report
 start: https://consumer.experian.in/ECSINDIA-DCE/view/angular/index.html#!/
+learn: no
 ---
 - This is Experian India's page for raising a dispute on a credit report. It opens with two boxes: type [profile:experian_ern] into "Experian Reference Number" and [profile:experian_uti] into "Unique Transaction ID", then press Verify.
 - The ERN is on the top right of the user's Experian report; the UTI is in Experian's email. Both must come from a report pulled in the last 30 days: if the page says they are too old or don't match, DONE saying a fresh Experian report is needed.

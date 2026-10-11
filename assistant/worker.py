@@ -273,7 +273,7 @@ class Worker:
             cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None, closed=False,
             commit_drops=0, idle_asked=0, circled={}, loops={}, fruitless=None, blank_waits=0, coded=[],
             file_refusals=0, path_steps={}, path_asked=[], refusals_log=[], stuck_why=None, acting=None,
-            recent_at=None, last_by_site={}, payees=[], wrong_cards=0,
+            recent_at=None, last_by_site={}, wrong_cards=0,
         )
 
     # ---- what the user and the models see
@@ -341,10 +341,6 @@ class Worker:
     def observe(self):
         page = self.clean(self.state["browser"].observe())
         self.state["page"] = page
-        for action in page["actions"]:  # MyUPI's mandates, as their cards scroll by
-            card = rules.CARD_ACTION.match(action.get("label") or "")
-            if card and card[1] not in self.state["payees"]:
-                self.state["payees"].append(card[1])
         self.state["files"].extend(page.get("downloads", []))
         self.forget_accepted(page)
         return page
@@ -1251,8 +1247,8 @@ class Worker:
         options = [re.sub(r"^\d{1,2}[.)]\s+", "", plain(o.strip())) for o in out["options"] if o.strip()][:10]
         if op in {"ASK", "STOP"} and rules.captcha_challenge(page):
             return self.relay_captcha(page)  # only the user solves a captcha
-        if op in {"ASK", "STOP"} and self.no_card_named():
-            return self.no_mandate()  # “No Netflix mandate here. What would you like to do?”: say so, and end
+        if op in {"ASK", "STOP", "DONE"} and self.no_card_named(page):
+            return self.no_mandate(page)  # “No Netflix mandate here. What would you like to do?”: say so, and end
         problem = planner.lint(op, message, options, s["chat"])
         if problem:
             raise Retry(problem)
@@ -1463,8 +1459,8 @@ class Worker:
             payee = rules.wrong_card(self.state["goal"], action)
             if payee:
                 self.state["wrong_cards"] += 1
-                if self.state["wrong_cards"] >= 2 and self.no_card_named():
-                    return self.no_mandate()
+                if self.state["wrong_cards"] >= 2 and self.no_card_named(page):
+                    return self.no_mandate(page)
                 raise Retry(f"“{action.get('label')}” is on {payee}'s card, and the goal doesn't name {payee}: press "
                             "only the card whose payee is the merchant the goal names, or the company that bills for "
                             "it. When no card's is, DONE saying so and list every payee; press nothing.")
@@ -1488,20 +1484,22 @@ class Worker:
             return self.hand_off(card[1])  # the rest is the user's, in their UPI app
         return ran
 
-    def no_card_named(self):
-        """A cancel, pause, or resume of a mandate that none of the cards seen is for (MyUPI: Netflix)."""
-        s = self.state
-        return bool(s["payees"]) and bool(rules.MANDATE_ACTION.search(s["goal"])) and all(
-            rules.wrong_card(s["goal"], {"label": f"Cancel (in “{payee}”)"}) for payee in s["payees"])
+    def no_card_named(self, page):
+        """A cancel, pause, or resume of a mandate that none of the page's cards is for (MyUPI: Netflix), judged on the
+        whole list only: two cards or more, read off the page whether on screen or not. One mandate's own panel says
+        nothing of the rest (“cancel my aisle” was answered “no mandate” with GOOGLE PLAY's card alone read)."""
+        cards, goal = page.get("cards") or [], self.state["goal"]
+        return len(cards) >= 2 and bool(rules.MANDATE_ACTION.search(goal)) and all(
+            rules.wrong_card(goal, {"label": f"Cancel (in “{card}”)"}) for card in cards)
 
-    def no_mandate(self):
-        """The planner reached again for a mandate the goal doesn't name, and no card seen is the goal's: the task ends
-        saying so, with the payees seen and nothing pressed (MyUPI: “Netflix billed by OPENAI LLC”, refused six times
-        over, and the planner never gave up on it)."""
+    def no_mandate(self, page):
+        """The goal's merchant has none of the user's mandates: the task ends saying so, with every payee on the list
+        and nothing pressed (MyUPI: the planner insisted “Netflix billed by OPENAI LLC”, or listed only the cards on
+        screen)."""
         s = self.state
         s["held"] = None  # the planner's own word on it, held a step: this answer says it
         self.say(f"None of your UPI AutoPay mandates is for what you asked (“{s['goal']}”), so nothing was changed. "
-                 f"Your mandates: {', '.join(s['payees'])}.", kind="result")
+                 f"Your mandates: {', '.join(page['cards'])}.", kind="result")
         s["status"] = "done"
 
     def hand_off(self, payee):

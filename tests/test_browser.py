@@ -375,10 +375,24 @@ def test_a_sign_in_left_by_an_earlier_run_is_ended_at_start(browser_at):
     assert browser_at("/next.html", owner="u5").evaluate(LOGGED_OUT)  # the site's own Logout was pressed
 
 
+CARD = ("<div><div><div>{payee}</div><div>₹{amount}</div><div>Active on GOOGLE PAY</div></div>"
+        "<div><button>Pause</button><button>Cancel</button></div></div>")
+
+
+def test_every_cards_title_is_read_even_off_screen(browser_at):  # MyUPI: GOOGLE PLAY's card was never scrolled to
+    payees = [("OPENAI LLC", 399), ("AISLE", 499), ("GOOGLE PLAY", 299)]
+    cards = "".join(CARD.format(payee=p, amount=a) for p, a in payees)
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', "
+               f"'<div style=\"height:90px;overflow:auto\">{cards}</div>')")
+    page = b.observe()
+    assert page["cards"] == ["OPENAI LLC", "AISLE", "GOOGLE PLAY"]
+    assert "Cancel (in “GOOGLE PLAY”)" not in [a["label"] for a in page["actions"]]  # off screen: not offered
+
+
 def test_a_cards_own_action_names_its_card_even_when_one_card_shows(browser_at):
     # MyUPI shows one mandate card at a time, each with Pause and Cancel: a bare "Cancel" was pressed for the wrong one
-    card = ("<div><div><div>{payee}</div><div>₹{amount}</div><div>Active on GOOGLE PAY</div></div>"
-            "<div><button>Pause</button><button>Cancel</button></div></div>")
+    card = CARD
     b = browser_at("/next.html")
     b.evaluate(f"document.body.insertAdjacentHTML('afterbegin', '{card.format(payee='AISLE', amount=499)}')")
     labels = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click"]

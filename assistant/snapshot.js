@@ -469,6 +469,11 @@
   page('right', scrollX + innerWidth < width - 2);
   page('left', scrollX > 0);
   actions.push({id: 'wait', kind: 'wait', node: null, label: 'Wait for the page to update'});
-  return {url: location.href, title: document.title, text, scroll: {x: scrollX, y: scrollY, height, width},
+  // Every card that carries its own Cancel or Pause, on screen or scrolled out of view (MyUPI shows a few mandates at
+  // a time): whose cards the page holds.
+  const cards = [...new Set([...document.querySelectorAll('button,[role="button"]')]
+    .filter(e => /^(?:cancel|pause|resume|revoke)$/i.test((e.innerText || '').trim()) && rendered(e))
+    .map(cardTitle).filter(Boolean))];
+  return {url: location.href, title: document.title, text, cards, scroll: {x: scrollX, y: scrollY, height, width},
     actions, marker, page_key, guards, omitted_actions};
 })()

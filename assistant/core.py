@@ -379,8 +379,10 @@ class Core:
         No) and any standing approval. A bench run learns only in its learn mode, after grading."""
         if task.script is not None or not task.worker:
             return
+        note = skills.site_for(f"https://{task.host}/", self.library["sites"]) if task.host else None
         try:
-            self.offer_learned(task)
+            if (note or {}).get("learn") != "no":  # a site with a hand-written note (MyUPI) learns nothing more
+                self.offer_learned(task)
         except Exception as error:  # a failed reflection never costs the standing-approval offer below
             self.say(f"I couldn't learn from {task.title}: {error}", task)
         try:

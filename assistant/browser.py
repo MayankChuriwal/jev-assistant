@@ -1220,7 +1220,7 @@ def merge(parts):
     """One page state from the main document and its cross-origin frames. Element ids are page-wide."""
     main = parts[0][1]
     page = {"url": main["url"], "title": main["title"], "scroll": main["scroll"], "actions": [], "frames": {},
-            "omitted_actions": 0}
+            "omitted_actions": 0, "cards": main.get("cards") or []}
     texts, count = [], 0
     for index, (frame, state) in enumerate(parts):
         host = urlparse(state["url"]).netloc

@@ -368,15 +368,22 @@ def test_cancel_on_a_card_whose_payee_the_goal_doesnt_name_is_refused(tmp_path):
     assert not w.browser.act.called
 
 
+def mandate_page(cards, shown=None):
+    """MyUPI's list: every card's payee read off the page, and a Cancel for each of those on screen."""
+    page = fake_page(actions=[{"id": f"c{n}", "kind": "click", "label": f"Cancel (in “{payee}”)", "role": "button",
+                               "node": n} for n, payee in enumerate(cards if shown is None else shown, 1)])
+    page["cards"] = list(cards)
+    return page
+
+
 def test_reaching_again_for_a_mandate_the_goal_doesnt_name_ends_with_the_payees(tmp_path):
     # MyUPI: “Netflix billed by OPENAI LLC”, refused six times over, then stuck
-    cards = [{"id": f"c{n}", "kind": "click", "label": f"Cancel (in “{payee}”)", "role": "button", "node": n}
-             for n, payee in enumerate(["OPENAI LLC", "AISLE", "GOOGLE PLAY"], 1)]
-    w = worker_with(tmp_path, page=fake_page(actions=cards), goal="cancel my netflix subscription")
-    w.observe()
+    page = mandate_page(["OPENAI LLC", "AISLE", "GOOGLE PLAY"], shown=["OPENAI LLC"])  # the rest scrolled off
+    w = worker_with(tmp_path, page=page, goal="cancel my netflix subscription")
+    openai = page["actions"][0]
     with pytest.raises(Retry):
-        w.act("CLICK", cards[0], w.state["page"], sub("cancel the Netflix mandate"))
-    w.act("CLICK", cards[0], w.state["page"], sub("cancel the Netflix mandate"))
+        w.act("CLICK", openai, w.state["page"], sub("cancel the Netflix mandate"))
+    w.act("CLICK", openai, w.state["page"], sub("cancel the Netflix mandate"))
     assert w.state["status"] == "done" and not w.browser.act.called
     assert w.told[-1]["text"] == ("None of your UPI AutoPay mandates is for what you asked (“cancel my netflix "
                                   "subscription”), so nothing was changed. Your mandates: OPENAI LLC, AISLE, "
@@ -403,10 +410,7 @@ def test_after_a_mandates_cancel_the_worker_hands_the_user_its_qr_and_ends(tmp_p
 
 
 def test_the_planners_own_word_on_a_missing_mandate_goes_out_once(tmp_path, monkeypatch):
-    cards = [{"id": f"c{n}", "kind": "click", "label": f"Cancel (in “{payee}”)", "role": "button", "node": n}
-             for n, payee in enumerate(["OPENAI LLC", "AISLE"], 1)]
-    w = worker_with(tmp_path, page=fake_page(actions=cards), goal="cancel my netflix subscription")
-    w.observe()
+    w = worker_with(tmp_path, page=mandate_page(["OPENAI LLC", "AISLE"]), goal="cancel my netflix subscription")
     script_planner(monkeypatch, turn("TELL", message="No Netflix mandate was found among your mandates."),
                    turn("ASK", message="Do you want to cancel any of these instead?"))
     jev_checks(monkeypatch)
@@ -454,17 +458,29 @@ def test_an_update_then_a_question_in_the_same_words_goes_out_once(tmp_path, mon
     assert w.told == [] and len(w.asked) == 1  # the held update was this question: it went once, as the question
 
 
-def test_a_cancel_for_a_merchant_no_mandate_is_for_ends_listing_the_payees_instead_of_asking(tmp_path, monkeypatch):
-    cards = [{"id": f"c{n}", "kind": "click", "label": f"Cancel (in “{payee}”)", "role": "button", "node": n}
-             for n, payee in enumerate(["OPENAI LLC", "AISLE"], 1)]
-    w = worker_with(tmp_path, page=fake_page(actions=cards), goal="cancel my netflix subscription")
-    w.observe()
-    script_planner(monkeypatch, turn("ASK", message="No Netflix mandate is here. What would you like to do?",
+@pytest.mark.parametrize("op", ["ASK", "DONE"])  # DONE: the planner's list missed the cards off screen
+def test_a_cancel_for_a_merchant_no_mandate_is_for_ends_listing_the_payees(tmp_path, monkeypatch, op):
+    page = mandate_page(["OPENAI LLC", "AISLE", "GOOGLE PLAY"], shown=["OPENAI LLC", "AISLE"])
+    w = worker_with(tmp_path, page=page, goal="cancel my netflix subscription")
+    script_planner(monkeypatch, turn(op, message="No Netflix mandate is here: OPENAI LLC and AISLE only.",
                                      options=["Check if Netflix is part of a Google Play mandate", "Stop here"]))
     jev_checks(monkeypatch)
     w.command("tick")
     assert w.asked == [] and w.state["status"] == "done"
-    assert w.told[-1]["text"].endswith("Your mandates: OPENAI LLC, AISLE.")
+    assert [m["text"] for m in w.told] == ["None of your UPI AutoPay mandates is for what you asked (“cancel my "
+                                           "netflix subscription”), so nothing was changed. Your mandates: OPENAI "
+                                           "LLC, AISLE, GOOGLE PLAY."]
+
+
+@pytest.mark.parametrize("cards", [["GOOGLE PLAY"], ["GOOGLE PLAY", "AISLE"]])
+def test_a_mandate_the_whole_list_wasnt_read_for_is_never_called_missing(tmp_path, monkeypatch, cards):
+    # MyUPI: with GOOGLE PLAY's card alone read, “cancel my aisle” was answered “no mandate for it”
+    w = worker_with(tmp_path, page=mandate_page(cards, shown=["GOOGLE PLAY"]), goal="Cancel my aisle subscription",
+                    replies=[{"text": "yes"}])
+    script_planner(monkeypatch, turn("ASK", message="Do you want me to cancel the AISLE mandate?"))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.asked and not w.told
 
 
 def test_the_same_update_is_told_once(tmp_path, monkeypatch):  # MyUPI: “Please scan the QR …” three times over
