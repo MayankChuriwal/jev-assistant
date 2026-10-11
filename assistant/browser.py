@@ -298,9 +298,10 @@ def site_of(url):
     return urlparse(url).netloc.lower().removeprefix("www.")
 
 
-def end_session(target):
+def end_session(target, why):
     """Sign a tab out: the site's own Logout pressed (its server ends the session), its storage cleared, the tab
-    closed."""
+    closed. `why` goes to jev's log: a sign-in that ends early says why."""
+    print(f"jev: a kept sign-in ended ({why})", file=sys.stderr, flush=True)
     try:
         session = cdp("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
         pressed = cdp("Runtime.evaluate", session_id=session, expression=LOG_OUT, returnByValue=True)
@@ -325,7 +326,7 @@ def end_sessions(owner=None):
             TOKENS.pop(key, None)
         ENDED[owner] = time.monotonic()
     for target in targets:
-        end_session(target)
+        end_session(target, "logged out" if owner else "jev stopping")
     return [site for _, site in ended]
 
 
@@ -338,7 +339,7 @@ def end_leftovers(sites):
     left = [t["targetId"] for t in cdp("Target.getTargets")["targetInfos"]
             if t["type"] == "page" and site_of(t["url"]) in sites]
     for target in left:
-        end_session(target)
+        end_session(target, "left signed in by an earlier run")
     return len(left)
 
 
@@ -348,7 +349,7 @@ def expire(key, target, token):
             return  # taken by the user's next task, kept again since (a newer timer runs), or ended already
         KEPT.pop(key)
         TOKENS.pop(key)
-    end_session(target)
+    end_session(target, f"idle {SESSION_IDLE:g} s")
 
 
 def watch_popups():
@@ -1196,6 +1197,8 @@ class Browser:
             site = site_of(cdp("Target.getTargetInfo", targetId=kept)["targetInfo"]["url"]) if kept else None
         except (RuntimeError, TimeoutError):
             kept = None
+        if keep and not kept:  # a sign-in that should have lasted: jev's log says so
+            print("jev: a sign-in wasn't kept (the task's tab was gone)", file=sys.stderr, flush=True)
         for target in list(self.tabs):
             if target != kept:
                 try:
@@ -1210,12 +1213,12 @@ class Browser:
         except (RuntimeError, TimeoutError):
             pass
         if max(ENDED.get(self.owner, -1.0), ENDED.get(None, -1.0)) >= self.started:
-            return end_session(kept)
+            return end_session(kept, "logged out while its task ran")
         key, token = (self.owner, site), object()
         with KEEPING:
             old, KEPT[key], TOKENS[key] = KEPT.get(key), kept, token
         if old and old != kept:
-            end_session(old)
+            end_session(old, "another tab kept on the site")
         timer = threading.Timer(SESSION_IDLE, expire, args=(key, kept, token))
         timer.daemon = True
         timer.start()
