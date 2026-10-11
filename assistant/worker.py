@@ -34,6 +34,11 @@ MANDATE_CANCEL = re.compile(r"(?:cancel|revoke)\b", re.IGNORECASE)  # a card's C
 APPROVED = re.compile(r"\s*(?:yes|done|approved|i approved|i did|ok)\b", re.IGNORECASE)
 AGREE = re.compile(r"\b(?:i (?:have read and )?agree|i accept)\b", re.IGNORECASE)  # a terms box
 LOADING = re.compile(r"\bloading\b", re.IGNORECASE)  # a part of the page not drawn yet
+PHONE_BOX = re.compile(r"mobile|phone|\b9876543210\b", re.IGNORECASE)  # a sign-in form's phone number box
+SUBMIT = re.compile(r"\s*(?:continue|proceed|log ?in|sign ?in|get otp|verify(?: (?:&|and) continue)?)\s*$",
+                    re.IGNORECASE)  # a sign-in form's own button
+QUESTION = re.compile(r"\s*(?:what|how|why|when|where|which|who|whom|is|are|can|could|do|does|did|should|will)\b|"
+                      r".*\?\s*$", re.IGNORECASE)
 POLICY = re.compile(r"\s*(?:terms(?: of use| (?:&|and) conditions)?|privacy(?: policy)?|disclaimer|faqs?)\b",
                     re.IGNORECASE)  # a site's own policy or help pages
 QUIET = executor.QUIET  # waits and scrolls: repeating these is not going in circles…
@@ -519,6 +524,10 @@ class Worker:
         if box:  # the text the user read, typed now: the planner left it, and Continue stayed disabled
             inputs, shown = self.value(box, self.state["captcha_text"][0], page)
             return self.run(page, "TYPE_TEXT", box, inputs, shown, goal="type the captcha text the user read")
+        signing = self.sign_in_step(page)
+        if signing:  # MyUPI: the planner skipped the phone, so Continue never lit up
+            operation, action, text = signing
+            return self.act(operation, action, page, None, text=text)
         if s["reason"]:
             return self.think(page)
         sub = self.subgoal()
@@ -773,6 +782,31 @@ class Worker:
         pending = self.state["captcha_text"]
         return bool(pending) and not any(h.get("operation") == "TYPE_TEXT" and h.get("text") == pending[0]
                                          for h in self.state["history"][pending[1]:])
+
+    def sign_in_step(self, page):
+        """On a sign-in form its site note says the worker fills (MyUPI's `sign-in: auto`): (operation, control, text)
+        for the next step, else None. The phone first, then the agree box, then Continue or Proceed once no box is
+        empty; the captcha and the code have their own rules, which ask the user."""
+        note = skills.site_for(page["url"], self.library["sites"])
+        if (note or {}).get("sign-in") != "auto":
+            return None
+        fills = [a for a in page["actions"] if a["kind"] == "fill"]
+        phones = [a for a in fills if (a.get("constraints") or {}).get("type") == "tel"
+                  or PHONE_BOX.search(a.get("label") or "")]
+        if not phones and not any(a.get("group") for a in fills):
+            return None  # not the sign-in form: neither its phone box nor its code's boxes
+        empty = next((a for a in phones if not a.get("value")), None)
+        if empty:
+            return "TYPE_TEXT", empty, "[profile:phone]"
+        agree = next((a for a in page["actions"] if a.get("role") == "checkbox" and a.get("checked") != "true"
+                      and AGREE.search(a.get("label") or "")), None)
+        if agree:
+            return "CLICK", agree, None
+        if any(not a.get("value") for a in fills):
+            return None  # the captcha or the code, still to come from the user
+        submit = next((a for a in page["actions"] if a["kind"] == "click" and SUBMIT.match(a.get("label") or "")),
+                      None)
+        return ("CLICK", submit, None) if submit else None
 
     def captcha_box(self, page):
         """The captcha's text box when it is empty, else None."""
@@ -1513,7 +1547,7 @@ class Worker:
                             "size swatches, or the control naming the current choice), or LOOK for it.")
             label, goal = action.get("label") or "", self.state["goal"]
             if POLICY.match(label) and not POLICY.search(goal) and not (
-                    label.lower().startswith("faq") and (rules.LOOKS.match(goal) or goal.rstrip().endswith("?"))):
+                    label.lower().startswith("faq") and QUESTION.match(goal)):
                 raise Retry(f"“{label}” only opens the site's policy or help text, which isn't needed for this task: "
                             "go on with the task itself.")  # MyUPI: its Terms, Privacy and FAQs opened again and again
             if action.get("role") == "checkbox" and action.get("checked") == "true" and \

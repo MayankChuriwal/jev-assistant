@@ -591,6 +591,45 @@ def test_a_sites_policy_pages_are_opened_only_when_the_goal_wants_them(tmp_path,
         assert w.browser.act.called
 
 
+def myupi_sign_in(phone="", captcha="9EF5", agreed="false"):
+    page = fake_page(url="https://www.upihelp.npci.org.in/", text="Security Verification")
+    page["actions"] = [
+        {"id": "e1", "kind": "fill", "label": "Eg. 9876543210", "role": "textbox", "value": phone, "node": 1,
+         "constraints": {"type": "tel", "maxlength": 10}},
+        {"id": "e2", "kind": "fill", "label": "Security Verification", "role": "textbox", "value": captcha, "node": 2,
+         "constraints": {}},
+        {"id": "e3", "kind": "click", "label": "I have read and agree to the Terms & Conditions , Privacy Policy and "
+         "Disclaimer", "role": "checkbox", "checked": agreed, "node": 3},
+        {"id": "e4", "kind": "click", "label": "Continue", "role": "button", "node": 4},
+        {"id": "e5", "kind": "click", "label": "FAQs", "role": "button", "node": 5}]
+    return page
+
+
+@pytest.mark.parametrize("page, operation, label", [
+    (myupi_sign_in(), "TYPE_TEXT", "Eg. 9876543210"),  # MyUPI: the planner never typed the phone, Continue stayed off
+    (myupi_sign_in(phone="[profile:phone]"), "CLICK", "I have read and agree to the Terms & Conditions , Privacy "
+                                                       "Policy and Disclaimer"),
+    (myupi_sign_in(phone="[profile:phone]", agreed="true"), "CLICK", "Continue")])
+def test_myupis_sign_in_form_is_filled_by_the_worker_one_step_at_a_time(tmp_path, monkeypatch, page, operation,
+                                                                         label):
+    w = worker_with(tmp_path, page=page)
+    seen = script_planner(monkeypatch, turn("CLICK", pick=5))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert seen == [] and w.state["history"][-1]["operation"] == operation
+    if operation == "TYPE_TEXT":  # the profile's phone is the box's own example number: its label reads masked
+        assert w.state["history"][-1]["text"] == "[profile:phone]"
+    else:
+        assert w.browser.act.call_args.args[1]["label"] == label
+
+
+def test_faqs_open_for_a_question_not_for_a_request(tmp_path):  # “Show my subscriptions” opened FAQs twice
+    faqs = {"id": "f1", "kind": "click", "label": "FAQs", "role": "button", "node": 9}
+    w = worker_with(tmp_path, page=fake_page(actions=[faqs]), goal="Show my subscriptions")
+    with pytest.raises(Retry, match="isn't needed"):
+        w.act("CLICK", faqs, w.state["page"], sub("sign in"))
+
+
 def test_a_ticked_agree_box_is_never_clicked_again(tmp_path):  # a second click unticks it
     w = worker_with(tmp_path, page=fake_page(actions=SIGN_IN_PAGE))
     with pytest.raises(Retry, match="already ticked"):
@@ -641,6 +680,7 @@ def test_a_code_the_user_just_sent_is_typed_not_asked_for_again(tmp_path, monkey
 
 def test_a_code_ask_names_the_site_by_its_note_not_its_page_title(tmp_path, monkeypatch):
     page = fake_page(url="https://www.upihelp.npci.org.in/")
+    page["actions"] = [a for a in page["actions"] if a["label"] != "Phone number"]  # MyUPI's code screen: its boxes
     page["title"] = "MyUPI | Raise UPI Complaints, Check Transaction Status & Resolve Transaction Issues | NPCI"
     w = worker_with(tmp_path, page=page, replies=[{"text": "481516"}, {"text": "go on"}])
     script_planner(monkeypatch, turn(subgoals=[sub("sign in")]))
