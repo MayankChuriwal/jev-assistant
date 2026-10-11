@@ -177,6 +177,7 @@ def captcha_challenge(page):
                 any(CHALLENGE.search(a.get("label") or "") for a in page.get("actions") or ()))
 
 
+CAPTCHA_BOX = re.compile(r"captcha|security verification", re.IGNORECASE)  # where a captcha's text is typed
 CARD_DETAIL = re.compile(r"\b(cvv|cvc|card (number|no\.?|details?)|expir(y|ation)( date)?|upi pin)\b", re.IGNORECASE)
 PRICE = re.compile(r"[₹$€£]\s?\d(?:[\d,]*\d)?(?:\.\d+)?|\bRs\.?\s?\d(?:[\d,]*\d)?(?:\.\d+)?", re.IGNORECASE)
 

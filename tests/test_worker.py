@@ -508,6 +508,18 @@ def test_a_numeric_text_captcha_is_text_not_squares(tmp_path):
         assert w.asked[0]["captcha"]  # the chat hands the reply straight over: Jev can't read captcha text
 
 
+def test_a_typed_captcha_is_shown_without_numbered_squares(tmp_path):  # MyUPI: a picture of text beside its box
+    page = fake_page(actions=[{"id": "e1", "kind": "click", "label": "Refresh CAPTCHA", "role": "button", "node": 1},
+                              {"id": "e2", "kind": "fill", "label": "Security Verification", "role": "textbox",
+                               "value": "", "node": 2, "constraints": {}}])
+    w = worker_with(tmp_path, page=page, replies=[{"text": "4653"}])
+    w.browser.marked_screenshot = Mock(return_value="shot")
+    w.relay_captcha(w.state["page"])
+    assert w.browser.marked_screenshot.call_args.args[0] == [] and pressed(w) == []
+    assert w.asked[0]["text"] == "The site wants a check (captcha) solved. Type the text it shows."
+    assert "4653" in w.state["chat"][-1]["text"] and w.state["reason"] == "reply"
+
+
 def test_squares_may_be_joined_by_and_commas_or_ampersands(tmp_path):
     assert pressed(captcha_relay(tmp_path, "2 and 5")) == ["Tile 2", "Tile 5"]
     w = captcha_relay(tmp_path, "2, 5 & 7")

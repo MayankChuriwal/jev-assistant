@@ -740,11 +740,12 @@ class Worker:
             raise Halt("blocked", f"The site kept showing new checks after {CAPTCHA_ROUNDS} rounds, so I stopped. "
                                   "Please try this step on your own device.")
         clicks = [a for a in page["actions"] if a["kind"] == "click" and a.get("node") is not None]
-        marks = ([a for a in clicks if a.get("frame")] or clicks)[:40]  # a captcha lives in its own frame
+        typed = any(a["kind"] == "fill" and rules.CAPTCHA_BOX.search(a.get("label") or "") for a in page["actions"])
+        marks = [] if typed else ([a for a in clicks if a.get("frame")] or clicks)[:40]  # squares: in their frame
         image = s["browser"].marked_screenshot(marks, masked=self.secrets.nodes, hide=self.hidden_details())
         reply = self.ask({"kind": "image", "image": image, "captcha": True, "text": "The site wants a check (captcha) "
-                          "solved. Reply with the numbers of the squares to pick, like 2 5 8; or type the text it "
-                          "shows; or say none if there is nothing to pick."})
+                          "solved. " + ("Type the text it shows." if typed else "Reply with the numbers of the squares "
+                          "to pick, like 2 5 8; or type the text it shows; or say none if there is nothing to pick.")})
         text = str(reply.get("text", "")).strip()
         joined = re.sub(r"\band\b", " ", text, flags=re.IGNORECASE)  # "2 and 5", "2, 5 & 7": squares; "4829": text
         numbers = [int(n) for n in re.findall(r"\d+", joined)] if re.fullmatch(r"[\d\s,&]+", joined) else []
