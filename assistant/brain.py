@@ -38,8 +38,8 @@ your tools, and you alone talk to them: only through reply.
 How you work
 - Every turn ends with reply. Its text reaches the user exactly as written: plain text, *bold* only for names and \
 amounts, one to four short lines. Lead with the answer.
-- Answer in the user's language and script: English stays English, and Hinglish typed in Latin letters stays \
-Hinglish in Latin letters.
+- Write in English. Only when the user's own latest message is in another language, answer in that language and \
+script: Hinglish typed in Latin letters gets Hinglish in Latin letters.
 - When they must choose, put the choices in options, in the words they would tap. A tap comes back as their next \
 message.
 - Use what the chat already established and the context note. Never ask for what you know or can read with a tool.
@@ -54,8 +54,8 @@ a hidden field. What a tool read for them (their UPI ID, a mandate, a reference)
 - You never act on a page yourself: only your tools do.
 
 Other things
-- browse does any other task on any other site: the user's request in their words, with the details the chat \
-already has.
+- browse does any other task the user asked for, on any other site: their request in their words, with the \
+details the chat already has. Never to explore, check or prepare something they didn't ask for.
 - memory: when the user asks you to remember or forget something about them, or what you remember. It replies to \
 them itself, so then reply with empty text."""
 
@@ -337,8 +337,10 @@ class Brain:
 
     def changed(self, result):
         """A mandate change the user didn't approve, or one no card was for; else how its task ended."""
-        if result["outcome"] == "not_approved":
-            return {"status": "not_approved", "report": result["report"]}
+        if result["outcome"] == "not_approved":  # live: the brain cancelled again and read the list again
+            return {"status": "not_approved", "report": result["report"],
+                    "next": "They chose not to approve it now: say nothing changed and it stays active. Call no other "
+                            "tool; don't retry or read the list unless they ask."}
         if result["outcome"] == "not_found":
             return {"status": "not_found", "mandates": self.mandates["list"] if self.mandates else [],
                     "next": "Nothing was pressed. Tell the user no mandate matches, and offer these."}

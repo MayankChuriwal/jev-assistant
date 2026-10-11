@@ -16,6 +16,7 @@ CARDS = [{"name": "OPENAI LLC", "details": "OPENAI LLC ₹ 399 Active on NAVI AP
          {"name": "GOOGLE PLAY", "details": "GOOGLE PLAY ₹ 299 Active on NAVI APP Frequency Monthly"},
          {"name": "AISLE", "details": "AISLE ₹ 499 Active on Google Pay Frequency Monthly"}]
 PAYEES = [c["name"] for c in CARDS]
+HINGLISH = re.compile(r"\b(?:aap|aapke|kaunsa|karna|karein|hai|kya|nahi)\b", re.I)  # the live run: English in, Hinglish out
 CHANGE = re.compile(r"(Cancel|Pause) the UPI AutoPay mandate whose payee is (.+?)(?: until .+)?$")
 
 
@@ -86,10 +87,11 @@ def last(tools):
 
 
 CASES = [
-    ("A vague cancel reads the list and asks which", ["Cancel my subscriptions"], False,
-     lambda t: t.executed == [LIST] and not t.changed("Cancel") and len(last(t)[1]) >= 2),
+    ("A vague cancel reads the list and asks which, in English", ["Cancel my subscriptions"], False,
+     lambda t: t.executed == [LIST] and not t.changed("Cancel") and len(last(t)[1]) >= 2
+     and not HINGLISH.search(last(t)[0])),
     ("A named payee is cancelled at once", ["Cancel my aisle subscription"], False,
-     lambda t: t.changed("Cancel") == ["AISLE"]),
+     lambda t: t.changed("Cancel") == ["AISLE"] and CHANGE.match(t.executed[-1])),  # nothing read after “Not now”
     ("A brand billed by a company gets the card", ["cancel chatgpt"], True,
      lambda t: not t.changed("Cancel") and "Cancel OPENAI LLC" in last(t)[1]),
     ("The card's yes runs the cancel", ["cancel chatgpt", "haan kar do"], True,

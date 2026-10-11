@@ -346,3 +346,14 @@ def test_the_same_call_twice_in_a_turn_runs_once(tmp_path):
     brain = make(core, model, tmp_path)
     brain.turn("what's my UPI ID?")
     assert len(core.executed) == 1 and results(brain, "upi_task")[1]["status"] == "repeat"
+
+
+def test_a_qr_the_user_didnt_approve_tells_the_brain_to_stop_there(tmp_path):
+    # live: after “Not now” the brain cancelled again (the repeat guard caught it) and read the list again
+    core = FakeCore(done("Nothing was changed: AISLE's UPI AutoPay stays active.", CARDS, outcome="not_approved"))
+    model = Model(("upi_cancel", {"payee": "AISLE", "reason": None}),
+                  ("reply", {"text": "Nothing changed: AISLE stays active.", "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn("AISLE")
+    out = results(brain, "upi_cancel")[0]
+    assert out["status"] == "not_approved" and "don't retry" in out["next"]
