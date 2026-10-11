@@ -110,6 +110,15 @@ The sign-in lives in the tab (sessionStorage `accessToken`): a new tab means a n
 
 ### Information
 - FAQs, fraud awareness, What is UPI, forgotten UPI PIN steps, Terms of use, Privacy policy, Disclaimer.
+- The FAQs modal (on the sign-in page too) has 10 categories, each a collapsed list: General Questions; Transaction
+  Failures & Money Deduction; Dispute Redressal & Complaint Tracking; Wrong Transfers (User Error); Fraud & Security
+  Issues; Merchant & Bill Payment Issues; Technical & Bank Errors; General Usage & Registration; Status Codes & Error
+  Messages; Advanced / Miscellaneous. 54 questions in English (and in हिंदी, తెలుగు, বাংলা, தமிழ்), among them: money
+  deducted but not received; failed debits and when the money returns; Pending and Deemed Approved; raising and
+  tracking a dispute, the CRN, resolution time, reopening; wrong UPI ID or number; collect-request and PIN frauds;
+  money taken without permission; blocking UPI after losing the phone; bill and merchant payments not reflected; IPO
+  mandates; FASTag; error codes (U30, U19, U69, Bank Server Down, Limit Exceeded, Risk Threshold Exceeded); daily
+  limits; stopping autopay; wallet to bank; the Ombudsman. The agent reads an answer off the site when asked.
 
 ### Account
 - Logout. ⚠ Revoke consent (privacy). Rate MyUPI.
