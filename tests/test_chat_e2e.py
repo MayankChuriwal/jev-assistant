@@ -1,5 +1,6 @@
 """The chat core with a real Worker over a scripted browser and scripted models: one order end to end."""
 
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 from fakes import answers_for, fake_page, jev_checks, script_planner, store, sub, turn
@@ -29,9 +30,8 @@ def test_an_order_is_planned_approved_in_chat_and_reported(tmp_path, monkeypatch
         return Worker(url, task.goal, asker=asker, notify=notify, memory=memory, browser=browser,
                       trace_dir=tmp_path / "traces", skill=task.skill, preauth=task.preauth, cap=task.cap)
 
-    routes = [("NEW_TASK", "none", {"NEW_TASK": 1.0}, {"none": 1.0}), ("ANSWER", "t1", {"ANSWER": 1.0}, {"t1": 1.0})]
-    chat = conversation.Core(channel, memory=memory, make_worker=make_worker, poll=0.01,
-                             route=lambda text, tasks, recent: routes.pop(0),
+    brain = SimpleNamespace(busy=False, hear=lambda text: chat.new_task(text))  # the brain's tool starts the order
+    chat = conversation.Core(channel, memory=memory, make_worker=make_worker, poll=0.01, brain=brain,
                              intake=lambda message, kinds, several=True: {"several": "no", "skill": "general",
                                                                           "preauth": "no"},
                              start=lambda goal: ("https://shop.test/checkout", "Shop · Diet Coke", True),

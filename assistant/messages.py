@@ -9,9 +9,11 @@ def text_payloads(text):
     return [{"type": "text", "text": {"body": text[i:i + TEXT_LIMIT]}} for i in range(0, len(text) or 1, TEXT_LIMIT)]
 
 
-def render(message, question_id=None, image_id=None, title=None):
-    """Payloads for one agent message. Options become reply buttons (≤ 3), a list (≤ 10), or numbered text."""
+def render(message, question_id=None, image_id=None, title=None, tag=None):
+    """Payloads for one agent message. Options become reply buttons (≤ 3), a list (≤ 10), or numbered text. Their ids
+    start with the question's (q7) or, for a brain reply that opens no question, its `tag` (b7)."""
     text = f"*{title}*\n{message['text']}" if title else message["text"]
+    tag = tag or f"q{question_id}"
     options = message.get("options") or []
     payloads = [{"type": "image", "image": {"id": image_id}}] if image_id else []
     if options and len(options) <= ROWS:
@@ -20,11 +22,11 @@ def render(message, question_id=None, image_id=None, title=None):
             payloads += text_payloads(text)
             body = "Choose one:"
         if len(options) <= BUTTONS:
-            action = {"buttons": [{"type": "reply", "reply": {"id": f"q{question_id}:{o['id']}",
+            action = {"buttons": [{"type": "reply", "reply": {"id": f"{tag}:{o['id']}",
                                                              "title": o["label"][:BUTTON_TITLE]}} for o in options]}
             kind = "button"
         else:
-            rows = [{"id": f"q{question_id}:{o['id']}", "title": o["label"][:ROW_TITLE],
+            rows = [{"id": f"{tag}:{o['id']}", "title": o["label"][:ROW_TITLE],
                      "description": (o.get("description") or "")[:ROW_DESCRIPTION]} for o in options]
             action = {"button": "Choose", "sections": [{"title": "Options", "rows": rows}]}
             kind = "list"

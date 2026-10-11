@@ -5,7 +5,9 @@ Spec: docs/superpowers/specs/2026-10-12-brain-and-hands-design.md."""
 
 import functools
 import json
+import queue
 import re
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -131,6 +133,31 @@ class Brain:
         self.mandates = None  # the last read of MyUPI's list: {"read_at": "HH:MM", "list": [{"payee", "details"}]}
         self.card = self.pending = None  # a confirmation card code sent; it counts for the next message only
         self.heard = ""
+        self.inbox, self.busy, self.thread, self.starting = queue.Queue(), False, None, threading.Lock()
+
+    # ---- messages, one at a time
+
+    def hear(self, text):
+        """Queue one message. The brain's own thread reads them one at a time, in order: a tool may wait minutes for
+        the user to type a code, and the chat must stay free to take it."""
+        self.inbox.put(text)
+        with self.starting:
+            if self.thread is None:
+                self.thread = threading.Thread(target=self.listen, name="jev-brain", daemon=True)
+                self.thread.start()
+
+    def listen(self):
+        while True:
+            text = self.inbox.get()
+            self.busy = True
+            self.core.update_typing()
+            try:
+                self.turn(text)
+            except Exception as error:  # the thread outlives any turn
+                self.core.say(f"I couldn't work that out just now ({error}). Please try again.")
+            finally:
+                self.busy = not self.inbox.empty()
+                self.core.update_typing()
 
     # ---- a turn
 

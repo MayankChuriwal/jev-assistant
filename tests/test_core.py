@@ -70,10 +70,26 @@ def hold(gate):
     return lambda agent: gate.wait(5)
 
 
+class FakeBrain:
+    """The brain, scripted: what reached it (so what any model saw), in order. By default each message starts a task,
+    as the brain's tool would."""
+
+    busy = False
+
+    def __init__(self, heard):
+        self.heard, self.core, self.starts = heard, None, True
+
+    def hear(self, text):
+        self.heard.append(text)
+        if self.starts:
+            self.core.new_task(text)
+
+
 @pytest.fixture
 def world(tmp_path):
-    w = SimpleNamespace(scripts={}, hosts={}, agents={}, late={}, classified=[], intents=[], clock=Clock(), n=0,
+    w = SimpleNamespace(scripts={}, hosts={}, agents={}, late={}, classified=[], clock=Clock(), n=0,
                         intakes={}, splits={}, made={}, learned=None, known=[], memory_outs=[])
+    w.brain = FakeBrain(w.classified)
     w.channel = WebChannel(tmp_path / "media")
 
     def make_worker(task, url, asker, notify):
@@ -81,23 +97,18 @@ def world(tmp_path):
         w.agents[task.goal] = FakeAgent(w.scripts.get(task.goal, []), asker, notify, w.late.get(task.goal, []))
         return w.agents[task.goal]
 
-    def route(text, tasks, chat):
-        w.classified.append(text)
-        entry = w.intents.pop(0) if w.intents else ("NEW_TASK", "none", {"NEW_TASK": 1.0})
-        return (*entry, {entry[1]: 1.0})[:4]  # the task pick is certain unless a test says otherwise
-
     def intake(message, kinds, several=True):
         info = {"several": "no", "skill": "general", "preauth": "no", **w.intakes.get(message, {})}
         return info if several else {**info, "several": "no"}
 
     w.core = conversation.Core(
         w.channel, memory=store(), make_worker=make_worker,
-        start=lambda goal: (f"https://{w.hosts.get(goal, 'shop.test')}/", goal, True), route=route, intake=intake,
+        start=lambda goal: (f"https://{w.hosts.get(goal, 'shop.test')}/", goal, True), brain=w.brain, intake=intake,
         split=lambda message: w.splits.get(message, [message]), library=EMPTY,
-        chat=lambda message, tasks: (f"About {len(tasks)} task(s).", {}),
         remember=lambda question, answer: (f"Default choice: {answer}", {}), clock=w.clock, poll=0.01,
         learn=lambda state, memory: w.learned,
         memory_job=lambda message, known: w.known.append(known) or w.memory_outs.pop(0))
+    w.brain.core = w.core
     return w
 
 
@@ -168,7 +179,6 @@ def test_code_requests_open_at_once_and_the_rest_wait_oldest_first(world):
     text(world, "482913")
     assert until(lambda: world.agents["C"].replies == [{"text": "482913"}])
     assert until(lambda: world.core.open is not None and world.core.open.task.goal == "A")
-    world.intents.append(("ANSWER", "t1", {"ANSWER": 0.95}))
     text(world, "Airport")
     assert until(lambda: world.agents["A"].replies == [{"text": "Airport"}])
     assert until(lambda: world.core.open is not None and world.core.open.task.goal == "B")
@@ -206,50 +216,69 @@ def test_files_answer_the_question_that_asked_for_them(world):
     assert until(lambda: world.agents["Dispute a charge"].replies == [{"file": str(path)}])
 
 
-def test_amendments_status_small_talk_and_cancel(world):
-    gate = threading.Event()
-    world.scripts["Order Diet Coke"] = [hold(gate), ask(ADDRESS)]
-    text(world, "Order Diet Coke")
-    assert until(lambda: world.core.tasks["t1"].status == "running")
-    world.intents += [("AMEND", "t1", {"AMEND": 0.9}), ("STATUS", "t1", {"STATUS": 0.9}),
-                      ("OTHER", "none", {"OTHER": 0.95}), ("CANCEL", "t1", {"CANCEL": 0.97})]
-    text(world, "make it 2 cans")
-    text(world, "where are we?")
-    text(world, "thanks")
-    gate.set()
-    agent = world.agents["Order Diet Coke"]
-    assert until(lambda: "User update: make it 2 cans" in agent.state["memory"]) and agent.state["approval"] is None
-    assert until(lambda: interactive(world))
-    text(world, "stop the coke order")
-    assert until(lambda: agent.replies == [{"cancel": True}])
-    got = bodies(world)
-    assert "Got it. I'll use that for Order Diet Coke." in got and got.count("About 1 task(s).") == 2
-
-
-def test_amending_after_a_payment_says_it_already_went_through(world):
-    gate = threading.Event()
-    world.scripts["Order Diet Coke"] = [lambda agent: agent.state["done"].append("Pay ₹79"), hold(gate)]
-    text(world, "Order Diet Coke")
-    assert until(lambda: "Order Diet Coke" in world.agents and world.agents["Order Diet Coke"].state["done"])
-    world.intents.append(("AMEND", "t1", {"AMEND": 0.9}))
-    text(world, "make it 2 cans")
-    assert until(lambda: any(b.startswith("Pay ₹79 already went through.") for b in bodies(world)))
-    gate.set()
-    assert until(lambda: "User update: make it 2 cans" in world.agents["Order Diet Coke"].state["memory"])
-
-
-def test_unclear_messages_ask_which_task_they_are_for(world):
+def test_while_a_task_runs_a_message_waits_for_the_brain_with_one_notice(world):
     gate = threading.Event()
     world.scripts["Order Diet Coke"] = [hold(gate)]
     text(world, "Order Diet Coke")
     assert until(lambda: world.core.tasks["t1"].status == "running")
-    world.intents.append(("AMEND", "t1", {"AMEND": 0.5, "NEW_TASK": 0.45}))
-    text(world, "2 please")
-    assert until(lambda: interactive(world))
-    assert buttons(world) == ["route:t1:wamid.in2", "route:new:wamid.in2"]
-    tap(world, "route:t1:wamid.in2")
+    world.brain.starts = False
+    text(world, "where are we?")
+    text(world, "thanks")
     gate.set()
-    assert until(lambda: "User update: 2 please" in world.agents["Order Diet Coke"].state["memory"])
+    assert world.classified == ["Order Diet Coke", "where are we?", "thanks"]
+    assert bodies(world).count("I'll get to that as soon as this finishes.") == 1
+
+
+def test_a_stop_word_while_a_task_runs_stops_it_without_the_brain(world):
+    gate = threading.Event()
+    world.scripts["Order Diet Coke"] = [hold(gate), ask(ADDRESS)]
+    text(world, "Order Diet Coke")
+    assert until(lambda: world.core.tasks["t1"].status == "running")
+    text(world, "stop")
+    gate.set()
+    assert until(lambda: world.core.tasks["t1"].status == "cancelled") and world.classified == ["Order Diet Coke"]
+
+
+def test_text_typed_while_a_tasks_question_is_open_answers_it(world):
+    world.scripts["Order Diet Coke"] = [ask(ADDRESS)]
+    text(world, "Order Diet Coke")
+    assert until(lambda: interactive(world))
+    text(world, "the office one")
+    assert until(lambda: world.agents["Order Diet Coke"].replies == [{"text": "the office one"}])
+    assert world.classified == ["Order Diet Coke"]
+
+
+def test_a_tap_on_a_brain_reply_reaches_the_brain_as_the_options_words(world):
+    world.brain.starts = False
+    world.core.reply("You have 3 AutoPay mandates. Which should I cancel?", ["OPENAI LLC", "GOOGLE PLAY", "AISLE"])
+    assert buttons(world) == ["b1:1", "b1:2", "b1:3"]
+    assert interactive(world)[-1]["interactive"]["body"]["text"] == "You have 3 AutoPay mandates. Which should I cancel?"
+    tap(world, "b1:3")
+    assert world.classified == ["AISLE"]
+
+
+def test_a_long_option_comes_back_whole_though_its_button_is_cut(world):
+    world.brain.starts = False
+    options = ["Cancel ONE97 COMMUNICATIONS LIMITED", "No, keep it"]
+    world.core.reply("Cancel ONE97 COMMUNICATIONS LIMITED (₹ 99)?", options)
+    titles = [b["reply"]["title"] for b in interactive(world)[-1]["interactive"]["action"]["buttons"]]
+    assert titles == ["Cancel ONE97 COMMUNI", "No, keep it"]
+    tap(world, "b1:1")
+    assert world.classified == ["Cancel ONE97 COMMUNICATIONS LIMITED"]
+
+
+def test_a_brain_reply_without_options_is_plain_text(world):
+    world.core.reply("Done. MyUPI no longer lists AISLE.", [])
+    assert bodies(world) == ["Done. MyUPI no longer lists AISLE."] and interactive(world) == []
+
+
+def test_typing_shows_while_the_brain_thinks(world):
+    world.brain.busy = True
+    world.core.update_typing()
+    assert world.channel.typing is True
+    world.brain.busy = False
+    world.core.update_typing()
+    assert world.channel.typing is False
 
 
 def test_a_remember_button_follows_an_answered_choice(world):
@@ -360,16 +389,6 @@ def test_typing_shows_while_a_task_works_and_a_failed_start_says_why(world):
     assert until(lambda: any("invalid start" in b for b in bodies(world)))
 
 
-def test_a_message_that_cannot_be_read_says_so(world):
-    def down(text, tasks, chat):
-        raise RuntimeError("Model connection failed; no action executed.")
-
-    world.core.route_message = down
-    text(world, "Order Diet Coke")
-    assert "I couldn't read that message: Model connection failed; no action executed." in bodies(world)
-    assert world.core.tasks == {}
-
-
 def test_only_the_configured_user_is_heard(world):
     stranger = {"from": "someone-else", "id": "wamid.x", "type": "text", "text": {"body": "Order Diet Coke"}}
     body = {"object": "whatsapp_business_account",
@@ -389,61 +408,11 @@ def test_a_cancel_mid_step_stops_it_before_it_asks(world):
     world.scripts["Order Diet Coke"] = [step]
     text(world, "Order Diet Coke")
     assert until(lambda: world.core.tasks["t1"].status == "running")
-    world.intents.append(("CANCEL", "t1", {"CANCEL": 0.97}))
     text(world, "stop")
     gate.set()
     agent = world.agents["Order Diet Coke"]
     assert until(lambda: agent.replies == [{"cancel": True}]) and flags == [True]
     assert interactive(world) == [] and world.core.open is None
-
-
-def test_an_amendment_mid_step_interrupts_it(world):
-    gate, flags = threading.Event(), []
-
-    def step(agent):
-        gate.wait(5)
-        flags.append(agent.interrupted())
-
-    world.scripts["Order Diet Coke"] = [step]
-    text(world, "Order Diet Coke")
-    assert until(lambda: world.core.tasks["t1"].status == "running")
-    world.intents.append(("AMEND", "t1", {"AMEND": 0.9}))
-    text(world, "make it 2 cans")
-    gate.set()
-    assert until(lambda: "User update: make it 2 cans" in world.agents["Order Diet Coke"].state["memory"])
-    assert flags == [True]
-
-
-def test_cancel_and_changes_never_guess_the_task(world):
-    gate = threading.Event()
-    world.scripts["Order Diet Coke"] = [hold(gate)]
-    text(world, "Order Diet Coke")
-    assert until(lambda: world.core.tasks["t1"].status == "running")
-    world.intents.append(("CANCEL", "none", {"CANCEL": 0.97}))
-    text(world, "cancel the chips order")
-    assert until(lambda: interactive(world)) and buttons(world) == ["route:t1:wamid.in2"]
-    assert interactive(world)[-1]["interactive"]["body"]["text"] == "Which task should I stop?"
-    assert not world.core.tasks["t1"].cancelled
-    tap(world, "route:t1:wamid.in2")
-    assert world.core.tasks["t1"].cancelled and "Stopping Order Diet Coke after its current step." in bodies(world)
-    gate.set()
-
-
-def test_an_unsure_task_pick_asks_which(world):
-    gates = {g: threading.Event() for g in "AB"}
-    world.hosts.update(A="a.test", B="b.test")
-    world.scripts.update(A=[hold(gates["A"])], B=[hold(gates["B"])])
-    text(world, "A")
-    world.core.new_task("B")
-    assert until(lambda: sum(t.status == "running" for t in world.core.tasks.values()) == 2)
-    world.intents.append(("AMEND", "t1", {"AMEND": 0.9}, {"t1": 0.55, "t2": 0.45}))
-    text(world, "make it 2")
-    assert until(lambda: interactive(world)) and buttons(world) == ["route:t1:wamid.in2", "route:t2:wamid.in2"]
-    assert world.core.tasks["t1"].updates == []
-    tap(world, "route:t2:wamid.in2")
-    assert world.core.tasks["t2"].updates == ["make it 2"]
-    for gate in gates.values():
-        gate.set()
 
 
 CAPTCHA = {"kind": "image", "image": "cG5n", "captcha": True, "text": "The site wants a check (captcha) solved."}
@@ -463,9 +432,8 @@ def test_stop_at_a_captcha_still_stops_the_task(world):
     world.scripts["Cancel Netflix"] = [ask(CAPTCHA)]
     text(world, "Cancel Netflix")
     assert until(lambda: world.core.open is not None)
-    world.intents.append(("CANCEL", "t1", {"CANCEL": 0.97}))
     text(world, "stop")
-    assert world.classified == ["Cancel Netflix", "stop"] and until(lambda: world.core.tasks["t1"].cancelled)
+    assert world.classified == ["Cancel Netflix"] and until(lambda: world.core.tasks["t1"].cancelled)
 
 
 NPCI_NOTE = {"upihelp.npci.org.in": {"host": "upihelp.npci.org.in", "name": "NPCI UPI Help", "aliases": []}}
@@ -491,54 +459,10 @@ def test_a_task_that_mentions_logging_out_is_still_a_task(world, monkeypatch):
     assert world.classified == ["log out of my Amazon account and sign in with my office one"]
 
 
-def test_changes_with_nothing_running_say_so(world):
-    world.intents.append(("CANCEL", "none", {"CANCEL": 0.97}))
-    text(world, "cancel it")
-    assert bodies(world) == ["Nothing is running right now."] and world.core.tasks == {}
-
-
-def test_an_answer_goes_only_to_the_question_that_was_open(world):
-    world.scripts["Order Diet Coke"] = [ask(ADDRESS), ask(OTP)]
-    text(world, "Order Diet Coke")
-    assert until(lambda: interactive(world))
-
-    def slow(message, tasks, chat):  # the address is tapped and the OTP opens while Jev reads "Home"
-        tap(world, "q1:o1")
-        until(lambda: world.core.open is not None and world.core.open.id == 2)
-        return "ANSWER", "t1", {"ANSWER": 0.95}, {"t1": 1.0}
-
-    world.core.route_message = slow
-    text(world, "Home")
-    assert "The question changed while I was reading your message. Please answer again." in bodies(world)
-    assert world.agents["Order Diet Coke"].replies == [{"option": "o1"}] and world.core.open.id == 2
-
-
-def test_a_late_which_tap_never_answers_a_newer_question(world):
-    world.scripts["Order Diet Coke"] = [ask(ADDRESS), ask(OTP)]
-    text(world, "Order Diet Coke")
-    assert until(lambda: interactive(world))
-    world.intents.append(("ANSWER", "t1", {"ANSWER": 0.5, "AMEND": 0.45}))
-    text(world, "use my office address")
-    assert until(lambda: buttons(world) == ["route:t1:wamid.in2", "route:new:wamid.in2"])
-    tap(world, "q1:o1")
-    assert until(lambda: world.core.open is not None and world.core.open.id == 2)
-    tap(world, "route:t1:wamid.in2")
-    assert world.core.tasks["t1"].updates == ["use my office address"]
-    assert world.agents["Order Diet Coke"].replies == [{"option": "o1"}] and world.core.open.id == 2
-
-
-def test_a_which_tap_for_a_finished_task_starts_nothing(world):
-    gate = threading.Event()
-    world.scripts["Order Diet Coke"] = [hold(gate)]
-    text(world, "Order Diet Coke")
-    assert until(lambda: world.core.tasks["t1"].status == "running")
-    world.intents.append(("AMEND", "t1", {"AMEND": 0.5, "NEW_TASK": 0.45}))
-    text(world, "2 please")
-    assert until(lambda: interactive(world))
-    gate.set()
-    assert until(lambda: world.core.tasks["t1"].status == "done")
-    tap(world, "route:t1:wamid.in2")
-    assert "Order Diet Coke already finished." in bodies(world) and list(world.core.tasks) == ["t1"]
+def test_a_stop_with_nothing_running_goes_to_the_brain(world):
+    world.brain.starts = False
+    text(world, "stop")
+    assert world.classified == ["stop"] and bodies(world) == []
 
 
 def test_cancel_works_even_while_a_secret_is_asked(world):
@@ -589,7 +513,6 @@ def test_a_stopped_task_says_when_it_has_stopped(world):
     world.scripts["Order Diet Coke"] = [hold(gate), tell("never")]
     text(world, "Order Diet Coke")
     assert until(lambda: world.core.tasks["t1"].status == "running")
-    world.intents.append(("CANCEL", "t1", {"CANCEL": 0.97}))
     text(world, "stop")
     gate.set()
     assert until(lambda: "Stopped Order Diet Coke." in bodies(world)) and "never" not in bodies(world)
@@ -602,7 +525,6 @@ def test_a_stop_after_a_payment_says_it_may_have_gone_through(world):
                                         hold(gate)]
     text(world, "Order Diet Coke")
     assert until(lambda: world.agents.get("Order Diet Coke") and world.agents["Order Diet Coke"].state["commit"])
-    world.intents.append(("CANCEL", "t1", {"CANCEL": 0.97}))
     text(world, "stop")
     gate.set()
     assert until(lambda: "Stopped Order Diet Coke. Pay ₹79 may already have gone through; check it before trying "
@@ -619,7 +541,6 @@ def test_a_task_that_finished_is_never_reported_stopped(world):
     world.scripts["Order Diet Coke"] = [last]
     text(world, "Order Diet Coke")
     assert until(lambda: world.core.tasks["t1"].status == "running")
-    world.intents.append(("CANCEL", "t1", {"CANCEL": 0.97}))
     text(world, "stop")
     gate.set()
     assert until(lambda: world.core.tasks["t1"].status == "done")
@@ -904,27 +825,20 @@ def test_skip_and_no_keep_nothing(world):
 ZEPTO = {"skills": {}, "sites": {"zeptonow.com": {"name": "Zepto", "aliases": [], "host": "zeptonow.com",
                                                   "start": "https://www.zeptonow.com/", "body": ""}}}
 
-MEMORY = ("MEMORY", "none", {"MEMORY": 1.0})
-
-
 def said(op, facts=(), key="", label="", refs=(), site="", reply=""):
     return {"op": op, "facts": list(facts), "id": {"key": key, "label": label}, "refs": list(refs), "site": site,
             "reply": reply}
 
 
 def tell_memory(world, message, out):
-    world.intents.append(MEMORY)
     world.memory_outs.append(out)
     before = len(bodies(world))
-    text(world, message)
+    world.core.memory_message(message)  # what the brain's memory tool calls
     assert until(lambda: len(bodies(world)) > before)
     return bodies(world)[-1]
 
 
 def test_you_can_tell_it_what_to_remember(world):
-    from assistant import jev
-
-    assert "MEMORY" in jev.INTENTS
     office = {"kind": "address", "label": "Office", "text": "12 MG Road", "tags": ["address"]}
     assert tell_memory(world, "remember my office is 12 MG Road", said("remember", [office])) == \
         "Saved: Office: 12 MG Road"
@@ -1166,18 +1080,15 @@ def test_an_id_is_forgotten_by_its_ref(world):
 
 
 def test_a_memory_model_failure_or_store_failure_is_a_chat_message(world, monkeypatch):
-    world.intents.append(MEMORY)
-
     def broken(message, known):
         raise RuntimeError("model down")
 
     world.core.memory_job = broken
-    text(world, "what do you remember?")
+    world.core.memory_message("what do you remember?")
     assert until(lambda: any("I couldn't read that: model down" in b for b in bodies(world)))
     world.core.memory_job = lambda message, known: said("list")
     monkeypatch.setattr(world.core, "memory_op", lambda *a: 1 / 0)
-    world.intents.append(MEMORY)
-    text(world, "what do you remember now?")
+    world.core.memory_message("what do you remember now?")
     assert until(lambda: any("I couldn't do that: division by zero" in b for b in bodies(world)))
 
 

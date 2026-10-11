@@ -2,10 +2,12 @@
 no browser."""
 
 import json
+import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
+from helpers import until
 
 from assistant import brain as brains
 from assistant import skills
@@ -57,6 +59,9 @@ class FakeCore:
 
     def memory_message(self, words):
         self.remembered.append(words)
+
+    def update_typing(self):
+        pass
 
 
 class Model:
@@ -299,3 +304,20 @@ def test_each_turn_writes_one_redacted_trace_line(tmp_path):
     trace = json.loads(line)
     assert trace["heard"] == "my phone is [profile:phone]"
     assert [s["tool"] for s in trace["steps"]] == ["reply"] and trace["steps"][0]["status"] == "sent"
+
+
+def test_messages_heard_are_read_one_at_a_time_in_order(tmp_path):
+    gate, heard = threading.Event(), []
+
+    def model(instructions, items, tools, final=False):
+        heard.append(next(i["content"] for i in reversed(items) if i.get("role") == "user"))
+        gate.wait(3)
+        return ({"type": "function_call", "call_id": f"c{len(heard)}", "name": "reply",
+                 "arguments": json.dumps({"text": "ok", "options": []})}, {"latency_ms": 1})
+
+    brain = make(FakeCore(), model, tmp_path)
+    brain.hear("first")
+    brain.hear("second")
+    assert until(lambda: heard == ["first"]) and brain.busy
+    gate.set()
+    assert until(lambda: heard == ["first", "second"]) and until(lambda: not brain.busy)

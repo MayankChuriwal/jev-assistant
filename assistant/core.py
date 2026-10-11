@@ -1,5 +1,6 @@
-"""The conversation: routes every chat message, keeps one question open at a time, and runs each task's worker in
-its own thread — at most three at once and one per site."""
+"""The conversation's code: every chat message goes, by rule and never by a model, to the open question it answers,
+to a stop, to a log out, or to the brain (brain.py), which talks to the user and runs tasks as its tools. Core keeps
+one question open at a time and runs each task's worker — at most three at once and one per site."""
 
 import base64
 import itertools
@@ -12,6 +13,7 @@ from urllib.parse import urlparse
 
 from . import browser, jev, messages, planner, replay, rules, skills
 from . import learn as learning
+from .brain import Brain
 from .gate import cap, rule_cap, same_cart
 from .memory import LABELS, RULE_DAYS, UNSTORABLE, Memory, StoreError, Unstorable, rule_line, rupees
 from .privacy import SECRETS, Secrets, storable
@@ -24,7 +26,7 @@ CANCEL_AFTER = 24 * 3600
 BENCH_CODE_WAIT = 5 * 60  # a bench run skips a site whose sign-in code doesn't come
 MAX_DOWNLOAD = 100 * 1024 * 1024
 FIRST = {"secret", "confirm"}  # asked before anything older
-STOP_WORDS = {"cancel", "stop", "/cancel"}  # stop a task even at a hidden prompt, without any model
+STOP_WORDS = {"cancel", "stop", "/cancel", "never mind", "nevermind", "abort", "ruko", "bas"}  # stop a task, no model
 ACTIVE = {"starting", "waiting", "running", "paused"}
 MAX_NOTES_SHOWN = 10  # learned site notes the chat lists
 MANDATES = "upihelp.npci.org.in"  # NPCI's portal listing every UPI AutoPay mandate, across all UPI apps
@@ -124,34 +126,24 @@ class Question:
 class Task:
     def __init__(self, tid, goal, single=False):
         self.id, self.goal, self.title, self.host = tid, goal, goal[:60], None
-        self.status, self.worker, self.updates = "starting", None, []
+        self.status, self.worker, self.noticed = "starting", None, False  # noticed: “I'll get to that…” said
         self.cancelled, self.sent_files, self.problems = False, 0, 0
         self.skill, self.preauth, self.cap, self.url, self.single = None, False, None, None, single
         self.script, self.bench = None, {"gate": None, "asked": []}  # a bench run: scripted replies
         self.habit, self.sameness = None, None  # the saved habit this goal repeats
         self.capture, self.result = False, None  # a brain tool's task: how it ended goes back to the brain
 
-    def view(self, question=None):
-        history = self.worker.state["history"] if self.worker else []
-        view = {"id": self.id, "title": self.title, "goal": self.goal,
-                "step": history[-1]["action"] if history else self.status}
-        if question:
-            view["open_question"] = question.message["text"]
-        return view
-
 
 class Core:
-    def __init__(self, channel, *, user="local", memory=None, make_worker=None, start=None, route=None, intake=None,
-                 split=None, chat=None, remember=None, learn=None, memory_job=None, habit_job=None, library=None,
+    def __init__(self, channel, *, user="local", memory=None, make_worker=None, start=None, brain=None, intake=None,
+                 split=None, remember=None, learn=None, memory_job=None, habit_job=None, library=None,
                  clock=time.monotonic, poll=1.0):
         self.channel, self.user = channel, user
         self.memory = memory if memory is not None else Memory.open()
         self.make_worker = make_worker or self.worker_for
         self.start = start or planner.start
-        self.route_message = route or jev.route
         self.intake = intake or jev.intake
         self.split = split or planner.split
-        self.chat = chat or planner.chat
         self.remember_job = remember or planner.remember
         self.learn = learn or learning.after
         self.memory_job = memory_job or planner.memory
@@ -161,10 +153,11 @@ class Core:
         self.lock = threading.RLock()
         self.slots = threading.Condition(self.lock)
         self.tasks, self.queue, self.open, self.log = {}, [], None, []
-        self.remembering, self.routes = {}, {}
+        self.remembering, self.offered = {}, {}  # offered: a brain reply's option ids → the option's own words
         self.offers, self.offer_ids = {}, itertools.count(1)  # buttons offered after a task, by key
         self.payees = set()  # the user's mandates read off MyUPI this session: “cancel the aisle” names one
         self.task_ids, self.question_ids = itertools.count(1), itertools.count(1)
+        self.brain = brain if brain is not None else Brain(self)  # reads every message no task's question takes
 
     def worker_for(self, task, url, asker, notify):
         library = {**self.library, "sites": skills.learned(self.library["sites"], self.memory.learned())}
@@ -199,15 +192,29 @@ class Core:
     def say(self, text, task=None):
         self.send({"kind": "info", "text": text}, task)
 
+    def reply(self, text, options):
+        """The brain's message. Its options become reply buttons (≤ 3) or a list (≤ 10), else numbered lines; a tap comes
+        back to the brain as the option's own words, however its button cut them."""
+        with self.lock:
+            tag = f"b{next(self.offer_ids)}"
+            self.offered.update({f"{tag}:{n}": label for n, label in enumerate(options, 1)})
+        message = {"kind": "info", "text": text,
+                   "options": [{"id": str(n), "label": label} for n, label in enumerate(options, 1)]}
+        for payload in messages.render(message, tag=tag):
+            self.channel.send(self.user, payload)
+        self.log.append({"from": "agent", "text": text})
+
     def buttons(self, body, options):
         self.channel.send(self.user, {"type": "interactive", "interactive": {"type": "button", "body": {"text": body},
                           "action": {"buttons": [{"type": "reply", "reply": {"id": rid, "title": title[:20]}}
                                                  for rid, title in options]}}})
 
     def update_typing(self):
+        """Typing shows while the brain thinks or a task works, and never while the user is being asked."""
         with self.lock:
             asking = {q.task for q in self.queue}
-            self.channel.set_typing(any(t.status == "running" and t not in asking for t in self.tasks.values()))
+            working = any(t.status == "running" and t not in asking for t in self.tasks.values())
+            self.channel.set_typing(working or (bool(self.brain.busy) and not self.queue))
 
     # ---- receiving
 
@@ -217,6 +224,9 @@ class Core:
                 self.receive(event)
 
     def receive(self, event):
+        """Code decides where a message goes, in order: a tap; an open question's answer (a stop word cancels the task
+        that asked); “log out”; a stop word while a task runs; else the brain, after one notice while a task runs. No
+        model sees a captcha's text, a code, or a tap on a task's question."""
         if (event.get("reply_id") or "").startswith("remember:"):
             return self.remember(event["reply_id"].partition(":")[2])  # a model call: outside the lock
         with self.lock:
@@ -226,8 +236,9 @@ class Core:
             self.log.append({"from": "user", "text": "••••" if secret and not event.get("reply_id") else text})
             if event.get("reply_id"):
                 return self.tapped(event)
-            if secret and text.lower() in STOP_WORDS:
-                return self.cancel(question.task)
+            stop = text.lower().strip(" .!") in STOP_WORDS
+            if question and stop:
+                return self.cancel(question.task)  # even at a hidden prompt or a captcha
             takes_file = question is not None and question.message["kind"] in {"file", "image", "text"}
             if question and (secret or (event.get("context") and event["context"] in question.sent)
                              or (event.get("media_id") and takes_file) or self.numbered(question, text)
@@ -239,12 +250,17 @@ class Core:
                 return None
             if not secret and LOG_OUT.fullmatch(text):
                 return self.log_out()
-            views, chat = self.views(), self.log[-7:-1]
-        try:
-            intent, target, probabilities, certainty = self.hidden(self.route_message, text, views, chat)
-        except Exception as error:  # a model or network failure is a chat message, never a failed webhook
-            return self.say(f"I couldn't read that message: {error}")
-        return self.route(event, text, intent, target, probabilities, certainty, question)
+            if question:  # only a running task asks: what is typed while its question is open answers it
+                return self.answer(question, event)
+            running = [t for t in self.tasks.values() if t.status in ACTIVE]
+            if running and stop:
+                for task in running:
+                    self.cancel(task)
+                return None
+            if running and not any(t.noticed for t in running):
+                running[0].noticed = True
+                self.say("I'll get to that as soon as this finishes.")
+            self.brain.hear(text)
 
     def log_out(self):
         """“Log out”: this user's kept sign-ins end now, each site's own Logout pressed; a task of theirs still running
@@ -258,77 +274,16 @@ class Core:
         options = question.message.get("options") or []
         return len(options) > messages.ROWS and text.isdigit() and 1 <= int(text) <= len(options)
 
-    def views(self):
-        return [t.view(self.open if self.open and self.open.task is t else None)
-                for t in self.tasks.values() if t.status in ACTIVE]
-
-    def route(self, event, text, intent, target, probabilities, certainty, asked):
-        """Act on Jev's reading. `asked` is the question that was open when the message arrived."""
-        with self.lock:
-            active = [t for t in self.tasks.values() if t.status in ACTIVE]
-            task = self.tasks.get(target)
-            task = task if task in active else None
-            if active and jev.ambiguous(probabilities):
-                return self.which(event, text, active, None, asked)
-            if intent == "ANSWER" and self.open:
-                if self.open is not asked:  # another question opened while Jev read this one's answer
-                    return self.say("The question changed while I was reading your message. Please answer again.")
-                return self.answer(self.open, event)
-            if intent == "NEW_TASK":
-                return self.new_task(text)
-            if intent in {"CANCEL", "AMEND"}:
-                if not active:
-                    return self.say("Nothing is running right now.")
-                if task is None or jev.ambiguous(certainty):  # never stop or change a task by guess
-                    return self.which(event, text, active, intent, asked)
-                return self.cancel(task) if intent == "CANCEL" else self.amend(task, text)
-            views = self.views()
-        if intent == "MEMORY":
-            return self.memory_message(text)  # outside the lock: a model call
-        try:
-            reply, _ = self.hidden(self.chat, text, views)  # STATUS, OTHER, or nothing to act on
-        except Exception as error:
-            reply = f"I couldn't answer that: {error}"
-        self.say(reply)
-
-    def amend(self, task, text):
-        task.updates.append(text)
-        done = task.worker.state.get("done", []) if task.worker else []  # commits the site confirmed
-        if done:
-            return self.say(f"{done[-1]} already went through. I'll try to change it on the site; anything "
-                            "that costs money again waits for your OK. Say “cancel” to stop instead.", task)
-        return self.say(f"Got it. I'll use that for {task.title}.")
-
-    def which(self, event, text, active, intent, asked):
-        """Ask which task a message is about. A stop or a change names a running task; anything else may be new."""
-        self.routes[event["id"]] = (text, intent, asked)
-        options = [(f"route:{t.id}:{event['id']}", t.title) for t in active[:3 if intent else 2]]
-        if intent is None:
-            return self.buttons("Is this about one of your tasks, or something new?",
-                                options + [(f"route:new:{event['id']}", "New task")])
-        self.buttons("Which task should I stop?" if intent == "CANCEL" else "Which task is this change for?", options)
-
     def tapped(self, event):
-        kind, _, rest = event["reply_id"].partition(":")
-        if kind == "route":
-            target, _, key = rest.partition(":")
-            routed = self.routes.pop(key, None)
-            if routed is None:
-                return None
-            text, intent, asked = routed
-            if target == "new":
-                return self.new_task(text)
-            task = self.tasks.get(target)
-            if not task or task.status not in ACTIVE:
-                return self.say(f"{task.title if task else 'That task'} already finished.")
-            if intent == "CANCEL":
-                return self.cancel(task)
-            if intent is None and asked is not None and self.open is asked and asked.task is task:
-                return self.answer(asked, {"type": "text", "text": text})  # still the question it was sent to
-            return self.amend(task, text)
+        reply_id = event["reply_id"]
+        if reply_id in self.offered:  # a brain reply's option: its own words go back to the brain
+            words = self.offered[reply_id]
+            self.log[-1]["text"] = words
+            return self.brain.hear(words)
+        kind, _, rest = reply_id.partition(":")
         if kind in {"rule", "note", "guess"}:  # an offer posted after a task
             return {"rule": self.decide_rule, "note": self.decide_note, "guess": self.decide_guess}[kind](rest)
-        question = next((q for q in self.queue if q.sent and event["reply_id"].startswith(f"q{q.id}:")), None)
+        question = next((q for q in self.queue if q.sent and reply_id.startswith(f"q{q.id}:")), None)
         if question and messages.reply_for(question.id, question.message.get("options") or [], event) is not None:
             return self.answer(question, event)  # any question on screen, even one a code request moved aside
         return None  # a tap on a question that is already answered
@@ -694,10 +649,9 @@ class Core:
                 return self.ended(task, f"Cancelled {task.title} before it started.")
             task.worker = self.make_worker(task, task.url, lambda m: self.ask(task, m), lambda m: self.notify(task, m))
             task.worker.bench = task.script is not None
-            task.worker.interrupted = lambda: task.cancelled or bool(task.updates)
+            task.worker.interrupted = lambda: task.cancelled
             self.update_typing()
             while task.worker.state["status"] not in STOPPED and not task.cancelled:
-                self.apply_updates(task)
                 try:
                     task.worker.command("tick")
                     task.problems = 0
@@ -847,10 +801,6 @@ class Core:
                                  task=task.goal, actor="user", supersede=True)
             self.say(f"Saved: I'll use {names[host]} for {skill['name']} from now on.", task)
         return host
-
-    def apply_updates(self, task):
-        while task.updates:
-            task.worker.update(task.updates.pop(0))  # the planner hears it next; any approval is void
 
     @staticmethod
     def record(task, error):

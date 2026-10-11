@@ -62,3 +62,10 @@ def test_replies_map_back_to_the_question_they_answer():
     assert messages.reply_for(3, opts, {"type": "text", "text": "13"}) == {"text": "13"}
     assert messages.reply_for(3, [], {"type": "text", "text": "Home"}) == {"text": "Home"}
     assert messages.reply_for(3, [], {"type": "document", "media_id": "m9", "text": ""}) == {"media_id": "m9"}
+
+
+def test_a_brain_replys_options_carry_its_tag_and_open_no_question():
+    payloads = messages.render({"kind": "info", "text": "Which?", "options": [{"id": "1", "label": "AISLE"}]},
+                               tag="b4")
+    assert payloads[-1]["interactive"]["action"]["buttons"][0]["reply"]["id"] == "b4:1"
+    assert all("x_question" not in p for p in payloads)
