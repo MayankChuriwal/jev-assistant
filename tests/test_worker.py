@@ -472,6 +472,17 @@ def test_a_cancel_for_a_merchant_no_mandate_is_for_ends_listing_the_payees(tmp_p
                                            "LLC, AISLE, GOOGLE PLAY."]
 
 
+def test_a_list_of_mandates_that_missed_cards_off_screen_gets_the_whole_list(tmp_path, monkeypatch):
+    page = mandate_page(["OPENAI LLC", "AISLE", "GOOGLE PLAY"], shown=["OPENAI LLC", "AISLE"])
+    page["text"] = "UPI Autopay\nOPENAI LLC\n₹399\nAISLE\n₹499"
+    w = worker_with(tmp_path, page=page, goal="What all mandates do I have?")
+    script_planner(monkeypatch, turn("DONE", message="You have OPENAI LLC for ₹399 and AISLE for ₹499.", text="₹399"))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.told[-1]["text"] == ("You have OPENAI LLC for ₹399 and AISLE for ₹499. All your UPI AutoPay mandates: "
+                                  "OPENAI LLC, AISLE, GOOGLE PLAY.")
+
+
 @pytest.mark.parametrize("cards", [["GOOGLE PLAY"], ["GOOGLE PLAY", "AISLE"]])
 def test_a_mandate_the_whole_list_wasnt_read_for_is_never_called_missing(tmp_path, monkeypatch, cards):
     # MyUPI: with GOOGLE PLAY's card alone read, “cancel my aisle” was answered “no mandate for it”

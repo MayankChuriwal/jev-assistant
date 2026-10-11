@@ -1411,6 +1411,9 @@ class Worker:
             message, quote = quote, ""  # the report written where the quote goes: it is the report
         quote = self.evidence(quote, message, texts)
         report = (message or "Done.") + missing
+        cards = page.get("cards") or []
+        if rules.MANDATE_GOAL.search(s["goal"]) and any(card.lower() not in report.lower() for card in cards):
+            report += f" All your UPI AutoPay mandates: {', '.join(cards)}."  # MyUPI: the cards off screen were missed
         # a lookup may read its answer across pages (a comparison of two sites): Jev also sees those pages
         before = self.pages_before(page) if rules.lookup_goal(s["goal"], s["skill"]) else []
         if jev.achieved(page, s["goal"], report, before=before) != "yes":
