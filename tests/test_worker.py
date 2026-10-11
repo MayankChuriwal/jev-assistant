@@ -509,6 +509,32 @@ def test_a_question_about_one_mandate_gets_no_list_of_the_others(tmp_path, monke
     assert w.told[-1]["text"] == "You pay ₹399 a month to OPENAI LLC for ChatGPT."
 
 
+SIGN_IN_PAGE = [{"id": "e1", "kind": "click", "label": "Refresh CAPTCHA", "role": "button", "node": 1},
+                {"id": "e2", "kind": "fill", "label": "Security Verification", "role": "textbox", "value": "",
+                 "node": 2, "constraints": {}},
+                {"id": "e3", "kind": "click", "label": "I have read and agree to the Terms & Conditions , Privacy "
+                 "Policy and Disclaimer", "role": "checkbox", "checked": "true", "node": 3},
+                {"id": "e4", "kind": "click", "label": "FAQs", "role": "button", "node": 4}]
+
+
+def test_an_empty_captcha_on_screen_goes_to_the_user_before_the_planner_wanders(tmp_path, monkeypatch):
+    # MyUPI: the planner toggled the agree box, opened FAQs and Terms, and never sent the captcha
+    w = worker_with(tmp_path, page=fake_page(actions=SIGN_IN_PAGE), replies=[{"text": "84D0"}])
+    w.browser.marked_screenshot = Mock(return_value="shot")
+    seen = script_planner(monkeypatch, turn("CLICK", pick=4))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.asked[0]["captcha"] and "84D0" in w.state["chat"][-1]["text"]
+    assert all(s.get("reason") != "start" for s in seen)  # the planner wasn't asked first
+
+
+def test_a_ticked_agree_box_is_never_clicked_again(tmp_path):  # a second click unticks it
+    w = worker_with(tmp_path, page=fake_page(actions=SIGN_IN_PAGE))
+    with pytest.raises(Retry, match="already ticked"):
+        w.act("CLICK", SIGN_IN_PAGE[2], w.state["page"], sub("tick the agree box"))
+    assert not w.browser.act.called
+
+
 def test_the_captcha_text_the_user_gave_is_typed_not_asked_for_again(tmp_path):
     # MyUPI: the planner asked, the user answered “131F”, and the captcha rule asked again before it was typed
     w = captcha_relay(tmp_path, "131F")

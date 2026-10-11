@@ -32,6 +32,7 @@ CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QR_TRIES = 5  # seconds a mandate's QR may take to render after its Cancel
 MANDATE_CANCEL = re.compile(r"(?:cancel|revoke)\b", re.IGNORECASE)  # a card's Cancel: the UPI app does the rest
 APPROVED = re.compile(r"\s*(?:yes|done|approved|i approved|i did|ok)\b", re.IGNORECASE)
+AGREE = re.compile(r"\b(?:i (?:have read and )?agree|i accept)\b", re.IGNORECASE)  # a terms box
 QUIET = executor.QUIET  # waits and scrolls: repeating these is not going in circles…
 SCROLLS = 8  # …until this many scrolls in a row on one page: then scrolling has stopped finding anything
 CIRCLE_AT = 3  # one action run this often from the same page (its path and controls) is not run from it again…
@@ -509,6 +510,8 @@ class Worker:
         pressed = self.mandate_cancel_pressed()
         if pressed:  # its hand-off was cut short (reading the click's result failed): the QR still goes next
             return self.hand_off(pressed)
+        if self.captcha_unasked(page):  # MyUPI: the planner wandered the sign-in page and never sent it
+            return self.relay_captcha(page)
         if s["reason"]:
             return self.think(page)
         sub = self.subgoal()
@@ -758,13 +761,24 @@ class Worker:
             s["coded"].append(name)
             s["code_asks"] += 1
 
+    def captcha_pending(self):
+        """The text the user read off a captcha, given and not typed yet."""
+        pending = self.state["captcha_text"]
+        return bool(pending) and not any(h.get("operation") == "TYPE_TEXT" and h.get("text") == pending[0]
+                                         for h in self.state["history"][pending[1]:])
+
+    def captcha_unasked(self, page):
+        """A captcha on screen with its box empty and none of the user's text for it still to type: it goes to them
+        first, before anything else on the page."""
+        empty = any(a["kind"] == "fill" and rules.CAPTCHA_BOX.search(a.get("label") or "") and not a.get("value")
+                    for a in page["actions"])
+        return empty and rules.captcha_challenge(page) and not self.captcha_pending()
+
     def relay_captcha(self, page):
         """A captcha only the user may solve: they see it with its squares numbered, and the worker clicks exactly
         the squares they name, or hands the text they read to the planner. Nothing is solved automatically."""
         s = self.state
-        pending = s["captcha_text"]
-        if pending and not any(h.get("operation") == "TYPE_TEXT" and h.get("text") == pending[0]
-                               for h in s["history"][pending[1]:]):
+        if self.captcha_pending():
             s["reason"] = "reply"  # the text the user read is in the chat, not typed yet: typed next, never asked again
             return None
         s["captcha_rounds"] += 1
@@ -1480,6 +1494,10 @@ class Worker:
                 raise Retry(f"“{action.get('label')}” is a photo in the item's picture gallery: clicking it only shows "
                             "that photo and chooses nothing. Choose with the page's own control for it (the colour or "
                             "size swatches, or the control naming the current choice), or LOOK for it.")
+            if action.get("role") == "checkbox" and action.get("checked") == "true" and \
+                    AGREE.search(action.get("label") or ""):  # MyUPI: ticked and unticked five times over
+                raise Retry(f"“{action['label']}” is already ticked: a second click unticks it. Go on to the next "
+                            "step.")
             if STRIP.search(action.get("label") or "") and not action.get("within"):
                 raise Retry(f"“{action.get('label')}” is a strip of choices: clicking it lands on its middle. PICK it "
                             "with the words of the one to click, like PICK [k] with text 2.")
