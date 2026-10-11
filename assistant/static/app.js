@@ -138,6 +138,7 @@ async function render(m, live) {
   if (m.type === 'image') {
     const img = el('img', 'shot');
     img.alt = 'Screenshot';
+    img.addEventListener('load', () => { chat.scrollTop = chat.scrollHeight; }); // a QR's buttons stay in view
     img.src = media(m.image.id);
     b.append(img);
   }
