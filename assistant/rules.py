@@ -7,7 +7,7 @@ COMMIT = re.compile(  # outright: Jev can never clear these. "Buy it again" open
     r"\b(pay|place (your )?order|buy(?!\s+(?:things\s+|it\s+)?again\b)|purchase|book now"
     r"|confirm (order|booking|ride|payment|purchase)"
     r"|request (ride|uber\w*|trip)|cancel (my )?(order|booking|subscription|ride|membership|mandate|auto ?pay)|delete"
-    r"|revoke|pause (my )?(mandate|auto ?pay)"
+    r"|revoke|pause (my )?(mandate|auto ?pay)|de-?link"
     r"|submit (complaint|dispute|claim|request)|book (a )?(ride|cab|bike|auto|table|tickets?|room|hotel|flight)"
     r"|end (my )?(membership|subscription)|submit (the )?order|order now|recharge now|make (a )?payment"
     r"|complete (the )?(payment|order|booking|purchase)|continue (to )?booking)\b",

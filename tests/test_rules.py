@@ -369,7 +369,8 @@ def test_a_text_captcha_with_a_refresh_button_is_a_captcha():
     assert not rules.captcha_challenge({"text": "This site is protected by reCAPTCHA.", "actions": []})
 
 
-@pytest.mark.parametrize("label", ["Revoke", "Revoke mandate", "Cancel mandate", "Cancel AutoPay", "Pause autopay"])
+@pytest.mark.parametrize("label", ["Revoke", "Revoke mandate", "Cancel mandate", "Cancel AutoPay", "Pause autopay",
+                                   "De-link UPI Number", "Delink"])  # MyUPI: payments to the number stop
 def test_revoking_or_cancelling_a_mandate_always_asks(label):
     assert rules.commit_label("CLICK", {"label": label, "name": label}, {"text": ""}) == label
 
