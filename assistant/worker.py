@@ -709,7 +709,8 @@ class Worker:
             raise Halt("blocked", f"Signing in to {rules.host(page['url'])} isn't working after {CODE_ASKS} codes, "
                                   "so I stopped rather than send you more. Please sign in once in the agent's "
                                   "Chrome window, then ask me again.")
-        site = page["title"] or rules.host(page["url"])
+        note = skills.site_for(page["url"], self.library["sites"])  # “NPCI UPI Help”, not the page's long title
+        site = note["name"] if note else page["title"] or rules.host(page["url"])
         question = (f"{site} is asking for your card's {field['label']}. Type it here; it stays hidden." if card else
                     f"{site} is asking for a code or password. Type it here; it stays hidden.")
         self.steady(page)  # a page still switching screens gets read again first
@@ -741,9 +742,9 @@ class Worker:
         clicks = [a for a in page["actions"] if a["kind"] == "click" and a.get("node") is not None]
         marks = ([a for a in clicks if a.get("frame")] or clicks)[:40]  # a captcha lives in its own frame
         image = s["browser"].marked_screenshot(marks, masked=self.secrets.nodes, hide=self.hidden_details())
-        reply = self.ask({"kind": "image", "image": image, "text": "The site wants a check (captcha) solved. Reply "
-                          "with the numbers of the squares to pick, like 2 5 8; or type the text it shows; or say "
-                          "none if there is nothing to pick."})
+        reply = self.ask({"kind": "image", "image": image, "captcha": True, "text": "The site wants a check (captcha) "
+                          "solved. Reply with the numbers of the squares to pick, like 2 5 8; or type the text it "
+                          "shows; or say none if there is nothing to pick."})
         text = str(reply.get("text", "")).strip()
         joined = re.sub(r"\band\b", " ", text, flags=re.IGNORECASE)  # "2 and 5", "2, 5 & 7": squares; "4829": text
         numbers = [int(n) for n in re.findall(r"\d+", joined)] if re.fullmatch(r"[\d\s,&]+", joined) else []

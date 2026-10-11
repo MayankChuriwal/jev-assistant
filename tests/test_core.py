@@ -446,6 +446,28 @@ def test_an_unsure_task_pick_asks_which(world):
         gate.set()
 
 
+CAPTCHA = {"kind": "image", "image": "cG5n", "captcha": True, "text": "The site wants a check (captcha) solved."}
+
+
+@pytest.mark.parametrize("reply", ["F658", "none", "2 5 8", "2, 5 and 8"])
+def test_a_captcha_reply_reaches_the_captcha_without_jev(world, reply):  # Jev read “F658” as small talk
+    world.scripts["Cancel Netflix"] = [ask(CAPTCHA)]
+    text(world, "Cancel Netflix")
+    assert until(lambda: world.core.open is not None)
+    text(world, reply)
+    assert until(lambda: world.agents["Cancel Netflix"].replies) and world.classified == ["Cancel Netflix"]
+    assert world.agents["Cancel Netflix"].replies[0]["text"] == reply
+
+
+def test_stop_at_a_captcha_still_stops_the_task(world):
+    world.scripts["Cancel Netflix"] = [ask(CAPTCHA)]
+    text(world, "Cancel Netflix")
+    assert until(lambda: world.core.open is not None)
+    world.intents.append(("CANCEL", "t1", {"CANCEL": 0.97}))
+    text(world, "stop")
+    assert world.classified == ["Cancel Netflix", "stop"] and until(lambda: world.core.tasks["t1"].cancelled)
+
+
 def test_changes_with_nothing_running_say_so(world):
     world.intents.append(("CANCEL", "none", {"CANCEL": 0.97}))
     text(world, "cancel it")

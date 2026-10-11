@@ -31,6 +31,7 @@ MANDATES = "upihelp.npci.org.in"  # NPCI's portal listing every UPI AutoPay mand
 LOOKS_LIKE_AN_ID = ("That looks like an ID. Tell me what it is called (like “my BESCOM account number is …”) so I "
                     "can keep it hidden.")
 PLACEHOLDER = re.compile(r"\[(?:profile|secret):[\w.]+\]")
+CAPTCHA_REPLY = re.compile(r"\S{1,12}|\d+(?:\s*(?:,|&|and)?\s*\d+)*", re.IGNORECASE)  # “F658”, “none”, “2, 5 and 8”
 
 
 def site(url):
@@ -54,6 +55,13 @@ ID_CANDIDATES = (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)*"),
                  re.compile(r"\b(?=[A-Za-z0-9-]*[A-Za-z])(?=[A-Za-z0-9-]*\d)[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+\b"),
                  re.compile(r"\+?\d(?:[\s-]?\d){5,}"),
                  re.compile(r"\b(?=[A-Za-z]*\d)[A-Za-z0-9]{4,}\b"))
+
+
+def captcha_reply(question, text):
+    """The text the user read off a captcha, or its squares' numbers: Jev can't tell “F658” from small talk. A stop
+    word still goes to Jev."""
+    return bool(question.message.get("captcha")) and text.lower() not in STOP_WORDS and \
+        bool(CAPTCHA_REPLY.fullmatch(text))
 
 
 def id_candidates(text):
@@ -218,7 +226,8 @@ class Core:
                 return self.cancel(question.task)
             takes_file = question is not None and question.message["kind"] in {"file", "image", "text"}
             if question and (secret or (event.get("context") and event["context"] in question.sent)
-                             or (event.get("media_id") and takes_file) or self.numbered(question, text)):
+                             or (event.get("media_id") and takes_file) or self.numbered(question, text)
+                             or captcha_reply(question, text)):
                 return self.answer(question, event)  # a secret answer never reaches any model
             if event.get("media_id"):
                 return self.say("I wasn't expecting a file just now.")

@@ -350,6 +350,18 @@ def test_a_code_field_is_asked_hidden_and_typed_without_the_planner(tmp_path, mo
     assert w.browser.act.call_args.kwargs["text"] == "481516" and w.state["history"][-1]["text"] == "[secret:answer1]"
 
 
+def test_a_code_ask_names_the_site_by_its_note_not_its_page_title(tmp_path, monkeypatch):
+    page = fake_page(url="https://www.upihelp.npci.org.in/")
+    page["title"] = "MyUPI | Raise UPI Complaints, Check Transaction Status & Resolve Transaction Issues | NPCI"
+    w = worker_with(tmp_path, page=page, replies=[{"text": "481516"}])
+    script_planner(monkeypatch, turn(subgoals=[sub("sign in")]))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Code", "blocker": "code"})
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.command("tick")
+    assert w.asked[0]["text"] == "NPCI UPI Help is asking for a code or password. Type it here; it stays hidden."
+
+
 def test_a_fourth_code_stops_instead_of_sending_more(tmp_path, monkeypatch):
     w = worker_with(tmp_path)
     script_planner(monkeypatch, turn(subgoals=[sub("sign in")]))
@@ -477,6 +489,7 @@ def test_a_numeric_text_captcha_is_text_not_squares(tmp_path):
         w = captcha_relay(tmp_path, reply)
         assert pressed(w) == [] and not any("Clicked" in note for note in w.state["notes"]), reply
         assert reply in w.state["chat"][-1]["text"] and w.state["reason"] == "reply", reply
+        assert w.asked[0]["captcha"]  # the chat hands the reply straight over: Jev can't read captcha text
 
 
 def test_squares_may_be_joined_by_and_commas_or_ampersands(tmp_path):
