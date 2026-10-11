@@ -138,8 +138,11 @@ def page_state(page):
 INTENTS = {
     "ANSWER": "Answers the question the assistant just asked.",
     "AMEND": "Changes something about an existing task: quantity, item, address, payment, time, or destination.",
-    "NEW_TASK": "Asks for a new, separate task.",
-    "CANCEL": "Stops or cancels an existing task.",
+    "NEW_TASK": "Asks for a new, separate task, including cancelling, returning, or changing something the user has on "
+                "a site or app (a subscription, order, booking, ride, membership, or mandate) that no running task is "
+                "about.",
+    "CANCEL": "Tells the assistant to stop one of its own running tasks, or what a running task is doing (\"stop\", "
+              "\"cancel it\", \"never mind\").",
     "STATUS": "Asks how a task is going or what is happening.",
     "MEMORY": "Tells the assistant something to remember about the user, asks it to forget something or stop a "
               "standing approval, asks what it remembers, or asks to undo the last memory change.",
