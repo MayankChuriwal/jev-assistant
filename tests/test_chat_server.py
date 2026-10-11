@@ -124,3 +124,17 @@ def test_one_named_public_origin_may_post_and_no_other(chat, monkeypatch):
     assert ok.json() == {"ok": True}
     bad = chat.client.post("/webhook", json=WEBHOOK, headers={"Origin": "https://evil.ngrok-free.app"})
     assert bad.status_code == 403
+
+
+def test_the_rivo_look_s_fonts_and_images_come_from_this_server_only(chat):
+    static = server.STATIC
+    (static / "fonts").mkdir()
+    (static / "fonts" / "Montserrat-Regular.ttf").write_bytes(b"\x00\x01font")
+    (static / "rivo-logo.svg").write_text("<svg/>")
+    (static / "rio-mark.png").write_bytes(b"\x89PNG")
+    font = httpx.get(chat.base + "/fonts/Montserrat-Regular.ttf")
+    assert font.status_code == 200 and font.headers["content-type"] == "font/ttf" and font.content == b"\x00\x01font"
+    assert httpx.get(chat.base + "/rivo-logo.svg").headers["content-type"] == "image/svg+xml"
+    assert httpx.get(chat.base + "/rio-mark.png").headers["content-type"] == "image/png"
+    policy = httpx.get(chat.base + "/").headers["content-security-policy"]
+    assert "font-src 'self'" in policy and "default-src 'none'" in policy

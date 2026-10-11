@@ -105,14 +105,14 @@ def test_message_text_is_never_html(chat):
     assert until(lambda: js(chat, "document.querySelectorAll('.bubble').length") == 3)
     assert js(chat, "document.querySelectorAll('#chat img, #chat b').length") == 0
     assert js(chat, "window.pwned === undefined")
-    assert js(chat, "document.querySelector('.bubble .text').textContent") == EVIL
+    assert until(lambda: js(chat, "document.querySelector('.bubble .text').textContent") == EVIL)
 
 
 def test_whatsapp_bold_shows_as_bold_and_stays_text(chat):
     chat.channel.send("local", {"type": "text", "text": {"body": f"You have *3* AutoPays: **AISLE** ₹499, *{EVIL}*"}})
     assert until(lambda: js(chat, "document.querySelectorAll('.bubble').length") == 1)
     strong = "[...document.querySelectorAll('.bubble .text strong')].map(s => s.textContent)"
-    assert js(chat, strong) == ["3", "AISLE", EVIL]
+    assert until(lambda: js(chat, strong) == ["3", "AISLE", EVIL])
     assert js(chat, "document.querySelector('.bubble .text').textContent") == f"You have 3 AutoPays: AISLE ₹499, {EVIL}"
     assert js(chat, "document.querySelectorAll('#chat img, #chat b').length") == 0 and js(chat, "window.pwned === undefined")
 
@@ -168,3 +168,57 @@ def test_a_restarted_server_asks_for_a_reload(chat):
     chat.channel.set_typing(True)  # wakes the page's long poll; the next poll meets the new token
     assert until(lambda: js(chat, "document.getElementById('status').textContent") ==
                  "jev restarted: reload this page", timeout=5)
+
+
+# ---- the Rivo AI look, on a phone
+
+def test_the_page_is_rivo_ai_on_a_phone(chat):
+    assert until(lambda: js(chat, "document.fonts.check('13px Montserrat') && "
+                                  "document.querySelector('.logo').naturalWidth > 0"))
+    assert js(chat, "!!document.querySelector('.device .screen .statusbar') && !!document.querySelector('.homebar')")
+    assert js(chat, "document.getElementById('text').placeholder") == "Ask anything or type.…"
+    assert js(chat, "document.querySelector('.disclaimer').textContent") == \
+        "Rivo's content is AI generated - Verify before acting."
+    assert js(chat, "getComputedStyle(document.querySelector('.screen')).backgroundColor") == "rgb(16, 18, 26)"
+
+
+def test_a_starter_card_sends_its_prompt_and_the_cards_go(chat):
+    assert until(lambda: js(chat, "document.querySelectorAll('.starter').length") == 4)
+    js(chat, "document.querySelector('.starter[data-say]').click()")
+    assert until(lambda: chat.core.events) and chat.core.events[0]["text"] == "Cancel my subscriptions"
+    assert js(chat, "document.querySelector('.starters') === null")
+
+
+def test_a_live_reply_types_itself_out(chat):
+    text = "You have 3 AutoPay mandates: OPENAI LLC, GOOGLE PLAY and AISLE. Which should I cancel?"
+    chat.channel.send("local", {"type": "text", "text": {"body": text}})
+    assert until(lambda: js(chat, "!!document.querySelector('.bubble .cursor')"))
+    assert js(chat, "document.querySelector('.bubble .text').textContent.length") < len(text)
+    assert until(lambda: js(chat, "document.querySelector('.bubble .text').textContent") == text)
+    assert js(chat, "document.querySelector('.bubble .cursor') === null")
+
+
+def test_choices_are_pills_under_the_reply_and_feedback_icons_are_not_buttons(chat):
+    chat.channel.send("local", {"type": "text", "text": {"body": "You have 3 AutoPay mandates."}})
+    chat.channel.send("local", {"type": "interactive", "x_question": 1, "interactive": {
+        "type": "button", "body": {"text": "Which should I cancel?"}, "action": {"buttons": [
+            {"type": "reply", "reply": {"id": "b1:1", "title": "AISLE"}}]}}})
+    assert until(lambda: js(chat, "document.querySelector('.bubble + .choices .choice')?.textContent") == "AISLE")
+    assert js(chat, "document.querySelector('.bubble + .feedback').getAttribute('aria-hidden')") == "true"
+    assert js(chat, "document.querySelectorAll('.feedback button').length") == 0
+
+
+def test_while_jev_works_the_rio_activity_row_shows(chat):
+    chat.channel.set_typing(True)
+    assert until(lambda: js(chat, "document.querySelector('.activity')?.textContent") == "Processing")
+    chat.channel.set_typing(False)
+    chat.channel.send("local", {"type": "text", "text": {"body": "Done."}})
+    assert until(lambda: js(chat, "document.querySelector('.activity') === null"))
+
+
+def test_a_progress_line_shows_as_a_status_line_not_a_reply(chat):
+    chat.channel.send("local", {"type": "text", "text": {"body": "Checking your UPI AutoPay mandates on MyUPI…"},
+                                "x_status": True})
+    assert until(lambda: js(chat, "document.querySelector('.status-line')?.textContent") ==
+                 "Checking your UPI AutoPay mandates on MyUPI…")
+    assert js(chat, "document.querySelectorAll('.bubble, .feedback').length") == 0

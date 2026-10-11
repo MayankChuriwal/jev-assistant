@@ -578,8 +578,9 @@ class Core:
             task = Task(f"t{next(self.task_ids)}", goal, single=True)
             task.capture, task.url, task.skill = True, url, skill
             self.tasks[task.id] = task
-        if progress:
-            self.say(progress)
+        if progress:  # a status line, as the Rivo app shows its own (“Processing”): never a reply
+            self.channel.send(self.user, {"type": "text", "text": {"body": progress}, "x_status": True})
+            self.log.append({"from": "agent", "text": progress})
         self.run(task)
         state = task.worker.state if task.worker else {}
         page = state.get("page") or {}

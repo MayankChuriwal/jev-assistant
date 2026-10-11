@@ -1288,6 +1288,7 @@ def test_a_brain_tasks_progress_line_goes_out_before_it_starts(world):
     world.scripts[LIST_GOAL] = [tell("Your UPI AutoPay mandates: none")]
     world.core.execute(LIST_GOAL, url=MYUPI, skill="account", progress="Checking your UPI AutoPay mandates on MyUPI…")
     assert bodies(world) == ["Checking your UPI AutoPay mandates on MyUPI…"]
+    assert sent(world)[0]["x_status"] is True  # the chat shows it as a status line, never as a reply
 
 
 # ---- the real brain on the real core: a scripted model, scripted workers, the whole cancel conversation

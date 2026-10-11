@@ -29,9 +29,14 @@ MAX_UPLOAD = 20 * 1024 * 1024
 DRAIN_LIMIT = 64 * 1024 * 1024  # larger refused bodies are cut off instead of read
 STATIC = Path(__file__).parent / "static"
 ASSETS = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-          "/style.css": ("style.css", "text/css; charset=utf-8")}
+          "/style.css": ("style.css", "text/css; charset=utf-8"),
+          # the Rivo app's own look (rivo-app/assets): its font, wordmark and the Rio mark
+          **{f"/fonts/Montserrat-{w}.ttf": (f"fonts/Montserrat-{w}.ttf", "font/ttf") for w in ("Regular", "Medium",
+                                                                                                 "SemiBold")},
+          "/rivo-logo.svg": ("rivo-logo.svg", "image/svg+xml"), "/rio-mark.png": ("rio-mark.png", "image/png")}
 IMAGES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
-PAGE_POLICY = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; "
+PAGE_POLICY = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; font-src 'self'; "
+               "connect-src 'self'; "
                "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 SMOKE_SITES = ("https://www.swiggy.com/instamart", "https://www.swiggy.com", "https://m.uber.com",
                "https://www.amazon.in")
