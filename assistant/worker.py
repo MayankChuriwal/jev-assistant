@@ -34,6 +34,7 @@ MANDATE_CANCEL = re.compile(r"(?:cancel|revoke)\b", re.IGNORECASE)  # a card's C
 APPROVED = re.compile(r"\s*(?:yes|done|approved|i approved|i did|ok)\b", re.IGNORECASE)
 AGREE = re.compile(r"\b(?:i (?:have read and )?agree|i accept)\b", re.IGNORECASE)  # a terms box
 LOADING = re.compile(r"\bloading\b", re.IGNORECASE)  # a part of the page not drawn yet
+PROOF = re.compile(r"\b(?:complaint|dispute|proof|screenshot|receipt|document|attach)", re.IGNORECASE)
 PHONE_BOX = re.compile(r"mobile|phone|\b9876543210\b", re.IGNORECASE)  # a sign-in form's phone number box
 SUBMIT = re.compile(r"\s*(?:continue|proceed|log ?in|sign ?in|get otp|verify(?: (?:&|and) continue)?)\s*$",
                     re.IGNORECASE)  # a sign-in form's own button
@@ -1496,8 +1497,9 @@ class Worker:
         if lines and rules.lists_mandates(s["goal"], cards):  # the cards' own words: the planner made one up
             report = "Your UPI AutoPay mandates:\n" + "\n".join(f"• {line}" for line in lines)
         named = [line for card, line in zip(cards, lines)
-                 if not rules.wrong_card(s["goal"], {"label": f"Cancel (in “{card}”)"})]
-        if len(named) == 1 and rules.MANDATE_GOAL.search(s["goal"]) and not rules.MANDATE_ACTION.search(s["goal"]):
+                 if not rules.wrong_card(s["goal"], {"label": f"Cancel (in “{card}”)"}, self.payee_cards(page))]
+        if len(named) == 1 and (rules.MANDATE_GOAL.search(s["goal"]) or self.payee_cards(page)) \
+                and not rules.MANDATE_ACTION.search(s["goal"]):
             report = f"Your UPI AutoPay mandate for it: {named[0]}"  # its card's words (“every month” was Custom)
         missing = [card for card in cards if card.lower() not in report.lower()]
         if missing and rules.lists_mandates(s["goal"], cards):  # MyUPI: “two active …” with three on the list
@@ -1560,7 +1562,7 @@ class Worker:
             drift = self.other_item(action, page)
             if drift:
                 raise Retry(drift)
-            payee = rules.wrong_card(self.state["goal"], action)
+            payee = rules.wrong_card(self.state["goal"], action, self.payee_cards(page))
             if payee:
                 self.state["wrong_cards"] += 1
                 if self.state["wrong_cards"] >= 2 and self.no_card_named(page):
@@ -1584,9 +1586,16 @@ class Worker:
         ran = self.run(page, operation, action, inputs, shown, commit=label, goal=(sub or {}).get("do", ""),
                        cleared=cleared)
         card = rules.CARD_ACTION.match(action.get("label") or "") if operation == "CLICK" else None
-        if card and MANDATE_CANCEL.match(action["label"]) and rules.MANDATE_GOAL.search(self.state["goal"]):
+        if card and MANDATE_CANCEL.match(action["label"]) and (rules.MANDATE_GOAL.search(self.state["goal"])
+                                                                or self.payee_cards(page)):
             return self.hand_off(card[1])  # the rest is the user's, in their UPI app
         return ran
+
+    def payee_cards(self, page):
+        """Whether the page's site names a card by its payee and every action on one must be the user's (its note's
+        `cards: payee`: MyUPI's mandates), however the goal is worded."""
+        note = skills.site_for(page.get("url") or "", self.library["sites"]) if page.get("url") else None
+        return (note or {}).get("cards") == "payee"
 
     def no_card_named(self, page):
         """A cancel, pause, or resume of a mandate that none of the page's cards is for (MyUPI: Netflix), judged on the
@@ -1594,7 +1603,7 @@ class Worker:
         nothing of the rest (“cancel my aisle” was answered “no mandate” with GOOGLE PLAY's card alone read)."""
         cards, goal = page.get("cards") or [], self.state["goal"]
         return len(cards) >= 2 and bool(rules.MANDATE_ACTION.search(goal)) and all(
-            rules.wrong_card(goal, {"label": f"Cancel (in “{card}”)"}) for card in cards)
+            rules.wrong_card(goal, {"label": f"Cancel (in “{card}”)"}, self.payee_cards(page)) for card in cards)
 
     def no_mandate(self, page):
         """The goal's merchant has none of the user's mandates: the task ends saying so, with every payee on the list
@@ -1608,7 +1617,7 @@ class Worker:
 
     def mandate_cancel_pressed(self):
         """The payee whose card's Cancel this task pressed, on a goal about the user's mandates, else None."""
-        if not rules.MANDATE_GOAL.search(self.state["goal"]):
+        if not (rules.MANDATE_GOAL.search(self.state["goal"]) or self.payee_cards(self.state["page"] or {})):
             return None
         for step in reversed(self.state["history"]):
             card = rules.CARD_ACTION.match(step.get("action") or "") if step.get("operation") == "CLICK" else None
@@ -1647,6 +1656,9 @@ class Worker:
         if operation == "LOOK":
             return {"point": action["point"], **({"hover": True} if action.get("hover") else {})}, action.get("label")
         if operation == "UPLOAD":
+            if self.payee_cards(page) and not PROOF.search(self.state["goal"]):  # MyUPI: asked for a file to cancel
+                raise Retry("This attach-file belongs to the site's chat box, which this task never uses: on this "
+                            "site a file is only a complaint's proof the user gave.")
             return {"files": self.files_for(action)}, None
         return {}, None
 

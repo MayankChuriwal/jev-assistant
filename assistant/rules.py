@@ -144,11 +144,12 @@ CARD_ACTION = re.compile(r"(?:cancel|pause|resume|revoke)\b.*\(in “(.+?)”\)$
 COMPANIES = {"chatgpt": "openai", "chat gpt": "openai", "youtube": "google", "google one": "google"}  # who bills
 
 
-def wrong_card(goal, action):
+def wrong_card(goal, action, mandates=False):
     """The payee whose card a mandate's Cancel, Pause, or Resume sits on when the goal names neither it nor a brand it
-    bills for (MyUPI: Netflix had no mandate, and GOOGLE PLAY's Cancel was pressed as Netflix's), else None."""
+    bills for (MyUPI: Netflix had no mandate, and GOOGLE PLAY's Cancel was pressed as Netflix's), else None. On a site
+    of mandates (`mandates`) every goal counts, however it is worded (“cancel the aisle one instead”)."""
     found = CARD_ACTION.match(action.get("label") or "")
-    if not found or not MANDATE_GOAL.search(goal or ""):
+    if not found or not (mandates or MANDATE_GOAL.search(goal or "")):
         return None
     named = words(goal) | {company for brand, company in COMPANIES.items() if brand in (goal or "").lower()}
     return None if words(found[1]) & named else found[1]

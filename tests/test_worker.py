@@ -376,6 +376,37 @@ def mandate_page(cards, shown=None):
     return page
 
 
+def test_on_myupi_a_cards_cancel_must_be_the_one_the_user_named_however_they_said_it(tmp_path):
+    # “Cancel the aisle one instead” (no subscription or brand word) pressed Cancel (in “OPENAI LLC”)
+    page = mandate_page(["OPENAI LLC", "AISLE"])
+    page["url"] = "https://www.upihelp.npci.org.in/"
+    w = worker_with(tmp_path, page=page, goal="Cancel the aisle one instead", replies=[{"option": "o2"}])
+    w.browser.qr_screenshot = Mock(return_value="cXI=")
+    openai, aisle = page["actions"]
+    with pytest.raises(Retry, match="OPENAI LLC"):
+        w.act("CLICK", openai, w.state["page"], sub("cancel the aisle mandate"))
+    w.act("CLICK", aisle, w.state["page"], sub("cancel the aisle mandate"))
+    assert w.asked[0]["text"].startswith("To cancel AISLE's UPI AutoPay") and w.state["status"] == "done"
+
+
+@pytest.mark.parametrize("goal, refused", [("Cancel the aisle one instead", True),
+                                           ("Raise a complaint for my ₹499 payment, here is the proof", False)])
+def test_on_myupi_a_file_is_asked_for_only_as_a_complaints_proof(tmp_path, goal, refused):
+    # MyUPI: cancelling AISLE asked “This step needs a file (image/*)” (the chat box's attach file)
+    attach = {"id": "u1", "kind": "upload", "label": "File input: image/*", "role": "file", "node": 7}
+    page = mandate_page(["AISLE"])
+    page["url"], page["actions"] = "https://www.upihelp.npci.org.in/", [attach]
+    w = worker_with(tmp_path, page=page, goal=goal, replies=[{"text": "no file"}])
+    if refused:
+        with pytest.raises(Retry, match="chat box"):
+            w.act("UPLOAD", attach, w.state["page"], sub("attach"))
+        assert w.asked == []
+    else:
+        with pytest.raises(Exception):
+            w.act("UPLOAD", attach, w.state["page"], sub("attach the proof"))
+        assert w.asked[0]["kind"] == "file"
+
+
 def test_reaching_again_for_a_mandate_the_goal_doesnt_name_ends_with_the_payees(tmp_path):
     # MyUPI: “Netflix billed by OPENAI LLC”, refused six times over, then stuck
     page = mandate_page(["OPENAI LLC", "AISLE", "GOOGLE PLAY"], shown=["OPENAI LLC"])  # the rest scrolled off

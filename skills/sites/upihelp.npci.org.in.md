@@ -5,6 +5,7 @@ aliases: NPCI, UPI Help, MyUPI, UPI AutoPay, autopay, UPI mandate, UPI mandates
 start: https://www.upihelp.npci.org.in/
 learn: no
 sign-in: auto
+cards: payee
 keep: tab
 ---
 - NPCI's MyUPI shows the user's UPI activity across all their UPI apps: AutoPay mandates (and their cancel, pause, resume), the last 60 days of transactions, complaints, their UPI ID and number, payee checks, fraud advice and FAQs.
