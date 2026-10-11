@@ -1288,3 +1288,43 @@ def test_a_brain_tasks_progress_line_goes_out_before_it_starts(world):
     world.scripts[LIST_GOAL] = [tell("Your UPI AutoPay mandates: none")]
     world.core.execute(LIST_GOAL, url=MYUPI, skill="account", progress="Checking your UPI AutoPay mandates on MyUPI…")
     assert bodies(world) == ["Checking your UPI AutoPay mandates on MyUPI…"]
+
+
+# ---- the real brain on the real core: a scripted model, scripted workers, the whole cancel conversation
+
+def test_the_brain_and_core_hold_a_whole_cancel_conversation(world, tmp_path):
+    import json as jsonlib
+
+    from assistant.brain import Brain
+
+    calls = [("upi_mandates", {}),
+             ("reply", {"text": "You have 3 AutoPay mandates. Which should I cancel?",
+                        "options": ["OPENAI LLC", "GOOGLE PLAY", "AISLE"]}),
+             ("upi_cancel", {"payee": "AISLE", "reason": None}),
+             ("reply", {"text": "Nothing changed: AISLE's AutoPay stays active.", "options": []})]
+
+    def model(instructions, items, tools, final=False):
+        name, args = calls.pop(0)
+        return ({"type": "function_call", "call_id": f"c{len(calls)}", "name": name,
+                 "arguments": jsonlib.dumps(args)}, {"latency_ms": 1})
+
+    cards = {"cards": ["OPENAI LLC", "GOOGLE PLAY", "AISLE"],
+             "card_lines": ["OPENAI LLC ₹ 399", "GOOGLE PLAY ₹ 299", "AISLE ₹ 499"]}
+    qr = {"kind": "choice", "text": "To cancel AISLE's UPI AutoPay, scan this QR with your UPI app.",
+          "options": [{"id": "o1", "label": "I approved it"}, {"id": "o2", "label": "Not now"}]}
+    world.scripts["List all my UPI AutoPay mandates"] = [lambda agent: agent.state.update(page=cards),
+                                                          tell("Your UPI AutoPay mandates: …")]
+    world.scripts["Cancel the UPI AutoPay mandate whose payee is AISLE"] = [
+        ask(qr), lambda agent: agent.state.update(page=cards, outcome="not_approved"),
+        tell("Nothing was changed: AISLE's UPI AutoPay stays active.")]
+    world.core.brain = Brain(world.core, model=model, traces=tmp_path)
+    text(world, "Cancel my subscriptions")
+    assert until(lambda: buttons(world) == ["b1:1", "b1:2", "b1:3"] if interactive(world) else False)
+    tap(world, "b1:3")
+    assert until(lambda: interactive(world) and buttons(world) == ["q1:o1", "q1:o2"])
+    tap(world, "q1:o2")
+    assert until(lambda: "Nothing changed: AISLE's AutoPay stays active." in bodies(world))
+    assert bodies(world)[:1] == ["Checking your UPI AutoPay mandates on MyUPI…"]
+    assert "Cancelling AISLE's AutoPay on MyUPI…" in bodies(world)
+    assert not any(b.startswith(("Your UPI AutoPay mandates", "Nothing was changed")) for b in bodies(world))
+    assert until(lambda: not world.core.brain.busy)
