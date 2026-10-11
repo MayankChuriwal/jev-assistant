@@ -3579,3 +3579,75 @@ def test_a_saved_phone_goes_into_a_ten_digit_box_without_the_country_code(tmp_pa
     box = {"id": "m", "kind": "fill", "label": "Eg. 9876543210", "role": "textbox", "value": "", "node": 30,
            "constraints": {"type": "tel", "maxlength": 10, "pattern": "[0-9]{10}", "autocomplete": "tel-national"}}
     assert w.value(box, "[profile:phone]", w.state["page"]) == ({"text": "9876543210"}, "[profile:phone]")
+
+
+# ---- MyUPI's list settles before it is read; a mandate task's outcome
+
+MYUPI = "https://www.upihelp.npci.org.in/"
+HEADER = "UPI Autopay\nManage recurring payments, subscriptions, and active UPI mandates across apps."
+
+
+def drawn(cards, lines):
+    page = fake_page(url=MYUPI, text=HEADER + "\n" + "\n".join(lines), actions=[])
+    page["cards"], page["card_lines"] = list(cards), list(lines)
+    return page
+
+
+HALF = drawn(["OPENAI LLC", "GOOGLE PLAY"], ["OPENAI LLC ₹ 399 Frequency Custom", "GOOGLE PLAY ₹ 299 Frequency"])
+FULL = drawn(["OPENAI LLC", "GOOGLE PLAY", "AISLE"],
+             ["OPENAI LLC ₹ 399 Frequency Custom", "GOOGLE PLAY ₹ 299 Frequency Monthly", "AISLE ₹ 499"])
+
+
+@pytest.fixture
+def no_wait(monkeypatch):
+    from assistant import worker as module
+
+    monkeypatch.setattr(module, "LIST_GAP", 0)
+
+
+def test_on_myupi_the_mandate_list_is_read_again_until_two_reads_match(tmp_path, no_wait):
+    # “Cancel my aisle subscription” was answered “no mandate” 6.7 s in: GOOGLE PLAY half drawn, AISLE not yet
+    w = worker_with(tmp_path, page=fake_page(url=MYUPI))
+    w.browser.observe.side_effect = [HALF, FULL, FULL]
+    page = w.observe()
+    assert page["cards"] == ["OPENAI LLC", "GOOGLE PLAY", "AISLE"] and w.browser.observe.call_count == 4
+
+
+def test_on_myupi_a_list_still_empty_under_its_heading_is_waited_for(tmp_path, no_wait):
+    w = worker_with(tmp_path, page=fake_page(url=MYUPI))
+    w.browser.observe.side_effect = [drawn([], []), FULL, FULL]
+    assert w.observe()["cards"] == ["OPENAI LLC", "GOOGLE PLAY", "AISLE"]
+
+
+@pytest.mark.parametrize("page", [fake_page(url=MYUPI, text="Security Verification"),  # MyUPI, no list on it
+                                  {**FULL, "url": "https://shop.test/checkout"}])  # cards, but not a payee site
+def test_a_page_with_no_payee_list_is_read_once(tmp_path, no_wait, page):
+    w = worker_with(tmp_path, page=fake_page(url=MYUPI))
+    w.browser.observe.side_effect = [page, FULL]
+    w.observe()
+    assert w.browser.observe.call_count == 2  # the worker's first look, then this one
+
+
+def test_a_list_that_keeps_changing_is_read_six_times_at_most(tmp_path, no_wait):
+    w = worker_with(tmp_path, page=fake_page(url=MYUPI))
+    w.browser.observe.side_effect = [drawn(["AISLE"], [f"AISLE ₹ {n}"]) for n in range(10)]
+    assert w.observe()["card_lines"] == ["AISLE ₹ 5"] and w.browser.observe.call_count == 7
+
+
+@pytest.mark.parametrize("reply, outcome", [({"option": "o1"}, "approved"), ({"option": "o2"}, "not_approved")])
+def test_the_users_answer_to_a_mandates_qr_is_the_tasks_outcome(tmp_path, reply, outcome):
+    w = worker_with(tmp_path, page=fake_page(actions=[OPENAI_CANCEL]), goal="Cancel the UPI AutoPay mandate whose "
+                    "payee is OPENAI LLC", replies=[reply])
+    w.browser.qr_screenshot = Mock(return_value="cXI=")
+    w.act("CLICK", OPENAI_CANCEL, w.state["page"], sub("cancel OPENAI LLC"))
+    assert w.state["outcome"] == outcome
+
+
+def test_a_mandate_no_card_is_for_ends_with_the_outcome_not_found(tmp_path):
+    page = mandate_page(["OPENAI LLC", "AISLE"], shown=["OPENAI LLC"])
+    w = worker_with(tmp_path, page=page, goal="cancel my netflix subscription")
+    openai = page["actions"][0]
+    with pytest.raises(Retry):
+        w.act("CLICK", openai, w.state["page"], sub("cancel the Netflix mandate"))
+    w.act("CLICK", openai, w.state["page"], sub("cancel the Netflix mandate"))
+    assert w.state["outcome"] == "not_found" and w.state["status"] == "done"

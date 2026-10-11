@@ -30,6 +30,7 @@ CODE_ASKS = 3
 COMMIT_DROPS = 3  # an order's replan with no commit (none left in the old plan either): refused this often, then taken
 CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QR_TRIES = 5  # seconds a mandate's QR may take to render after its Cancel
+LIST_READS, LIST_GAP = 6, 0.7  # MyUPI draws its mandate list a card at a time, over a few seconds
 MANDATE_CANCEL = re.compile(r"(?:cancel|revoke)\b", re.IGNORECASE)  # a card's Cancel: the UPI app does the rest
 APPROVED = re.compile(r"\s*(?:yes|done|approved|i approved|i did|ok)\b", re.IGNORECASE)
 AGREE = re.compile(r"\b(?:i (?:have read and )?agree|i accept)\b", re.IGNORECASE)  # a terms box
@@ -283,7 +284,7 @@ class Worker:
             cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None, closed=False,
             commit_drops=0, idle_asked=0, circled={}, loops={}, fruitless=None, blank_waits=0, coded=[],
             file_refusals=0, path_steps={}, path_asked=[], refusals_log=[], stuck_why=None, acting=None,
-            recent_at=None, last_by_site={}, wrong_cards=0, list_refusals=0, captcha_text=None,
+            recent_at=None, last_by_site={}, wrong_cards=0, list_refusals=0, captcha_text=None, outcome=None,
         )
 
     # ---- what the user and the models see
@@ -349,10 +350,29 @@ class Worker:
         return page
 
     def observe(self):
-        page = self.clean(self.state["browser"].observe())
+        page = self.settled(self.clean(self.state["browser"].observe()))
         self.state["page"] = page
         self.state["files"].extend(page.get("downloads", []))
         self.forget_accepted(page)
+        return page
+
+    def settled(self, page):
+        """On a site that names its cards by payee (its note's `cards: payee`), a read of its list (cards on the page,
+        or the note's `list` words) is read again until two reads show the same cards in the same words: MyUPI draws
+        them a card at a time (“cancel my aisle” was answered “no mandate” 6.7 s in, AISLE's card not yet drawn)."""
+        note = skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None
+        if (note or {}).get("cards") != "payee":
+            return page
+        marker = (note.get("list") or "").lower()
+        for _ in range(LIST_READS - 1):
+            if not page.get("cards") and not (marker and marker in page["text"].lower()):
+                return page
+            time.sleep(LIST_GAP)
+            again = self.clean(self.state["browser"].observe())
+            if again.get("cards") and (again["cards"], again.get("card_lines")) == (page.get("cards"),
+                                                                                    page.get("card_lines")):
+                return again
+            page = again
         return page
 
     def forget_accepted(self, page):
@@ -1613,7 +1633,7 @@ class Worker:
         s["held"] = None  # the planner's own word on it, held a step: this answer says it
         self.say(f"None of your UPI AutoPay mandates is for what you asked (“{s['goal']}”), so nothing was changed. "
                  f"Your mandates: {', '.join(page['cards'])}.", kind="result")
-        s["status"] = "done"
+        s["status"], s["outcome"] = "done", "not_found"
 
     def mandate_cancel_pressed(self):
         """The payee whose card's Cancel this task pressed, on a goal about the user's mandates, else None."""
@@ -1645,7 +1665,7 @@ class Worker:
         self.say(f"Done: you approved cancelling {payee}'s UPI AutoPay in your UPI app, so its future payments stop. "
                  "NPCI's list can take a few minutes to show it, and the account with the merchant itself isn't "
                  "closed." if approved else f"Nothing was changed: {payee}'s UPI AutoPay stays active.", kind="result")
-        s["status"] = "done"
+        s["status"], s["outcome"] = "done", "approved" if approved else "not_approved"
 
     def inputs(self, operation, action, page, sub, key=None, text=None):
         """(browser inputs, what the history shows) for one operation."""
