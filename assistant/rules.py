@@ -50,16 +50,17 @@ COMMITS = re.compile(r"\b(?:cancel|submit|send|delete|remove|end|request|subscri
                      r"sign\s*up|join|message|reply|claim|return(?!\s+polic)|exchange(?!\s+rate)|refund|ordering|"
                      r"booking(?!\.)|buying|paying|purchasing|reserving|renting|hiring)\b", re.IGNORECASE)
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
-QR = re.compile(r"\bQR\b")  # a page showing a code to scan with the user's phone
+QR = re.compile(r"\bQR\b|\b(?i:upi app)\b")  # a code to scan with the user's phone, or its approval in their app
 # Cancelling something that bills on its own: with no site note for the merchant, its UPI AutoPay mandate is the handle.
 # or a subscription by its brand alone ("cancel my Netflix", "pause my Spotify", "how much do I pay for ChatGPT"):
 # services people pay by UPI AutoPay with no site note of their own; or the mandates themselves ("what autopays do I
 # have", "what subscriptions am I paying for").
 BRANDS = (r"netflix|spotify|youtube (?:premium|music)|jio ?hotstar|hotstar|disney|zee5|sony ?liv|prime video|"
           r"apple (?:music|tv|one)|google one|audible|linkedin premium|gaana|jio ?saavn|wynk|jio ?cinema|chat ?gpt")
-MANDATE_GOAL = re.compile(rf"\b(?:cancel|stop|end|revoke|unsubscribe|pause|resume|pay|paying|paid)\b.{{0,40}}"
-                          rf"\b(?:{BRANDS})\b|\b(?:auto ?pays?|mandates?|subscriptions?|recurring payments?)\b",
-                          re.IGNORECASE)
+MANDATE_GOAL = re.compile(rf"\b(?:cancel|stop|end|revoke|unsubscribe|pause|resume|pay|paying|paid|show|list|view)\b"
+                          rf".{{0,40}}\b(?:{BRANDS})\b|"
+                          r"\b(?:auto ?pays?|mandates?|subscriptions?|recurring payments?)\b", re.IGNORECASE)
+MANDATE_ACTION = re.compile(r"\b(?:cancel|stop|end|revoke|unsubscribe|pause|resume)\b", re.IGNORECASE)
 INDIAN_MOBILE = re.compile(r"(?:\+?91)?[\s-]*([6-9]\d{4})[\s-]*(\d{5})")
 
 

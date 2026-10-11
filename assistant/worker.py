@@ -298,6 +298,8 @@ class Worker:
         """One question to the user; returns the reply. Secret replies never enter the log."""
         if self.asker is None:
             raise Halt("blocked", "This step needs you, but no one is attached to answer.")
+        if self.state["held"] and repeats(message["text"], self.state["held"]):
+            self.state["held"] = None  # the update held a step was this question: it goes once, as the question
         self.release()
         message = {"from": "agent", **message}
         self.state["messages"].append(message)
@@ -877,8 +879,8 @@ class Worker:
             s["situations"].append("location")  # a step that sets the place: the planner reads the location rules
         if s["replay"] and (reason == "start" or subgoals):  # a plan of another shape, now or later: no replay
             s["replay"]["on"] = s["replay"]["on"] and replay.same_shape(s["plan"], self.habit["plan"])
-        if act["op"] not in {"DONE", "TELL"}:
-            self.release()  # a TELL waits one step: when the next move is DONE with the same words, they go once
+        if act["op"] not in {"DONE", "TELL", "ASK"}:
+            self.release()  # a TELL waits one step: when the next move is DONE or ASK with the same words, they go once
         if act["op"] in TALKING:
             return self.talk(out, page)
         if act["op"] == "CONTINUE":
@@ -1246,6 +1248,8 @@ class Worker:
         options = [re.sub(r"^\d{1,2}[.)]\s+", "", plain(o.strip())) for o in out["options"] if o.strip()][:10]
         if op in {"ASK", "STOP"} and rules.captcha_challenge(page):
             return self.relay_captcha(page)  # only the user solves a captcha
+        if op in {"ASK", "STOP"} and self.no_card_named():
+            return self.no_mandate()  # “No Netflix mandate here. What would you like to do?”: say so, and end
         problem = planner.lint(op, message, options, s["chat"])
         if problem:
             raise Retry(problem)
@@ -1453,11 +1457,10 @@ class Worker:
             drift = self.other_item(action, page)
             if drift:
                 raise Retry(drift)
-            s, payee = self.state, rules.wrong_card(self.state["goal"], action)
+            payee = rules.wrong_card(self.state["goal"], action)
             if payee:
-                s["wrong_cards"] += 1
-                if s["wrong_cards"] >= 2 and all(rules.wrong_card(s["goal"], {"label": f"Cancel (in “{p}”)"})
-                                                 for p in s["payees"]):
+                self.state["wrong_cards"] += 1
+                if self.state["wrong_cards"] >= 2 and self.no_card_named():
                     return self.no_mandate()
                 raise Retry(f"“{action.get('label')}” is on {payee}'s card, and the goal doesn't name {payee}: press "
                             "only the card whose payee is the merchant the goal names, or the company that bills for "
@@ -1477,6 +1480,12 @@ class Worker:
             gate.approved(self, page, action, label, sub)  # returns True, or raises StalePage or Retry
         return self.run(page, operation, action, inputs, shown, commit=label, goal=(sub or {}).get("do", ""),
                         cleared=cleared)
+
+    def no_card_named(self):
+        """A cancel, pause, or resume of a mandate that none of the cards seen is for (MyUPI: Netflix)."""
+        s = self.state
+        return bool(s["payees"]) and bool(rules.MANDATE_ACTION.search(s["goal"])) and all(
+            rules.wrong_card(s["goal"], {"label": f"Cancel (in “{payee}”)"}) for payee in s["payees"])
 
     def no_mandate(self):
         """The planner reached again for a mandate the goal doesn't name, and no card seen is the goal's: the task ends

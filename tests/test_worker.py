@@ -391,11 +391,12 @@ MANDATE_QR = ("To cancel, you'll need to authenticate via your UPI app.\nOpen in
     (MANDATE_QR, "cXI=", "cXI="),
     ("Got it — cancelling GOOGLE PLAY mandate.", "cXI=", "cXI="),  # the QR's own words scrolled off the screen
     ("Checkout\nPay ₹79", None, None)])
-def test_telling_the_user_to_scan_a_qr_the_page_shows_sends_the_qr(tmp_path, monkeypatch, text, shot, image):
+@pytest.mark.parametrize("told", ["Scan this QR with your UPI app and enter your UPI PIN to cancel Netflix's AutoPay.",
+                                  "Please approve the cancellation in your UPI app as instructed."])  # no “QR” said
+def test_telling_the_user_to_scan_a_qr_the_page_shows_sends_the_qr(tmp_path, monkeypatch, text, shot, image, told):
     w = worker_with(tmp_path, page=fake_page(text=text))
     w.browser.qr_screenshot = Mock(return_value=shot)
-    script_planner(monkeypatch, turn("TELL", message="Scan this QR with your UPI app and enter your UPI PIN to cancel "
-                                                     "Netflix's AutoPay."))
+    script_planner(monkeypatch, turn("TELL", message=told))
     jev_checks(monkeypatch)
     w.command("tick")
     w.release()  # a TELL without a QR is held a step
@@ -408,6 +409,30 @@ def test_a_site_whose_sign_in_lives_in_its_tab_keeps_the_tab_for_the_next_task(t
     w = worker_with(tmp_path, page=fake_page(url=url))
     w.close()
     assert w.browser.close.call_args.kwargs == {"keep": keep}
+
+
+def test_an_update_then_a_question_in_the_same_words_goes_out_once(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=fake_page(text="Got it — cancelling OPENAI LLC mandate."), replies=[{"text": "ok"}])
+    w.browser.qr_screenshot = Mock(return_value=None)
+    script_planner(monkeypatch, turn("TELL", message="Please approve the cancellation in your UPI app, then tell me."),
+                   turn("ASK", message="Please approve the cancellation in your UPI app, then tell me."))
+    jev_checks(monkeypatch)
+    for _ in range(2):
+        w.command("tick")
+    assert w.told == [] and len(w.asked) == 1  # the held update was this question: it went once, as the question
+
+
+def test_a_cancel_for_a_merchant_no_mandate_is_for_ends_listing_the_payees_instead_of_asking(tmp_path, monkeypatch):
+    cards = [{"id": f"c{n}", "kind": "click", "label": f"Cancel (in “{payee}”)", "role": "button", "node": n}
+             for n, payee in enumerate(["OPENAI LLC", "AISLE"], 1)]
+    w = worker_with(tmp_path, page=fake_page(actions=cards), goal="cancel my netflix subscription")
+    w.observe()
+    script_planner(monkeypatch, turn("ASK", message="No Netflix mandate is here. What would you like to do?",
+                                     options=["Check if Netflix is part of a Google Play mandate", "Stop here"]))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.asked == [] and w.state["status"] == "done"
+    assert w.told[-1]["text"].endswith("Your mandates: OPENAI LLC, AISLE.")
 
 
 def test_the_same_update_is_told_once(tmp_path, monkeypatch):  # MyUPI: “Please scan the QR …” three times over

@@ -383,6 +383,7 @@ def test_a_tab_listing_revoked_mandates_is_no_commit():
     ("Revoke the YouTube Premium UPI mandate", True), ("What all autopay I have right now?", True),
     ("what subscriptions am I paying for?", True), ("pause my Google Play autopay", True),
     ("how much do I pay for ChatGPT every month?", True), ("resume my Spotify", True),
+    ("Show my netflix ubscriptions", True),  # a typo: the brand still names it
     ("Cancel my Amazon Prime membership", False), ("Order one Diet Coke", False), ("find a movie on Netflix", False)])
 def test_a_goal_about_the_users_upi_mandates_is_recognised(goal, mandates):
     assert bool(rules.MANDATE_GOAL.search(goal)) is mandates
