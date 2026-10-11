@@ -153,6 +153,22 @@ MARKS = r"""(marks => {
   document.documentElement.append(host);
   return true;
 })"""
+# The biggest square picture named as a QR code (MyUPI's "intent-qr-code-display"), scrolled into view: its box in
+# page coordinates, or null.
+QR_BOX = r"""(() => {
+  const named = e => !!e && /qr/i.test([e.id, e.getAttribute('class'), e.getAttribute('alt'),
+    e.getAttribute('aria-label'), e.getAttribute('title')].join(' '));
+  let best = null, size = 0;
+  for (const e of document.querySelectorAll('canvas, svg, img')) {
+    const r = e.getBoundingClientRect();
+    if (r.width >= 80 && Math.abs(r.width - r.height) <= r.width * 0.1 && r.width > size &&
+        (named(e) || named(e.parentElement) || named(e.parentElement?.parentElement))) [best, size] = [e, r.width];
+  }
+  if (!best) return null;
+  best.scrollIntoView({block: 'center'});
+  const r = best.getBoundingClientRect();
+  return {x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height};
+})"""
 # A labelled grid drawn over the page for one capture, in a closed shadow root: the page's own reads never see it.
 GRID = r"""(cells => {
   document.getElementById('__jev_grid')?.remove();
@@ -773,6 +789,16 @@ class Browser:
             return self.call("Page.captureScreenshot", **params)["data"]
         finally:
             self._mask(by_frame, False)
+
+    def qr_screenshot(self, masked=(), hide=(), pad=24):
+        """Base64 PNG of the QR code the page shows the user to scan (a UPI app's mandate or payment), doubled so a
+        phone reads it off the chat's picture; or None."""
+        box = self.evaluate(f"({QR_BOX})()")
+        if not box:
+            return None
+        clip = {"x": max(0, box["x"] - pad), "y": max(0, box["y"] - pad), "width": box["width"] + 2 * pad,
+                "height": box["height"] + 2 * pad, "scale": 2}
+        return self.screenshot(masked=masked, clip=clip, hide=hide)
 
     def grid_screenshot(self, region=None, columns=8, rows=6, masked=(), scale=1, hide=()):
         """(PNG of the viewport or `region` under a labelled grid, the grid's cells in viewport coordinates)."""

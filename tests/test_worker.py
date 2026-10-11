@@ -350,6 +350,22 @@ def test_a_code_field_is_asked_hidden_and_typed_without_the_planner(tmp_path, mo
     assert w.browser.act.call_args.kwargs["text"] == "481516" and w.state["history"][-1]["text"] == "[secret:answer1]"
 
 
+MANDATE_QR = ("To cancel, you'll need to authenticate via your UPI app.\nOpen in your UPI App\nRevoking this mandate "
+              "will stop all future payments to Netflix. Scan the QR below to revoke your mandate for Netflix")
+
+
+@pytest.mark.parametrize("text, image", [(MANDATE_QR, "cXI="), ("Checkout\nPay ₹79", None)])
+def test_telling_the_user_to_scan_a_qr_the_page_shows_sends_the_qr(tmp_path, monkeypatch, text, image):
+    w = worker_with(tmp_path, page=fake_page(text=text))
+    w.browser.qr_screenshot = Mock(return_value="cXI=")
+    script_planner(monkeypatch, turn("TELL", message="Scan this QR with your UPI app and enter your UPI PIN to cancel "
+                                                     "Netflix's AutoPay."))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    w.release()  # a TELL without a QR is held a step
+    assert [m.get("image") for m in w.told] == [image]
+
+
 def test_a_code_ask_names_the_site_by_its_note_not_its_page_title(tmp_path, monkeypatch):
     page = fake_page(url="https://www.upihelp.npci.org.in/")
     page["title"] = "MyUPI | Raise UPI Complaints, Check Transaction Status & Resolve Transaction Issues | NPCI"

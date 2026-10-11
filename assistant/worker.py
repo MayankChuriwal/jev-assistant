@@ -1244,8 +1244,13 @@ class Worker:
             if s["told_at"] == len(s["history"]):
                 raise Retry("You just told the user something. Do an action next, or finish with DONE: the answer "
                             "the user asked for goes in DONE's message, never in another TELL.")
-            self.release()
-            s["held"] = message
+            qr = s["browser"].qr_screenshot(masked=self.secrets.nodes, hide=self.hidden_details()) \
+                if rules.QR.search(page["text"]) else None
+            if qr:  # a QR for the user's phone (a UPI app's mandate or payment) goes out now, as its picture
+                self.say(message, image=qr)
+            else:
+                self.release()
+                s["held"] = message
             s["chat"].append({"from": "agent", "text": message})
             s["told_at"] = len(s["history"])
             return None

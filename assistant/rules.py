@@ -48,6 +48,7 @@ COMMITS = re.compile(r"\b(?:cancel|submit|send|delete|remove|end|request|subscri
                      r"sign\s*up|join|message|reply|claim|return(?!\s+polic)|exchange(?!\s+rate)|refund|ordering|"
                      r"booking(?!\.)|buying|paying|purchasing|reserving|renting|hiring)\b", re.IGNORECASE)
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+QR = re.compile(r"\bQR\b")  # a page showing a code to scan with the user's phone
 # Cancelling something that bills on its own: with no site note for the merchant, its UPI AutoPay mandate is the handle.
 SUBSCRIPTION_CANCEL = re.compile(r"\b(?:cancel|stop|end|revoke)\b.{0,40}\b(?:subscription|auto ?pay|mandate|"
                                  r"recurring payment)s?\b", re.IGNORECASE)

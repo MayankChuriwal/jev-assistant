@@ -324,6 +324,15 @@ def test_a_first_code_box_that_takes_a_pasted_code_is_one_of_the_code_boxes(brow
     assert b.evaluate("[...document.querySelectorAll('[id^=otp-]')].map(i => i.value).join('')") == "482913"
 
 
+def test_a_qr_to_scan_is_cut_out_and_enlarged_and_a_page_without_one_gives_none(browser_at):
+    b = browser_at("/next.html")
+    assert b.qr_screenshot() is None
+    b.evaluate("document.body.insertAdjacentHTML('beforeend', '<div style=\"height:2000px\"></div><div>"
+               "<canvas class=\"intent-qr-code-display\" width=\"200\" height=\"200\"></canvas></div>')")
+    width, height = struct.unpack(">II", base64.b64decode(b.qr_screenshot())[16:24])  # PNG header: below the fold
+    assert width == height and width >= 400  # scrolled to and doubled: a phone reads it off the chat's picture
+
+
 def test_a_new_code_replaces_the_digits_a_rejected_one_left_in_the_boxes(browser_at):
     b = browser_at("/next.html")
     b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div>' + [1, 2, 3, 4].map(n => "
