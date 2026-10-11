@@ -129,6 +129,7 @@ class Task:
         self.skill, self.preauth, self.cap, self.url, self.single = None, False, None, None, single
         self.script, self.bench = None, {"gate": None, "asked": []}  # a bench run: scripted replies
         self.habit, self.sameness = None, None  # the saved habit this goal repeats
+        self.capture, self.result = False, None  # a brain tool's task: how it ended goes back to the brain
 
     def view(self, question=None):
         history = self.worker.state["history"] if self.worker else []
@@ -613,6 +614,37 @@ class Core:
             threading.Thread(target=self.run, args=(task,), name=f"jev-{task.id}", daemon=True).start()
         return task
 
+    def execute(self, goal, url=None, skill=None, progress=None):
+        """A brain tool's task, run to its end on the calling thread: {status, outcome, report, cards}. Its result, its
+        “Stopped …” line, or the error that ended it come back here for the brain to say in its own words; its
+        questions, pictures and info lines reach the chat as they happen. With a `url` the brain chose the site: no
+        intake, start page or habit, and never pre-authorised."""
+        with self.lock:
+            task = Task(f"t{next(self.task_ids)}", goal, single=True)
+            task.capture, task.url, task.skill = True, url, skill
+            self.tasks[task.id] = task
+        if progress:
+            self.say(progress)
+        self.run(task)
+        state = task.worker.state if task.worker else {}
+        page = state.get("page") or {}
+        return {"status": task.status, "outcome": state.get("outcome"), "report": task.result or "",
+                "cards": [{"name": c, "details": d} for c, d in zip(page.get("cards") or [], page.get("card_lines") or [])]}
+
+    def notify(self, task, message):
+        """A task's message: a brain task's result goes back to the brain; everything else reaches the chat now."""
+        if task.capture and message.get("kind") == "result":
+            task.result = message["text"]
+        else:
+            self.send(message, task)
+
+    def ended(self, task, text):
+        """How a task ended, when no result said it: back to the brain for a brain task, else in the chat."""
+        if task.capture:
+            task.result = text
+        else:
+            self.say(text, task)
+
     def cancel(self, task):
         task.cancelled = True
         waiting = next((q for q in self.queue if q.task is task), None)
@@ -659,8 +691,8 @@ class Core:
         try:
             self.prepare(task)
             if not self.acquire(task):
-                return self.say(f"Cancelled {task.title} before it started.")
-            task.worker = self.make_worker(task, task.url, lambda m: self.ask(task, m), lambda m: self.send(m, task))
+                return self.ended(task, f"Cancelled {task.title} before it started.")
+            task.worker = self.make_worker(task, task.url, lambda m: self.ask(task, m), lambda m: self.notify(task, m))
             task.worker.bench = task.script is not None
             task.worker.interrupted = lambda: task.cancelled or bool(task.updates)
             self.update_typing()
@@ -674,7 +706,10 @@ class Core:
                         break
                 self.deliver_files(task)
         except Exception as error:  # the start, launching the browser, anything: say it once
-            self.say(f"I couldn't carry on with {task.title}: {error}")
+            if task.capture:
+                task.result = f"I couldn't carry on with {task.title}: {error}"
+            else:
+                self.say(f"I couldn't carry on with {task.title}: {error}")
             self.record(task, error)
         finally:
             state = task.worker.state["status"] if task.worker else None
@@ -685,7 +720,7 @@ class Core:
                 commit = task.worker.state.get("commit")
                 pending = f" {commit['label']} may already have gone through; check it before trying again." \
                     if commit else ""
-                self.say(f"Stopped {task.title}.{pending}", task)
+                self.ended(task, f"Stopped {task.title}.{pending}")
             if task.worker:
                 self.payees.update((task.worker.state.get("page") or {}).get("cards") or [])  # its mandates, by name
                 try:
@@ -708,6 +743,11 @@ class Core:
     def prepare(self, task):
         """Before a task starts: its skill, pre-authorisation, cap, and start page. A message with several errands
         becomes several tasks; this one keeps the first."""
+        if task.url:  # a brain tool chose the site
+            note = skills.site_for(task.url, self.library["sites"])
+            task.host, task.preauth, task.cap = site(task.url), False, cap(task.goal)
+            task.title = f"{note['name'] if note else task.host} · {task.goal}"[:60]
+            return
         kinds = skills.kinds(self.library["skills"])
         info = self.hidden(self.intake, task.goal, kinds, not task.single)  # the user's own words only
         if info.get("several") == "yes":

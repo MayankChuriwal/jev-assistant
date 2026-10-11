@@ -1300,3 +1300,80 @@ def test_an_experian_dispute_starts_on_its_dispute_page(tmp_path):
     url, _ = c.start_page(conversation.Task("t1", "Raise a dispute on my Experian credit report: the HDFC Bank card "
                                                   "ending 1234 shows ACTIVE but it was closed in March 2025"))
     assert url == "https://consumer.experian.in/ECSINDIA-DCE/view/angular/index.html#!/"
+
+
+# ---- a brain tool's task: Core.execute runs it to its end and hands its result back
+
+MYUPI = "https://www.upihelp.npci.org.in/"
+LIST_GOAL = "List all my UPI AutoPay mandates"
+
+
+def executing(world, *args, **kwargs):
+    """Core.execute on its own thread, as the brain calls it: (thread, the list its result lands in)."""
+    out = []
+    thread = threading.Thread(target=lambda: out.append(world.core.execute(*args, **kwargs)), daemon=True)
+    thread.start()
+    return thread, out
+
+
+def test_a_brain_tasks_result_comes_back_to_the_brain_not_the_chat(world):
+    world.scripts[LIST_GOAL] = [
+        lambda agent: agent.state.update(page={"cards": ["AISLE"], "card_lines": ["AISLE ₹ 499"]}, outcome=None),
+        tell("Your UPI AutoPay mandates:\n• AISLE ₹ 499")]
+    result = world.core.execute(LIST_GOAL, url=MYUPI, skill="account")
+    assert result == {"status": "done", "outcome": None, "report": "Your UPI AutoPay mandates:\n• AISLE ₹ 499",
+                      "cards": [{"name": "AISLE", "details": "AISLE ₹ 499"}]}
+    assert not any("AISLE" in b for b in bodies(world))
+
+
+def test_a_brain_task_on_a_named_site_skips_intake_and_the_start_page(world):
+    world.core.intake = lambda *a: pytest.fail("intake read a brain task")
+    world.core.start = lambda *a: pytest.fail("the start job read a brain task")
+    world.core.execute(LIST_GOAL, url=MYUPI, skill="account")
+    task = world.made[LIST_GOAL]
+    assert task.url == MYUPI and task.host == "upihelp.npci.org.in" and task.skill == "account"
+    assert task.preauth is False and task.title == "upihelp.npci.org.in · " + LIST_GOAL
+
+
+def test_a_brain_task_with_no_site_starts_like_any_task(world):
+    world.hosts["Book a cab home"] = "olacabs.com"
+    result = world.core.execute("Book a cab home")
+    assert result["status"] == "done" and world.made["Book a cab home"].url == "https://olacabs.com/"
+
+
+def test_a_brain_tasks_questions_reach_the_chat_as_they_happen(world):
+    world.scripts[LIST_GOAL] = [ask(ADDRESS), tell("Done.")]
+    thread, out = executing(world, LIST_GOAL, url=MYUPI, skill="account")
+    assert until(lambda: interactive(world))
+    tap(world, buttons(world)[0])
+    thread.join(3)
+    assert out[0]["status"] == "done" and world.agents[LIST_GOAL].replies == [{"option": "o1"}]
+
+
+def test_a_brain_task_the_user_stops_tells_the_brain_how_it_ended(world):
+    gate = threading.Event()
+    world.scripts[LIST_GOAL] = [hold(gate)]
+    thread, out = executing(world, LIST_GOAL, url=MYUPI, skill="account")
+    task = until(lambda: world.made.get(LIST_GOAL))
+    with world.core.lock:  # as the chat holds it when “stop” arrives
+        world.core.cancel(task)
+    gate.set()
+    thread.join(3)
+    assert out[0]["status"] == "cancelled" and out[0]["report"].startswith("Stopped ")
+    assert not any(b.startswith("Stopped ") for b in bodies(world))
+
+
+def test_a_brain_task_that_cannot_start_tells_the_brain_why(world):
+    def broken(task, url, asker, notify):
+        raise RuntimeError("Chrome is not running")
+
+    world.core.make_worker = broken
+    result = world.core.execute(LIST_GOAL, url=MYUPI, skill="account")
+    assert result["status"] == "failed" and "Chrome is not running" in result["report"]
+    assert not any("Chrome is not running" in b for b in bodies(world))
+
+
+def test_a_brain_tasks_progress_line_goes_out_before_it_starts(world):
+    world.scripts[LIST_GOAL] = [tell("Your UPI AutoPay mandates: none")]
+    world.core.execute(LIST_GOAL, url=MYUPI, skill="account", progress="Checking your UPI AutoPay mandates on MyUPI…")
+    assert bodies(world) == ["Checking your UPI AutoPay mandates on MyUPI…"]
