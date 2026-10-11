@@ -528,6 +528,32 @@ def test_an_empty_captcha_on_screen_goes_to_the_user_before_the_planner_wanders(
     assert all(s.get("reason") != "start" for s in seen)  # the planner wasn't asked first
 
 
+def test_the_captcha_text_the_user_gave_is_typed_by_the_worker(tmp_path, monkeypatch):
+    # MyUPI: the user answered “84D0”, the planner never typed it, and Continue stayed disabled
+    w = worker_with(tmp_path, page=fake_page(actions=SIGN_IN_PAGE))
+    w.state["captcha_text"] = ("84D0", 0)
+    seen = script_planner(monkeypatch, turn("CLICK", pick=4))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert seen == [] and w.browser.act.call_args.kwargs["text"] == "84D0"
+    assert w.state["history"][-1]["operation"] == "TYPE_TEXT"
+
+
+@pytest.mark.parametrize("label, goal, refused", [
+    ("Terms of use", "cancel my netflix subscription", True), ("Privacy policy", "show my autopays", True),
+    ("FAQs", "cancel my netflix subscription", True), ("FAQs", "What do I do if I forget my UPI PIN?", False),
+    ("Privacy policy", "show me NPCI's privacy policy", False)])
+def test_a_sites_policy_pages_are_opened_only_when_the_goal_wants_them(tmp_path, label, goal, refused):
+    link = {"id": "f1", "kind": "click", "label": label, "role": "button", "node": 9}
+    w = worker_with(tmp_path, page=fake_page(actions=[link]), goal=goal)
+    if refused:
+        with pytest.raises(Retry, match="isn't needed"):
+            w.act("CLICK", link, w.state["page"], sub("sign in"))
+    else:
+        w.act("CLICK", link, w.state["page"], sub("open it"))
+        assert w.browser.act.called
+
+
 def test_a_ticked_agree_box_is_never_clicked_again(tmp_path):  # a second click unticks it
     w = worker_with(tmp_path, page=fake_page(actions=SIGN_IN_PAGE))
     with pytest.raises(Retry, match="already ticked"):
