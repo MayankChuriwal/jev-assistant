@@ -506,6 +506,9 @@ class Worker:
         if page is None:
             return None
         self.remember_page(page)
+        pressed = self.mandate_cancel_pressed()
+        if pressed:  # its hand-off was cut short (reading the click's result failed): the QR still goes next
+            return self.hand_off(pressed)
         if s["reason"]:
             return self.think(page)
         sub = self.subgoal()
@@ -1517,6 +1520,16 @@ class Worker:
         self.say(f"None of your UPI AutoPay mandates is for what you asked (“{s['goal']}”), so nothing was changed. "
                  f"Your mandates: {', '.join(page['cards'])}.", kind="result")
         s["status"] = "done"
+
+    def mandate_cancel_pressed(self):
+        """The payee whose card's Cancel this task pressed, on a goal about the user's mandates, else None."""
+        if not rules.MANDATE_GOAL.search(self.state["goal"]):
+            return None
+        for step in reversed(self.state["history"]):
+            card = rules.CARD_ACTION.match(step.get("action") or "") if step.get("operation") == "CLICK" else None
+            if card and MANDATE_CANCEL.match(step["action"]):
+                return card[1]
+        return None
 
     def hand_off(self, payee):
         """After a mandate's Cancel, MyUPI shows a QR that only the user's UPI app approves, with their UPI PIN: the

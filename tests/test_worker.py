@@ -409,6 +409,19 @@ def test_after_a_mandates_cancel_the_worker_hands_the_user_its_qr_and_ends(tmp_p
     assert w.state["status"] == "done" and w.told[-1]["text"] == result
 
 
+def test_a_cancel_pressed_whose_hand_off_was_cut_short_hands_off_next_step(tmp_path, monkeypatch):
+    # the click went through but reading its result failed: next step, the QR still goes, never the planner
+    w = worker_with(tmp_path, page=fake_page(text="Got it — cancelling AISLE mandate."), replies=[{"option": "o2"}],
+                    goal="cancel my aisle subscription")
+    w.browser.qr_screenshot = Mock(return_value="cXI=")
+    w.state["history"].append({"step": 1, "operation": "CLICK", "action": "Cancel (in “AISLE”)"})
+    seen = script_planner(monkeypatch, turn("CLICK", pick=1))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert seen == [] and w.asked[0]["text"].startswith("To cancel AISLE's UPI AutoPay, scan this QR")
+    assert w.state["status"] == "done"
+
+
 def test_the_planners_own_word_on_a_missing_mandate_goes_out_once(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=mandate_page(["OPENAI LLC", "AISLE"]), goal="cancel my netflix subscription")
     script_planner(monkeypatch, turn("TELL", message="No Netflix mandate was found among your mandates."),
