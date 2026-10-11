@@ -141,11 +141,11 @@ INTENTS = {
     "AMEND": "Changes something about an existing task: quantity, item, address, payment, time, or destination.",
     "NEW_TASK": "Asks for a new, separate task, including cancelling, returning, or changing something the user has on "
                 "a site or app (a subscription, order, booking, ride, membership, or mandate) that no running task is "
-                "about. A question about the user's own accounts, subscriptions, AutoPay mandates, orders, or "
-                "payments is a task too: it is looked up on a site.",
+                "about. A question about the user's own accounts, subscriptions, AutoPay mandates, orders, payments, "
+                "UPI ID, or complaints with a bank or a site is a task too: it is looked up on a site.",
     "CANCEL": "Tells the assistant to stop one of its own running tasks, or what a running task is doing (\"stop\", "
               "\"cancel it\", \"never mind\").",
-    "STATUS": "Asks how a task is going or what is happening.",
+    "STATUS": "Asks how one of the assistant's own running tasks is going or what it is doing.",
     "MEMORY": "Tells the assistant something to remember about the user, asks it to forget something or stop a "
               "standing approval, asks what it remembers, or asks to undo the last memory change.",
     "OTHER": "Anything else: thanks, greetings, small talk.",
