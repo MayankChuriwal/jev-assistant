@@ -53,7 +53,46 @@ through Rivo as a participating channel. Until then, its use here is a prototype
 
 The sign-in lives in the tab (sessionStorage `accessToken`): a new tab means a new sign-in.
 
-### Home: a chat
+### Signed in (verified on the live site, 12 October 2026)
+- Routes: `/` (home, and most panels), `/thread/<id>` (each chat: Fraud Awareness, a chip's answer), `/issue` (My
+  Complaints). Every panel opened (a chip, Fraud Awareness, Raise complaint) also starts a chat, listed under CHAT
+  HISTORY by its topic ("Raise complaint: Google …", "UPI ID Assistance").
+- Sidebar: Ask AI Assistant (home), UPI Autopay, UPI Transactions, Stay Safe, My Complaints, Search (chats), CHAT
+  HISTORY, Profile (a menu: Profile, Language, Appearance light/dark, Your Policy: Terms of use, Privacy Policy,
+  Disclaimer, FAQs), About MyUPI, Rate MyUPI, Logout. Inside a panel the sidebar folds to icons; the MyUPI mark
+  unfolds it.
+- Home: "Ask the AI assistant…" with attach and send, and five chips: UPI related issue (posts "I have UPI related
+  transaction issue" and shows All Transactions), Have a question? ("Sure! Ask me anything about digital payments —
+  UPI, RuPay, FASTag, AePS, and more."), Show Autopay, Fraud Awareness, Default UPI Id (posts "Show my Default UPI Id":
+  a "Your UPI details" table of Linked App, UPI ID (VPA), Bank).
+- UPI Autopay: "Consolidated view of your UPI activity across payment apps." Cards under a category heading
+  ("OTHERS"), each: payee, amount (the mandate's ceiling; Total is what was actually debited: ₹1 on a new one), Active
+  on (app), Linked bank, Frequency, Executed N times, Total ₹, Valid till; Pause and Cancel. No details button. The
+  cards' order changes from one load to the next: never go by position.
+- Pause: "Sure, I can help you pause your {PAYEE} mandate (₹{AMOUNT}). Please select a date till when you'd like to
+  pause it:" with chips for the next 15th and month-ends (15 Oct, 30 Oct, 15 Nov, 30 Nov) and Custom date; then the
+  UPI app approval.
+- UPI Transactions ("TRANSACTION SUPPORT — Check Transactions & Raise a Dispute"): first a "Confirm your account" box,
+  the last 4 digits of the bank account (four one-digit boxes, Verify & Continue), remembered for the session; then
+  "All Transactions" for that bank, with Filters, Switch account, "Not able to find your transaction? Find Now", the
+  last 60 days by month. Each row: Paid to / Paid via UPI Autopay, payee, date and time, amount; opening it shows the
+  status ("Payment successful"), Transaction ID, Payment mode, Debited account, UPI App, and Raise A Complaint.
+- Filters (Apply Now / Clear All): All Apps (the user's UPI apps), Payment Type (Businesses, People, Bill Payments),
+  Status, Date Range (Last 7 days, This month, Last month, Custom range), Amount (minimum and maximum, ₹0 to
+  ₹1,00,000), Mode (Bank Account, UPI Autopay), Type (Send). Options follow the user's own transactions.
+- Raise a complaint (from a transaction, or My Complaints' + Raise Complaint, which goes through the account box):
+  "What issue are you facing?" with the four reasons; then proofs and ⚠ the confirmation (not opened).
+- My Complaints (`/issue`): tabs ALL, UNDER REVIEW, ACTIONED; "No complaints found", or each complaint.
+- Stay Safe: Pay Safe ("Verify who you are paying before sending money": a UPI ID or a QR, then Verify Payee), UPI
+  Number (your UPI ID, its app and bank; ⚠ De-link UPI Number; how to change it), Fraud Awareness ("Learn about
+  scams": numbered stories with a category and Read more).
+- About MyUPI: a guide to every feature (UPI Autopay, Transactions, Ask AI "Do anything in the app just by chatting",
+  Pay Safe, UPI Number, Complaints, Fraud Awareness, Live Members: the banks, prepaid accounts and RuPay credit cards
+  live in MyUPI).
+- Not on screen: Safety Switch and Transaction Replay (in the Terms and the code; perhaps through Ask AI, or not
+  offered for this account).
+
+### Home: a chat (from the code)
 - Greeting "Good day! How may I assist you?" and quick actions: I have UPI transaction related issue, UPI Autopay,
   Txn history, UPI related issue, What is UPI?, Forgot PIN?, Fraud Awareness, Show my Default UPI Id, What is my UPI
   number?, Show information on recent frauds.
@@ -144,6 +183,8 @@ that only messages NPCI's assistant.
 | U2 | Delete my UPI number | ⚠ Only on an explicit request; its own confirmation needs the user's yes | Deleted, or nothing changed | Ever as a step of something else |
 | S1 | Turn on Safety Switch / block UPI on my account | ⚠ Only on an explicit request; confirmation needs the user's yes | Switched, with the cooldown said | Ever as a step of something else |
 | F1 | What do I do if I forgot my UPI PIN? / recent frauds | The quick action or FAQ | The steps or the advice, quoted | Change anything |
+| P1 | Is the UPI ID x@bank safe to pay? / whose is this UPI ID? | Stay Safe → Pay Safe; type the UPI ID; Verify Payee | What MyUPI says about the payee | Pay anyone |
+| T0 | (any transaction or complaint request) | The account box first: the last 4 digits of the bank account, asked hidden once and remembered | — | Guess the digits |
 | A1 | Log out | The system logs out (the site's own Logout) | Logged out | |
 
 ## 3. Test matrix
