@@ -108,6 +108,15 @@ def test_message_text_is_never_html(chat):
     assert js(chat, "document.querySelector('.bubble .text').textContent") == EVIL
 
 
+def test_whatsapp_bold_shows_as_bold_and_stays_text(chat):
+    chat.channel.send("local", {"type": "text", "text": {"body": f"You have *3* AutoPays: **AISLE** ₹499, *{EVIL}*"}})
+    assert until(lambda: js(chat, "document.querySelectorAll('.bubble').length") == 1)
+    strong = "[...document.querySelectorAll('.bubble .text strong')].map(s => s.textContent)"
+    assert js(chat, strong) == ["3", "AISLE", EVIL]
+    assert js(chat, "document.querySelector('.bubble .text').textContent") == f"You have 3 AutoPays: AISLE ₹499, {EVIL}"
+    assert js(chat, "document.querySelectorAll('#chat img, #chat b').length") == 0 and js(chat, "window.pwned === undefined")
+
+
 def test_images_documents_uploads_and_typing(chat, tmp_path):
     invoice = tmp_path / "invoice.pdf"
     invoice.write_bytes(b"%PDF-1.4 invoice")

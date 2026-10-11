@@ -40,7 +40,14 @@ function body(target, text) {
     target.append(el('strong', 'title', title[1]));
     text = text.slice(title[0].length);
   }
-  target.append(el('p', 'text', text));
+  const p = el('p', 'text');
+  let at = 0;
+  for (const bold of text.matchAll(/\*\*?([^*\n]+?)\*\*?/g)) { // *bold* as WhatsApp shows it (and a stray **bold**)
+    p.append(document.createTextNode(text.slice(at, bold.index)), el('strong', '', bold[1]));
+    at = bold.index + bold[0].length;
+  }
+  p.append(document.createTextNode(text.slice(at)));
+  target.append(p);
 }
 
 function choices(b, m) {

@@ -321,3 +321,28 @@ def test_messages_heard_are_read_one_at_a_time_in_order(tmp_path):
     assert until(lambda: heard == ["first"]) and brain.busy
     gate.set()
     assert until(lambda: heard == ["first", "second"]) and until(lambda: not brain.busy)
+
+
+@pytest.mark.parametrize("account, wrong, correct, missing", [
+    ("", "", "", "the account"), ("HDFC Bank card ending 4321", "", "₹0", "what the report shows"),
+    ("HDFC Bank card ending 4321", "₹12,000 overdue", " ", "what it should show")])
+def test_a_dispute_missing_its_details_is_refused_before_any_page_opens(tmp_path, account, wrong, correct, missing):
+    # the eval: “I want to dispute something on my Experian report” raised one with no details at all
+    core = FakeCore()
+    model = Model(("bureau_dispute", {"bureau": "Experian", "kind": "Account Details", "account": account,
+                                      "wrong": wrong, "correct": correct}), ("reply", {"text": "What's wrong?",
+                                                                                         "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn("I want to dispute something on my Experian report")
+    out = results(brain, "bureau_dispute")[0]
+    assert core.executed == [] and out["status"] == "rejected" and missing in out["reason"]
+
+
+def test_the_same_call_twice_in_a_turn_runs_once(tmp_path):
+    # the eval: “what's my UPI ID?” ran the same MyUPI task three times
+    core = FakeCore(done("Your UPI ID is jev.user@okaxis."))
+    model = Model(("upi_task", {"goal": "Show my UPI ID"}), ("upi_task", {"goal": "Show my UPI ID"}),
+                  ("reply", {"text": "Your UPI ID is jev.user@okaxis.", "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn("what's my UPI ID?")
+    assert len(core.executed) == 1 and results(brain, "upi_task")[1]["status"] == "repeat"

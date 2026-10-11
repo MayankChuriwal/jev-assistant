@@ -4,7 +4,7 @@ when: cancelling, pausing or listing UPI AutoPay mandates and subscriptions; UPI
 ---
 - NPCI's MyUPI shows the user's UPI AutoPay mandates across all their UPI apps, plus their last 60 days of UPI transactions, complaints, their UPI ID, payee checks and UPI help.
 - Reading it needs a sign-in: the user gets a captcha picture and an SMS code to type. That's expected, and the sign-in lasts a few minutes between requests.
-- upi_mandates reads the list. The context note keeps the last list with the time it was read: use it, and read again only after a change or when the user asks for fresh data.
+- upi_mandates reads the list. The context note keeps the last list with the time it was read: use it, and read again only after a change or when the user asks for fresh data. The list is every mandate the user has: never send upi_task to look for one.
 - A subscription the user wants cancelled is one of these mandates. When they don't say which ("cancel my subscriptions"), read the list and ask which, with the payees as options.
 - upi_cancel cancels one mandate, with the payee exactly as listed. When the user didn't name that payee, pass the reason ("ChatGPT bills as OPENAI LLC."): the system then asks for their yes first. MyUPI then shows a QR that only the user's UPI app approves, with their UPI PIN; the system sends it, reports their answer, and checks the list again.
 - Brands billed by a company: ChatGPT bills as OPENAI LLC; YouTube Premium and Google One as GOOGLE. An app store's mandate (GOOGLE PLAY, APPLE) pays for many apps: never assume it is one brand's.
