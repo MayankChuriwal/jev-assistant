@@ -273,7 +273,7 @@ class Worker:
             cleared_maybe=[], idle=0, idle_ticks=0, orders=[], checkout=None, replay=None, closed=False,
             commit_drops=0, idle_asked=0, circled={}, loops={}, fruitless=None, blank_waits=0, coded=[],
             file_refusals=0, path_steps={}, path_asked=[], refusals_log=[], stuck_why=None, acting=None,
-            recent_at=None, last_by_site={}, wrong_cards=0,
+            recent_at=None, last_by_site={}, wrong_cards=0, list_refusals=0, captcha_text=None,
         )
 
     # ---- what the user and the models see
@@ -762,6 +762,11 @@ class Worker:
         """A captcha only the user may solve: they see it with its squares numbered, and the worker clicks exactly
         the squares they name, or hands the text they read to the planner. Nothing is solved automatically."""
         s = self.state
+        pending = s["captcha_text"]
+        if pending and not any(h.get("operation") == "TYPE_TEXT" and h.get("text") == pending[0]
+                               for h in s["history"][pending[1]:]):
+            s["reason"] = "reply"  # the text the user read is in the chat, not typed yet: typed next, never asked again
+            return None
         s["captcha_rounds"] += 1
         if s["captcha_rounds"] > CAPTCHA_ROUNDS:
             raise Halt("blocked", f"The site kept showing new checks after {CAPTCHA_ROUNDS} rounds, so I stopped. "
@@ -780,6 +785,7 @@ class Worker:
         if picked is None and text.lower() in {"none", ""}:
             s["notes"].append("The user says the captcha has nothing to pick: press its verify or skip button.")
         elif picked is None:
+            s["captcha_text"] = (text, len(s["history"]))
             s["chat"] += [{"from": "agent", "text": "(captcha)"}, {"from": "user", "text": f"“{text}” (the text "
                                                                                             "the captcha shows)"}]
             s["reason"] = "reply"  # the planner types it into the captcha's field
@@ -1428,8 +1434,13 @@ class Worker:
         quote = self.evidence(quote, message, texts)
         report = (message or "Done.") + missing
         cards = page.get("cards") or []
-        if rules.MANDATE_GOAL.search(s["goal"]) and any(card.lower() not in report.lower() for card in cards):
-            report += f" All your UPI AutoPay mandates: {', '.join(cards)}."  # MyUPI: the cards off screen were missed
+        missing = [card for card in cards if card.lower() not in report.lower()]
+        if missing and rules.lists_mandates(s["goal"], cards):  # MyUPI: “two active …” with three on the list
+            s["list_refusals"] += 1
+            if s["list_refusals"] <= 1:
+                raise Retry(f"Your answer leaves out {', '.join(missing)}: the list has {len(cards)} mandates "
+                            f"({', '.join(cards)}). Scroll to their cards and name each one.")
+            report += f" All your UPI AutoPay mandates: {', '.join(cards)}."
         # a lookup may read its answer across pages (a comparison of two sites): Jev also sees those pages
         before = self.pages_before(page) if rules.lookup_goal(s["goal"], s["skill"]) else []
         if jev.achieved(page, s["goal"], report, before=before) != "yes":

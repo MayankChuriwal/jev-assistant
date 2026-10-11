@@ -162,6 +162,7 @@ class Core:
         self.tasks, self.queue, self.open, self.log = {}, [], None, []
         self.remembering, self.routes = {}, {}
         self.offers, self.offer_ids = {}, itertools.count(1)  # buttons offered after a task, by key
+        self.payees = set()  # the user's mandates read off MyUPI this session: “cancel the aisle” names one
         self.task_ids, self.question_ids = itertools.count(1), itertools.count(1)
 
     def worker_for(self, task, url, asker, notify):
@@ -686,6 +687,7 @@ class Core:
                     if commit else ""
                 self.say(f"Stopped {task.title}.{pending}", task)
             if task.worker:
+                self.payees.update((task.worker.state.get("page") or {}).get("cards") or [])  # its mandates, by name
                 try:
                     task.worker.settle()  # downloads that finish as the task ends still reach chat
                     self.deliver_files(task)
@@ -756,7 +758,9 @@ class Core:
         sites = self.library["sites"]
         skill = self.library["skills"].get(task.skill) if task.skill else None
         note = skills.named(task.goal, sites)
-        if note is None and MANDATES in sites and rules.MANDATE_GOAL.search(task.goal):
+        payee = rules.MANDATE_ACTION.search(task.goal) and any(rules.words(p) & rules.words(task.goal)
+                                                               for p in self.payees)
+        if note is None and MANDATES in sites and (rules.MANDATE_GOAL.search(task.goal) or payee):
             note = sites[MANDATES]  # no site of its own: the subscription's UPI AutoPay mandate is managed at NPCI
         if note is None:
             url, title, named = self.hidden(self.start, task.goal)

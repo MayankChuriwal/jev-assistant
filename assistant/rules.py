@@ -61,6 +61,7 @@ MANDATE_GOAL = re.compile(rf"\b(?:cancel|stop|end|revoke|unsubscribe|pause|resum
                           rf".{{0,40}}\b(?:{BRANDS})\b|"
                           r"\b(?:auto ?pays?|mandates?|subscriptions?|recurring payments?)\b", re.IGNORECASE)
 MANDATE_ACTION = re.compile(r"\b(?:cancel|stop|end|revoke|unsubscribe|pause|resume)\b", re.IGNORECASE)
+BRAND = re.compile(rf"\b(?:{BRANDS})\b", re.IGNORECASE)
 INDIAN_MOBILE = re.compile(r"(?:\+?91)?[\s-]*([6-9]\d{4})[\s-]*(\d{5})")
 
 
@@ -127,6 +128,12 @@ STOP_WORDS = {"the", "your", "and", "for", "now", "with", "this", "all", "you"}
 
 def words(text):
     return {w for w in re.findall(r"[a-z]{3,}", str(text).lower())} - STOP_WORDS
+
+
+def lists_mandates(goal, cards):
+    """Whether the goal asks about all the user's mandates (“what autopays do I have”), not one of them or a change."""
+    return bool(MANDATE_GOAL.search(goal or "")) and not MANDATE_ACTION.search(goal or "") and \
+        not BRAND.search(goal or "") and not any(words(card) & words(goal) for card in cards)
 
 
 CARD_ACTION = re.compile(r"(?:cancel|pause|resume|revoke)\b.*\(in “(.+?)”\)$", re.IGNORECASE)

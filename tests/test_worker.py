@@ -485,15 +485,35 @@ def test_a_cancel_for_a_merchant_no_mandate_is_for_ends_listing_the_payees(tmp_p
                                            "LLC, AISLE, GOOGLE PLAY."]
 
 
-def test_a_list_of_mandates_that_missed_cards_off_screen_gets_the_whole_list(tmp_path, monkeypatch):
+def test_a_list_of_mandates_that_missed_cards_off_screen_is_sent_back_once_then_completed(tmp_path, monkeypatch):
+    # MyUPI: “You have two active UPI AutoPay subscriptions …” with three on the list
     page = mandate_page(["OPENAI LLC", "AISLE", "GOOGLE PLAY"], shown=["OPENAI LLC", "AISLE"])
     page["text"] = "UPI Autopay\nOPENAI LLC\n₹399\nAISLE\n₹499"
     w = worker_with(tmp_path, page=page, goal="What all mandates do I have?")
     script_planner(monkeypatch, turn("DONE", message="You have OPENAI LLC for ₹399 and AISLE for ₹499.", text="₹399"))
     jev_checks(monkeypatch)
     w.command("tick")
+    assert w.told == [] and "leaves out GOOGLE PLAY" in w.state["feedback"][-1]
+    w.command("tick")
     assert w.told[-1]["text"] == ("You have OPENAI LLC for ₹399 and AISLE for ₹499. All your UPI AutoPay mandates: "
                                   "OPENAI LLC, AISLE, GOOGLE PLAY.")
+
+
+def test_a_question_about_one_mandate_gets_no_list_of_the_others(tmp_path, monkeypatch):
+    page = mandate_page(["OPENAI LLC", "AISLE", "GOOGLE PLAY"])
+    page["text"] = "UPI Autopay\nOPENAI LLC\n₹399"
+    w = worker_with(tmp_path, page=page, goal="how much do I pay for ChatGPT?")
+    script_planner(monkeypatch, turn("DONE", message="You pay ₹399 a month to OPENAI LLC for ChatGPT.", text="₹399"))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.told[-1]["text"] == "You pay ₹399 a month to OPENAI LLC for ChatGPT."
+
+
+def test_the_captcha_text_the_user_gave_is_typed_not_asked_for_again(tmp_path):
+    # MyUPI: the planner asked, the user answered “131F”, and the captcha rule asked again before it was typed
+    w = captcha_relay(tmp_path, "131F")
+    w.relay_captcha(w.state["page"])
+    assert len(w.asked) == 1 and w.state["reason"] == "reply"
 
 
 @pytest.mark.parametrize("cards", [["GOOGLE PLAY"], ["GOOGLE PLAY", "AISLE"]])
