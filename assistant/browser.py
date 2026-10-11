@@ -327,11 +327,13 @@ def end_sessions(owner=None):
 
 
 def end_leftovers(sites):
-    """At start: log out the tabs on these sites that an earlier run of jev left signed in (none attached to them)."""
+    """At start, before any task: log out every tab on these sites, a sign-in an earlier run left open (it stopped
+    without logging out). One jev drives the agent Chrome; its daemon stays attached to a dead run's tabs, so being
+    attached says nothing."""
     with DAEMON:
         ensure_daemon()
     left = [t["targetId"] for t in cdp("Target.getTargets")["targetInfos"]
-            if t["type"] == "page" and not t.get("attached") and site_of(t["url"]) in sites]
+            if t["type"] == "page" and site_of(t["url"]) in sites]
     for target in left:
         end_session(target)
     return len(left)

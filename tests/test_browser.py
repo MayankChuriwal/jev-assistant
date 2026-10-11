@@ -371,9 +371,8 @@ def test_a_sign_in_left_by_an_earlier_run_is_ended_at_start(browser_at):
     first.close(keep=True)
     site = next(site for owner, site in browser.KEPT if owner == "u5")
     browser.KEPT.clear()  # a new run of jev: it never kept that tab
-    busy = browser_at("/ops.html", owner="u6")  # another task's tab on the site, attached: left alone
-    assert browser.end_leftovers({site}) == 1 and busy.evaluate("location.pathname") == "/ops.html"
-    assert busy.evaluate(LOGGED_OUT)
+    assert browser.end_leftovers({site}) == 1 and browser.end_leftovers({site}) == 0
+    assert browser_at("/next.html", owner="u5").evaluate(LOGGED_OUT)  # the site's own Logout was pressed
 
 
 def test_a_cards_own_action_names_its_card_even_when_one_card_shows(browser_at):
