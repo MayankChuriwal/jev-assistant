@@ -136,6 +136,19 @@ def page_state(page):
     return {"page": {k: page.get(k, "") for k in ("url", "title", "text")}}
 
 
+CONFIRMS = {"yes": "The reply agrees to exactly what the card asks, in any words or language (“haan kar do”, “yes, "
+                   "cancel it”, “go ahead”).",
+            "no": "The reply declines, hesitates, asks something, changes what is asked, or is about something else."}
+
+
+def confirms(card, reply):
+    """Whether the user's typed reply says yes to the card the assistant just sent (“Cancel OPENAI LLC (₹ 399)?”):
+    "yes" or "no". The brain's gate asks it only for a reply that isn't a plain yes."""
+    return choose({"card": card, "reply": reply}, "confirms", CONFIRMS,
+                  {"message": reply, "rules": "The card is the assistant's question and the reply the user's answer "
+                                              "to it. Yes only for a clear agreement to that exact action."})["choice"]
+
+
 INTENTS = {
     "ANSWER": "Answers the question the assistant just asked.",
     "AMEND": "Changes something about an existing task: quantity, item, address, payment, time, or destination.",

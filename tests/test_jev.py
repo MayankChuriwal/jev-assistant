@@ -188,3 +188,12 @@ def test_an_earlier_page_too_long_to_read_whole_is_cut_to_the_lines_that_bear_on
     kept = sent[-1]["state"]["pages_before"][0]
     assert "Aashirvaad Superior MP Chakki Atta 1 kg\n₹68" in kept and len(kept) <= jev.JUDGE_TEXT
     assert "Category 0" not in kept  # the page's top, which says nothing about the report, made room
+
+
+def test_jev_reads_whether_a_typed_reply_says_yes_to_the_card(typesafe):
+    sent, replies = typesafe
+    replies.append(lambda questions: {"confirms": answer(questions["confirms"]["criteria"], "yes")})
+    assert jev.confirms("Cancel OPENAI LLC (₹ 399)?", "haan kar do") == "yes"
+    state, question = json.loads(json.dumps(sent[0]["state"])), sent[0]["questions"]["confirms"]
+    assert state == {"card": "Cancel OPENAI LLC (₹ 399)?", "reply": "haan kar do"}
+    assert set(question["criteria"]) == {"yes", "no"}
