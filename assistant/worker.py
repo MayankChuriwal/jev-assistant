@@ -215,7 +215,8 @@ class Worker:
     bench = False  # a bench run: a pre-authorisation is logged, never used
 
     def __init__(self, url, goal, *, asker=None, notify=None, memory=None, habit=None, sameness=None, browser=None,
-                 title=None, skill=None, preauth=False, cap=None, library=None, trace_dir=None, provide_file=None):
+                 title=None, skill=None, preauth=False, cap=None, library=None, trace_dir=None, provide_file=None,
+                 owner=None):
         goal = goal.strip() if isinstance(goal, str) else ""
         if not goal:
             raise ValueError("Supply a task")
@@ -227,7 +228,7 @@ class Worker:
             self.trace_dir = Path(trace_dir)
         token = SECRETS.set(self.secrets)
         try:
-            self.browser = browser or Browser(url, geolocation=self.memory.geolocation())
+            self.browser = browser or Browser(url, geolocation=self.memory.geolocation(), owner=owner)
             try:
                 page = self.clean(self.browser.observe())
                 home = urlparse(url)._replace(path="/", params="", query="", fragment="").geturl()

@@ -279,11 +279,70 @@ DAEMON = threading.Lock()  # tasks starting together must not each spawn or rest
 OPENERS = {}  # pop-up target id -> the target that opened it
 POPUP_DOWNLOADS = set()  # guids of downloads that started in a pop-up
 WATCH = {"session": None}  # the browser-level session that sees those downloads
-KEPT = {}  # site -> the tab a finished task left open there, signed in, for the next task on that site
+# A site whose sign-in lives in the tab (MyUPI) keeps it between one user's requests: never another user's, and only
+# until they log out, jev stops, or SESSION_IDLE passes with no task there.
+SESSION_IDLE = 5 * 60
+KEPT = {}  # (owner, site) -> the tab a finished task left signed in, for that user's next task on that site
+ENDED = {}  # owner (None: everyone) -> when they logged out: a task begun before then keeps no tab
+KEEPING = threading.Lock()
+LOG_OUT = r"""(() => {
+  const out = [...document.querySelectorAll('button,a,[role="button"]')]
+    .find(e => /^\s*(log ?out|sign ?out)\s*$/i.test(e.innerText || e.textContent || ''));
+  out?.click();
+  return !!out;
+})()"""
 
 
 def site_of(url):
-    return (urlparse(url).hostname or "").removeprefix("www.")
+    return urlparse(url).netloc.lower().removeprefix("www.")
+
+
+def end_session(target):
+    """Sign a tab out: the site's own Logout pressed (its server ends the session), its storage cleared, the tab
+    closed."""
+    try:
+        session = cdp("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
+        pressed = cdp("Runtime.evaluate", session_id=session, expression=LOG_OUT, returnByValue=True)
+        if (pressed.get("result") or {}).get("value"):
+            time.sleep(1.5)  # its logout request goes out before the tab closes
+        cdp("Runtime.evaluate", session_id=session, expression="sessionStorage.clear(); localStorage.clear()")
+    except (RuntimeError, TimeoutError):
+        pass
+    try:
+        cdp("Target.closeTarget", targetId=target)
+    except (RuntimeError, TimeoutError):
+        pass
+
+
+def end_sessions(owner=None):
+    """Log out every tab kept signed in for `owner` (everyone's when None); a task of theirs still running keeps no
+    tab when it ends. Returns the sites logged out of."""
+    with KEEPING:
+        ended = [key for key in KEPT if owner is None or key[0] == owner]
+        targets = [KEPT.pop(key) for key in ended]
+        ENDED[owner] = time.monotonic()
+    for target in targets:
+        end_session(target)
+    return [site for _, site in ended]
+
+
+def end_leftovers(sites):
+    """At start: log out the tabs on these sites that an earlier run of jev left signed in (none attached to them)."""
+    with DAEMON:
+        ensure_daemon()
+    left = [t["targetId"] for t in cdp("Target.getTargets")["targetInfos"]
+            if t["type"] == "page" and not t.get("attached") and site_of(t["url"]) in sites]
+    for target in left:
+        end_session(target)
+    return len(left)
+
+
+def expire(key, target):
+    with KEEPING:
+        if KEPT.get(key) != target:
+            return  # taken by the user's next task, or ended already
+        KEPT.pop(key)
+    end_session(target)
 
 
 def watch_popups():
@@ -361,7 +420,8 @@ def forget_sites(sites):
 class Browser:
     """One task's tabs in the agent Chrome. Every executed target resolves from an observed node."""
 
-    def __init__(self, url, *, downloads=None, geolocation=None):
+    def __init__(self, url, *, downloads=None, geolocation=None, owner=None):
+        self.owner, self.started = owner, time.monotonic()  # whose task: a kept sign-in is only ever theirs
         with DAEMON:
             ensure_daemon()
             watch_popups()
@@ -387,8 +447,9 @@ class Browser:
             raise
 
     def _kept(self, url):
-        """The tab a finished task kept open on this site (its sign-in lives in the tab), if it is still open."""
-        target = KEPT.pop(site_of(url), None)
+        """The tab this user's last task kept signed in on this site, if it is still open."""
+        with KEEPING:
+            target = KEPT.pop((self.owner, site_of(url)), None)
         try:
             return self._adopt(target) if target else None
         except (RuntimeError, TimeoutError):  # closed since
@@ -1119,9 +1180,11 @@ class Browser:
         self._close_dialog(False)
 
     def close(self, keep=False):
-        """Close the task's tabs. With `keep` the active tab stays open for the next task on its site, in place of any
-        tab kept there before: MyUPI keeps its sign-in in the tab, so closing it signed the user out."""
-        kept, session = (self.active, self.tabs.get(self.active)) if keep else (None, None)
+        """Close the task's tabs. With `keep` the active tab stays open, signed in, for this user's next task on its
+        site, until SESSION_IDLE passes (MyUPI keeps its sign-in in the tab: closing it signed out after every
+        request). A user who logged out while the task ran gets that tab signed out instead."""
+        kept = self.active if keep and self.active in self.tabs else None
+        session = self.tabs.get(kept)
         try:
             site = site_of(cdp("Target.getTargetInfo", targetId=kept)["targetInfo"]["url"]) if kept else None
         except (RuntimeError, TimeoutError):
@@ -1133,18 +1196,22 @@ class Browser:
                 except (RuntimeError, TimeoutError):
                     pass
             self._forget(target)
-        if kept:
-            try:
-                cdp("Target.detachFromTarget", sessionId=session)
-            except (RuntimeError, TimeoutError):
-                pass
-            old = KEPT.pop(site, None)
-            if old and old != kept:
-                try:
-                    cdp("Target.closeTarget", targetId=old)
-                except (RuntimeError, TimeoutError):
-                    pass
-            KEPT[site] = kept
+        if not kept:
+            return
+        try:
+            cdp("Target.detachFromTarget", sessionId=session)
+        except (RuntimeError, TimeoutError):
+            pass
+        if max(ENDED.get(self.owner, -1.0), ENDED.get(None, -1.0)) >= self.started:
+            return end_session(kept)
+        key = (self.owner, site)
+        with KEEPING:
+            old, KEPT[key] = KEPT.get(key), kept
+        if old and old != kept:
+            end_session(old)
+        timer = threading.Timer(SESSION_IDLE, expire, args=(key, kept))
+        timer.daemon = True
+        timer.start()
 
 
 def merge(parts):

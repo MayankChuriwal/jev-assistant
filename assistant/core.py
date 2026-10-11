@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import jev, messages, planner, replay, rules, skills
+from . import browser, jev, messages, planner, replay, rules, skills
 from . import learn as learning
 from .gate import cap, rule_cap, same_cart
 from .memory import LABELS, RULE_DAYS, UNSTORABLE, Memory, StoreError, Unstorable, rule_line, rupees
@@ -32,6 +32,8 @@ LOOKS_LIKE_AN_ID = ("That looks like an ID. Tell me what it is called (like “m
                     "can keep it hidden.")
 PLACEHOLDER = re.compile(r"\[(?:profile|secret):[\w.]+\]")
 CAPTCHA_REPLY = re.compile(r"\S{1,12}|\d+(?:\s*(?:,|&|and)?\s*\d+)*", re.IGNORECASE)  # “F658”, “none”, “2, 5 and 8”
+LOG_OUT = re.compile(r"\s*(?:please\s+)?(?:log|sign)\s*(?:me\s+)?out(?:\s+of\s+[\w .'-]{1,30})?[.!]?\s*|"
+                     r"\s*end\s+(?:the\s+|this\s+|my\s+)?session[.!]?\s*", re.IGNORECASE)  # the whole message
 
 
 def site(url):
@@ -166,7 +168,7 @@ class Core:
         library = {**self.library, "sites": skills.learned(self.library["sites"], self.memory.learned())}
         return Worker(url, task.goal, title=task.title, asker=asker, notify=notify, memory=self.memory,
                       habit=task.habit, sameness=task.sameness, skill=task.skill, preauth=task.preauth, cap=task.cap,
-                      library=library)
+                      library=library, owner=self.user)
 
     def hidden(self, call, *args):
         """A model call with the user's IDs redacted: read afresh each time, so a value a task learned
@@ -233,12 +235,22 @@ class Core:
                 return self.say("I wasn't expecting a file just now.")
             if not text:
                 return None
+            if not secret and LOG_OUT.fullmatch(text):
+                return self.log_out()
             views, chat = self.views(), self.log[-7:-1]
         try:
             intent, target, probabilities, certainty = self.hidden(self.route_message, text, views, chat)
         except Exception as error:  # a model or network failure is a chat message, never a failed webhook
             return self.say(f"I couldn't read that message: {error}")
         return self.route(event, text, intent, target, probabilities, certainty, question)
+
+    def log_out(self):
+        """“Log out”: this user's kept sign-ins end now, each site's own Logout pressed; a task of theirs still running
+        keeps none when it ends. No model reads it."""
+        ended = browser.end_sessions(self.user)
+        names = [(skills.site_for(f"https://{site}/", self.library["sites"]) or {}).get("name", site) for site in ended]
+        return self.say(f"Logged out of {', '.join(names)}. Your next request there starts with a fresh sign-in."
+                        if names else "Logged out. Your next request on a site that needs a sign-in starts fresh.")
 
     def numbered(self, question, text):
         options = question.message.get("options") or []

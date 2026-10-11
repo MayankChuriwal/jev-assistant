@@ -324,16 +324,56 @@ def test_a_first_code_box_that_takes_a_pasted_code_is_one_of_the_code_boxes(brow
     assert b.evaluate("[...document.querySelectorAll('[id^=otp-]')].map(i => i.value).join('')") == "482913"
 
 
+TOKEN = "sessionStorage.getItem('accessToken')"
+SIGN_IN = ("sessionStorage.setItem('accessToken', 'signed-in'); document.body.insertAdjacentHTML('afterbegin', "
+           "'<div role=\"button\" onclick=\"document.cookie = `out=1; path=/`\">Logout</div>')")
+LOGGED_OUT = "const out = document.cookie.includes('out=1'); document.cookie = 'out=; path=/; max-age=0'; out"
+
+
 def test_a_kept_tab_carries_its_sign_in_to_the_next_task_on_the_site(browser_at):
     # MyUPI keeps its sign-in in the tab's sessionStorage: closing the tab signed the user out after every request
-    first = browser_at("/next.html")
-    first.evaluate("sessionStorage.setItem('accessToken', 'signed-in')")
+    first = browser_at("/next.html", owner="u1")
+    first.evaluate(SIGN_IN)
     first.close(keep=True)
-    second = browser_at("/ops.html")
-    assert second.evaluate("sessionStorage.getItem('accessToken')") == "signed-in"
+    assert browser_at("/next.html", owner="u2").evaluate(TOKEN) is None  # never another user's
+    second = browser_at("/ops.html", owner="u1")
+    assert second.evaluate(TOKEN) == "signed-in"
     assert second.evaluate("location.pathname") == "/ops.html"  # the task's own start, in the kept tab
     second.close()
-    assert browser_at("/next.html").evaluate("sessionStorage.getItem('accessToken')") is None  # not kept: a fresh tab
+    assert browser_at("/next.html", owner="u1").evaluate(TOKEN) is None  # not kept: a fresh tab
+
+
+def test_a_kept_sign_in_ends_when_idle_by_the_sites_own_logout(browser_at, monkeypatch):
+    monkeypatch.setattr(browser, "SESSION_IDLE", 0.5)
+    first = browser_at("/next.html", owner="u3")
+    first.evaluate(SIGN_IN)
+    first.close(keep=True)
+    time.sleep(3)  # idle, then the logout's own pause
+    fresh = browser_at("/next.html", owner="u3")
+    assert fresh.evaluate(TOKEN) is None and fresh.evaluate(LOGGED_OUT)  # the site's own Logout was pressed
+
+
+def test_logging_out_ends_kept_sign_ins_and_those_of_tasks_still_running(browser_at):
+    first = browser_at("/next.html", owner="u4")
+    first.evaluate(SIGN_IN)
+    first.close(keep=True)
+    running = browser_at("/ops.html", owner="u4")  # adopts the kept tab, signed in
+    assert browser.end_sessions("u4") == [] and running.evaluate(TOKEN) == "signed-in"  # nothing kept while it runs
+    running.evaluate(SIGN_IN)  # this page's own Logout, as MyUPI shows on every page
+    running.close(keep=True)  # it began before the user logged out: its sign-in ends too
+    fresh = browser_at("/next.html", owner="u4")
+    assert fresh.evaluate(TOKEN) is None and fresh.evaluate(LOGGED_OUT)
+
+
+def test_a_sign_in_left_by_an_earlier_run_is_ended_at_start(browser_at):
+    first = browser_at("/next.html", owner="u5")
+    first.evaluate(SIGN_IN)
+    first.close(keep=True)
+    site = next(site for owner, site in browser.KEPT if owner == "u5")
+    browser.KEPT.clear()  # a new run of jev: it never kept that tab
+    busy = browser_at("/ops.html", owner="u6")  # another task's tab on the site, attached: left alone
+    assert browser.end_leftovers({site}) == 1 and busy.evaluate("location.pathname") == "/ops.html"
+    assert busy.evaluate(LOGGED_OUT)
 
 
 def test_a_cards_own_action_names_its_card_even_when_one_card_shows(browser_at):

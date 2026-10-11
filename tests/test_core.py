@@ -468,6 +468,29 @@ def test_stop_at_a_captcha_still_stops_the_task(world):
     assert world.classified == ["Cancel Netflix", "stop"] and until(lambda: world.core.tasks["t1"].cancelled)
 
 
+NPCI_NOTE = {"upihelp.npci.org.in": {"host": "upihelp.npci.org.in", "name": "NPCI UPI Help", "aliases": []}}
+
+
+@pytest.mark.parametrize("message", ["log out", "Logout", "please log me out", "End session.", "sign out of NPCI"])
+def test_log_out_ends_the_users_kept_sign_ins_without_any_model(world, monkeypatch, message):
+    from assistant import browser
+
+    ended = []
+    monkeypatch.setattr(browser, "end_sessions", lambda owner=None: ended.append(owner) or ["upihelp.npci.org.in"])
+    world.core.library = {"skills": {}, "sites": NPCI_NOTE}
+    text(world, message)
+    assert ended == ["local"] and world.classified == []
+    assert bodies(world) == ["Logged out of NPCI UPI Help. Your next request there starts with a fresh sign-in."]
+
+
+def test_a_task_that_mentions_logging_out_is_still_a_task(world, monkeypatch):
+    from assistant import browser
+
+    monkeypatch.setattr(browser, "end_sessions", lambda owner=None: pytest.fail("not a log out"))
+    text(world, "log out of my Amazon account and sign in with my office one")
+    assert world.classified == ["log out of my Amazon account and sign in with my office one"]
+
+
 def test_changes_with_nothing_running_say_so(world):
     world.intents.append(("CANCEL", "none", {"CANCEL": 0.97}))
     text(world, "cancel it")

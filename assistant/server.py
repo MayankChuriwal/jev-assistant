@@ -568,6 +568,14 @@ def serve(port=CHAT_PORT, bench=None):
     threading.Thread(target=purge_daily, args=(memory,), daemon=True).start()  # forgotten means gone after a day
     if chrome():
         return release(1)
+    from . import browser, skills
+
+    keep = {browser.site_of(f"https://{key.partition('/')[0]}/") for key, note in skills.load_sites().items()
+            if note.get("keep") == "tab"}
+    try:
+        browser.end_leftovers(keep)  # a sign-in an earlier run left open (it stopped without logging out)
+    except (RuntimeError, TimeoutError, OSError) as error:
+        print(f"jev: couldn't check for sign-ins left open: {error}", file=sys.stderr)
     channel = WebChannel(home() / "media")
     try:
         core = Core(channel, memory=memory)
@@ -606,6 +614,7 @@ def serve(port=CHAT_PORT, bench=None):
         pass
     finally:
         core.shutdown()  # running tasks are cancelled and write their traces
+        browser.end_sessions()  # every user's kept sign-in ends with jev
         httpd.server_close()
         release(0)
     return 0
