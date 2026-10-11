@@ -514,6 +514,21 @@ def test_a_list_of_mandates_is_told_from_the_cards_never_the_planners_words(tmp_
                                   "Active on GOOGLE PAY APP\n• OPENAI LLC ₹399 Active on NAVI APP")
 
 
+def test_a_question_about_one_mandate_is_told_from_its_card(tmp_path, monkeypatch):
+    # MyUPI: “You pay ₹399 every month for ChatGPT, as shown on the page” (its card says Frequency Custom, ₹1 paid)
+    page = mandate_page(["GOOGLE PLAY", "AISLE", "OPENAI LLC"])
+    page["card_lines"] = ["GOOGLE PLAY ₹299 Active on NAVI APP", "AISLE ₹499 Active on GOOGLE PAY APP",
+                          "OPENAI LLC ₹399 Active on NAVI APP Frequency Custom Executed 1 times Total ₹1"]
+    page["text"] = "UPI Autopay\nOPENAI LLC\n₹399"
+    w = worker_with(tmp_path, page=page, goal="How much do I pay for ChatGPT every month?")
+    script_planner(monkeypatch, turn("DONE", message="You pay ₹399 every month for ChatGPT, as shown on the page.",
+                                     text="₹399"))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.told[-1]["text"] == ("Your UPI AutoPay mandate for it: OPENAI LLC ₹399 Active on NAVI APP Frequency "
+                                  "Custom Executed 1 times Total ₹1")
+
+
 def test_a_question_about_one_mandate_gets_no_list_of_the_others(tmp_path, monkeypatch):
     page = mandate_page(["OPENAI LLC", "AISLE", "GOOGLE PLAY"])
     page["text"] = "UPI Autopay\nOPENAI LLC\n₹399"

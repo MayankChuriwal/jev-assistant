@@ -1461,6 +1461,10 @@ class Worker:
         cards, lines = page.get("cards") or [], page.get("card_lines") or []
         if lines and rules.lists_mandates(s["goal"], cards):  # the cards' own words: the planner made one up
             report = "Your UPI AutoPay mandates:\n" + "\n".join(f"• {line}" for line in lines)
+        named = [line for card, line in zip(cards, lines)
+                 if not rules.wrong_card(s["goal"], {"label": f"Cancel (in “{card}”)"})]
+        if len(named) == 1 and rules.MANDATE_GOAL.search(s["goal"]) and not rules.MANDATE_ACTION.search(s["goal"]):
+            report = f"Your UPI AutoPay mandate for it: {named[0]}"  # its card's words (“every month” was Custom)
         missing = [card for card in cards if card.lower() not in report.lower()]
         if missing and rules.lists_mandates(s["goal"], cards):  # MyUPI: “two active …” with three on the list
             s["list_refusals"] += 1
