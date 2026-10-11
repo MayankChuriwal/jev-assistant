@@ -309,6 +309,21 @@ def test_unnamed_little_number_boxes_in_a_row_are_one_code_field(browser_at):
 
 
 
+def test_a_first_code_box_that_takes_a_pasted_code_is_one_of_the_code_boxes(browser_at):
+    # MyUPI (NPCI): six boxes in a row, the first holding up to 6 characters so a pasted code lands, the rest 1 each;
+    # beside them a 1px screen-reader input catches the phone's autofill
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div><input autocomplete=\"one-time-code\" "
+               "maxlength=\"6\" style=\"position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)\">"
+               "<div>' + [6, 1, 1, 1, 1, 1].map((m, n) => `<input id=\"otp-${n}\" maxlength=\"${m}\" "
+               "inputmode=\"numeric\" style=\"width:48px;height:48px\">`).join('') + '</div></div>')")
+    page = b.observe()
+    code = [a for a in page["actions"] if a.get("group")]
+    assert len(code) == 1 and len(code[0]["group"]) == 6
+    b.act("TYPE_TEXT", code[0], page, text="482913")
+    assert b.evaluate("[...document.querySelectorAll('[id^=otp-]')].map(i => i.value).join('')") == "482913"
+
+
 def test_a_new_code_replaces_the_digits_a_rejected_one_left_in_the_boxes(browser_at):
     b = browser_at("/next.html")
     b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div>' + [1, 2, 3, 4].map(n => "

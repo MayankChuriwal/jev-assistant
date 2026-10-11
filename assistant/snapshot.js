@@ -231,12 +231,22 @@
     const middles = boxes.map(b => { const r = b.getBoundingClientRect(); return r.y + r.height / 2; });
     return Math.max(...middles) - Math.min(...middles) < 8;
   };
+  // A text box the size of a code's box, in its row, is one of its boxes whatever its maxlength: MyUPI's first box
+  // holds 6 characters so a pasted code lands, the five after it one each.
+  const twinBox = (b, box) => {
+    const r = b.getBoundingClientRect(), s = box.getBoundingClientRect();
+    return ['number', 'tel', 'text', 'password'].includes(b.type) && Math.abs(r.width - s.width) < 2 &&
+      Math.abs(r.height - s.height) < 2 && Math.abs(r.y - s.y) < 8;
+  };
   const otpGroup = e => {  // 4 to 8 boxes of one kind in the same container are one code
+    if (!codeBox(e) && !bareBox(e) && e.getBoundingClientRect().width > 72) return null;  // a wide field is no box
     for (const kind of [codeBox, bareBox]) {
-      if (!kind(e)) continue;
       for (let p = e.parentElement, i = 0; p && i < 3; p = p.parentElement, i++) {
-        const boxes = [...p.querySelectorAll('input')].filter(b => kind(b) && visible(b));
-        if (boxes.length >= 4 && boxes.length <= 8 && (kind === codeBox || inRow(boxes))) return boxes;
+        const inputs = [...p.querySelectorAll('input')].filter(visible);
+        const first = inputs.find(kind);
+        const boxes = first ? inputs.filter(b => kind(b) || twinBox(b, first)) : [];
+        if (boxes.includes(e) && boxes.length >= 4 && boxes.length <= 8 && (kind === codeBox || inRow(boxes)))
+          return boxes;
       }
     }
     return null;
