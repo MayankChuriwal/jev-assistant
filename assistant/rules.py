@@ -50,8 +50,11 @@ COMMITS = re.compile(r"\b(?:cancel|submit|send|delete|remove|end|request|subscri
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 QR = re.compile(r"\bQR\b")  # a page showing a code to scan with the user's phone
 # Cancelling something that bills on its own: with no site note for the merchant, its UPI AutoPay mandate is the handle.
-SUBSCRIPTION_CANCEL = re.compile(r"\b(?:cancel|stop|end|revoke)\b.{0,40}\b(?:subscription|auto ?pay|mandate|"
-                                 r"recurring payment)s?\b", re.IGNORECASE)
+# or by its brand alone ("cancel my Netflix"): services people pay by UPI AutoPay with no site note of their own.
+SUBSCRIPTION_CANCEL = re.compile(r"\b(?:cancel|stop|end|revoke|unsubscribe)\b.{0,40}\b(?:subscription|auto ?pay|"
+                                 r"mandate|recurring payment|netflix|spotify|youtube (?:premium|music)|jio ?hotstar|"
+                                 r"hotstar|disney|zee5|sony ?liv|prime video|apple (?:music|tv|one)|google one|audible|"
+                                 r"linkedin premium|gaana|jio ?saavn|wynk|jio ?cinema)s?\b", re.IGNORECASE)
 INDIAN_MOBILE = re.compile(r"(?:\+?91)?[\s-]*([6-9]\d{4})[\s-]*(\d{5})")
 
 
