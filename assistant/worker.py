@@ -717,6 +717,10 @@ class Worker:
             if "payment" not in s["situations"]:
                 s["situations"].append("payment")
             return self.escalate("blocker:payment", page)
+        fresh = None if card else self.untyped_code()
+        if fresh:  # sent a moment ago, to the planner's own question or before the page moved on: typed, not asked
+            inputs, shown = self.value(field, f"[secret:{fresh}]", page)
+            return self.run(page, "TYPE_TEXT", field, inputs, shown, goal="type what the user sent")
         if not card and s["code_asks"] >= CODE_ASKS:  # each code usually means a new one sent to the user's phone
             raise Halt("blocked", f"Signing in to {rules.host(page['url'])} isn't working after {CODE_ASKS} codes, "
                                   "so I stopped rather than send you more. Please sign in once in the agent's "
@@ -733,6 +737,15 @@ class Worker:
         s["chat"] += [{"from": "agent", "text": question}, {"from": "user", "text": f"[secret:{name}] (hidden answer)"}]
         inputs, shown = self.value(field, f"[secret:{name}]", page)
         return self.run(page, "TYPE_TEXT", field, inputs, shown, goal="type what the user sent")
+
+    def untyped_code(self):
+        """The user's latest hidden answer when it is a code no field has had yet. MyUPI asked for its SMS code three
+        times: the planner asked, then this rule; and an answer dropped when the page moved on (its resend countdown
+        ticking) was asked for again."""
+        s = self.state
+        name = next(reversed(s["answers"]), None)
+        typed = {entry.get("key") for entry in s["typed"].values()}
+        return name if name and name not in typed and code_like(s["answers"][name]) else None
 
     def count_code(self, name):
         """One more code toward CODE_ASKS, once per answer: when the user's reply is a code, or a hidden answer is

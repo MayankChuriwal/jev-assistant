@@ -505,6 +505,18 @@ def test_the_same_update_is_told_once(tmp_path, monkeypatch):  # MyUPI: “Pleas
     assert len(w.told) == 1 and "told the user this already" in w.state["feedback"][-1]
 
 
+def test_a_code_the_user_just_sent_is_typed_not_asked_for_again(tmp_path, monkeypatch):
+    # MyUPI: the planner asked for the SMS code, then the code rule asked for it again
+    w = worker_with(tmp_path, replies=[{"text": "481516"}, {"text": "999999"}])
+    script_planner(monkeypatch, turn("ASK", message="Please enter the 6-digit code sent to your phone."),
+                   turn(subgoals=[sub("sign in")]))
+    script_jev(monkeypatch, {"next": "TYPE", "type_text_target": "Code", "blocker": "code"})
+    jev_checks(monkeypatch)
+    for _ in range(3):
+        w.command("tick")
+    assert len(w.asked) == 1 and w.browser.act.call_args.kwargs["text"] == "481516"
+
+
 def test_a_code_ask_names_the_site_by_its_note_not_its_page_title(tmp_path, monkeypatch):
     page = fake_page(url="https://www.upihelp.npci.org.in/")
     page["title"] = "MyUPI | Raise UPI Complaints, Check Transaction Status & Resolve Transaction Issues | NPCI"
