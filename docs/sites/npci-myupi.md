@@ -10,7 +10,35 @@ look at the signed-in screen.
 
 Legend: ⚠ = changes something real; never done without the user, and never as a guess.
 
+## 0. Terms of use: automated access needs NPCI's written authorisation
+
+MyUPI's Terms of Use (version 1.2, last updated 1 September 2026; the "Terms of use" link on the sign-in page):
+
+- 4.1(k): "The User shall not use any automated means, bots, scripts, crawlers or similar tools to access, interact
+  with, monitor, scrape or extract information from MyUPI without prior written authorisation."
+- 4.1(h): no probing, testing, reverse engineering, decompiling, or extracting data from MyUPI.
+- 4.1(l): a violation may restrict, suspend, or withdraw access, and may be reported to the bank, the UPI app, or an
+  authority.
+- 2.1: MyUPI is offered through participating banks' websites, DigiSaathi, NPCI, UPI apps, and other participating
+  entities' platforms ("Channels"), after their own authentication.
+
+An agent operating MyUPI for a user is automated access: it needs NPCI's prior written authorisation, or MyUPI offered
+through Rivo as a participating channel. Until then, its use here is a prototype on the founder's own account.
+
 ## 1. Site map
+
+### Landing and sign-in page (public)
+- Header: language switch (English, हिंदी, తెలుగు, বাংলা, தமிழ்); MyUPI logo; "AI-Powered Assistant".
+- "Simplify • Resolve • Inform", and three features: Digital Payments Q&A! (answers about payments), Mandate Management
+  (tracking and help for UPI mandates), Grievance Redressal (transaction status and complaints).
+- Sign-in form (below). Footer: Terms of use, Privacy policy, Disclaimer, FAQs, each a modal with Close; © 2026 NPCI.
+- The Terms list the services: mandate management (UPI AutoPay and UPI Circle mandates: pause, resume, revoke, update
+  through the UPI app), Safety Switch (declines the user's outgoing UPI debits on all or chosen accounts; incoming
+  payments still arrive; IPO, SBMD and Retail Direct debits still go through), delinking the UPI number, Transaction
+  Replay (a past payment pre-filled in the UPI app as a new payment, made only on the user's own authentication there),
+  payee and merchant insights, complaints and disputes (with chargebacks, across UPI, RuPay, credit card on UPI, UPI
+  AutoPay, credit line on UPI), and grievance redressal. History goes back 60 days. MyUPI's own answers come from
+  language models (Mistral, Llama 3, Gemma 3 among those listed) and may be wrong.
 
 ### Sign-in (every session)
 1. Mobile number box ("Eg. 9876543210"), then "Valid mobile number".
