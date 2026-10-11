@@ -262,3 +262,101 @@ def test_a_reply_whose_usage_numbers_are_null_is_charged_as_zero():
     finally:
         model.METER.reset(token)
     assert meter["mini"] == 0.0 and meter["mini_calls"] == 1 and meter["jev_calls"] == 1 and meter["jev"] > 0
+
+
+# ---- the brain's step: one Responses API call that must call one tool
+
+TOOLS = [{"type": "function", "name": "reply", "description": "Talk to the user.", "strict": True,
+          "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"],
+                         "additionalProperties": False}}]
+
+
+def called(name="reply", arguments='{"text": "Hi"}', **extra):
+    return Mock(return_value={"status": "completed", "error": None, "usage": {"input_tokens": 9}, **extra,
+                              "output": [{"type": "reasoning", "id": "rs_1", "summary": []},
+                                         {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": name,
+                                          "arguments": arguments, "status": "completed"}]})
+
+
+@pytest.fixture
+def brain_env(monkeypatch):
+    monkeypatch.delenv("BRAIN_MODEL", raising=False)
+    monkeypatch.delenv("BRAIN_EFFORT", raising=False)
+
+
+def test_a_brain_step_must_call_one_tool_and_keeps_nothing_at_openai(monkeypatch, brain_env):
+    post = called()
+    monkeypatch.setattr(model, "post_json", post)
+    items = [{"role": "user", "content": "Cancel my subscriptions"}]
+    call, meta = model.agent_turn("You are Jev.", items, TOOLS)
+    url, _key, body = post.call_args.args
+    assert url == "https://api.openai.com/v1/responses"
+    assert body == {"model": "gpt-5.6-luna", "instructions": "You are Jev.", "input": items, "tools": TOOLS,
+                    "tool_choice": "required", "parallel_tool_calls": False, "reasoning": {"effort": "low"},
+                    "store": False, "max_output_tokens": 4000}
+    assert call == {"type": "function_call", "call_id": "call_1", "name": "reply", "arguments": '{"text": "Hi"}'}
+    assert meta["model"] == "gpt-5.6-luna" and "latency_ms" in meta
+
+
+def test_the_last_brain_step_may_only_reply(monkeypatch, brain_env):
+    post = called()
+    monkeypatch.setattr(model, "post_json", post)
+    model.agent_turn("You are Jev.", [], TOOLS, final=True)
+    assert post.call_args.args[2]["tool_choice"] == {"type": "function", "name": "reply"}
+
+
+def test_the_brain_model_and_its_effort_come_from_the_environment(monkeypatch, brain_env):
+    monkeypatch.setenv("BRAIN_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv("BRAIN_EFFORT", "none")
+    post = called()
+    monkeypatch.setattr(model, "post_json", post)
+    model.agent_turn("You are Jev.", [], TOOLS)
+    body = post.call_args.args[2]
+    assert body["model"] == "gpt-5.4-mini" and body["reasoning"] == {"effort": "none"}
+
+
+def test_a_brain_reply_cut_off_is_an_error(monkeypatch, brain_env):
+    monkeypatch.setattr(model, "post_json", called(status="incomplete",
+                                                   incomplete_details={"reason": "max_output_tokens"}))
+    with pytest.raises(ValueError, match="cut off"):
+        model.agent_turn("You are Jev.", [], TOOLS)
+
+
+def test_a_brain_reply_with_no_tool_call_is_an_error(monkeypatch, brain_env):
+    monkeypatch.setattr(model, "post_json", Mock(return_value={"status": "completed", "error": None, "output": [
+        {"type": "message", "content": [{"type": "output_text", "text": "Hi"}]}]}))
+    with pytest.raises(ValueError, match="no tool"):
+        model.agent_turn("You are Jev.", [], TOOLS)
+
+
+def test_a_brain_reply_carrying_an_error_is_an_error(monkeypatch, brain_env):
+    monkeypatch.setattr(model, "post_json", Mock(return_value={"status": "failed", "output": [],
+                                                               "error": {"message": "server overloaded"}}))
+    with pytest.raises(ValueError, match="server overloaded"):
+        model.agent_turn("You are Jev.", [], TOOLS)
+
+
+def test_the_brain_needs_the_openai_key(monkeypatch, brain_env):
+    monkeypatch.delenv("OPENAI_API_KEY")
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        model.agent_turn("You are Jev.", [], TOOLS)
+
+
+def test_a_brain_step_is_redacted_on_its_way_out(monkeypatch, brain_env):
+    from assistant.privacy import SECRETS, Secrets
+
+    sent = []
+
+    class Response:
+        status_code, is_error = 200, False
+
+        def json(self):
+            return called().return_value
+
+    monkeypatch.setattr(model.CLIENT, "post", lambda url, json, headers: sent.append(json) or Response())
+    token = SECRETS.set(Secrets([("98765 43210", "[profile:phone]")]))
+    try:
+        model.agent_turn("You are Jev.", [{"role": "user", "content": "my number is 98765 43210"}], TOOLS)
+    finally:
+        SECRETS.reset(token)
+    assert "98765" not in json.dumps(sent[0]) and "[profile:phone]" in json.dumps(sent[0])

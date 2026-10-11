@@ -207,3 +207,33 @@ def text_json(system, payload, *, max_tokens=512, images=(), schema=None, schema
         "latency_ms": round((time.perf_counter() - started) * 1000),
         "usage": result.get("usage", {}),
     }
+
+
+def agent_turn(instructions, items, tools, *, final=False):
+    """One step of the brain: a Responses API call that must call one of `tools` (only `reply` on the `final` step).
+    Returns (the call as an input item for the next step, call metadata). The function tools need the Responses API:
+    Chat Completions refuses them with reasoning. Nothing is stored at OpenAI and no reasoning item comes back into
+    the conversation, so the user's redaction never rewrites an encrypted blob; the call goes back without its id, so
+    it never points at a reasoning item that isn't there."""
+    key = os.environ.get("OPENAI_API_KEY")
+    if not key:
+        raise ValueError("The brain needs OPENAI_API_KEY; nothing is guessed.")
+    base = os.environ.get("TEXT_MODEL_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    name = os.environ.get("BRAIN_MODEL", "gpt-5.6-luna")
+    started = time.perf_counter()
+    result = post_json(base + "/responses", key, {
+        "model": name, "instructions": instructions, "input": items, "tools": tools,
+        "tool_choice": {"type": "function", "name": "reply"} if final else "required",
+        "parallel_tool_calls": False, "reasoning": {"effort": os.environ.get("BRAIN_EFFORT", "low")},
+        "store": False, "max_output_tokens": 4000,
+    })
+    if result.get("error"):
+        raise ValueError(f"The brain model failed: {result['error'].get('message', result['error'])}")
+    if result.get("status") == "incomplete":
+        raise ValueError("The brain model's reply was cut off; nothing ran.")
+    call = next((o for o in result.get("output") or [] if o.get("type") == "function_call"), None)
+    if call is None:
+        raise ValueError("The brain model called no tool; nothing ran.")
+    return ({k: call[k] for k in ("type", "call_id", "name", "arguments")},
+            {"model": name, "latency_ms": round((time.perf_counter() - started) * 1000),
+             "usage": result.get("usage", {})})
