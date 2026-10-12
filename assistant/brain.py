@@ -148,6 +148,7 @@ class Brain:
         self.instructions = instructions()
         self.items = []  # the conversation, as Responses API input items
         self.mandates = None  # the last read of MyUPI's list: {"read_at": "HH:MM", "list": [{"payee", "details"}]}
+        self.read = {}  # (bureau, kind) -> what its report showed: each read is a sign-in, and too many lock it
         self.card = self.pending = None  # a confirmation card code sent; it counts for the next message only
         self.heard = ""
         self.inbox, self.busy, self.thread, self.starting = queue.Queue(), False, None, threading.Lock()
@@ -321,11 +322,17 @@ class Brain:
         if kind in KINDS and not KINDS[kind].search(said):  # the eval read Account Details, a guess: a sign-in wasted
             return {"status": "rejected", "reason": f"The user hasn't said the dispute is about {kind}.",
                     "next": "Ask which kind first, with options (an account, personal details, a credit enquiry)."}
+        if not fresh_ids and (bureau, kind) in self.read:  # live: a tapped address read it again, and again
+            return {"status": "already_read", "report": self.read[(bureau, kind)],
+                    "next": "These are the report's values now: don't read it again. Ask which entry is wrong or "
+                            "what it should show, or call bureau_dispute."}
         if fresh_ids:
             self.forget_ids(bureau)
         result = self.core.execute(f"Show my {kind} as {bureau}'s dispute page lists them: every row with its current "
                                    "value. Change nothing.", url=skills.start(note, "account"), skill="account",
                                    progress=f"Reading your {kind.lower()} on {bureau}…")
+        if result["status"] == "done":
+            self.read[(bureau, kind)] = result["report"]
         return self.ended(result)
 
     def forget_ids(self, bureau):

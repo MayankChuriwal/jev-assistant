@@ -425,6 +425,21 @@ def test_a_dispute_reads_the_reports_entries_before_asking_which(tmp_path):
     assert results(brain, "bureau_details")[0]["report"].startswith("Name: Jev User")
 
 
+def test_a_report_read_once_is_not_read_again_for_the_same_kind(tmp_path):
+    # live: “Address 1: Howrah” was tapped and the report was read again: a fresh sign-in each time locked the portal
+    core = FakeCore(done("Name: Jev User; Address 1: 12 Old Road; Address 2: 4 Park Street"))
+    model = Model(("bureau_details", {"bureau": "Experian", "kind": "Personal Details", "fresh_ids": False}),
+                  ("reply", {"text": "Which address?", "options": ["12 Old Road", "4 Park Street"]}),
+                  ("bureau_details", {"bureau": "Experian", "kind": "Personal Details", "fresh_ids": False}),
+                  ("reply", {"text": "What should it show?", "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Personal details")
+    brain.turn("Address 1: 12 Old Road")
+    again = results(brain, "bureau_details")[1]
+    assert len(core.executed) == 1 and again["status"] == "already_read"
+    assert again["report"].startswith("Name: Jev User") and "don't read" in again["next"].lower()
+
+
 def test_the_report_is_read_only_for_a_kind_the_user_named(tmp_path):
     # the eval: “I want to dispute something on my Experian report” read Account Details, a guess, before asking
     core = FakeCore()
