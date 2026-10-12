@@ -187,7 +187,7 @@ CARD_INTO_VIEW = r"""((title, word) => {
   return false;
 })"""
 BUTTON_INTO_VIEW = r"""(word => {
-  const norm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const norm = s => (s || '').replace(/[\s,]+/g, '').toLowerCase();  // GyFTR's "₹ 1,000" tile reads as ₹1,000
   const button = [...document.querySelectorAll('button, [role="button"], input[type="submit"]')]
     .find(b => norm(b.innerText || b.value) === norm(word) && b.checkVisibility());
   button?.scrollIntoView({block: 'center'});

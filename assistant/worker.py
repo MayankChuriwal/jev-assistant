@@ -573,7 +573,8 @@ class Worker:
             return self.act("CLICK", notice, page, None)
         buying = self.voucher_step(page)
         if buying:  # dry run: the chosen amount left the controls offered, and the planner toggled two amounts
-            return self.act("CLICK", buying, page, None)
+            action, page = buying
+            return self.act("CLICK", action, page, None)
         fixing = self.row_step(page)
         if fixing:  # live: the planner opened other rows, cancelled the address it typed, and left the page
             operation, action, text, page = fixing
@@ -912,9 +913,10 @@ class Worker:
 
     def voucher_step(self, page):
         """A voucher the brain's checkout names (“Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy.”) on a
-        portal whose note names its cart button (`cart:`): the amount's tile until the page's Total shows it, then
-        that button; each at most twice, and nothing once the button was pressed (sign-in and checkout are the
-        planner's, and the gate's). A chosen tile leaves the controls offered, so the Total is the proof."""
+        portal whose note names its cart button (`cart:`): (control, page) to press, else None for the planner. The
+        amount's tile until the page's Total shows it, then that button; each scrolled into view when off screen;
+        the tile at most twice, and nothing once the button was pressed (sign-in and checkout are the planner's, and
+        the gate's). A chosen tile leaves the controls offered, so the Total is the proof."""
         s = self.state
         wanted = VOUCHER_BUY.match(s["goal"])
         cart = ((skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}).get("cart")
@@ -924,13 +926,20 @@ class Worker:
         amount, pressed = "₹" + wanted[1].replace(",", ""), [h.get("action") for h in s["history"]]
         if any(flat(label) == flat(cart) for label in pressed):
             return None
-        chosen = re.search(r"total(?:value)?:?" + re.escape(amount) + r"(?!\d)", flat(page["text"]))
-        button = next((a for a in page["actions"] if a["kind"] == "click" and flat(a.get("label")) == flat(cart)), None)
-        if chosen and button:
-            return button
-        tile = next((a for a in page["actions"] if a["kind"] == "click" and flat(a.get("label")) == amount), None)
-        if tile and not chosen and sum(flat(label) == amount for label in pressed) < 2:
-            return tile
+        presses = sum(flat(label) == amount for label in pressed)
+        for scrolled in (False, True):
+            chosen = re.search(r"total(?:value)?:?" + re.escape(amount) + r"(?!\d)", flat(page["text"]))
+            button = next((a for a in page["actions"] if a["kind"] == "click" and flat(a.get("label")) == flat(cart)),
+                          None)
+            tile = next((a for a in page["actions"] if a["kind"] == "click" and flat(a.get("label")) == amount), None)
+            if chosen and button:
+                return button, page
+            if tile and not chosen and presses < 2:
+                return tile, page
+            # off screen: the cart button once the amount was pressed (its Total sits beside it), else the tile
+            if scrolled or not s["browser"].into_view(cart if chosen or presses else amount):
+                return None
+            page = self.observe()
         return None
 
     def row_step(self, page):

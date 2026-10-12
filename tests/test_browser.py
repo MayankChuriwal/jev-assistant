@@ -453,6 +453,9 @@ def test_a_rows_pencil_below_the_screen_and_submit_are_scrolled_into_view(browse
     assert b.reveal("Address 1", "Edit Field") is True and "Edit Field (in “Address 1”)" in labels()
     assert b.into_view("Submit") is True and "Submit" in labels()
     assert b.into_view("Pay now") is False
+    b.evaluate("document.body.insertAdjacentHTML('beforeend', '<div style=\"height:2000px\"></div><button>"
+               "<span>₹</span><span>1,000</span></button>')")
+    assert b.into_view("₹1000") is True  # GyFTR's amount tile: its words in parts, matched without spaces or commas
 
 
 def test_a_greyed_out_fields_value_is_read_beside_its_row_but_never_an_id(browser_at):

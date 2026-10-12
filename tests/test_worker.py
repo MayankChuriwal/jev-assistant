@@ -3955,6 +3955,20 @@ def test_an_amount_pressed_twice_without_taking_is_the_planners(tmp_path):
     page = voucher_page(SMARTBUY, "Choose Denomination", "₹ 250", "₹ 500")
     w = worker_with(tmp_path, page=page, goal=VOUCHER)
     w.state["history"] += [{"operation": "CLICK", "action": "₹ 500"}] * 2
+    w.browser.into_view = Mock(return_value=False)
     assert w.voucher_step(page) is None
     w.state["history"] = [{"operation": "CLICK", "action": "Add to cart"}]  # in the cart: the rest is the planner's
     assert w.voucher_step(voucher_page(SMARTBUY, "Total Value : ₹ 500", "Add to cart")) is None
+
+
+def test_with_the_total_and_cart_below_the_screen_they_are_scrolled_into_view(tmp_path, monkeypatch, no_wait):
+    # dry run: ₹500 was pressed, then its Total and Add to cart were off screen, and the planner pressed Redeem Now
+    pressed = voucher_page(SMARTBUY, "Choose Denomination", "₹ 250", "₹ 1,000", "Redeem Now")
+    w = worker_with(tmp_path, page=pressed, goal=VOUCHER)
+    w.state["history"].append({"operation": "CLICK", "action": "₹ 500"})
+    w.browser.into_view = Mock(return_value=True)
+    w.browser.observe.return_value = voucher_page(SMARTBUY, "Total Value : ₹ 500", "₹ 250", "Add to cart")
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.into_view.call_args.args == ("Add to cart",)
+    assert w.browser.act.call_args.args[1]["label"] == "Add to cart"
