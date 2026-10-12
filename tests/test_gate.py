@@ -103,6 +103,21 @@ def test_smartbuys_cart_buy_now_asks_and_its_view_cart_never_does(monkeypatch):
     assert gate.commit_label(w, "CLICK", click("View Cart & Buy"), page) is None
 
 
+def test_ishops_checkout_asks_at_proceed_to_pay_and_never_at_proceed_to_checkout(monkeypatch):
+    # iShop's scripts: "Proceed to Checkout" leads on to "Choose Payment Mode" … "Proceed to Pay" / "Pay Now"
+    monkeypatch.setattr(gate.jev, "final", lambda *a: pytest.fail("Jev was asked"))
+    page = fake_page(url="https://www.ishoprewards.com/checkout",
+                     text="Checkout\nSwiggy Money E-Voucher ₹1,000 x 1\nChoose Payment Mode\nCredit Card\nDebit Card\n"
+                          "Net Banking\nPayment Details\nTotal Amount ₹1,000\nBalance Payable ₹1,000\nProceed to Pay")
+    w = Fake(page)
+    w.library = {"sites": skills.load_sites()}
+    click = lambda label: {"id": label, "kind": "click", "label": label, "role": "button", "node": 47}
+    for final in ("Proceed to Pay", "Pay Now", "Continue to Payment"):
+        assert gate.commit_label(w, "CLICK", click(final), page) == final
+    for step in ("Proceed to Checkout", "PROCEED TO CHECKOUT", "Buy now"):
+        assert gate.commit_label(w, "CLICK", click(step), page) is None
+
+
 def test_a_control_its_site_note_names_a_step_never_asks(monkeypatch):
     # iShop: “Buy now” opens the sign-in and checkout, and SmartBuy's “View Cart & Buy” the cart: no approval there
     monkeypatch.setattr(gate.jev, "final", lambda *a: pytest.fail("Jev was asked"))
