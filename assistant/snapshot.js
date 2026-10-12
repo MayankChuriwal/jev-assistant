@@ -203,7 +203,11 @@
 
   const pointer = e => style(e).cursor === 'pointer';
   // ponytail: cursor/onclick/tabindex heuristic for React-style clickable divs; listeners added in JS are invisible.
-  const extra = e => e.hasAttribute('onclick') || typeof e.onclick === 'function' ||
+  // An icon whose click a script bound (Experian's pencil: <i class="fa fa-edit" title="Edit Field">) shows no sign of it:
+  // an <i> with a title, or an edit or pencil icon, is offered by its title.
+  const icon = e => !e.children.length && (e.tagName === 'I' && !!e.getAttribute('title') ||
+    /^(?:I|SPAN)$/.test(e.tagName) && /\b(?:fa-edit|fa-pencil|edit-icon|pencil)\b/i.test(e.getAttribute('class') || ''));
+  const extra = e => e.hasAttribute('onclick') || typeof e.onclick === 'function' || icon(e) ||
     (e.hasAttribute('tabindex') && e.tabIndex >= 0) || (pointer(e) && !(e.parentElement && pointer(e.parentElement)));
   // A clickable wrapper around a link or button of the same name (site headers) is that control, offered once.
   const sameInside = e => {
@@ -408,7 +412,7 @@
   // A card's own action ("Pause", "Cancel" on each mandate; "Remove" on each cart line) carries its card's title, even
   // when one card shows at a time (MyUPI): a bare "Cancel" was pressed for the wrong mandate. Lines of nothing but
   // such actions ("PauseCancel", the card's button row) are no title.
-  const ACT = /^(?:cancel|pause|resume|remove|delete|edit|revoke|stop|manage)$/i;
+  const ACT = /^(?:cancel|pause|resume|remove|delete|edit|revoke|stop|manage)(?: field| details?)?$/i;  // “Edit Field”
   const ACTS = /cancel|pause|resume|remove|delete|edit|revoke|stop|manage/gi;
   // The card a control sits on: its lines that aren't only actions; the first is its title.
   const cardOf = e => {

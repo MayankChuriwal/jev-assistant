@@ -417,6 +417,19 @@ def test_a_card_off_screen_is_scrolled_into_view_by_its_title(browser_at):
     assert b.reveal("NETFLIX", "Cancel") is False
 
 
+def test_an_edit_icon_with_only_a_title_is_offered_and_names_its_row(browser_at):
+    # Experian: each field's pencil is <i class="fa fa-edit edit-icon" title="Edit Field">, its click bound in script;
+    # it was never offered, so the correction went into the comments box
+    rows = "".join(f'<div><label>{name}</label><input value="old"><input disabled>'
+                   '<i class="fa fa-edit edit-icon" title="Edit Field" style="display:inline-block;width:16px;'
+                   'height:16px"></i></div>' for name in ("Name", "Address 1"))
+    b = browser_at("/next.html")
+    b.evaluate(f"document.body.insertAdjacentHTML('afterbegin', {json.dumps('<div>' + rows + '</div>')}); "
+               "document.querySelectorAll('.edit-icon').forEach(i => i.addEventListener('click', () => {}))")
+    labels = [a["label"] for a in b.observe()["actions"] if a["kind"] == "click"]
+    assert "Edit Field (in “Address 1”)" in labels and "Edit Field (in “Name”)" in labels
+
+
 def test_a_cards_own_action_names_its_card_even_when_one_card_shows(browser_at):
     # MyUPI shows one mandate card at a time, each with Pause and Cancel: a bare "Cancel" was pressed for the wrong one
     card = CARD
