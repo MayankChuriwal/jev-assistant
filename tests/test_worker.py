@@ -3789,3 +3789,15 @@ def test_a_code_just_typed_is_sent_with_its_own_button_or_enter(tmp_path, monkey
     w.command("tick")
     call = w.browser.act.call_args
     assert call.args[0] == operation and call.args[1]["label"] == label
+
+
+def test_a_report_may_quote_what_the_pages_fields_show(tmp_path, monkeypatch):
+    # Experian's dispute form shows each address in a box: a report of them was refused for want of a quote
+    page = fake_page(url="https://consumer.experian.in/ECSINDIA-DCE/view/angular/", text="Personal details\nAddress 1",
+                     actions=[{"id": "f1", "kind": "fill", "label": "Address 1", "role": "textbox",
+                               "value": "12 Old Road, Howrah", "node": 1}])
+    w = worker_with(tmp_path, page=page, goal="Show my Personal Details as Experian's dispute page lists them")
+    script_planner(monkeypatch, turn("DONE", message="Address 1: 12 Old Road, Howrah", text="12 Old Road, Howrah"))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.state["status"] == "done" and w.told[-1]["text"] == "Address 1: 12 Old Road, Howrah"

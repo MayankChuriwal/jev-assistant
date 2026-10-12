@@ -65,6 +65,9 @@ class Tools:
             return done(f"Nothing was changed: {change[2]}'s UPI AutoPay stays active.", CARDS, "not_approved")
         if change:
             return done(f"Paused {change[2]}'s UPI AutoPay; the user approved it in their UPI app.", CARDS)
+        if goal.startswith("Show my Personal Details"):
+            return done("Name: Jev User; Date of Birth: 01-01-1990; Address 1: 12 Old Road, Howrah; Address 2: 4 Park "
+                        "Street, Kolkata; Address 3: 9 Lake View, Howrah")
         if "credit report" in goal:
             return done("Dispute raised with Experian. Reference EXP-2026-1012.")
         return done("Your UPI ID is jev.user@okaxis.")
@@ -109,6 +112,10 @@ CASES = [
      lambda t: any(g != LIST and not CHANGE.match(g) for g in t.executed) and "jev.user@okaxis" in last(t)[0]),
     ("An Experian dispute starts by asking what's wrong", ["I want to dispute something on my Experian report"],
      False, lambda t: t.executed == [] and bool(last(t)[0])),
+    ("A wrong address is read off the report, then asked which", ["I want to dispute something on my Experian report",
+                                                                  "Personal details", "my address is wrong"], False,
+     lambda t: any(g.startswith("Show my Personal Details") for g in t.executed)
+     and not any("credit report" in g for g in t.executed) and len(last(t)[1]) >= 2),
     ("Thanks needs no tool", ["thanks!"], True, lambda t: t.executed == [] and bool(last(t)[0])),
 ]
 

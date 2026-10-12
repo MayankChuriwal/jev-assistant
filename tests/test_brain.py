@@ -109,8 +109,8 @@ def results(brain, name):
 def test_the_brain_offers_its_tools_and_reads_its_playbooks(tmp_path):
     model = Model(("reply", {"text": "Hi!", "options": []}))
     make(FakeCore(), model, tmp_path).turn("hi")
-    assert model.seen[0]["tools"] == ["upi_mandates", "upi_cancel", "upi_pause", "upi_task", "bureau_dispute",
-                                      "browse", "memory", "reply"]
+    assert model.seen[0]["tools"] == ["upi_mandates", "upi_cancel", "upi_pause", "upi_task", "bureau_details",
+                                      "bureau_dispute", "browse", "memory", "reply"]
     assert "UPI AutoPay mandates" in model.seen[0]["instructions"]
     assert "Credit report disputes" in model.seen[0]["instructions"]
 
@@ -407,3 +407,30 @@ def test_a_retry_with_fresh_ids_forgets_the_saved_pair_first(tmp_path):
                   ("reply", {"text": "Raised.", "options": []}))
     make(core, model, tmp_path).turn("Retry with fresh IDs")
     assert core.memory.forgotten == ["id:experian_ern", "id:experian_uti"] and len(core.executed) == 1
+
+
+def test_a_dispute_reads_the_reports_entries_before_asking_which(tmp_path):
+    # live: it asked for “the new address” with three addresses on the report and no word of which one
+    core = FakeCore(done("Name: Jev User; Address 1: 12 Old Road; Address 2: 4 Park Street; Address 3: 9 Lake View"))
+    model = Model(("bureau_details", {"bureau": "Experian", "kind": "Personal Details", "fresh_ids": False}),
+                  ("reply", {"text": "Which address should I correct?",
+                             "options": ["12 Old Road", "4 Park Street", "9 Lake View"]}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Personal details")
+    assert core.executed == [{
+        "goal": "Show my Personal Details as Experian's dispute page lists them: every row with its current value. "
+                "Change nothing.",
+        "url": "https://consumer.experian.in/ECSINDIA-DCE/view/angular/index.html#!/", "skill": "account",
+        "progress": "Reading your personal details on Experian…"}]
+    assert results(brain, "bureau_details")[0]["report"].startswith("Name: Jev User")
+
+
+def test_the_report_is_read_only_for_a_kind_the_user_named(tmp_path):
+    # the eval: “I want to dispute something on my Experian report” read Account Details, a guess, before asking
+    core = FakeCore()
+    model = Model(("bureau_details", {"bureau": "Experian", "kind": "Account Details", "fresh_ids": False}),
+                  ("reply", {"text": "What's wrong on it?", "options": ["An account", "Personal details"]}))
+    brain = make(core, model, tmp_path)
+    brain.turn("I want to dispute something on my Experian report")
+    out = results(brain, "bureau_details")[0]
+    assert core.executed == [] and out["status"] == "rejected" and "which kind" in out["next"]

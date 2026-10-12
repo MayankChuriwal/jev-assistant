@@ -73,6 +73,8 @@ def text(description):
 
 
 PAYEE = text("The payee exactly as listed")
+FRESH_IDS = {"type": "boolean", "description": "true when the saved ERN and UTI failed and the user will give new ones: "
+                                               "they are forgotten first, so the hidden field asks for both"}
 REASON = {"type": ["string", "null"], "description": "Why this payee, when the user didn't name it (“ChatGPT bills as "
                                                      "OPENAI LLC.”); null when they did"}
 TOOLS = [
@@ -84,14 +86,18 @@ TOOLS = [
          reason=REASON),
     tool("upi_task", "Anything else on MyUPI: UPI transactions, complaints, the user's UPI ID, checking a payee, UPI "
                      "help.", goal=text("One clear instruction, with what the chat already says (payee, amount, date)")),
+    tool("bureau_details", "Read what the user's credit report holds for one kind of dispute, as the bureau's dispute "
+                           "page lists it (each address, each account): every row with its current value. Changes "
+                           "nothing.", bureau={"type": "string", "enum": list(BUREAUS)},
+         kind={"type": "string", "enum": ["Account Details", "Personal Details", "Credit Enquiry"]},
+         fresh_ids=FRESH_IDS),
     tool("bureau_dispute", "Raise a dispute on the user's credit report with a bureau.",
          bureau={"type": "string", "enum": list(BUREAUS)},
          kind={"type": "string", "enum": ["Account Details", "Personal Details", "Credit Enquiry"]},
          account=text("The account's lender and last 4 digits (“HDFC Bank credit card ending 4321”); empty when the "
                       "dispute isn't about an account"),
          wrong=text("What the report shows"), correct=text("What it should show"),
-         fresh_ids={"type": "boolean", "description": "true when the saved ERN and UTI failed and the user will give "
-                                                      "new ones: they are forgotten first, so the hidden field asks"}),
+         fresh_ids=FRESH_IDS),
     tool("browse", "Do any other task on any other site, in a real browser.",
          goal=text("The user's request in their words, with the details the chat already has")),
     tool("memory", "Remember or forget something about the user, or list what you remember. It replies to them "
@@ -103,6 +109,9 @@ TOOLS = [
                                  "would say; [] when none"}),
 ]
 NAMES = {t["name"] for t in TOOLS} - {"reply"}
+KINDS = {"Account Details": re.compile(r"account|loan|card|lender|emi|overdue|balance|limit", re.I),
+         "Personal Details": re.compile(r"personal|address|name|birth|dob|phone|mobile|e-?mail", re.I),
+         "Credit Enquiry": re.compile(r"enquir|inquir", re.I)}  # the user's own words that name a dispute's kind
 PLACEHOLDER = re.compile(r"not (?:yet )?(?:provided|given|known)|\bunknown\b|\bto be (?:provided|confirmed|added)\b|"
                          r"\b(?:tbd|n/a)\b|\bthe user'?s\b", re.IGNORECASE)  # a detail the brain made up words for
 
@@ -301,6 +310,31 @@ class Brain:
         self.learn(result)
         return self.ended(result)
 
+    def bureau_details(self, bureau, kind, fresh_ids=False):
+        """What the report holds for a dispute's kind, read off the bureau's dispute page before the user is asked
+        which entry is wrong: live, “the new address?” was asked with three addresses on the report."""
+        note = self.core.library["sites"].get(BUREAUS.get(bureau, ""))
+        if not note:
+            return {"status": "rejected", "reason": f"{bureau} isn't covered yet.",
+                    "next": "Say which bureaus are covered: " + ", ".join(BUREAUS)}
+        said = " ".join(i["content"] for i in self.items[-12:] if i.get("role") == "user")
+        if kind in KINDS and not KINDS[kind].search(said):  # the eval read Account Details, a guess: a sign-in wasted
+            return {"status": "rejected", "reason": f"The user hasn't said the dispute is about {kind}.",
+                    "next": "Ask which kind first, with options (an account, personal details, a credit enquiry)."}
+        if fresh_ids:
+            self.forget_ids(bureau)
+        result = self.core.execute(f"Show my {kind} as {bureau}'s dispute page lists them: every row with its current "
+                                   "value. Change nothing.", url=skills.start(note, "account"), skill="account",
+                                   progress=f"Reading your {kind.lower()} on {bureau}…")
+        return self.ended(result)
+
+    def forget_ids(self, bureau):
+        for key in BUREAU_IDS.get(bureau, ()):
+            try:
+                self.core.memory.forget(f"id:{key}")
+            except KeyError:
+                pass  # not saved: nothing to forget
+
     def bureau_dispute(self, bureau, kind, account, wrong, correct, fresh_ids=False):
         missing = [what for what, value in (("the account (its lender and last 4 digits)",
                                               account if kind == "Account Details" else "-"),
@@ -316,11 +350,7 @@ class Brain:
             return {"status": "rejected", "reason": f"{bureau} isn't covered yet.",
                     "next": "Say which bureaus are covered: " + ", ".join(BUREAUS)}
         if fresh_ids:  # live: “Retry with fresh IDs” typed the refused pair again
-            for key in BUREAU_IDS.get(bureau, ()):
-                try:
-                    self.core.memory.forget(f"id:{key}")
-                except KeyError:
-                    pass  # not saved: nothing to forget
+            self.forget_ids(bureau)
         goal = (f"Raise a dispute on my {bureau} credit report. Dispute type: {kind}."
                 + (f" Account: {account}." if account.strip() else "")
                 + f" The report shows: {wrong}. It should be: {correct}.")
