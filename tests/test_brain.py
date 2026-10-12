@@ -377,3 +377,16 @@ def test_a_cancel_confirmed_gone_tells_the_brain_to_say_so_and_stop(tmp_path):
     brain.turn("cancel aisle")
     out = results(brain, "upi_cancel")[0]
     assert out["verified"] == "gone" and "Call no other tool" in out["next"]
+
+
+def test_a_dispute_with_a_placeholder_for_a_detail_is_refused(tmp_path):
+    # live: the brain filed “It should be: The user's current correct address (not yet provided)”
+    core = FakeCore()
+    model = Model(("bureau_dispute", {"bureau": "Experian", "kind": "Personal Details", "account": "",
+                                      "wrong": "Address shown on the report is incorrect",
+                                      "correct": "The user's current correct address (not yet provided)"}),
+                  ("reply", {"text": "What's your correct address?", "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn("my address is wrong on my Experian report")
+    out = results(brain, "bureau_dispute")[0]
+    assert core.executed == [] and out["status"] == "rejected" and "what it should show" in out["reason"]

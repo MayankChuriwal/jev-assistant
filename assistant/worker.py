@@ -76,7 +76,10 @@ FILLER = {"a", "an", "the", "and", "or", "to", "of", "for", "in", "on", "at", "b
 PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGNORECASE),
                 "email": re.compile(r"\b(your e-?mail|e-?mail (address|id))\b", re.IGNORECASE),
                 "name": re.compile(r"\b(your (full )?name|full name)\b", re.IGNORECASE),
-                "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE)}
+                "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE),
+                # live: “Please provide a fresh report's ERN and UTI” went out in the open
+                "experian_ern": re.compile(r"\b(ERN|experian reference number)\b", re.IGNORECASE),
+                "experian_uti": re.compile(r"\b(UTI|unique transaction id)\b", re.IGNORECASE)}
 # A question that asks how to pay: "How would you like to pay?", "Which payment method…?", "What will you pay with?".
 # A yes/no about going on to pay ("Shall I proceed to payment?") or "how much" asks no such thing.
 HOW_TO_PAY = re.compile(r"\bhow\b(?!\s+(?:much|many|long|soon|often)\b)(?:\s+[\w']+){0,6}?\s+pay(?:ing|ment)?\b|"
@@ -550,6 +553,10 @@ class Worker:
         if signing:  # MyUPI: the planner skipped the phone, so Continue never lit up
             operation, action, text = signing
             return self.act(operation, action, page, None, text=text)
+        sending = self.code_submit(page)
+        if sending:  # live: Experian's OTP was typed and never sent; the planner waited eleven times
+            operation, action, key = sending
+            return self.act(operation, action, page, None, key=key)
         chosen = self.mandate_step(page)
         if chosen:  # the demo: the planner never scrolled to AISLE's card and reached for GOOGLE PLAY's until stuck
             action, page = chosen
@@ -833,6 +840,20 @@ class Worker:
         submit = next((a for a in page["actions"] if a["kind"] == "click" and SUBMIT.match(a.get("label") or "")),
                       None)
         return ("CLICK", submit, None) if submit else None
+
+    def code_submit(self, page):
+        """A one-time code the last step typed, still in its field: (operation, control, key) that sends it, the
+        field's own submit button or Enter, else None. Never a card's detail: those are never typed."""
+        last = self.state["history"][-1] if self.state["history"] else None
+        if not last or last.get("operation") != "TYPE_TEXT" or not str(last.get("text") or "").startswith("[secret:"):
+            return None
+        field = next((a for a in page["actions"] if a["kind"] == "fill" and a.get("label") == last.get("action")
+                      and a.get("value")), None)
+        if field is None or rules.CARD_DETAIL.search(field.get("label") or ""):
+            return None  # the site took it (the field is gone), or it isn't a code's
+        button = next((a for a in page["actions"] if a["kind"] == "click" and field.get("submit")
+                       and a.get("label") == field["submit"]), None)
+        return ("CLICK", button, None) if button else ("PRESS_KEY", field, "Enter")
 
     def mandate_step(self, page):
         """A mandate the user chose (the brain's goal “Cancel the UPI AutoPay mandate whose payee is AISLE”) on a site

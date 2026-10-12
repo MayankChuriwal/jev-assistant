@@ -1329,3 +1329,27 @@ def test_the_brain_and_core_hold_a_whole_cancel_conversation(world, tmp_path):
     assert "Cancelling AISLE's AutoPay on MyUPI…" in bodies(world)
     assert not any(b.startswith(("Your UPI AutoPay mandates", "Nothing was changed")) for b in bodies(world))
     assert until(lambda: not world.core.brain.busy)
+
+
+@pytest.mark.parametrize("message", ["1791764938968", " 2824079067 ", "+91 98765 43210"])
+def test_a_bare_long_number_never_reaches_a_model(world, message):
+    # live: the user's ERN and UTI, typed in the open, went to the planner as answers
+    world.brain.starts = False
+    text(world, message)
+    assert world.classified == [] and "hidden field" in bodies(world)[-1]
+
+
+def test_a_bare_long_number_never_answers_an_open_question(world):
+    world.scripts["Raise a dispute"] = [ask({"kind": "text", "text": "What's the correct address?"})]
+    text(world, "Raise a dispute")
+    assert until(lambda: world.core.open is not None)
+    text(world, "2824079067")
+    assert world.agents["Raise a dispute"].replies == [] and "hidden field" in bodies(world)[-1]
+    assert world.core.open is not None  # the question is still open for a real answer
+
+
+def test_a_pincode_or_a_number_in_words_still_goes_through(world):
+    world.brain.starts = False
+    text(world, "560001")
+    text(world, "my order 402-1234567-1234567 hasn't arrived")
+    assert world.classified == ["560001", "my order 402-1234567-1234567 hasn't arrived"]

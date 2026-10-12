@@ -3756,3 +3756,36 @@ def test_a_done_without_a_quote_hears_it_may_stop_with_why_instead(tmp_path, mon
     jev_checks(monkeypatch)
     w.command("tick")
     assert "STOP" in w.state["feedback"][-1]
+
+
+@pytest.mark.parametrize("saved, told", [({"experian_ern": "1234567890123"}, "Memory has it: use [profile:experian_ern]"),
+                                         ({}, "TYPE [profile:experian_ern]")])
+def test_a_question_for_the_ern_or_uti_never_goes_out_in_the_open(tmp_path, monkeypatch, saved, told):
+    # live: “Please provide a fresh report's ERN and UTI” went out as a plain question; the reply reached the models
+    w = worker_with(tmp_path, page=fake_page(text="Experian Reference Number\nUnique Transaction ID"),
+                    goal="Raise a dispute on my Experian credit report", profile=saved)
+    script_planner(monkeypatch, turn("ASK", message="Please provide a fresh report's ERN and UTI to proceed."))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.asked == [] and told in w.state["feedback"][-1]
+
+
+def code_typed(submit=None):
+    actions = [{"id": "f1", "kind": "fill", "label": "One-time code", "role": "textbox", "value": "[secret]", "node": 1,
+                "constraints": {"inputmode": "numeric"}, **({"submit": submit} if submit else {})},
+               {"id": "b1", "kind": "click", "label": "Verify OTP", "role": "button", "node": 2},
+               {"id": "wait", "kind": "wait", "label": "Wait", "node": None}]
+    return fake_page(url="https://consumer.experian.in/ECSINDIA-DCE/view/angular/", text="Enter the OTP", actions=actions)
+
+
+@pytest.mark.parametrize("submit, operation, label", [("Verify OTP", "CLICK", "Verify OTP"),
+                                                      (None, "PRESS_KEY", "One-time code")])
+def test_a_code_just_typed_is_sent_with_its_own_button_or_enter(tmp_path, monkeypatch, submit, operation, label):
+    # live: Experian's OTP was typed and never sent; the planner waited eleven times until the user pressed Enter
+    w = worker_with(tmp_path, page=code_typed(submit), goal="Raise a dispute on my Experian credit report")
+    w.state["history"].append({"step": 1, "operation": "TYPE_TEXT", "action": "One-time code",
+                               "text": "[secret:answer1]"})
+    no_planner(monkeypatch)
+    w.command("tick")
+    call = w.browser.act.call_args
+    assert call.args[0] == operation and call.args[1]["label"] == label

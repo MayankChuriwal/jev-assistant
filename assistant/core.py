@@ -34,6 +34,9 @@ LOOKS_LIKE_AN_ID = ("That looks like an ID. Tell me what it is called (like “m
                     "can keep it hidden.")
 PLACEHOLDER = re.compile(r"\[(?:profile|secret):[\w.]+\]")
 CAPTCHA_REPLY = re.compile(r"\S{1,12}|\d+(?:\s*(?:,|&|and)?\s*\d+)*", re.IGNORECASE)  # “F658”, “none”, “2, 5 and 8”
+BARE_ID = re.compile(r"[\d\s()+-]*\d[\d\s()+-]*|[A-Za-z0-9]*\d[A-Za-z0-9]*")  # the whole message: a number or a code
+KEPT_OUT = ("That looks like an ID, so I kept it out of the models. When a site needs one I ask for it in the hidden "
+            "field, where it goes straight to the page.")
 LOG_OUT = re.compile(r"\s*(?:please\s+)?(?:log|sign)\s*(?:me\s+)?out(?:\s+of\s+[\w .'-]{1,30})?[.!]?\s*|"
                      r"\s*end\s+(?:the\s+|this\s+|my\s+)?session[.!]?\s*", re.IGNORECASE)  # the whole message
 
@@ -59,6 +62,14 @@ ID_CANDIDATES = (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)*"),
                  re.compile(r"\b(?=[A-Za-z0-9-]*[A-Za-z])(?=[A-Za-z0-9-]*\d)[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+\b"),
                  re.compile(r"\+?\d(?:[\s-]?\d){5,}"),
                  re.compile(r"\b(?=[A-Za-z]*\d)[A-Za-z0-9]{4,}\b"))
+
+
+def bare_id(text):
+    """A message that is only a long number or code (an ERN, a UTI, a phone, a PAN): never sent to a model in the open.
+    A pincode (six digits) and a number among words still go through."""
+    digits = sum(c.isdigit() for c in text)
+    return bool(BARE_ID.fullmatch(text)) and (digits >= 8 or (len(text) >= 8 and digits >= 4 and
+                                                               any(c.isalpha() for c in text)))
 
 
 def captcha_reply(question, text):
@@ -250,6 +261,9 @@ class Core:
                 return None
             if not secret and LOG_OUT.fullmatch(text):
                 return self.log_out()
+            if bare_id(text):  # live: an ERN and a UTI typed in the open went to the planner as answers
+                self.log[-1]["text"] = "••••"
+                return self.say(KEPT_OUT)
             if question:  # only a running task asks: what is typed while its question is open answers it
                 return self.answer(question, event)
             running = [t for t in self.tasks.values() if t.status in ACTIVE]

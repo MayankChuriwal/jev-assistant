@@ -100,6 +100,8 @@ TOOLS = [
                                  "would say; [] when none"}),
 ]
 NAMES = {t["name"] for t in TOOLS} - {"reply"}
+PLACEHOLDER = re.compile(r"not (?:yet )?(?:provided|given|known)|\bunknown\b|\bto be (?:provided|confirmed|added)\b|"
+                         r"\b(?:tbd|n/a)\b|\bthe user'?s\b", re.IGNORECASE)  # a detail the brain made up words for
 
 
 def instructions():
@@ -301,7 +303,9 @@ class Brain:
                                               account if kind == "Account Details" else "-"),
                                              ("what the report shows", wrong), ("what it should show", correct))
                    if not value.strip()]
-        if missing:  # the eval raised a dispute with none of its details
+        missing += [what for what, value in (("what the report shows", wrong), ("what it should show", correct))
+                    if PLACEHOLDER.search(value) and what not in missing]
+        if missing:  # the eval raised a dispute with none of its details; live, “… (not yet provided)”
             return {"status": "rejected", "reason": "Missing " + ", ".join(missing) + ".",
                     "next": "Ask the user for it: one short question, with options when the answer can be listed."}
         note = self.core.library["sites"].get(BUREAUS.get(bureau, ""))
