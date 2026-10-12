@@ -3917,3 +3917,44 @@ def test_a_notice_its_site_note_names_is_closed_without_the_planner(tmp_path, mo
     assert w.browser.act.call_args.args[1]["label"].startswith("clickable in “If you have made a recent payment")
     w.state["history"].append({"operation": "CLICK", "action": notice["label"]})
     assert w.notice_step(w.state["page"]) is None  # never twice in a row: the planner takes over
+
+
+# ---- a voucher's amount and its cart button, pressed by the worker itself: dry run, the selected amount left the
+# controls offered, so the planner took it for hidden, opened the site's chat, and toggled two amounts
+
+SMARTBUY = "https://www.gyftr.com/instantvouchers/swiggy-gv-gift-vouchers"
+ISHOP = "https://www.ishoprewards.com/shopping-vouchers-details/SVMxMjU%3D"
+VOUCHER = "Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy."
+
+
+def voucher_page(url, text, *labels):
+    return fake_page(url=url, text=text, actions=[{"id": f"v{n}", "kind": "click", "label": label, "role": "button",
+                                                   "node": n} for n, label in enumerate(labels, 1)])
+
+
+def test_the_named_amount_is_pressed_without_the_planner(tmp_path, monkeypatch, no_wait):
+    page = voucher_page(SMARTBUY, "Choose Denomination", "₹ 250", "₹ 500", "₹ 1,000", "View Cart & Buy")
+    w = worker_with(tmp_path, page=page, goal=VOUCHER)
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"] == "₹ 500"
+
+
+@pytest.mark.parametrize("url, goal, text, cart", [
+    (SMARTBUY, VOUCHER, "Choose Denomination\nTotal Value : ₹ 500", "Add to cart"),
+    (ISHOP, "Buy a ₹1,000 Swiggy gift voucher, quantity 1, on iShop.", "₹1,000\nQuantity\n1\nTotal: ₹1,000", "Buy now")])
+def test_with_the_amount_chosen_its_cart_button_is_pressed(tmp_path, monkeypatch, no_wait, url, goal, text, cart):
+    page = voucher_page(url, text, "₹ 250", cart, "Hello, have a question? Let’s chat.")
+    w = worker_with(tmp_path, page=page, goal=goal)
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"] == cart
+
+
+def test_an_amount_pressed_twice_without_taking_is_the_planners(tmp_path):
+    page = voucher_page(SMARTBUY, "Choose Denomination", "₹ 250", "₹ 500")
+    w = worker_with(tmp_path, page=page, goal=VOUCHER)
+    w.state["history"] += [{"operation": "CLICK", "action": "₹ 500"}] * 2
+    assert w.voucher_step(page) is None
+    w.state["history"] = [{"operation": "CLICK", "action": "Add to cart"}]  # in the cart: the rest is the planner's
+    assert w.voucher_step(voucher_page(SMARTBUY, "Total Value : ₹ 500", "Add to cart")) is None

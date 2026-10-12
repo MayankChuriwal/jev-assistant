@@ -89,6 +89,19 @@ def test_a_control_its_site_note_names_final_commits_without_jevs_check(monkeypa
     assert gate.commit_label(w, "CLICK", other, page) is None
 
 
+def test_a_control_its_site_note_names_a_step_never_asks(monkeypatch):
+    # iShop: “Buy now” opens the sign-in and checkout, and SmartBuy's “View Cart & Buy” the cart: no approval there
+    monkeypatch.setattr(gate.jev, "final", lambda *a: pytest.fail("Jev was asked"))
+    page = fake_page(url="https://www.ishoprewards.com/shopping-vouchers-details/x")
+    w = Fake(page)
+    w.library = {"sites": {"ishoprewards.com": {"host": "ishoprewards.com", "step": "Buy now, Proceed to Login",
+                                                "final": "Pay Now", "body": ""}}}
+    buy = {"id": "b", "kind": "click", "label": "Buy now", "role": "button", "node": 44}
+    assert gate.commit_label(w, "CLICK", buy, page) is None
+    pay = {"id": "p", "kind": "click", "label": "Pay Now ₹1,000", "role": "button", "node": 45}
+    assert gate.commit_label(w, "CLICK", pay, page) == "Pay Now ₹1,000"
+
+
 def test_inside_a_commit_subgoal_jev_confirms_a_control_the_regex_missed(monkeypatch):
     page = fake_page()
     go = {"id": "g", "kind": "click", "label": "Continue", "role": "button", "node": 41}

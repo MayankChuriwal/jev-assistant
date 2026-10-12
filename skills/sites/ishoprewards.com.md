@@ -6,7 +6,9 @@ start: https://www.ishoprewards.com/shopping-vouchers
 learn: no
 brand.swiggy: https://www.ishoprewards.com/shopping-vouchers-details/SVMxMjU%3D
 keep: page
+cart: Buy now
 close: Accept & Proceed
+step: Add to cart, Buy now, Proceed to Login
 final: Proceed to Pay, Pay Now, Make Payment, Proceed to Payment, Pay ₹, Place Order
 ---
 - ICICI Bank's rewards portal, run by Reward360. It opens with its terms in a pop-up ("Accept & Proceed"): the system presses it.

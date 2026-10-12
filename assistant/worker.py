@@ -32,6 +32,7 @@ CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QR_TRIES = 5  # seconds a mandate's QR may take to render after its Cancel
 LIST_READS, LIST_GAP = 6, 0.7  # MyUPI draws its mandate list a card at a time, over a few seconds
 CHOSEN = re.compile(r"(Cancel|Pause) the UPI AutoPay mandate whose payee is (.+?)(?: until .+)?$")  # the brain's words
+VOUCHER_BUY = re.compile(r"^Buy a ₹([\d,]+) .+? gift voucher, quantity (\d+), on ")  # the brain's checkout goal
 ROW_FIX = re.compile(r"Dispute type: Personal Details\. The report shows: ([^:]+): .+?\. It should be: (.+?)\.?\s*$",
                      re.DOTALL)  # the brain's dispute: the row it names, and that row's correct value
 MANDATE_CANCEL = re.compile(r"(?:cancel|revoke)\b", re.IGNORECASE)  # a card's Cancel: the UPI app does the rest
@@ -570,6 +571,9 @@ class Worker:
         notice = self.notice_step(page)
         if notice:  # live: Experian's “… wait for 30 days …” was read as an instruction, and waited on twenty times
             return self.act("CLICK", notice, page, None)
+        buying = self.voucher_step(page)
+        if buying:  # dry run: the chosen amount left the controls offered, and the planner toggled two amounts
+            return self.act("CLICK", buying, page, None)
         fixing = self.row_step(page)
         if fixing:  # live: the planner opened other rows, cancelled the address it typed, and left the page
             operation, action, text, page = fixing
@@ -905,6 +909,29 @@ class Worker:
         last = self.state["history"][-1].get("action") if self.state["history"] else None
         return next((a for a in page["actions"] if words and a["kind"] == "click" and a.get("label") != last
                      and words in (a.get("label") or "").lower()), None)
+
+    def voucher_step(self, page):
+        """A voucher the brain's checkout names (“Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy.”) on a
+        portal whose note names its cart button (`cart:`): the amount's tile until the page's Total shows it, then
+        that button; each at most twice, and nothing once the button was pressed (sign-in and checkout are the
+        planner's, and the gate's). A chosen tile leaves the controls offered, so the Total is the proof."""
+        s = self.state
+        wanted = VOUCHER_BUY.match(s["goal"])
+        cart = ((skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}).get("cart")
+        if not wanted or not cart or int(wanted[2]) != 1:
+            return None
+        flat = lambda text: re.sub(r"[\s,]", "", text or "").lower()  # "₹ 1,000" and "₹1000" alike
+        amount, pressed = "₹" + wanted[1].replace(",", ""), [h.get("action") for h in s["history"]]
+        if any(flat(label) == flat(cart) for label in pressed):
+            return None
+        chosen = re.search(r"total(?:value)?:?" + re.escape(amount) + r"(?!\d)", flat(page["text"]))
+        button = next((a for a in page["actions"] if a["kind"] == "click" and flat(a.get("label")) == flat(cart)), None)
+        if chosen and button:
+            return button
+        tile = next((a for a in page["actions"] if a["kind"] == "click" and flat(a.get("label")) == amount), None)
+        if tile and not chosen and sum(flat(label) == amount for label in pressed) < 2:
+            return tile
+        return None
 
     def row_step(self, page):
         """A personal detail the brain's dispute names (“The report shows: Address 1: …. It should be: …”) on a site
