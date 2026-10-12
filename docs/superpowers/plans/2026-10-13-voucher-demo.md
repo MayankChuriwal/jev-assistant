@@ -25,5 +25,7 @@ unit and browser suites pass before each commit.
 
 Past the sign-in, the whole chain ran on a local replica of SmartBuy's brand page (copied from the live one) and its cart page (worded from GyFTR's public scripts: CART SUMMARY, Pay via Reward Points, Deliver to:, You Pay, BUY NOW; 58f2c2f, 80f4518). Final run: ₹500 → Add to cart → View Cart & Buy → the approval card at "BUY NOW" with no payment question → No → "Nothing was charged". An earlier run on a guessed cart page: with the real brain, worker, Jev and gate: ₹500 → Add to cart → View Cart & Buy → the approval card at "Proceed to Pay ₹500" (Yes / No) → No → "You chose not to pay. Nothing was charged."; the replica's payment page was never requested.
 
+iShop's chain ran the same way on a replica (its brand page as mapped live, its checkout worded from iShop's public scripts, signed in already): ₹1000 → Buy now → "Choose Payment Mode" asked (Credit Card) → the approval card at "Proceed to Pay" → No → "Nothing was charged"; its payment page was never requested. Known limit for a real purchase (out of this demo's scope): the payment mode the user named is not ticked on the page before the approval.
+
 Live with the user (needs their sign-in): SmartBuy's OTP, cart and checkout up to the approval card; iShop's net
 banking sign-in (User ID, password, any OTP), checkout, its payment-mode question, and the approval card.
