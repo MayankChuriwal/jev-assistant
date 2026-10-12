@@ -28,6 +28,12 @@ def done(report="", cards=(), outcome=None, status="done"):
 
 
 class Memory:
+    def __init__(self):
+        self.forgotten = []
+
+    def forget(self, ref, actor="user"):
+        self.forgotten.append(ref)
+
     def ids(self):
         return [{"key": "phone", "label": "phone number"},
                 {"key": "experian_ern", "label": "Experian Reference Number (ERN)"}]
@@ -274,7 +280,7 @@ def test_a_dispute_runs_on_the_bureaus_page_with_an_exact_goal(tmp_path):
     core = FakeCore(done("Dispute raised."))
     model = Model(("bureau_dispute", {"bureau": "Experian", "kind": "Account Details",
                                       "account": "HDFC Bank credit card ending 4321", "wrong": "Amount overdue ₹12,000",
-                                      "correct": "₹0"}),
+                                      "correct": "₹0", "fresh_ids": False}),
                   ("reply", {"text": "Raised.", "options": []}))
     make(core, model, tmp_path).turn("dispute the HDFC overdue on my Experian report")
     assert core.executed == [{
@@ -332,7 +338,7 @@ def test_a_dispute_missing_its_details_is_refused_before_any_page_opens(tmp_path
     # the eval: “I want to dispute something on my Experian report” raised one with no details at all
     core = FakeCore()
     model = Model(("bureau_dispute", {"bureau": "Experian", "kind": "Account Details", "account": account,
-                                      "wrong": wrong, "correct": correct}), ("reply", {"text": "What's wrong?",
+                                      "wrong": wrong, "correct": correct, "fresh_ids": False}), ("reply", {"text": "What's wrong?",
                                                                                          "options": []}))
     brain = make(core, model, tmp_path)
     brain.turn("I want to dispute something on my Experian report")
@@ -384,9 +390,20 @@ def test_a_dispute_with_a_placeholder_for_a_detail_is_refused(tmp_path):
     core = FakeCore()
     model = Model(("bureau_dispute", {"bureau": "Experian", "kind": "Personal Details", "account": "",
                                       "wrong": "Address shown on the report is incorrect",
-                                      "correct": "The user's current correct address (not yet provided)"}),
+                                      "correct": "The user's current correct address (not yet provided)", "fresh_ids": False}),
                   ("reply", {"text": "What's your correct address?", "options": []}))
     brain = make(core, model, tmp_path)
     brain.turn("my address is wrong on my Experian report")
     out = results(brain, "bureau_dispute")[0]
     assert core.executed == [] and out["status"] == "rejected" and "what it should show" in out["reason"]
+
+
+
+def test_a_retry_with_fresh_ids_forgets_the_saved_pair_first(tmp_path):
+    # live: “Retry with fresh IDs” typed the saved ERN and UTI again, and Experian refused them again
+    core = FakeCore(done("Dispute raised."))
+    model = Model(("bureau_dispute", {"bureau": "Experian", "kind": "Personal Details", "account": "",
+                                      "wrong": "Address", "correct": "19, Example Lane, Howrah", "fresh_ids": True}),
+                  ("reply", {"text": "Raised.", "options": []}))
+    make(core, model, tmp_path).turn("Retry with fresh IDs")
+    assert core.memory.forgotten == ["id:experian_ern", "id:experian_uti"] and len(core.executed) == 1

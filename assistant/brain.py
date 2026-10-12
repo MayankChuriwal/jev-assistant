@@ -22,6 +22,7 @@ WINDOW = 60  # conversation items the model reads, cut at one of the user's mess
 MYUPI = "https://www.upihelp.npci.org.in/"
 LIST = "List all my UPI AutoPay mandates"
 BUREAUS = {"Experian": "consumer.experian.in"}  # each bureau's site note
+BUREAU_IDS = {"Experian": ("experian_ern", "experian_uti")}  # the saved IDs its dispute page asks for
 IST = ZoneInfo("Asia/Kolkata")
 PLAYBOOKS = Path(__file__).resolve().parents[1] / "skills" / "playbooks"
 ENDED = {"done": "done", "cancelled": "stopped", "failed": "failed", "blocked": "failed"}  # a task's end, as a status
@@ -88,7 +89,9 @@ TOOLS = [
          kind={"type": "string", "enum": ["Account Details", "Personal Details", "Credit Enquiry"]},
          account=text("The account's lender and last 4 digits (“HDFC Bank credit card ending 4321”); empty when the "
                       "dispute isn't about an account"),
-         wrong=text("What the report shows"), correct=text("What it should show")),
+         wrong=text("What the report shows"), correct=text("What it should show"),
+         fresh_ids={"type": "boolean", "description": "true when the saved ERN and UTI failed and the user will give "
+                                                      "new ones: they are forgotten first, so the hidden field asks"}),
     tool("browse", "Do any other task on any other site, in a real browser.",
          goal=text("The user's request in their words, with the details the chat already has")),
     tool("memory", "Remember or forget something about the user, or list what you remember. It replies to them "
@@ -298,7 +301,7 @@ class Brain:
         self.learn(result)
         return self.ended(result)
 
-    def bureau_dispute(self, bureau, kind, account, wrong, correct):
+    def bureau_dispute(self, bureau, kind, account, wrong, correct, fresh_ids=False):
         missing = [what for what, value in (("the account (its lender and last 4 digits)",
                                               account if kind == "Account Details" else "-"),
                                              ("what the report shows", wrong), ("what it should show", correct))
@@ -312,6 +315,12 @@ class Brain:
         if not note:
             return {"status": "rejected", "reason": f"{bureau} isn't covered yet.",
                     "next": "Say which bureaus are covered: " + ", ".join(BUREAUS)}
+        if fresh_ids:  # live: “Retry with fresh IDs” typed the refused pair again
+            for key in BUREAU_IDS.get(bureau, ()):
+                try:
+                    self.core.memory.forget(f"id:{key}")
+                except KeyError:
+                    pass  # not saved: nothing to forget
         goal = (f"Raise a dispute on my {bureau} credit report. Dispute type: {kind}."
                 + (f" Account: {account}." if account.strip() else "")
                 + f" The report shows: {wrong}. It should be: {correct}.")
