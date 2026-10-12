@@ -1681,6 +1681,17 @@ def test_a_buy_now_summary_keeps_the_products_price_and_drops_a_line_saying_none
                      "Price: ₹799"]
 
 
+def test_a_dispute_approval_drops_lines_saying_what_it_doesnt_mention(monkeypatch):
+    # live Experian: “No specific order or membership is mentioned in the dispute.” under the address it corrects
+    page = fake_page(text="Personal Details\nAddress 1\n19, Old Lane\nSubmit",
+                     url="https://consumer.experian.in/ECSINDIA-DCE/view/angular/disputePreFillPage")
+    summary(monkeypatch, ["The address on the report will be corrected to 19, New Lane, Howrah-711101.",
+                          "No specific order or membership is mentioned in the dispute.",
+                          "No amount or refund is discussed in this dispute."])
+    assert gate.summary(Fake(page), page, gate.facts(page, [])) == [
+        "The address on the report will be corrected to 19, New Lane, Howrah-711101."]
+
+
 def test_a_bike_fare_off_by_a_rupee_is_cut_and_the_drop_stays(monkeypatch):
     page = fake_page(text="Bike\n₹45\n3 mins\nAuto\n₹92\nPickup: Mandpura\nDrop: Indiranagar Metro Station\n"
                           "Book Bike", url="https://www.rapido.bike/Home")

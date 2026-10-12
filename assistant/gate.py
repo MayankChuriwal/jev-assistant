@@ -75,7 +75,8 @@ ADDRESS_LABEL = re.compile(r"\b(?:selected address|delivering to|deliver to|deli
 # provided"): left out, and the facts the page shows are added below.
 HIDDEN = re.compile(r"\[(?:profile|secret):[\w.]+\]")  # a user's own detail as the models see it: never shown as such
 PLACEHOLDER = re.compile(r"\b(?:none|null|n/a|unknown|not (?:provided|shown|visible|listed|mentioned))"
-                         r"(?![\w/])|\bno\b[^.\n]{0,40}\bprovided\b", re.IGNORECASE)
+                         r"(?![\w/])|\bno\b[^.\n]{0,40}\b(?:provided|mentioned|discussed|specified)\b",
+                         re.IGNORECASE)  # “No amount or refund is discussed in this dispute.”
 FEE = re.compile(r"^[^\n₹]{0,20}?((?:small cart|delivery|handling|platform|packaging|convenience|surge|late night|"
                  r"rain|service)\s+(?:fee|charges?)[^\n₹]{0,10}₹\s?[\d,]+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
 ITEMS = re.compile(r"\b(\d+) items?\b", re.IGNORECASE)
