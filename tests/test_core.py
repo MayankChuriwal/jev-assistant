@@ -32,7 +32,8 @@ class FakeAgent:
     def __init__(self, script, asker, notify, late=()):
         self.script, self.asker, self.notify, self.late = list(script), asker, notify, list(late)
         self.state = {"status": "ready", "history": [], "files": [], "memory": [], "done": [],
-                      "approval": {"action_label": "Pay ₹79"}, "commit": None}
+                      "approval": {"action_label": "Pay ₹79"}, "commit": None,
+                      "page": {"url": "https://shop.test/checkout"}}  # where a real task's last page was
         self.replies, self.closed = [], False
 
     def command(self, name):
@@ -806,9 +807,9 @@ def test_after_a_task_its_notes_and_guesses_are_offered_and_decided_once(world):
     assert saved["text"] == "You prefer Diet Coke 300 ml" and saved["tags"] == ["groceries", "shop.test"]
 
 
-def test_a_site_whose_note_says_learn_no_offers_nothing_learned(world):  # MyUPI: a wrong lesson after each request
-    world.core.library = {"skills": {}, "sites": {"shop.test": {"host": "shop.test", "name": "Shop", "aliases": [],
-                                                                "learn": "no"}}}
+@pytest.mark.parametrize("key", ["shop.test", "shop.test/checkout"])  # SmartBuy's note: a path on GyFTR's host
+def test_a_site_whose_note_says_learn_no_offers_nothing_learned(world, key):  # MyUPI: a wrong lesson after each request
+    world.core.library = {"skills": {}, "sites": {key: {"host": key, "name": "Shop", "aliases": [], "learn": "no"}}}
     world.learned = {"host": "shop.test", "habit": None, "notes": [(1, "Search appears after the pop-up closes")],
                      "guesses": [{"text": "You prefer Diet Coke 300 ml", "tags": ["groceries"]}]}
     world.scripts["Order Diet Coke"] = [tell("Ordered.")]

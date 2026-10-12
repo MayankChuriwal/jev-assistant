@@ -355,7 +355,8 @@ class Core:
         No) and any standing approval. A bench run learns only in its learn mode, after grading."""
         if task.script is not None or not task.worker:
             return
-        note = skills.site_for(f"https://{task.host}/", self.library["sites"]) if task.host else None
+        page = (task.worker.state.get("page") or {}).get("url") or (f"https://{task.host}/" if task.host else "")
+        note = skills.site_for(page, self.library["sites"]) if page else None  # a note on a path: SmartBuy's GyFTR
         try:
             if (note or {}).get("learn") != "no":  # a site with a hand-written note (MyUPI) learns nothing more
                 self.offer_learned(task)
