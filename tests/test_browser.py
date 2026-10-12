@@ -343,6 +343,16 @@ def test_a_kept_tab_carries_its_sign_in_to_the_next_task_on_the_site(browser_at)
     assert browser_at("/next.html", owner="u1").evaluate(TOKEN) is None  # not kept: a fresh tab
 
 
+def test_a_kept_page_is_where_the_next_task_on_the_site_starts(browser_at):
+    # Experian's sign-in lives in its page: opening the start again asked for the ERN and the code on every request
+    first = browser_at("/next.html", owner="u8")
+    first.evaluate("window.signedIn = true")
+    first.close(keep=True)
+    second = browser_at("/ops.html", owner="u8", stay=True)
+    assert second.evaluate("window.signedIn") is True and second.evaluate("location.pathname") == "/next.html"
+    second.close()
+
+
 def test_a_kept_sign_in_ends_when_idle_by_the_sites_own_logout(browser_at, monkeypatch):
     monkeypatch.setattr(browser, "SESSION_IDLE", 0.5)
     first = browser_at("/next.html", owner="u3")
@@ -430,6 +440,21 @@ def test_an_edit_icon_with_only_a_title_is_offered_and_names_its_row(browser_at)
     assert "Edit Field (in “Address 1”)" in labels and "Edit Field (in “Name”)" in labels
 
 
+def test_a_rows_pencil_below_the_screen_and_submit_are_scrolled_into_view(browser_at):
+    # Experian: the address rows and Submit sit below the first screen; only controls on screen are offered
+    rows = "".join(f'<div class="row"><p>{name}</p><input disabled value="old"><input disabled>'
+                   '<i class="fa fa-edit edit-icon" title="Edit Field" style="display:inline-block;width:16px;'
+                   'height:16px"></i></div><div style="height:900px"></div>' for name in ("Name", "Address 1"))
+    b = browser_at("/next.html")
+    b.evaluate(f"document.body.insertAdjacentHTML('afterbegin', {json.dumps(rows + '<button>Submit</button>')}); "
+               "document.querySelectorAll('.edit-icon').forEach(i => i.addEventListener('click', () => {}))")
+    labels = lambda: [a["label"] for a in b.observe()["actions"]]
+    assert "Edit Field (in “Address 1”)" not in labels() and "Submit" not in labels()
+    assert b.reveal("Address 1", "Edit Field") is True and "Edit Field (in “Address 1”)" in labels()
+    assert b.into_view("Submit") is True and "Submit" in labels()
+    assert b.into_view("Pay now") is False
+
+
 def test_a_greyed_out_fields_value_is_read_beside_its_row_but_never_an_id(browser_at):
     # Experian shows what the report says in disabled fields: the addresses were never read, so none could be named
     rows = "".join(f'<div class="row"><p>{name}</p><input disabled readonly value="{value}"><input disabled></div>'
@@ -439,6 +464,16 @@ def test_a_greyed_out_fields_value_is_read_beside_its_row_but_never_an_id(browse
     text = b.observe()["text"]
     assert "Address 1\n12, Lake Road, Pune 411001\nPAN\n" in text
     assert "ABCDE1234F" not in text
+
+
+def test_a_greyed_out_field_off_screen_is_read_with_its_rows_name(browser_at):
+    # Experian's addresses sit below the first screen: the worker reported the rows in view, and no address was offered
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div class=\"row\"><p>Name</p>"
+               "<input disabled value=\"Asha Rao\"></div><div style=\"height:3000px\"></div><div class=\"row\">"
+               "<p>Address 2</p><input disabled value=\"4 Park Street\"><input disabled></div>')")
+    text = b.observe()["text"]
+    assert "Name\nAsha Rao" in text and "Address 2: 4 Park Street" in text
 
 
 def test_a_cards_own_action_names_its_card_even_when_one_card_shows(browser_at):

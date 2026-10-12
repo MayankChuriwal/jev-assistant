@@ -174,7 +174,8 @@ QR_BOX = r"""(() => {
 CARD_INTO_VIEW = r"""((title, word) => {
   const norm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
   const target = norm(title), name = norm(word);
-  const named = root => [...root.querySelectorAll('button, [role="button"], a')].filter(b => norm(b.innerText) === name);
+  const named = root => [...root.querySelectorAll('button, [role="button"], a, [title]')]  // Experian's pencil: a title
+    .filter(b => norm(b.innerText) === name || !norm(b.innerText) && norm(b.getAttribute('title')) === name);
   for (const control of named(document)) {
     let card = control;
     while (card.parentElement && named(card.parentElement).length === 1) card = card.parentElement;
@@ -184,6 +185,13 @@ CARD_INTO_VIEW = r"""((title, word) => {
     }
   }
   return false;
+})"""
+BUTTON_INTO_VIEW = r"""(word => {
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const button = [...document.querySelectorAll('button, [role="button"], input[type="submit"]')]
+    .find(b => norm(b.innerText || b.value) === norm(word) && b.checkVisibility());
+  button?.scrollIntoView({block: 'center'});
+  return !!button;
 })"""
 # A captcha's picture (MyUPI's letters in an image beside its "Security Verification" box), scrolled into view: its box
 # in page coordinates, or null. One named as a captcha, else the wide picture nearest the captcha's box.
@@ -468,7 +476,8 @@ def forget_sites(sites):
 class Browser:
     """One task's tabs in the agent Chrome. Every executed target resolves from an observed node."""
 
-    def __init__(self, url, *, downloads=None, geolocation=None, owner=None):
+    def __init__(self, url, *, downloads=None, geolocation=None, owner=None, stay=False):
+        """With `stay`, a kept tab is where the task starts, as it was left (Experian's sign-in lives in its page)."""
         self.owner, self.started = owner, time.monotonic()  # whose task: a kept sign-in is only ever theirs
         with DAEMON:
             ensure_daemon()
@@ -486,8 +495,10 @@ class Browser:
                 cdp("Browser.setPermission", permission={"name": permission}, setting=setting)
             except RuntimeError:
                 pass  # ponytail: an unsupported permission keeps Chrome's prompt, which cannot block CDP
-        self.active = self._kept(url) or self._adopt(
-            cdp("Target.createTarget", url="about:blank", background=True)["targetId"])
+        kept = self._kept(url)
+        self.active = kept or self._adopt(cdp("Target.createTarget", url="about:blank", background=True)["targetId"])
+        if kept and stay:
+            return
         try:
             self.navigate(url)
         except Exception:
@@ -938,6 +949,11 @@ class Browser:
         """Scroll the card titled `title` until its `word` control is in view (MyUPI listed AISLE below the fold, so its
         Cancel was never offered): True when that card was found."""
         return bool(self.evaluate(f"({CARD_INTO_VIEW})({json.dumps(title)}, {json.dumps(word)})"))
+
+    def into_view(self, word):
+        """Scroll the page's button named `word` into view (Experian's Submit, below the first screen): True when there
+        is one."""
+        return bool(self.evaluate(f"({BUTTON_INTO_VIEW})({json.dumps(word)})"))
 
     def grid_screenshot(self, region=None, columns=8, rows=6, masked=(), scale=1, hide=()):
         """(PNG of the viewport or `region` under a labelled grid, the grid's cells in viewport coordinates)."""

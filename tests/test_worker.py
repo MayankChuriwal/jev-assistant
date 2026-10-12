@@ -484,11 +484,26 @@ def test_telling_the_user_to_scan_a_qr_the_page_shows_sends_the_qr(tmp_path, mon
 
 
 @pytest.mark.parametrize("url, keep", [("https://www.upihelp.npci.org.in/", True),
+                                       ("https://consumer.experian.in/ECSINDIA-DCE/view/angular/disputePreFillPage", True),
                                        ("https://shop.test/checkout", False)])
 def test_a_site_whose_sign_in_lives_in_its_tab_keeps_the_tab_for_the_next_task(tmp_path, url, keep):
     w = worker_with(tmp_path, page=fake_page(url=url))
     w.close()
     assert w.browser.close.call_args.kwargs == {"keep": keep}
+
+
+@pytest.mark.parametrize("url, stay", [("https://consumer.experian.in/ECSINDIA-DCE/view/angular/index.html#!/", True),
+                                       ("https://www.upihelp.npci.org.in/", False)])
+def test_a_site_whose_sign_in_lives_in_its_page_starts_where_its_last_task_left_it(tmp_path, monkeypatch, url, stay):
+    # live: each Experian read opened the start again, asked for the ERN and a code, and the portal locked the user out
+    from assistant import worker as module
+
+    tab = Mock(fresh=Mock(return_value=True), observe=Mock(return_value=fake_page(url=url)), downloads=[],
+               pending_downloads=[])
+    opened = Mock(return_value=tab)
+    monkeypatch.setattr(module, "Browser", opened)
+    Worker(url, "Show my Personal Details", memory=store(), trace_dir=tmp_path / "traces")
+    assert opened.call_args.kwargs["stay"] is stay
 
 
 def test_an_update_then_a_question_in_the_same_words_goes_out_once(tmp_path, monkeypatch):
@@ -3801,3 +3816,79 @@ def test_a_report_may_quote_what_the_pages_fields_show(tmp_path, monkeypatch):
     jev_checks(monkeypatch)
     w.command("tick")
     assert w.state["status"] == "done" and w.told[-1]["text"] == "Address 1: 12 Old Road, Howrah"
+
+
+# ---- a disputed detail corrected by the worker itself: live, the planner opened the Email and Mobile rows, cancelled
+# the address it typed, and left for Track Disputes; only the comment went in
+
+EXPERIAN = "https://consumer.experian.in/ECSINDIA-DCE/view/angular/disputePreFillPage"
+DISPUTE = ("Raise a dispute on my Experian credit report. Dispute type: Personal Details. The report shows: Address 1: "
+           "19, OLD LANE HOWRAH 711101. It should be: 19, New Lane, Howrah-711101.")
+
+
+def rows_page(*actions, text="Personal Details\nWhat’s displayed in your report\nEnter the correct value"):
+    tab = {"id": "t1", "kind": "click", "label": "Personal details My personal details are incorrect", "role": "tab",
+           "selected": "true", "node": 1}
+    return fake_page(url=EXPERIAN, text=text, actions=[tab, *[{"node": 10 + n, **a} for n, a in enumerate(actions)]])
+
+
+def pencil(row):
+    return {"id": f"p-{row}", "kind": "click", "label": f"Edit Field (in “{row}”)", "role": "button"}
+
+
+def box(row, value=""):
+    return {"id": f"b-{row}", "kind": "fill", "label": f"textbox in “{row} Cancel Edit”", "role": "textbox",
+            "value": value}
+
+
+SUBMIT_BUTTON = {"id": "s1", "kind": "click", "label": "Submit", "role": "button"}
+
+
+def test_the_disputed_rows_own_pencil_is_pressed_without_the_planner(tmp_path, monkeypatch, no_wait):
+    w = worker_with(tmp_path, page=rows_page(pencil("Email Address"), pencil("Address 1")), goal=DISPUTE)
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"] == "Edit Field (in “Address 1”)"
+
+
+def test_the_disputed_row_below_the_screen_is_scrolled_to_and_no_other_rows_pencil_is_pressed(tmp_path, monkeypatch,
+                                                                                               no_wait):
+    w = worker_with(tmp_path, page=rows_page(pencil("Name"), pencil("Gender")), goal=DISPUTE)
+    w.browser.reveal = Mock(return_value=True)
+    w.browser.observe.return_value = rows_page(pencil("PAN"), pencil("Address 1"))
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.reveal.call_args.args == ("Address 1", "Edit Field")
+    assert w.browser.act.call_args.args[1]["label"] == "Edit Field (in “Address 1”)"
+
+
+def test_the_disputed_rows_open_box_gets_the_correct_value(tmp_path, monkeypatch, no_wait):
+    w = worker_with(tmp_path, page=rows_page(box("Address 1")), goal=DISPUTE)
+    no_planner(monkeypatch)
+    w.command("tick")
+    operation, action = w.browser.act.call_args.args[:2]
+    assert (operation, action["label"]) == ("TYPE_TEXT", "textbox in “Address 1 Cancel Edit”")
+    assert w.browser.act.call_args.kwargs["text"] == "19, New Lane, Howrah-711101"
+
+
+def test_with_the_value_in_submit_below_the_screen_is_brought_into_view_and_needs_the_users_yes(tmp_path, monkeypatch,
+                                                                                                no_wait):
+    filled = box("Address 1", "19, New Lane, Howrah-711101")
+    w = worker_with(tmp_path, page=rows_page(filled), goal=DISPUTE)
+    w.browser.into_view = Mock(return_value=True)
+    w.browser.observe.return_value = rows_page(filled, SUBMIT_BUTTON)
+    no_planner(monkeypatch)
+    jev_checks(monkeypatch)  # Submit is the final step
+    monkeypatch.setattr(planner, "summary", lambda payload: ["Address 1 becomes 19, New Lane, Howrah-711101"])
+    w.command("tick")
+    assert w.browser.into_view.call_args.args == ("Submit",)
+    assert w.asked[0]["approval"] and "I'll press “Submit”" in w.asked[0]["text"]
+    assert not w.browser.act.called  # the user's yes first: they didn't give it
+
+
+def test_a_value_the_site_shows_in_capitals_is_not_typed_again(tmp_path, monkeypatch, no_wait):
+    shown = box("Address 1", "19, NEW LANE, HOWRAH-711101")
+    w = worker_with(tmp_path, page=rows_page(shown), goal=DISPUTE)
+    w.browser.into_view = Mock(return_value=False)
+    no_planner(monkeypatch)
+    assert w.row_step(w.state["page"]) is None and w.browser.into_view.called  # on to Submit, not the box again

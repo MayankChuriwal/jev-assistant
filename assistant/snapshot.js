@@ -184,10 +184,18 @@
     }
   };
   // A greyed-out field shows its value as text does (Experian's dispute rows: what the report says, beside its row's
-  // name), but never an ID in it: a PAN, an Aadhaar or a card number stays off the page text.
+  // name), but never an ID in it: a PAN, an Aadhaar or a card number stays off the page text. Off screen, it is read
+  // with its row's name ("Address 2: …"): a report of every row needs no scrolling.
   const SHOWN = new Set(['text', 'email', 'tel', 'number', 'search', 'url', 'date']);
   const shown = e => (e.tagName === 'TEXTAREA' || e.tagName === 'INPUT' && SHOWN.has(e.type)) && e.matches(':disabled');
   const ID = /\b[A-Z]{5}\d{4}[A-Z]\b|\d(?:[\s-]?\d){11,}/i;
+  const rowName = e => {
+    for (let a = e.parentElement, n = 0; a && n < 4; a = a.parentElement, n++) {
+      const t = a.innerText.trim().split('\n')[0];
+      if (t) return t.slice(0, 60);
+    }
+    return '';
+  };
   for (const {root, dx, dy} of roots) {
     const doc = root.ownerDocument || root, start = root.body || root;
     const walker = doc.createTreeWalker(start, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT), range = doc.createRange();
@@ -200,8 +208,10 @@
         continue;
       if (!field) range.selectNodeContents(node);
       const r = (field ? node : range).getBoundingClientRect(), x = r.x + dx, y = r.y + dy;
-      if (!(r.width > 0 && r.height > 0 && y + r.height > 0 && y < innerHeight && x + r.width > 0 && x < innerWidth)) continue;
-      words.push(field && ID.test(value) ? '[an ID, hidden]' : value);
+      const onScreen = y + r.height > 0 && y < innerHeight && x + r.width > 0 && x < innerWidth;
+      if (!(r.width > 0 && r.height > 0 && (onScreen || field))) continue;
+      const said = field && ID.test(value) ? '[an ID, hidden]' : value;
+      words.push(onScreen ? said : `${rowName(node)}: ${said}`);
       length += value.length;
       if (/\b(drag|drop)\b/i.test(value) && FILE_WORDS.test(value)) dropZone(parent, value, dx, dy);  // not "Drop-off"
     }

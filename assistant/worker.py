@@ -32,6 +32,8 @@ CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QR_TRIES = 5  # seconds a mandate's QR may take to render after its Cancel
 LIST_READS, LIST_GAP = 6, 0.7  # MyUPI draws its mandate list a card at a time, over a few seconds
 CHOSEN = re.compile(r"(Cancel|Pause) the UPI AutoPay mandate whose payee is (.+?)(?: until .+)?$")  # the brain's words
+ROW_FIX = re.compile(r"Dispute type: Personal Details\. The report shows: ([^:]+): .+?\. It should be: (.+?)\.?\s*$",
+                     re.DOTALL)  # the brain's dispute: the row it names, and that row's correct value
 MANDATE_CANCEL = re.compile(r"(?:cancel|revoke)\b", re.IGNORECASE)  # a card's Cancel: the UPI app does the rest
 APPROVED = re.compile(r"\s*(?:yes|done|approved|i approved|i did|ok)\b", re.IGNORECASE)
 AGREE = re.compile(r"\b(?:i (?:have read and )?agree|i accept)\b", re.IGNORECASE)  # a terms box
@@ -252,7 +254,9 @@ class Worker:
             self.trace_dir = Path(trace_dir)
         token = SECRETS.set(self.secrets)
         try:
-            self.browser = browser or Browser(url, geolocation=self.memory.geolocation(), owner=owner)
+            keep = (skills.site_for(url, self.library["sites"]) or {}).get("keep")
+            self.browser = browser or Browser(url, geolocation=self.memory.geolocation(), owner=owner,
+                                              stay=keep == "page")  # Experian: its sign-in lives in its page
             try:
                 page = self.clean(self.browser.observe())
                 home = urlparse(url)._replace(path="/", params="", query="", fragment="").geturl()
@@ -561,6 +565,10 @@ class Worker:
         if chosen:  # the demo: the planner never scrolled to AISLE's card and reached for GOOGLE PLAY's until stuck
             action, page = chosen
             return self.no_mandate(page) if action is None else self.act("CLICK", action, page, None)
+        fixing = self.row_step(page)
+        if fixing:  # live: the planner opened other rows, cancelled the address it typed, and left the page
+            operation, action, text, page = fixing
+            return self.act(operation, action, page, None, text=text)
         if s["reason"]:
             return self.think(page)
         sub = self.subgoal()
@@ -883,6 +891,46 @@ class Worker:
         opener = next((a for a in page["actions"] if a["kind"] == "click" and link
                        and (a.get("label") or "").strip().lower() == link), None)
         return (opener, page) if opener else None
+
+    def row_step(self, page):
+        """A personal detail the brain's dispute names (“The report shows: Address 1: …. It should be: …”) on a site
+        whose rows each have their own edit control (Experian's pencil, its note's `rows`): (operation, control, text,
+        page) for the next step, else None for the planner. The Personal details tab, then that row's control (scrolled
+        into view; never another row's), the value into the box it opens, then Submit, once, which needs the user's
+        yes like any final step."""
+        s = self.state
+        fix = ROW_FIX.search(s["goal"])
+        note = skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None
+        control = (note or {}).get("rows")
+        if not fix or not control or any(h.get("committed") or h.get("action") == "Submit" for h in s["history"]):
+            return None
+        row, value = fix[1].strip(), fix[2].strip()
+
+        def labelled(p, label):
+            return next((a for a in p["actions"] if a["kind"] == "click"
+                         and (a.get("label") or "").lower() == label.lower()), None)
+
+        tab = next((a for a in page["actions"] if a.get("role") == "tab"
+                    and (a.get("label") or "").lower().startswith("personal details")), None)
+        if tab and tab.get("selected") == "false":
+            return "CLICK", tab, None, page
+        box = next((a for a in page["actions"] if a["kind"] == "fill"
+                    and f"“{row.lower()}" in (a.get("label") or "").lower()), None)
+        if box and rules.normal(box.get("value") or "").lower() != rules.normal(value).lower():
+            typed = sum(h.get("operation") == "TYPE_TEXT" and h.get("action") == box.get("label") for h in s["history"])
+            return ("TYPE_TEXT", box, value, page) if typed < 2 else None  # twice and still not shown: the planner's
+        if box:
+            submit = labelled(page, "Submit")
+            if not submit and s["browser"].into_view("Submit"):  # Experian's sits below the first screen
+                page = self.observe()
+                submit = labelled(page, "Submit")
+            return ("CLICK", submit, None, page) if submit else None
+        pencil = labelled(page, f"{control} (in “{row}”)")
+        if not pencil and any(f"{control} (in “".lower() in (a.get("label") or "").lower() for a in page["actions"]):
+            if s["browser"].reveal(row, control):  # other rows' pencils in view: its own is further down
+                page = self.observe()
+                pencil = labelled(page, f"{control} (in “{row}”)")
+        return ("CLICK", pencil, None, page) if pencil else None
 
     def captcha_box(self, page):
         """The captcha's text box when it is empty, else None."""
@@ -2335,7 +2383,7 @@ class Worker:
         finally:
             url = (self.state.get("page") or {}).get("url") or ""
             note = skills.site_for(url, self.library["sites"]) if url else None
-            self.browser.close(keep=(note or {}).get("keep") == "tab")  # MyUPI: its sign-in lives in the tab
+            self.browser.close(keep=(note or {}).get("keep") in ("tab", "page"))  # MyUPI, Experian: signed in there
 
     def steps(self):
         """Tick until the task stops, yielding the state after each step (for scripts)."""
