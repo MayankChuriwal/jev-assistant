@@ -555,6 +555,14 @@ class ChatServer(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", port), ChatHandler)
 
 
+def kept_sites(sites):
+    """The sites whose notes keep a sign-in between tasks (MyUPI's tab, Experian's page): any left open is ended."""
+    from . import browser
+
+    return {browser.site_of(f"https://{key.partition('/')[0]}/") for key, note in sites.items()
+            if note.get("keep") in ("tab", "page")}
+
+
 def serve(port=CHAT_PORT, bench=None):
     from .channel_web import WebChannel
     from .core import Core
@@ -575,10 +583,8 @@ def serve(port=CHAT_PORT, bench=None):
         return release(1)
     from . import browser, skills
 
-    keep = {browser.site_of(f"https://{key.partition('/')[0]}/") for key, note in skills.load_sites().items()
-            if note.get("keep") == "tab"}
     try:
-        browser.end_leftovers(keep)  # a sign-in an earlier run left open (it stopped without logging out)
+        browser.end_leftovers(kept_sites(skills.load_sites()))  # a sign-in an earlier run left open (no logout)
     except (RuntimeError, TimeoutError, OSError) as error:
         print(f"jev: couldn't check for sign-ins left open: {error}", file=sys.stderr)
     channel = WebChannel(home() / "media")

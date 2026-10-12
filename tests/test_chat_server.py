@@ -138,3 +138,10 @@ def test_the_rivo_look_s_fonts_and_images_come_from_this_server_only(chat):
     assert httpx.get(chat.base + "/rio-mark.png").headers["content-type"] == "image/png"
     policy = httpx.get(chat.base + "/").headers["content-security-policy"]
     assert "font-src 'self'" in policy and "default-src 'none'" in policy
+
+
+def test_sign_ins_left_open_are_ended_on_every_site_that_keeps_one():
+    # Experian, SmartBuy and iShop keep their page signed in (keep: page): a restart ended only keep: tab's
+    sites = {"upihelp.npci.org.in": {"keep": "tab"}, "consumer.experian.in": {"keep": "page"},
+             "gyftr.com/instantvouchers": {"keep": "page"}, "amazon.in": {}}
+    assert server.kept_sites(sites) == {"upihelp.npci.org.in", "consumer.experian.in", "gyftr.com"}
