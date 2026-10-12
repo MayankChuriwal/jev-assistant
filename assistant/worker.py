@@ -565,6 +565,9 @@ class Worker:
         if chosen:  # the demo: the planner never scrolled to AISLE's card and reached for GOOGLE PLAY's until stuck
             action, page = chosen
             return self.no_mandate(page) if action is None else self.act("CLICK", action, page, None)
+        notice = self.notice_step(page)
+        if notice:  # live: Experian's “… wait for 30 days …” was read as an instruction, and waited on twenty times
+            return self.act("CLICK", notice, page, None)
         fixing = self.row_step(page)
         if fixing:  # live: the planner opened other rows, cancelled the address it typed, and left the page
             operation, action, text, page = fixing
@@ -891,6 +894,15 @@ class Worker:
         opener = next((a for a in page["actions"] if a["kind"] == "click" and link
                        and (a.get("label") or "").strip().lower() == link), None)
         return (opener, page) if opener else None
+
+    def notice_step(self, page):
+        """A notice its site note says to close (`close`: Experian's “If you have made a recent payment, …”, a pop-up
+        with no button over the dispute page): the control showing it, else None. Never twice in a row: a notice that
+        stays is the planner's."""
+        words = ((skills.site_for(page["url"], self.library["sites"]) or {}).get("close") or "").lower()
+        last = self.state["history"][-1].get("action") if self.state["history"] else None
+        return next((a for a in page["actions"] if words and a["kind"] == "click" and a.get("label") != last
+                     and words in (a.get("label") or "").lower()), None)
 
     def row_step(self, page):
         """A personal detail the brain's dispute names (“The report shows: Address 1: …. It should be: …”) on a site

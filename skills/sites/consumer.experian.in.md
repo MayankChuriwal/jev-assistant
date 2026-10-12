@@ -6,8 +6,10 @@ start: https://consumer.experian.in/ECSINDIA-DCE/view/angular/index.html#!/
 learn: no
 keep: page
 rows: Edit Field
+close: If you have made a recent payment
 ---
 - This is Experian India's page for raising a dispute on a credit report. It opens with two boxes: type [profile:experian_ern] into "Experian Reference Number" and [profile:experian_uti] into "Unique Transaction ID", then press Verify.
+- The tab stays signed in between requests: when the page already shows the dispute page (Track Disputes, Account details, Personal details), don't sign in again. Its notice "If you have made a recent payment, it is advisable to wait for 30 days…" is only advice, never a reason to wait: the system closes it.
 - The ERN is on the top right of the user's Experian report; the UTI is in Experian's email. Both must come from a report pulled in the last 30 days: if the page says they are too old, don't match, or can't be verified ("Error while verifying UTI and ERN"), STOP saying Experian couldn't verify them and a fresh Experian report is needed.
 - After Verify (and the code Experian sends, which the system asks for), a goal to show the details opens the dispute type it names and ends with DONE listing every row with its current value ("Address 1: …; Address 2: …", or each account's lender, last 4 digits and fields), changing nothing.
 - After Verify, pick the dispute type from the drop-down: Account Details (an account's status, balance, limit, dates, or an account that isn't the user's), Personal Details, or Credit Enquiry.

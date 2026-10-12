@@ -3892,3 +3892,17 @@ def test_a_value_the_site_shows_in_capitals_is_not_typed_again(tmp_path, monkeyp
     w.browser.into_view = Mock(return_value=False)
     no_planner(monkeypatch)
     assert w.row_step(w.state["page"]) is None and w.browser.into_view.called  # on to Submit, not the box again
+
+
+def test_a_notice_its_site_note_names_is_closed_without_the_planner(tmp_path, monkeypatch, no_wait):
+    # live Experian: “If you have made a recent payment, … wait for 30 days …” covered the page after the code, and
+    # the planner read it as an instruction and waited twenty times
+    notice = {"id": "n1", "kind": "click", "label": "clickable in “If you have made a recent payment, it is advisable "
+              "to wait for 30 days for the s”", "role": "generic", "node": 1}
+    w = worker_with(tmp_path, page=fake_page(url=EXPERIAN, text="If you have made a recent payment, …",
+                                             actions=[notice]), goal="Show my Personal Details")
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"].startswith("clickable in “If you have made a recent payment")
+    w.state["history"].append({"operation": "CLICK", "action": notice["label"]})
+    assert w.notice_step(w.state["page"]) is None  # never twice in a row: the planner takes over
