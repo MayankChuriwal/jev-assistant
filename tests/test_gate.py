@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 from fakes import fake_page, worker_with
 
-from assistant import gate
+from assistant import gate, skills
 from assistant.browser import StalePage
 from assistant.errors import Halt, Retry
 
@@ -87,6 +87,20 @@ def test_a_control_its_site_note_names_final_commits_without_jevs_check(monkeypa
     assert gate.commit_label(w, "CLICK", pay, page) == "Proceed to Pay ₹500"
     other = {"id": "o", "kind": "click", "label": "Add to cart", "role": "button", "node": 43}
     assert gate.commit_label(w, "CLICK", other, page) is None
+
+
+def test_smartbuys_cart_buy_now_asks_and_its_view_cart_never_does(monkeypatch):
+    # GyFTR's cart ends in "BUY NOW" (its scripts: CART SUMMARY … You Pay … BUY NOW), the step to the bank's card form
+    monkeypatch.setattr(gate.jev, "final", lambda *a: pytest.fail("Jev was asked"))
+    page = fake_page(url="https://www.gyftr.com/instantvouchers/cart",
+                     text="CART SUMMARY\nSwiggy Money Voucher ₹500 x 1\nTotal Cart Value ₹500\nPromo Code Apply\n"
+                          "Pay via Reward Points\nDeliver to: [profile:email]\nYou Pay ₹500\nBUY NOW")
+    w = Fake(page)
+    w.library = {"sites": skills.load_sites()}
+    click = lambda label: {"id": label, "kind": "click", "label": label, "role": "button", "node": 46}
+    assert gate.commit_label(w, "CLICK", click("BUY NOW"), page) == "BUY NOW"
+    assert gate.commit_label(w, "CLICK", click("Redeem & Pay ₹500"), page) == "Redeem & Pay ₹500"
+    assert gate.commit_label(w, "CLICK", click("View Cart & Buy"), page) is None
 
 
 def test_a_control_its_site_note_names_a_step_never_asks(monkeypatch):
