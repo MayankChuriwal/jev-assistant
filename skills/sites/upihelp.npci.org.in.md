@@ -7,6 +7,7 @@ learn: no
 sign-in: auto
 cards: payee
 list: Manage recurring payments
+list-link: UPI Autopay
 keep: tab
 ---
 - NPCI's MyUPI shows the user's UPI activity across all their UPI apps: AutoPay mandates (and their cancel, pause, resume), the last 60 days of transactions, complaints, their UPI ID and number, payee checks, fraud advice and FAQs.

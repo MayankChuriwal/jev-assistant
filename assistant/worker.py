@@ -31,6 +31,7 @@ COMMIT_DROPS = 3  # an order's replan with no commit (none left in the old plan 
 CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QR_TRIES = 5  # seconds a mandate's QR may take to render after its Cancel
 LIST_READS, LIST_GAP = 6, 0.7  # MyUPI draws its mandate list a card at a time, over a few seconds
+CHOSEN = re.compile(r"(Cancel|Pause) the UPI AutoPay mandate whose payee is (.+?)(?: until .+)?$")  # the brain's words
 MANDATE_CANCEL = re.compile(r"(?:cancel|revoke)\b", re.IGNORECASE)  # a card's Cancel: the UPI app does the rest
 APPROVED = re.compile(r"\s*(?:yes|done|approved|i approved|i did|ok)\b", re.IGNORECASE)
 AGREE = re.compile(r"\b(?:i (?:have read and )?agree|i accept)\b", re.IGNORECASE)  # a terms box
@@ -549,6 +550,10 @@ class Worker:
         if signing:  # MyUPI: the planner skipped the phone, so Continue never lit up
             operation, action, text = signing
             return self.act(operation, action, page, None, text=text)
+        chosen = self.mandate_step(page)
+        if chosen:  # the demo: the planner never scrolled to AISLE's card and reached for GOOGLE PLAY's until stuck
+            action, page = chosen
+            return self.no_mandate(page) if action is None else self.act("CLICK", action, page, None)
         if s["reason"]:
             return self.think(page)
         sub = self.subgoal()
@@ -828,6 +833,35 @@ class Worker:
         submit = next((a for a in page["actions"] if a["kind"] == "click" and SUBMIT.match(a.get("label") or "")),
                       None)
         return ("CLICK", submit, None) if submit else None
+
+    def mandate_step(self, page):
+        """A mandate the user chose (the brain's goal “Cancel the UPI AutoPay mandate whose payee is AISLE”) on a site
+        whose cards go by payee: (its control to press, the page it is on), (None, page) when the whole list has no
+        such card, else None for the planner. The list is opened from its note's `list-link`, the card scrolled into
+        view, and its Cancel or Pause pressed: MyUPI lists its cards in a new order on each load, and only those on
+        screen are offered."""
+        chosen = CHOSEN.match(self.state["goal"])
+        note = skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None
+        if not chosen or (note or {}).get("cards") != "payee":
+            return None
+        word, payee = chosen[1], chosen[2].strip()
+        label = f"{word} (in “{payee}”)".lower()
+        pressable = next((a for a in page["actions"] if (a.get("label") or "").lower() == label), None)
+        if pressable:
+            return pressable, page
+        cards = [c.lower() for c in page.get("cards") or []]
+        if payee.lower() in cards:
+            if self.state["browser"].reveal(payee, word):
+                page = self.observe()
+                pressable = next((a for a in page["actions"] if (a.get("label") or "").lower() == label), None)
+            return (pressable, page) if pressable else None
+        marker = (note.get("list") or "").lower()
+        if marker and marker in page["text"].lower():  # the whole list (one mandate's own panel says nothing of it)
+            return None, page  # read whole, and settled: no card is this payee's
+        link = (note.get("list-link") or "").lower()
+        opener = next((a for a in page["actions"] if a["kind"] == "click" and link
+                       and (a.get("label") or "").strip().lower() == link), None)
+        return (opener, page) if opener else None
 
     def captcha_box(self, page):
         """The captcha's text box when it is empty, else None."""

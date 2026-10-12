@@ -3651,3 +3651,74 @@ def test_a_mandate_no_card_is_for_ends_with_the_outcome_not_found(tmp_path):
         w.act("CLICK", openai, w.state["page"], sub("cancel the Netflix mandate"))
     w.act("CLICK", openai, w.state["page"], sub("cancel the Netflix mandate"))
     assert w.state["outcome"] == "not_found" and w.state["status"] == "done"
+
+
+
+# ---- a mandate the user chose, pressed by the worker itself: MyUPI orders its cards anew on each load
+
+CHOSEN = "Cancel the UPI AutoPay mandate whose payee is AISLE"
+
+
+def listed(cards, shown):
+    page = mandate_page(cards, shown=shown)
+    page["url"], page["text"] = MYUPI, HEADER
+    page["card_lines"] = [f"{c} ₹ 1" for c in cards]
+    return page
+
+
+def no_planner(monkeypatch):
+    from assistant import planner
+
+    monkeypatch.setattr(planner, "turn", lambda *a, **k: pytest.fail("the planner was asked"))
+
+
+def test_a_chosen_mandate_on_screen_is_pressed_without_the_planner(tmp_path, monkeypatch, no_wait):
+    page = listed(["GOOGLE PLAY", "OPENAI LLC", "AISLE"], shown=["GOOGLE PLAY", "OPENAI LLC", "AISLE"])
+    w = worker_with(tmp_path, page=page, goal=CHOSEN, replies=[{"option": "o2"}])
+    w.browser.qr_screenshot = Mock(return_value="cXI=")
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"] == "Cancel (in “AISLE”)"
+    assert w.asked[0]["text"].startswith("To cancel AISLE's UPI AutoPay") and w.state["outcome"] == "not_approved"
+
+
+def test_a_chosen_mandate_below_the_screen_is_scrolled_into_view_then_pressed(tmp_path, monkeypatch, no_wait):
+    # the demo: AISLE was third, off screen; the planner reached for GOOGLE PLAY's Cancel until stuck
+    below = listed(["GOOGLE PLAY", "OPENAI LLC", "AISLE"], shown=["GOOGLE PLAY", "OPENAI LLC"])
+    w = worker_with(tmp_path, page=below, goal=CHOSEN, replies=[{"option": "o2"}])
+    w.browser.qr_screenshot = Mock(return_value="cXI=")
+    w.browser.reveal = Mock(return_value=True)
+    w.browser.observe.return_value = listed(["GOOGLE PLAY", "OPENAI LLC", "AISLE"], shown=["OPENAI LLC", "AISLE"])
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.reveal.call_args.args == ("AISLE", "Cancel")
+    assert w.browser.act.call_args.args[1]["label"] == "Cancel (in “AISLE”)" and w.asked
+
+
+def test_with_the_mandate_list_closed_the_worker_opens_it(tmp_path, monkeypatch, no_wait):
+    home = fake_page(url=MYUPI, text="Your UPI details", actions=[
+        {"id": "s1", "kind": "click", "label": "UPI Autopay", "role": "button", "node": 1},
+        {"id": "s2", "kind": "click", "label": "UPI Transactions", "role": "button", "node": 2}])
+    w = worker_with(tmp_path, page=home, goal=CHOSEN)
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"] == "UPI Autopay"
+
+
+def test_a_chosen_mandate_not_on_the_list_ends_not_found_with_nothing_pressed(tmp_path, monkeypatch, no_wait):
+    page = listed(["GOOGLE PLAY", "OPENAI LLC"], shown=["GOOGLE PLAY", "OPENAI LLC"])
+    w = worker_with(tmp_path, page=page, goal=CHOSEN)
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.state["outcome"] == "not_found" and not w.browser.act.called
+
+
+def test_one_mandates_own_panel_never_says_the_chosen_one_is_missing(tmp_path, monkeypatch, no_wait):
+    # MyUPI: “cancel my aisle” was once answered “no mandate” from GOOGLE PLAY's card alone
+    panel = listed(["GOOGLE PLAY"], shown=["GOOGLE PLAY"])
+    panel["text"] = "GOOGLE PLAY\n₹299"  # no list heading: a single mandate's panel
+    panel["actions"].append({"id": "s1", "kind": "click", "label": "UPI Autopay", "role": "button", "node": 9})
+    w = worker_with(tmp_path, page=panel, goal=CHOSEN)
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.state["outcome"] is None and w.browser.act.call_args.args[1]["label"] == "UPI Autopay"

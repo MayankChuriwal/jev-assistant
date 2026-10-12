@@ -169,6 +169,22 @@ QR_BOX = r"""(() => {
   const r = best.getBoundingClientRect();
   return {x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height};
 })"""
+# The card whose lines include `title` (MyUPI's payee), its `word` control (Cancel, Pause) scrolled into view: true when
+# found. A card is the widest box around one such control: two cards' box holds two.
+CARD_INTO_VIEW = r"""((title, word) => {
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const target = norm(title), name = norm(word);
+  const named = root => [...root.querySelectorAll('button, [role="button"], a')].filter(b => norm(b.innerText) === name);
+  for (const control of named(document)) {
+    let card = control;
+    while (card.parentElement && named(card.parentElement).length === 1) card = card.parentElement;
+    if (card.innerText.split('\n').map(norm).includes(target)) {
+      control.scrollIntoView({block: 'center'});
+      return true;
+    }
+  }
+  return false;
+})"""
 # A labelled grid drawn over the page for one capture, in a closed shadow root: the page's own reads never see it.
 GRID = r"""(cells => {
   document.getElementById('__jev_grid')?.remove();
@@ -882,6 +898,11 @@ class Browser:
         clip = {"x": max(0, box["x"] - pad), "y": max(0, box["y"] - pad), "width": box["width"] + 2 * pad,
                 "height": box["height"] + 2 * pad, "scale": 2}
         return self.screenshot(masked=masked, clip=clip, hide=hide)
+
+    def reveal(self, title, word):
+        """Scroll the card titled `title` until its `word` control is in view (MyUPI listed AISLE below the fold, so its
+        Cancel was never offered): True when that card was found."""
+        return bool(self.evaluate(f"({CARD_INTO_VIEW})({json.dumps(title)}, {json.dumps(word)})"))
 
     def grid_screenshot(self, region=None, columns=8, rows=6, masked=(), scale=1, hide=()):
         """(PNG of the viewport or `region` under a labelled grid, the grid's cells in viewport coordinates)."""

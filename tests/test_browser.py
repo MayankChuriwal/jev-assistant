@@ -404,6 +404,19 @@ def test_every_cards_title_is_read_even_off_screen(browser_at):  # MyUPI: GOOGLE
     assert "Cancel (in “GOOGLE PLAY”)" not in [a["label"] for a in page["actions"]]  # off screen: not offered
 
 
+def test_a_card_off_screen_is_scrolled_into_view_by_its_title(browser_at):
+    # MyUPI listed AISLE third, below the fold: its Cancel was never offered, so it was never pressed
+    payees = [("GOOGLE PLAY", 299), ("OPENAI LLC", 399), ("AISLE", 499)]
+    cards = "".join(CARD.format(payee=p, amount=a) for p, a in payees)
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', "
+               f"'<div style=\"height:90px;overflow:auto\">{cards}</div>')")
+    assert "Cancel (in “AISLE”)" not in [a["label"] for a in b.observe()["actions"]]
+    assert b.reveal("AISLE", "Cancel") is True
+    assert "Cancel (in “AISLE”)" in [a["label"] for a in b.observe()["actions"]]
+    assert b.reveal("NETFLIX", "Cancel") is False
+
+
 def test_a_cards_own_action_names_its_card_even_when_one_card_shows(browser_at):
     # MyUPI shows one mandate card at a time, each with Pause and Cancel: a bare "Cancel" was pressed for the wrong one
     card = CARD
