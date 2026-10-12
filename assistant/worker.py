@@ -3,6 +3,7 @@ and System Two (planner.py: mini plans, resolves what Jev is unsure about, and w
 every commit. The user is asked only for what they alone can give, and no model ever sees a secret."""
 
 import html
+import itertools
 import json
 import re
 import sys
@@ -32,6 +33,8 @@ CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QR_TRIES = 5  # seconds a mandate's QR may take to render after its Cancel
 LIST_READS, LIST_GAP = 6, 0.7  # MyUPI draws its mandate list a card at a time, over a few seconds
 CHOSEN = re.compile(r"(Cancel|Pause) the UPI AutoPay mandate whose payee is (.+?)(?: until .+)?$")  # the brain's words
+VOUCHER_READ = re.compile(r"^Show the (.+?) gift vouchers on (.+?): list the amounts")  # the brain's voucher read
+REWARD_LINE = re.compile(r"reward points|cashback|icash|instant discount", re.IGNORECASE)
 VOUCHER_BUY = re.compile(r"^Buy a ₹([\d,]+) .+? gift voucher, quantity (\d+), on ")  # the brain's checkout goal
 ROW_FIX = re.compile(r"Dispute type: Personal Details\. The report shows: ([^:]+): .+?\. It should be: (.+?)\.?\s*$",
                      re.DOTALL)  # the brain's dispute: the row it names, and that row's correct value
@@ -571,6 +574,8 @@ class Worker:
         notice = self.notice_step(page)
         if notice:  # live: Experian's “… wait for 30 days …” was read as an instruction, and waited on twenty times
             return self.act("CLICK", notice, page, None)
+        if self.voucher_read(page):  # live: the planner noted every amount, then said CONTINUE where DONE was due
+            return None
         buying = self.voucher_step(page)
         if buying:  # dry run: the chosen amount left the controls offered, and the planner toggled two amounts
             action, page = buying
@@ -911,6 +916,39 @@ class Worker:
         return next((a for a in page["actions"] if words and a["kind"] == "click" and a.get("label") != last
                      and words in (a.get("label") or "").lower()), None)
 
+    def voucher_read(self, page):
+        """The brain's voucher read (“Show the Swiggy gift vouchers on SmartBuy: list the amounts …”) on a portal whose
+        note names its cart button: done here, from the page as it is: its amount tiles (₹ lines and controls) and the
+        lines that state a reward (points, cashback, iCash, an instant discount). True when it ended the task; False
+        when the page shows no amounts yet (a pop-up over it, still loading): the planner goes on."""
+        s = self.state
+        wanted = VOUCHER_READ.match(s["goal"])
+        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
+        if not wanted or not note.get("cart"):
+            return False
+        tile = re.compile(r"^₹\s?([\d,]+)$")
+        lines = [line.strip() for line in page["text"].splitlines() if line.strip()]
+        first = next((n for n, line in enumerate(lines) if tile.match(line)), len(lines))
+        # its tiles are controls on both portals; else the first run of ₹ lines (a calculator's "₹325" comes later)
+        found = [tile.match(a.get("label") or "")[1] for a in page["actions"] if tile.match(a.get("label") or "")] or \
+            [tile.match(line)[1] for line in itertools.takewhile(tile.match, lines[first:])]
+        amounts = sorted({int(a.replace(",", "")) for a in found})
+        if not amounts:
+            return False
+        rewards = list(dict.fromkeys(line[:120] for line in lines[:first] if REWARD_LINE.search(line)
+                                     and not re.search(r"value|calculat|effective", line, re.IGNORECASE)))[:4]
+        # above its amounts: below them iShop suggests other brands, and SmartBuy's calculator estimates
+        report = f"{wanted[1]} gift vouchers on {wanted[2]}: " + ", ".join(f"₹{a:,}" for a in amounts) + "."
+        if rewards:
+            report += " Rewards shown: " + "; ".join(rewards) + "."
+        limit = next((line for line in lines if re.search(r"monthly limit", line, re.IGNORECASE)), None)
+        if limit:
+            report += f" {limit[:80]}."
+        s["held"] = None
+        self.say(report, kind="result", evidence=rewards[0] if rewards else lines[0])
+        s["status"] = "done"
+        return True
+
     def voucher_step(self, page):
         """A voucher the brain's checkout names (“Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy.”) on a
         portal whose note names its cart button (`cart:`): (control, page) to press, else None for the planner. The
@@ -922,7 +960,10 @@ class Worker:
         cart = ((skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}).get("cart")
         if not wanted or not cart or int(wanted[2]) != 1:
             return None
-        flat = lambda text: re.sub(r"[\s,]", "", text or "").lower()  # "₹ 1,000" and "₹1000" alike
+
+        def flat(text):  # "₹ 1,000" and "₹1000" alike
+            return re.sub(r"[\s,]", "", text or "").lower()
+
         amount, pressed = "₹" + wanted[1].replace(",", ""), [h.get("action") for h in s["history"]]
         if any(flat(label) == flat(cart) for label in pressed):
             return None

@@ -3972,3 +3972,36 @@ def test_with_the_total_and_cart_below_the_screen_they_are_scrolled_into_view(tm
     w.command("tick")
     assert w.browser.into_view.call_args.args == ("Add to cart",)
     assert w.browser.act.call_args.args[1]["label"] == "Add to cart"
+
+
+# ---- a voucher read done by the worker itself: live, the planner noted every amount, then answered CONTINUE where
+# it had to say DONE, and the user was asked "What should I do?"
+
+READ = ("Show the Swiggy gift vouchers on SmartBuy: list the amounts its page offers and the reward rate it states, "
+        "reading the page as it is. Press nothing.")
+
+
+def test_a_voucher_read_lists_the_pages_amounts_and_rewards_without_the_planner(tmp_path, monkeypatch, no_wait):
+    page = voucher_page(SMARTBUY, "Swiggy Money Voucher\nMonthly Limit: ₹10,000\nACCELERATED REWARDS Upto 5X Reward "
+                                  "Points / 5% Cashback\nINSTA DEALS 2.5% Instant Discount + 1X Reward Points*\n"
+                                  "Choose Denomination\n₹250\n₹500\n₹1,000\n₹2,000\nEffective Price ₹2,000 ₹1,675",
+                        "₹ 250", "₹ 500", "₹ 1,000", "₹ 2,000", "View Cart & Buy")
+    w = worker_with(tmp_path, page=page, goal=READ)
+    no_planner(monkeypatch)
+    w.command("tick")
+    report = w.told[-1]["text"]
+    assert w.state["status"] == "done" and not w.browser.act.called
+    assert report.startswith("Swiggy gift vouchers on SmartBuy: ₹250, ₹500, ₹1,000, ₹2,000.")
+    assert "5X Reward Points / 5% Cashback" in report and "2.5% Instant Discount" in report
+    assert "₹1,675" not in report  # the savings calculator's estimate is no price
+
+
+def test_an_ishop_read_keeps_its_own_reward_and_not_the_brands_it_suggests(tmp_path, monkeypatch, no_wait):
+    page = voucher_page(ISHOP, "Swiggy Money E-Voucher INR 1000\nSwiggy\n3% iCash\nOnline\n₹1,000\nVoucher worth of\n"
+                               "₹1000\n₹2000\nTotal: ₹1,000\nYou may also like\nBlinkit\n6X Points / 0.25% iCash\n"
+                               "Reward Points Value\n₹325", "₹1000", "₹2000", "Buy now")
+    w = worker_with(tmp_path, page=page, goal=READ.replace("SmartBuy", "iShop"))
+    no_planner(monkeypatch)
+    w.command("tick")
+    report = w.told[-1]["text"]
+    assert report == "Swiggy gift vouchers on iShop: ₹1,000, ₹2,000. Rewards shown: 3% iCash."
