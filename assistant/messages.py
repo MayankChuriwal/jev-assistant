@@ -5,6 +5,14 @@ BUTTONS, BUTTON_TITLE = 3, 20
 ROWS, ROW_TITLE, ROW_DESCRIPTION = 10, 24, 72
 
 
+def short(label, limit):
+    """A label within `limit` characters, cut at a word with “…” (live, a pill read “A credit enquiry I d”)."""
+    if len(label) <= limit:
+        return label
+    cut = label[:limit - 1]
+    return (cut.rsplit(" ", 1)[0] if " " in cut.strip() else cut).rstrip(" ,.;:-") + "…"
+
+
 def text_payloads(text):
     return [{"type": "text", "text": {"body": text[i:i + TEXT_LIMIT]}} for i in range(0, len(text) or 1, TEXT_LIMIT)]
 
@@ -23,10 +31,10 @@ def render(message, question_id=None, image_id=None, title=None, tag=None):
             body = "Choose one:"
         if len(options) <= BUTTONS:
             action = {"buttons": [{"type": "reply", "reply": {"id": f"{tag}:{o['id']}",
-                                                             "title": o["label"][:BUTTON_TITLE]}} for o in options]}
+                                                             "title": short(o["label"], BUTTON_TITLE)}} for o in options]}
             kind = "button"
         else:
-            rows = [{"id": f"{tag}:{o['id']}", "title": o["label"][:ROW_TITLE],
+            rows = [{"id": f"{tag}:{o['id']}", "title": short(o["label"], ROW_TITLE),
                      "description": (o.get("description") or "")[:ROW_DESCRIPTION]} for o in options]
             action = {"button": "Choose", "sections": [{"title": "Options", "rows": rows}]}
             kind = "list"

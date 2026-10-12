@@ -40,7 +40,7 @@ How you work
 amounts, one to four short lines. Lead with the answer.
 - Write in English. Only when the user's own latest message is in another language, answer in that language and \
 script: Hinglish typed in Latin letters gets Hinglish in Latin letters.
-- When they must choose, put the choices in options, in the words they would tap. A tap comes back as their next \
+- When they must choose, put the choices in options, in the words they would tap, each at most 20 characters. A tap comes back as their next \
 message.
 - Use what the chat already established and the context note. Never ask for what you know or can read with a tool.
 - Ask only when the evidence conflicts, nothing matches, it is a personal preference, or acting for them would be \
@@ -96,7 +96,8 @@ TOOLS = [
     tool("reply", "Send the user a message. This ends your turn.",
          text=text("The message, exactly as the user will see it"),
          options={"type": "array", "items": {"type": "string"},
-                  "description": "Tap choices, at most 10, each in the words the user would say; [] when none"}),
+                  "description": "Tap choices, at most 10, each at most 20 characters, in the words the user "
+                                 "would say; [] when none"}),
 ]
 NAMES = {t["name"] for t in TOOLS} - {"reply"}
 

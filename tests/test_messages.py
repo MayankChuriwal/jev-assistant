@@ -39,7 +39,7 @@ def test_long_bodies_go_first_as_text_and_titles_are_cut():
         {"id": "a", "label": "A" * 30}, {"id": "b", "label": "B"}]}, question_id=1)
     assert payloads[0]["type"] == "text" and payloads[0]["text"]["body"] == long_text
     assert payloads[1]["interactive"]["body"]["text"] == "Choose one:"
-    assert payloads[1]["interactive"]["action"]["buttons"][0]["reply"]["title"] == "A" * 20
+    assert payloads[1]["interactive"]["action"]["buttons"][0]["reply"]["title"] == "A" * 19 + "…"
 
 
 def test_secrets_files_images_and_titles():
@@ -69,3 +69,12 @@ def test_a_brain_replys_options_carry_its_tag_and_open_no_question():
                                tag="b4")
     assert payloads[-1]["interactive"]["action"]["buttons"][0]["reply"]["id"] == "b4:1"
     assert all("x_question" not in p for p in payloads)
+
+
+
+def test_a_long_label_is_cut_at_a_word_with_an_ellipsis():
+    # live: the pill read “A credit enquiry I d”
+    message = {"kind": "info", "text": "What's wrong?", "options": [
+        {"id": "1", "label": "A credit enquiry I didn't make"}, {"id": "2", "label": "My personal details"}]}
+    buttons = messages.render(message, tag="b1")[-1]["interactive"]["action"]["buttons"]
+    assert [b["reply"]["title"] for b in buttons] == ["A credit enquiry I…", "My personal details"]

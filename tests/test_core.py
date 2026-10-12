@@ -262,7 +262,7 @@ def test_a_long_option_comes_back_whole_though_its_button_is_cut(world):
     options = ["Cancel ONE97 COMMUNICATIONS LIMITED", "No, keep it"]
     world.core.reply("Cancel ONE97 COMMUNICATIONS LIMITED (₹ 99)?", options)
     titles = [b["reply"]["title"] for b in interactive(world)[-1]["interactive"]["action"]["buttons"]]
-    assert titles == ["Cancel ONE97 COMMUNI", "No, keep it"]
+    assert titles == ["Cancel ONE97…", "No, keep it"]  # cut at a word, never mid-word
     tap(world, "b1:1")
     assert world.classified == ["Cancel ONE97 COMMUNICATIONS LIMITED"]
 
