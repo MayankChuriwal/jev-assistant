@@ -8,6 +8,7 @@ brand.swiggy: https://www.gyftr.com/instantvouchers/swiggy-gv-gift-vouchers
 keep: page
 cart: Add to cart
 cards: .custom_dropdown .dropdown-menu li
+offers: ACCELERATED REWARDS, INSTA DEALS
 sign-in: auto
 otp: Request OTP
 step: Add to cart, View Cart & Buy, Request OTP, Continue, Submit

@@ -941,22 +941,45 @@ class Worker:
         amounts = sorted({int(a.replace(",", "")) for a in found})
         if not amounts:
             return False
-        rewards = list(dict.fromkeys(line[:120] for line in lines[:first] if REWARD_LINE.search(line)
-                                     and not re.search(r"value|calculat|effective", line, re.IGNORECASE)))[:4]
+        # the whole page's words when its note says how its offers are headed (SmartBuy): its calculator and offers sit
+        # below the first screen, and on screen they come in pieces ("Reward Points", "Cashback")
+        body = self.page_words() if note.get("offers") or note.get("cards") else ""
+        rewards = self.offers(note, body) or list(dict.fromkeys(
+            line[:120] for line in lines[:first] if REWARD_LINE.search(line)
+            and not re.search(r"value|calculat|effective", line, re.IGNORECASE)))[:4]
         # above its amounts: below them iShop suggests other brands, and SmartBuy's calculator estimates
         report = f"{wanted[1]} gift vouchers on {wanted[2]}: " + ", ".join(f"₹{a:,}" for a in amounts) + "."
         if rewards:
             report += " Rewards shown: " + "; ".join(rewards) + "."
-        limit = next((line for line in lines if re.search(r"monthly limit", line, re.IGNORECASE)), None)
+        limit = re.search(r"monthly limit:?\s*₹\s?[\d,]+", body, re.IGNORECASE)
         if limit:
-            report += f" {limit[:80]}."
-        report += self.card_savings(note, lines)
+            report += f" {limit[0]}."
+        report += self.card_savings(note, body)
         s["held"] = None
         self.say(report, kind="result", evidence=rewards[0] if rewards else lines[0])
         s["status"] = "done"
         return True
 
-    def card_savings(self, note, lines):
+    def page_words(self):
+        """The whole page's words, on screen or not, in one line; empty when the page can't be read."""
+        try:
+            return " ".join(self.state["browser"].texts("body"))
+        except (StalePage, RuntimeError, TimeoutError):
+            return ""
+
+    @staticmethod
+    def offers(note, body):
+        """The offers a voucher page states under its note's `offers:` headings, each with its figures ("ACCELERATED
+        REWARDS Upto 5X Reward Points / 5% Cashback"); a heading's banner with no figure is no offer."""
+        heads = [h.strip() for h in str(note.get("offers") or "").split(",") if h.strip()]
+        if not heads or not body:
+            return []
+        unit = r"(?:Cashback|Reward Points|iCash|Instant Discount|Discount)\*?"
+        found = re.finditer(r"(" + "|".join(map(re.escape, heads)) + r")\s+(.{3,90}?" + unit +
+                            r"(?:\s*[/+]\s*[\d.]+\s*(?:X|%)\s*" + unit + r")*)", body)
+        return list(dict.fromkeys(f"{m[1]} {m[2]}" for m in found if re.search(r"\d\s*(?:X|%)", m[2])))[:3]
+
+    def card_savings(self, note, body):
         """Each card's saving from the portal's own calculator (its note's `cards:` names the list, SmartBuy's closed
         dropdown), on the amount it quotes ("Effective Price ₹2,000 ₹1,675"): live, it showed Infinia's alone, and the
         user has another card. Empty when the note names none or the page shows none."""
@@ -969,8 +992,7 @@ class Worker:
             return ""  # the amounts still go out; the cards are asked about without their savings
         found = [re.match(r"(.+?)\s*Save\s*₹\s*([\d,]+)\s*via\s*(RP|CB|CP)\b", text) for text in texts]
         found = [m for m in found if m]
-        at = next((n for n, line in enumerate(lines) if re.fullmatch(r"effective price", line, re.IGNORECASE)), None)
-        basis = re.fullmatch(r"₹\s?([\d,]+)", lines[at + 1]) if at is not None and at + 1 < len(lines) else None
+        basis = re.search(r"effective price\s*₹\s?([\d,]+)", body, re.IGNORECASE)  # the amount it quotes them on
         if not found or not basis:
             return ""
         return (f" Savings on ₹{basis[1]} by card (the site's estimate): "

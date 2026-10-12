@@ -174,6 +174,21 @@ def test_a_bare_otp_resend_countdown_does_not_make_its_form_stale(browser_at):
     assert b.fresh(page, find(page, "Submit"))
 
 
+def test_gyftrs_resend_countdown_does_not_make_its_submit_stale(browser_at):
+    # live SmartBuy, GyFTR's own markup: "Didn't receive OTP? <span>Resend <strong>0:41</strong></span>", its minutes
+    # and seconds separate text; the Submit beside it went stale six times in a row
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div class=\"modal show\" role=\"dialog\"><p>OTP Sent to "
+               "your Registered Mobile Number</p><input name=\"otp\" aria-label=\"One-time code\"><span>Didn&#39;t receive "
+               "OTP? <span>Resend <strong id=\"t\"></strong></span></span><button type=\"button\">Submit</button></div>'); "
+               "let n = 59; const tick = () => { const t = document.getElementById('t'); t.replaceChildren("
+               "document.createTextNode('0'), document.createTextNode(':'), document.createTextNode(String(n--))); }; "
+               "tick(); setInterval(tick, 150)")
+    page = b.observe()
+    time.sleep(0.6)  # it ticks several times
+    assert b.fresh(page, find(page, "Submit")) and b.fresh(page)
+
+
 def test_fields_know_the_button_that_enter_submits(browser_at):
     page = browser_at("/pay-button.html").observe()
     assert find(page, "CVV", "fill")["submit"] == "Pay ₹79"

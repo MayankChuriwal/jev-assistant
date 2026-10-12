@@ -58,6 +58,7 @@
   };
   // Countdowns ("Resend code in 0:29", "expires in 4:59", "29s left") tick without changing what a page means.
   const steady = t => String(t ?? '').replace(/\b(in|within)\s+\d{1,2}:\d{2}\b/gi, '$1 #:##')
+    .replace(/\b(resend(?:\s+(?:otp|code|sms))?)\s+\d{1,2}\s*:\s*\d{1,2}(?!\d)/gi, '$1 #:##')  // GyFTR: "Resend 0:41Submit"
     .replace(/\b\d{1,2}:\d{2}\s+(left|remaining)\b/gi, '#:## $1')
     .replace(/\b(in|within)\s+\d+\s?(s|secs?|seconds)\b/gi, '$1 # $2')
     .replace(/\b\d+\s?(s|secs?|seconds)\s+(left|remaining)\b/gi, '# $1 $2');

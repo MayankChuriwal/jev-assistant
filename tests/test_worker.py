@@ -4026,17 +4026,24 @@ def test_a_sign_in_that_asks_a_password_is_switched_to_a_code(tmp_path, monkeypa
 
 def test_a_voucher_read_lists_each_cards_saving_from_the_portals_calculator(tmp_path, monkeypatch, no_wait):
     # live: SmartBuy's calculator showed Infinia's saving; the user has another card. Its list holds every card's
-    page = voucher_page(SMARTBUY, "ACCELERATED REWARDS Upto 5X Reward Points / 5% Cashback\nChoose Denomination\n"
-                                  "Calculate Savings on your Card / Wallet\nInfinia Credit Card\nEffective Price\n₹2,000\n"
-                                  "₹1,675", "₹ 250", "₹ 500", "₹ 1,000", "₹ 2,000")
+    # live: the calculator sits below the first screen, so its "Effective Price ₹2,000" is in no screen's text, and the
+    # offers come in pieces ("Reward Points", "Cashback"); the whole page's words have both
+    page = voucher_page(SMARTBUY, "5X Reward Points on HDFC SmartBuy | GyFTR\nThis festive season, choose Insta Deals for "
+                                  "Higher Instant Discounts.\nACCELERATED REWARDS\nUpto\n5X\nReward Points\n/\n5%\n"
+                                  "Cashback\nChoose Denomination", "₹ 250", "₹ 500", "₹ 1,000", "₹ 2,000")
     w = worker_with(tmp_path, page=page, goal=READ)
-    w.browser.texts = Mock(return_value=["Infinia Credit CardSave ₹ 325 via RP",
-                                         "Regalia Gold Credit Card / Biz Power Credit CardSave ₹ 125 via RP",
-                                         "Other Credit Cards*Save ₹ 100 via CB", "Zapp AccountSave ₹ 100 via CP"])
+    body = ("Swiggy Money Voucher Monthly Limit: ₹10,000 ACCELERATED REWARDS Upto 5X Reward Points / 5% Cashback INSTA "
+            "DEALS 2.5% Instant Discount + 1X Reward Points* Choose Denomination ₹250 ₹500 Calculate Savings on your "
+            "Card / Wallet Infinia Credit Card Effective Price ₹2,000 ₹1,675 Reward Points Value ₹325")
+    w.browser.texts = Mock(side_effect=lambda selector: [body] if selector == "body" else [
+        "Infinia Credit CardSave ₹ 325 via RP", "Regalia Gold Credit Card / Biz Power Credit CardSave ₹ 125 via RP",
+        "Other Credit Cards*Save ₹ 100 via CB", "Zapp AccountSave ₹ 100 via CP"])
     no_planner(monkeypatch)
     w.command("tick")
     report = w.told[-1]["text"]
-    assert w.browser.texts.call_args.args == (".custom_dropdown .dropdown-menu li",)  # the note's `cards:`
+    assert (".custom_dropdown .dropdown-menu li",) in [c.args for c in w.browser.texts.call_args_list]  # its `cards:`
+    assert "Rewards shown: ACCELERATED REWARDS Upto 5X Reward Points / 5% Cashback; INSTA DEALS 2.5% Instant Discount " \
+           "+ 1X Reward Points*. Monthly Limit: ₹10,000." in report and "festive" not in report
     assert report.endswith("Savings on ₹2,000 by card (the site's estimate): Infinia Credit Card ₹325 in reward "
                            "points; Regalia Gold Credit Card / Biz Power Credit Card ₹125 in reward points; Other "
                            "Credit Cards* ₹100 cashback; Zapp Account ₹100 in cash points.")
