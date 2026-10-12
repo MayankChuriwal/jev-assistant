@@ -435,6 +435,11 @@ class Brain:
                     "next": f"Offer the amounts it sells: {sold}."}
         if not 1 <= quantity <= 10:
             return {"status": "rejected", "reason": "A quantity is 1 to 10.", "next": "Ask how many, 1 to 10."}
+        latest = set(re.findall(r"[a-z']+", next((i["content"] for i in reversed(self.items)
+                                                   if i.get("role") == "user"), "").lower()))  # "no" too
+        if latest & NO and not latest & {"buy", "yes", "get"}:  # dry run: "Not now" started the checkout
+            return {"status": "rejected", "reason": "The user declined just now.",
+                    "next": "Don't buy. Say it isn't bought and nothing was charged; call no other tool."}
         if read["cards"] and (read.get("chosen") or (None,))[0] != amount:  # live: it assumed an Infinia card
             return {"status": "rejected", "reason": "The user's card and what it earns haven't been shown.",
                     "next": "Ask which HDFC card they'll pay with, offering the cards the read lists, then show what "

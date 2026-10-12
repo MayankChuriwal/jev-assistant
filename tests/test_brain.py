@@ -587,3 +587,19 @@ def test_the_portal_named_messages_ago_still_counts_after_tool_calls(tmp_path):
                         {"type": "function_call_output", "call_id": f"pad{n}", "output": "{}"}]
     brain.turn("Regalia Gold")
     assert results(brain, "voucher_savings")[0]["status"] == "done"
+
+
+@pytest.mark.parametrize("said", ["Not now", "no", "later", "nahi"])
+def test_a_checkout_after_a_decline_is_refused(tmp_path, said):
+    # dry run: "Not now" to "Get it?" started the checkout in one of two runs with the real model
+    core = FakeCore(CARDS_READ)
+    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia Gold"}),
+                  ("reply", {"text": "Get it?", "options": ["Buy it", "Not now"]}),
+                  ("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "quantity": 1}),
+                  ("reply", {"text": "OK, not bought.", "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy with my Regalia Gold")
+    brain.turn(said)
+    out = results(brain, "voucher_checkout")[0]
+    assert out["status"] == "rejected" and "nothing" in out["next"].lower() and len(core.executed) == 1

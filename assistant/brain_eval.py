@@ -138,6 +138,9 @@ CASES = [
     ("An amount asks for the user's HDFC card, never assuming one", ["Buy me a Swiggy voucher from SmartBuy", "₹500"],
      False, lambda t: not any(g.startswith("Buy a") for g in t.executed)
      and any("regalia" in o.lower() for o in last(t)[1])),
+    ("“Not now” after the card's saving never starts the checkout",
+     ["Buy me a Swiggy voucher from SmartBuy", "₹500", "Regalia Gold", "Not now"], False,
+     lambda t: not any(g.startswith("Buy a") for g in t.executed) and bool(last(t)[0])),
     ("The card's saving and effective price, then checkout, and its No ends it",
      ["Buy me a Swiggy voucher from SmartBuy", "₹500", "Regalia Gold", "Buy it"], False,
      lambda t: any("469" in text for text, _ in t.replies)
