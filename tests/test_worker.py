@@ -4047,3 +4047,25 @@ def test_a_voucher_read_lists_each_cards_saving_from_the_portals_calculator(tmp_
     assert report.endswith("Savings on ₹2,000 by card (the site's estimate): Infinia Credit Card ₹325 in reward "
                            "points; Regalia Gold Credit Card / Biz Power Credit Card ₹125 in reward points; Other "
                            "Credit Cards* ₹100 cashback; Zapp Account ₹100 in cash points.")
+
+
+def test_a_carts_required_boxes_are_ticked_without_the_planner(tmp_path, monkeypatch, no_wait):
+    # live SmartBuy cart: Checkout did nothing until "Read T&C …" and "I agree to the Terms and Conditions" were ticked;
+    # the user approved Checkout three times, and the planner asked to press the T&C line as a purchase
+    cart = "https://www.gyftr.com/instantvouchers/cart"
+    boxes = [{"id": "t", "kind": "click", "role": "checkbox", "checked": "false", "node": 1,
+              "label": "Read T&C and important instructions of brands before proceeding toBUY NOW"},
+             {"id": "w", "kind": "click", "role": "checkbox", "checked": "false", "node": 2,
+              "label": "Receive Gift Voucher on WhatsApp"},
+             {"id": "a", "kind": "click", "role": "checkbox", "checked": "false", "node": 3,
+              "label": "I agree to the Terms and Conditions"},
+             {"id": "c", "kind": "click", "role": "button", "label": "Checkout", "node": 4}]
+    w = worker_with(tmp_path, page=fake_page(url=cart, text="CART SUMMARY\nYou Pay\n₹ 2,000", actions=boxes),
+                    goal=VOUCHER)
+    w.state["history"].append({"operation": "CLICK", "action": "Add to cart"})  # the amount's step is done
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"].startswith("Read T&C")
+    w.state["history"].append({"operation": "CLICK", "action": boxes[0]["label"]})
+    boxes[0]["checked"] = "true"
+    assert w.agree_step(w.state["page"])["label"] == "I agree to the Terms and Conditions"  # never the WhatsApp box

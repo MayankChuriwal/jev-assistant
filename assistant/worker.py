@@ -574,6 +574,9 @@ class Worker:
         notice = self.notice_step(page)
         if notice:  # live: Experian's “… wait for 30 days …” was read as an instruction, and waited on twenty times
             return self.act("CLICK", notice, page, None)
+        ticking = self.agree_step(page)
+        if ticking:  # live SmartBuy cart: Checkout did nothing until its two required boxes were ticked
+            return self.act("CLICK", ticking, page, None)
         if self.voucher_read(page):  # live: the planner noted every amount, then said CONTINUE where DONE was due
             return None
         buying = self.voucher_step(page)
@@ -921,6 +924,21 @@ class Worker:
         last = self.state["history"][-1].get("action") if self.state["history"] else None
         return next((a for a in page["actions"] if words and a["kind"] == "click" and a.get("label") != last
                      and words in (a.get("label") or "").lower()), None)
+
+    def agree_step(self, page):
+        """A box its site note's `agree:` names (words its label starts with, comma-separated: SmartBuy's cart "Read
+        T&C and important instructions …", "I agree to the Terms and Conditions"), unticked on a purchase: the box to
+        tick, once each, else None. The final control does nothing until they are ticked, and the user's yes there
+        covers them; a box the note doesn't name (Receive Gift Voucher on WhatsApp) is never ticked."""
+        s = self.state
+        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
+        words = [w.strip().lower() for w in str(note.get("agree") or "").split(",") if w.strip()]
+        if not words or not VOUCHER_BUY.match(s["goal"]):
+            return None
+        ticked = {h.get("action") for h in s["history"] if h.get("operation") == "CLICK"}
+        return next((a for a in page["actions"] if a.get("role") == "checkbox" and a.get("checked") != "true"
+                     and a.get("label") not in ticked
+                     and any((a.get("label") or "").strip().lower().startswith(w) for w in words)), None)
 
     def voucher_read(self, page):
         """The brain's voucher read (“Show the Swiggy gift vouchers on SmartBuy: list the amounts …”) on a portal whose
