@@ -953,6 +953,13 @@ class Browser:
         Cancel was never offered): True when that card was found."""
         return bool(self.evaluate(f"({CARD_INTO_VIEW})({json.dumps(title)}, {json.dumps(word)})"))
 
+    def texts(self, selector):
+        """The words of every element `selector` matches, shown or not (SmartBuy's savings by card sit in a closed
+        dropdown, on no screen)."""
+        found = self.evaluate(f"[...document.querySelectorAll({json.dumps(selector)})].map(e => "
+                              "(e.innerText || e.textContent || '').replace(/\\s+/g, ' ').trim())")
+        return [text for text in found or [] if text]
+
     def into_view(self, word):
         """Scroll the page's button named `word` into view (Experian's Submit, below the first screen): True when there
         is one."""

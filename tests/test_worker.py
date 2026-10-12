@@ -3987,6 +3987,7 @@ def test_a_voucher_read_lists_the_pages_amounts_and_rewards_without_the_planner(
                                   "Choose Denomination\n₹250\n₹500\n₹1,000\n₹2,000\nEffective Price ₹2,000 ₹1,675",
                         "₹ 250", "₹ 500", "₹ 1,000", "₹ 2,000", "View Cart & Buy")
     w = worker_with(tmp_path, page=page, goal=READ)
+    w.browser.texts = Mock(return_value=[])  # no card list on this page
     no_planner(monkeypatch)
     w.command("tick")
     report = w.told[-1]["text"]
@@ -4021,3 +4022,21 @@ def test_a_sign_in_that_asks_a_password_is_switched_to_a_code(tmp_path, monkeypa
     assert w.browser.act.call_args.args[1]["label"] == "Request OTP"
     w.state["history"].append({"operation": "CLICK", "action": "Request OTP"})
     assert w.sign_in_step(page) is None  # pressed once already: never again in a row
+
+
+def test_a_voucher_read_lists_each_cards_saving_from_the_portals_calculator(tmp_path, monkeypatch, no_wait):
+    # live: SmartBuy's calculator showed Infinia's saving; the user has another card. Its list holds every card's
+    page = voucher_page(SMARTBUY, "ACCELERATED REWARDS Upto 5X Reward Points / 5% Cashback\nChoose Denomination\n"
+                                  "Calculate Savings on your Card / Wallet\nInfinia Credit Card\nEffective Price\n₹2,000\n"
+                                  "₹1,675", "₹ 250", "₹ 500", "₹ 1,000", "₹ 2,000")
+    w = worker_with(tmp_path, page=page, goal=READ)
+    w.browser.texts = Mock(return_value=["Infinia Credit CardSave ₹ 325 via RP",
+                                         "Regalia Gold Credit Card / Biz Power Credit CardSave ₹ 125 via RP",
+                                         "Other Credit Cards*Save ₹ 100 via CB", "Zapp AccountSave ₹ 100 via CP"])
+    no_planner(monkeypatch)
+    w.command("tick")
+    report = w.told[-1]["text"]
+    assert w.browser.texts.call_args.args == (".custom_dropdown .dropdown-menu li",)  # the note's `cards:`
+    assert report.endswith("Savings on ₹2,000 by card (the site's estimate): Infinia Credit Card ₹325 in reward "
+                           "points; Regalia Gold Credit Card / Biz Power Credit Card ₹125 in reward points; Other "
+                           "Credit Cards* ₹100 cashback; Zapp Account ₹100 in cash points.")

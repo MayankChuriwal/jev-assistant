@@ -26,6 +26,9 @@ BUREAU_IDS = {"Experian": ("experian_ern", "experian_uti")}  # the saved IDs its
 PORTALS = {"SmartBuy": "gyftr.com/instantvouchers", "iShop": "ishoprewards.com"}  # each voucher portal's site note
 PORTAL_WORDS = {"SmartBuy": re.compile(r"smart\s?buy|hdfc|gyftr", re.I),
                 "iShop": re.compile(r"\bi[\s-]?shop\b|icici", re.I)}  # the user's own words that name a portal
+CARD_SAVING = re.compile(r"([^;:]+?) ₹([\d,]+) (in reward points|cashback|in cash points)")  # a read's card savings
+SAVINGS_ON = re.compile(r"Savings on ₹([\d,]+) by card")  # the amount the portal's own calculator quotes them on
+CARD_FILLER = {"card", "cards", "my", "the", "hdfc", "bank", "with", "pay", "using"}
 VOUCHER_WORDS = {"voucher", "vouchers", "e-voucher", "evoucher", "gift", "giftcard", "card", "cards", "money", "gv"}
 IST = ZoneInfo("Asia/Kolkata")
 PLAYBOOKS = Path(__file__).resolve().parents[1] / "skills" / "playbooks"
@@ -105,6 +108,11 @@ TOOLS = [
     tool("voucher_options", "Read the gift vouchers a bank's rewards portal sells for one brand: every amount with "
                             "its price, and the reward rate shown. Buys nothing and needs no sign-in.",
          portal={"type": "string", "enum": list(PORTALS)}, brand=text("The brand the user named (“Swiggy”)")),
+    tool("voucher_savings", "What the user's card earns on a voucher amount, from the portal's own savings list that "
+                            "voucher_options read: the reward or cashback, and the effective price. Code: no browsing.",
+         portal={"type": "string", "enum": list(PORTALS)}, brand=text("The brand the user named"),
+         amount={"type": "integer", "description": "One of the amounts voucher_options read, in rupees"},
+         card=text("The card the user will pay with, in their words (“Regalia Gold”)")),
     tool("voucher_checkout", "Buy a gift voucher on a bank's rewards portal, up to its final pay control: the user "
                              "says yes or no to paying there.",
          portal={"type": "string", "enum": list(PORTALS)}, brand=text("The brand the user named"),
@@ -372,9 +380,44 @@ class Brain:
                                    url=voucher_page(note, brand, "lookup"),
                                    skill="lookup", progress=f"Reading {brand} vouchers on {portal}…")
         if result["status"] == "done":
-            amounts = sorted({int(figure.replace(",", "")) for figure in re.findall(r"₹\s?([\d,]+)", result["report"])})
-            self.vouchers[key] = {"report": result["report"], "amounts": amounts}
+            report = result["report"]
+            listed, savings = report.split(" Savings on ")[0], SAVINGS_ON.search(report)
+            amounts = sorted({int(figure.replace(",", "")) for figure in re.findall(r"₹\s?([\d,]+)", listed)})
+            cards = [{"name": m[1].strip(), "saving": int(m[2].replace(",", "")), "kind": m[3]}
+                     for m in CARD_SAVING.finditer(report[savings.end():])] if savings else []
+            self.vouchers[key] = {"report": report, "amounts": amounts, "cards": cards,
+                                  "basis": int(savings[1].replace(",", "")) if savings else None}
         return self.ended(result)
+
+    def voucher_savings(self, portal, brand, amount, card):
+        """What the user's card earns on an amount: the portal's own saving for that card (quoted on one amount,
+        ₹2,000 on SmartBuy), scaled to theirs in code, and the effective price. Live, the calculator assumed Infinia."""
+        refused = self.voucher_refused(portal, brand)
+        if refused:
+            return refused
+        read = self.vouchers.get((portal, brand.strip().lower()))
+        if read is None:
+            return {"status": "rejected", "reason": f"{brand}'s vouchers on {portal} haven't been read.",
+                    "next": "Read them first with voucher_options."}
+        if amount not in read["amounts"]:
+            return {"status": "rejected", "reason": f"{portal} doesn't sell a ₹{amount:,} {brand} voucher.",
+                    "next": "Offer the amounts it sells: " + ", ".join(f"₹{a:,}" for a in read["amounts"]) + "."}
+        if not read["cards"]:
+            return {"status": "rejected", "reason": f"{portal}'s page lists no savings by card.",
+                    "next": "Go on with voucher_checkout."}
+        wanted = rules.words(card) - CARD_FILLER
+        scored = sorted(((len(wanted & rules.words(c["name"])), -len(rules.words(c["name"]) - wanted), c)
+                         for c in read["cards"]), key=lambda x: (x[0], x[1]), reverse=True)
+        if not scored or scored[0][0] == 0:
+            return {"status": "rejected", "reason": f"{portal} lists no savings for “{card}”.",
+                    "next": "Offer the cards it lists: " + "; ".join(c["name"] for c in read["cards"]) + "."}
+        chosen = scored[0][2]
+        saving = round(chosen["saving"] * amount / read["basis"])  # money math in code: its rate, on their amount
+        read["chosen"] = (amount, chosen["name"])
+        return {"status": "done", "card": chosen["name"], "amount": f"₹{amount:,}",
+                "earns": f"₹{saving:,} {chosen['kind']}", "effective_price": f"₹{amount - saving:,}",
+                "next": "Tell them what this card earns and the effective price (the site's own estimate), then ask "
+                        "whether to get it, with options."}
 
     def voucher_checkout(self, portal, brand, amount, quantity):
         """A voucher bought up to the portal's final pay control, where the user says yes or no: only an amount the
@@ -392,6 +435,10 @@ class Brain:
                     "next": f"Offer the amounts it sells: {sold}."}
         if not 1 <= quantity <= 10:
             return {"status": "rejected", "reason": "A quantity is 1 to 10.", "next": "Ask how many, 1 to 10."}
+        if read["cards"] and (read.get("chosen") or (None,))[0] != amount:  # live: it assumed an Infinia card
+            return {"status": "rejected", "reason": "The user's card and what it earns haven't been shown.",
+                    "next": "Ask which HDFC card they'll pay with, offering the cards the read lists, then show what "
+                            "it earns with voucher_savings before buying."}
         note = self.core.library["sites"][PORTALS[portal]]
         result = self.core.execute(f"Buy a ₹{amount:,} {brand} gift voucher, quantity {quantity}, on {portal}.",
                                    url=voucher_page(note, brand, "shopping"), skill="shopping",
@@ -402,8 +449,9 @@ class Brain:
         return self.ended(result)
 
     def voucher_refused(self, portal, brand):
-        """A rejection when the user hasn't named the portal or the brand: each is asked, never guessed."""
-        said = " ".join(i["content"] for i in self.items[-12:] if i.get("role") == "user")
+        """A rejection when the user hasn't named the portal or the brand: each is asked, never guessed. Their last six
+        messages count, however many tool calls came between (eval: "from SmartBuy" fell out of the last 12 items)."""
+        said = " ".join([i["content"] for i in self.items if i.get("role") == "user"][-6:])
         if portal not in PORTALS or not PORTAL_WORDS[portal].search(said):
             return {"status": "rejected", "reason": "The user hasn't said which portal.",
                     "next": "Ask which portal: SmartBuy (HDFC) or iShop (ICICI), with them as options."}

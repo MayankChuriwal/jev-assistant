@@ -71,8 +71,12 @@ class Tools:
         if "credit report" in goal:
             return done("Dispute raised with Experian. Reference EXP-2026-1012.")
         if goal.startswith("Show the Swiggy gift vouchers on SmartBuy"):
-            return done("Swiggy Money Voucher on SmartBuy: ₹250, ₹500, ₹1,000, ₹2,000. ACCELERATED REWARDS: up to 5X "
-                        "reward points or 5% cashback. Monthly limit ₹10,000.")
+            return done("Swiggy gift vouchers on SmartBuy: ₹250, ₹500, ₹1,000, ₹2,000. Rewards shown: ACCELERATED "
+                        "REWARDS Upto 5X Reward Points / 5% Cashback. Monthly Limit: ₹10,000. Savings on ₹2,000 by card "
+                        "(the site's estimate): Infinia Credit Card ₹325 in reward points; Diners Black / Biz Black "
+                        "Credit Card ₹195 in reward points; Regalia Gold Credit Card / Biz Power Credit Card ₹125 in "
+                        "reward points; Regalia Credit Card ₹100 in reward points; Other Credit Cards* ₹100 cashback; "
+                        "Other Debit Cards* ₹100 cashback.")
         if goal.startswith("Show the Swiggy gift vouchers on iShop"):
             return done("Swiggy Money E-Voucher on iShop: ₹1,000, ₹2,000. Earns 3% iCash.")
         if goal.startswith("Buy a ₹"):  # the demo's No at the approval card
@@ -131,8 +135,13 @@ CASES = [
      lambda t: [g for g in t.executed if g.startswith("Show the Swiggy")] and not any(g.startswith("Buy a") for g in
                                                                                        t.executed)
      and any("500" in o for o in last(t)[1])),
-    ("An amount tapped goes to checkout, and its No ends it", ["Buy me a Swiggy voucher from SmartBuy", "₹500"], False,
-     lambda t: "Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy." in t.executed
+    ("An amount asks for the user's HDFC card, never assuming one", ["Buy me a Swiggy voucher from SmartBuy", "₹500"],
+     False, lambda t: not any(g.startswith("Buy a") for g in t.executed)
+     and any("regalia" in o.lower() for o in last(t)[1])),
+    ("The card's saving and effective price, then checkout, and its No ends it",
+     ["Buy me a Swiggy voucher from SmartBuy", "₹500", "Regalia Gold", "Buy it"], False,
+     lambda t: any("469" in text for text, _ in t.replies)
+     and "Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy." in t.executed
      and re.search(r"nothing was charged|not charged|didn't pay|stopped", last(t)[0], re.I)),
 ]
 

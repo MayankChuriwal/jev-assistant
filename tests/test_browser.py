@@ -470,6 +470,16 @@ def test_a_rows_pencil_below_the_screen_and_submit_are_scrolled_into_view(browse
     assert b.into_view("₹1000") is True  # GyFTR's amount tile: its words in parts, matched without spaces or commas
 
 
+def test_texts_reads_a_closed_dropdowns_items(browser_at):
+    # SmartBuy's savings calculator: its cards sit in a closed Bootstrap menu, so they are on no screen
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div class=\"custom_dropdown\"><button>Infinia</button>"
+               "<ul class=\"dropdown-menu\" style=\"display:none\"><li>Infinia <span>Save ₹ 325 via RP</span></li>"
+               "<li>Regalia Gold <span>Save ₹ 125 via RP</span></li></ul></div>')")
+    assert b.texts(".custom_dropdown .dropdown-menu li") == ["Infinia Save ₹ 325 via RP", "Regalia Gold Save ₹ 125 via RP"]
+    assert b.texts(".nothing-here") == []
+
+
 def test_a_greyed_out_fields_value_is_read_beside_its_row_but_never_an_id(browser_at):
     # Experian shows what the report says in disabled fields: the addresses were never read, so none could be named
     rows = "".join(f'<div class="row"><p>{name}</p><input disabled readonly value="{value}"><input disabled></div>'

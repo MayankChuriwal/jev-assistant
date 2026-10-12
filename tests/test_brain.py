@@ -111,8 +111,8 @@ def test_the_brain_offers_its_tools_and_reads_its_playbooks(tmp_path):
     model = Model(("reply", {"text": "Hi!", "options": []}))
     make(FakeCore(), model, tmp_path).turn("hi")
     assert model.seen[0]["tools"] == ["upi_mandates", "upi_cancel", "upi_pause", "upi_task", "bureau_details",
-                                      "bureau_dispute", "voucher_options", "voucher_checkout", "browse", "memory",
-                                      "reply"]
+                                      "bureau_dispute", "voucher_options", "voucher_savings", "voucher_checkout",
+                                      "browse", "memory", "reply"]
     assert "UPI AutoPay mandates" in model.seen[0]["instructions"]
     assert "Credit report disputes" in model.seen[0]["instructions"]
     assert "Gift vouchers" in model.seen[0]["instructions"]
@@ -520,3 +520,70 @@ def test_a_checkout_needs_the_read_and_an_amount_it_showed(tmp_path):
                                  "progress": "Getting your ₹500 Swiggy voucher ready on SmartBuy…"}
     assert bought["status"] == "not_approved" and "nothing was charged" in bought["next"].lower()
     assert "call no other tool" in bought["next"].lower()
+
+
+# ---- the user's card: SmartBuy's savings differ by HDFC card, and its calculator assumed Infinia (live, the user has
+# another card): the read lists every card's saving on ₹2,000, the user picks theirs, and code scales it to the amount
+
+CARDS_READ = done("Swiggy gift vouchers on SmartBuy: ₹250, ₹500, ₹1,000, ₹2,000. Rewards shown: ACCELERATED REWARDS "
+                  "Upto 5X Reward Points / 5% Cashback. Savings on ₹2,000 by card (the site's estimate): Infinia Credit "
+                  "Card ₹325 in reward points; Regalia Gold Credit Card / Biz Power Credit Card ₹125 in reward points; "
+                  "Regalia Credit Card ₹100 in reward points; Other Credit Cards* ₹100 cashback; Other Debit Cards* ₹100 "
+                  "cashback.")
+
+
+def test_the_users_card_gets_its_own_saving_and_effective_price_in_code(tmp_path):
+    core = FakeCore(CARDS_READ)
+    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("reply", {"text": "Which amount?", "options": ["₹500", "₹2,000"]}),
+                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia Gold"}),
+                  ("reply", {"text": "Get it?", "options": ["Buy it", "Not now"]}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Buy me a Swiggy voucher from SmartBuy")
+    brain.turn("₹500 with my Regalia Gold")
+    out = results(brain, "voucher_savings")[0]
+    assert out["card"] == "Regalia Gold Credit Card / Biz Power Credit Card" and out["earns"] == "₹31 in reward points"
+    assert out["effective_price"] == "₹469" and len(core.executed) == 1  # code, no second read
+
+
+def test_with_cards_on_the_read_a_checkout_waits_for_the_users_card(tmp_path):
+    core = FakeCore(CARDS_READ)
+    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "quantity": 1}),
+                  ("reply", {"text": "Which card?", "options": ["Regalia Gold", "Infinia"]}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy")
+    out = results(brain, "voucher_checkout")[0]
+    assert out["status"] == "rejected" and "which hdfc card" in out["next"].lower() and len(core.executed) == 1
+
+
+def test_a_card_the_read_doesnt_list_is_offered_the_ones_it_does(tmp_path):
+    core = FakeCore(CARDS_READ)
+    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Amex Platinum"}),
+                  ("reply", {"text": "Which card?", "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy")
+    out = results(brain, "voucher_savings")[0]
+    assert out["status"] == "rejected" and "Regalia Gold" in out["next"]
+
+
+def test_the_portal_named_messages_ago_still_counts_after_tool_calls(tmp_path):
+    # eval: "from SmartBuy" in the first message fell out of the last 12 conversation items (tool calls fill them),
+    # so the card's savings were refused and the portal asked again
+    core = FakeCore(CARDS_READ)
+    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("reply", {"text": "Which amount?", "options": ["₹500"]}),
+                  ("reply", {"text": "Which card?", "options": ["Regalia Gold"]}),
+                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia Gold"}),
+                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia"}),
+                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Infinia"}),
+                  ("reply", {"text": "Get it?", "options": ["Buy it"]}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Buy me a Swiggy voucher from SmartBuy")
+    brain.turn("₹500")
+    for n in range(8):  # a longer conversation's tool calls in between
+        brain.items += [{"type": "function_call", "call_id": f"pad{n}", "name": "memory", "arguments": "{}"},
+                        {"type": "function_call_output", "call_id": f"pad{n}", "output": "{}"}]
+    brain.turn("Regalia Gold")
+    assert results(brain, "voucher_savings")[0]["status"] == "done"

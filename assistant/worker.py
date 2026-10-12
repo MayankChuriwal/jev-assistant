@@ -950,10 +950,31 @@ class Worker:
         limit = next((line for line in lines if re.search(r"monthly limit", line, re.IGNORECASE)), None)
         if limit:
             report += f" {limit[:80]}."
+        report += self.card_savings(note, lines)
         s["held"] = None
         self.say(report, kind="result", evidence=rewards[0] if rewards else lines[0])
         s["status"] = "done"
         return True
+
+    def card_savings(self, note, lines):
+        """Each card's saving from the portal's own calculator (its note's `cards:` names the list, SmartBuy's closed
+        dropdown), on the amount it quotes ("Effective Price ₹2,000 ₹1,675"): live, it showed Infinia's alone, and the
+        user has another card. Empty when the note names none or the page shows none."""
+        if not note.get("cards"):
+            return ""
+        kinds = {"RP": "in reward points", "CB": "cashback", "CP": "in cash points"}
+        try:
+            texts = self.state["browser"].texts(note["cards"])
+        except (StalePage, RuntimeError, TimeoutError):
+            return ""  # the amounts still go out; the cards are asked about without their savings
+        found = [re.match(r"(.+?)\s*Save\s*₹\s*([\d,]+)\s*via\s*(RP|CB|CP)\b", text) for text in texts]
+        found = [m for m in found if m]
+        at = next((n for n, line in enumerate(lines) if re.fullmatch(r"effective price", line, re.IGNORECASE)), None)
+        basis = re.fullmatch(r"₹\s?([\d,]+)", lines[at + 1]) if at is not None and at + 1 < len(lines) else None
+        if not found or not basis:
+            return ""
+        return (f" Savings on ₹{basis[1]} by card (the site's estimate): "
+                + "; ".join(f"{m[1].strip()} ₹{m[2]} {kinds[m[3]]}" for m in found) + ".")
 
     def voucher_step(self, page):
         """A voucher the brain's checkout names (“Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy.”) on a
