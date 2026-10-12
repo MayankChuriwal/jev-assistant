@@ -343,7 +343,11 @@
       const rname = role(e) || (clickable ? 'clickable' : null);
       if (!rname || (rname === 'gridcell' && e.querySelector('button,[role="button"]'))) continue;
       taken.add(e);
-      const own = label(e), near = own ? '' : context(e);
+      // A wordless quantity stepper is named by its class (GyFTR's cart: "decreaseQty"), never by a price beside it
+      const stepper = /(?:^|[\s_-])(?:de|in)crease[-_]?(?:qty|quantity)|(?:minus|plus)[-_]?(?:qty|quantity)/i
+        .exec(String(e.className?.baseVal ?? e.className ?? ''));
+      const own = label(e) || (stepper ? (/de|minus/i.test(stepper[0]) ? 'Decrease quantity' : 'Increase quantity') : '');
+      const near = own ? '' : context(e);
       // A hidden name ("Make payment, tap to go to payment") keeps the words the button shows ("Proceed to Pay").
       // Never for a field: its words are what was typed into it (a code, a card number).
       const typing = e.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.tagName) ||

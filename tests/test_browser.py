@@ -495,6 +495,18 @@ def test_texts_reads_a_closed_dropdowns_items(browser_at):
     assert b.texts(".nothing-here") == []
 
 
+def test_a_quantity_button_with_no_words_is_named_by_its_class_not_the_price_beside_it(browser_at):
+    # live SmartBuy cart: <button class="decreaseQty"></button> was offered as "button in “Total Value : ₹ 2,000”"
+    # (1 of 2), read as a pay button, and asked as the purchase's yes
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div><p>Total Value : ₹ 2,000</p>"
+               "<button class=\"decreaseQty\" style=\"width:20px;height:20px\"></button><span>1</span>"
+               "<button class=\"increaseQty\" style=\"width:20px;height:20px\"></button></div>')")
+    labels = [a["label"] for a in b.observe()["actions"]]
+    assert "Decrease quantity" in labels and "Increase quantity" in labels
+    assert not any("Total Value" in label for label in labels)
+
+
 def test_a_greyed_out_fields_value_is_read_beside_its_row_but_never_an_id(browser_at):
     # Experian shows what the report says in disabled fields: the addresses were never read, so none could be named
     rows = "".join(f'<div class="row"><p>{name}</p><input disabled readonly value="{value}"><input disabled></div>'
