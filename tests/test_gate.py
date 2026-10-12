@@ -152,6 +152,37 @@ def test_a_yes_with_a_change_commits_nothing(monkeypatch):
     assert w.state["approval"] is None
 
 
+@pytest.mark.parametrize("reply", [{"option": "o2"}, {"text": "No"}, {"text": "nahi, don't pay"}])
+def test_a_plain_no_to_a_purchase_ends_it_with_nothing_charged(monkeypatch, reply):
+    # the voucher demo: the user taps No at the approval card, and the planner went on looking for another way
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[reply])
+    with pytest.raises(Halt, match="You chose not to pay. Nothing was charged.") as ended:
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert ended.value.status == "done" and w.state["outcome"] == "not_approved" and w.state["approval"] is None
+
+
+def test_the_approval_offers_yes_and_no_and_a_tapped_yes_approves(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"option": "o1"}])
+    with pytest.raises(StalePage):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+    assert w.asked[0]["options"] == [{"id": "o1", "label": "Yes"}, {"id": "o2", "label": "No"}]
+
+
+def test_a_no_that_says_what_to_change_still_redirects(monkeypatch):
+    page = fake_page()
+    summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
+    checks(monkeypatch)
+    w = Fake(page, replies=[{"text": "No, make it 2"}])
+    with pytest.raises(Retry, match="did not approve"):
+        gate.approved(w, page, PAY, "Pay ₹79", None)
+
+
 def test_an_amount_the_page_doesnt_show_never_reaches_the_user(monkeypatch):
     page = fake_page()
     summary(monkeypatch, ["Diet Coke", "Total ₹97"])
@@ -204,7 +235,7 @@ def test_an_order_that_doesnt_match_is_fixed_twice_then_asked(monkeypatch):
     for _ in range(2):
         with pytest.raises(Retry, match="doesn't match"):
             gate.approved(w, page, PAY, "Pay ₹79", None)
-    with pytest.raises(Retry, match="did not approve"):
+    with pytest.raises(Halt, match="Nothing was charged"):
         gate.approved(w, page, PAY, "Pay ₹79", None)
     assert len(w.asked) == 1
 
@@ -225,7 +256,7 @@ def test_preauthorised_over_the_cap_or_without_one_still_asks(monkeypatch, cap):
     page = fake_page(text="Total ₹79\nPay ₹79")
     summary(monkeypatch, ["Diet Coke", "Total ₹79"])
     checks(monkeypatch)
-    w = Fake(page, replies=[{"text": "no"}], preauth=True, cap=cap)
+    w = Fake(page, replies=[{"text": "change it"}], preauth=True, cap=cap)
     with pytest.raises(Retry):
         gate.approved(w, page, PAY, "Pay ₹79", None)
     assert len(w.asked) == 1
@@ -240,7 +271,7 @@ def test_preauthorised_without_a_cap_submits_a_form_with_no_amount_only_for_a_go
     w = Fake(page, replies=[{"text": "no"}], preauth=True)
     w.state["site"] = "httpbin.org"  # the bench's pizza form: "order" makes it a commerce goal, so it still asks
     w.state["goal"] = "Fill the pizza order form at https://httpbin.org/forms/post and submit it, don't ask"
-    with pytest.raises(Retry, match="did not approve"):
+    with pytest.raises(Halt, match="Nothing was charged"):
         gate.approved(w, page, submit, "Submit order", None)
     assert len(w.asked) == 1
     w = Fake(page, preauth=True)
@@ -252,7 +283,7 @@ def test_a_bench_run_never_uses_preauthorisation(monkeypatch):
     page = fake_page()
     summary(monkeypatch, ["Diet Coke", "Total ₹79"])
     checks(monkeypatch)
-    w = Fake(page, replies=[{"text": "no"}], preauth=True, cap=100.0)
+    w = Fake(page, replies=[{"text": "change it"}], preauth=True, cap=100.0)
     w.bench = True
     with pytest.raises(Retry):
         gate.approved(w, page, PAY, "Pay ₹79", None)
@@ -323,7 +354,7 @@ def test_a_total_in_another_currency_is_never_preauthorised(monkeypatch):
     checks(monkeypatch)
     w = Fake(page, replies=[{"text": "no"}], preauth=True, cap=5000.0)
     assert gate.preauthorised(w.state, gate.facts(page, []), page) is False
-    with pytest.raises(Retry, match="did not approve"):
+    with pytest.raises(Halt, match="Nothing was charged"):
         gate.approved(w, page, control("Pay now"), "Pay now", None)
     assert len(w.asked) == 1
 
@@ -377,7 +408,7 @@ def test_without_a_cap_a_page_that_shows_money_is_never_preauthorised(monkeypatc
     checks(monkeypatch)
     w = Fake(page, replies=[{"text": "no"}], preauth=True)
     w.state["site"] = "httpbin.org"
-    with pytest.raises(Retry, match="did not approve"):
+    with pytest.raises(Halt, match="Nothing was charged"):
         gate.approved(w, page, submit, "Submit order", None)
     assert len(w.asked) == 1
 
@@ -474,7 +505,7 @@ def test_an_approval_with_no_amount_does_not_survive_a_page_that_now_shows_money
         w = Fake(form, replies=[{"text": "no"}])
         gate.bind(w.state, PAY, "Submit order", "", form, "user")
         assert gate.approved(w, form, PAY, "Submit order", None) is True and w.asked == []  # still no money
-        with pytest.raises(Retry, match="did not approve"):
+        with pytest.raises(Halt, match="Nothing was charged"):
             gate.approved(w, fake_page(text=now), PAY, "Submit order", None)
         assert len(w.asked) == 1 and w.state["approval"] is None
 
@@ -495,7 +526,7 @@ def test_more_ways_to_show_money_are_never_preauthorised_without_a_cap(monkeypat
     checks(monkeypatch)
     w = Fake(page, replies=[{"text": "no"}], preauth=True)
     w.state["site"] = "httpbin.org"
-    with pytest.raises(Retry, match="did not approve"):
+    with pytest.raises(Halt, match="Nothing was charged"):
         gate.approved(w, page, control("Submit order", node=50), "Submit order", None)
     assert len(w.asked) == 1
 
@@ -587,7 +618,7 @@ def test_an_approval_lapses_when_any_money_line_changes(monkeypatch, before, aft
     w = Fake(second, replies=[{"text": "no"}])
     gate.bind(w.state, PAY, "Submit order", "", first, "user")
     assert gate.approved(w, first, PAY, "Submit order", None) is True and w.asked == []
-    with pytest.raises(Retry, match="did not approve"):
+    with pytest.raises(Halt, match="Nothing was charged"):
         gate.approved(w, second, PAY, "Submit order", None)
     assert len(w.asked) == 1 and w.state["approval"] is None
 
@@ -599,7 +630,7 @@ def test_an_approval_with_no_snapshot_is_void(monkeypatch):
     w = Fake(page, replies=[{"text": "no"}])
     gate.bind(w.state, PAY, "Pay ₹79", "₹79", page, "user")
     del w.state["approval"]["snapshot"]
-    with pytest.raises(Retry, match="did not approve"):
+    with pytest.raises(Halt, match="Nothing was charged"):
         gate.approved(w, page, PAY, "Pay ₹79", None)
     assert len(w.asked) == 1
 
@@ -628,7 +659,7 @@ def test_these_pages_show_money_and_are_never_preauthorised_without_a_cap(monkey
     checks(monkeypatch)
     w = Fake(page, replies=[{"text": "no"}], preauth=True)
     w.state["site"] = "httpbin.org"
-    with pytest.raises(Retry, match="did not approve"):
+    with pytest.raises(Halt, match="Nothing was charged"):
         gate.approved(w, page, control("Submit order", node=50), "Submit order", None)
     assert len(w.asked) == 1
 
@@ -726,7 +757,7 @@ def test_an_approval_lapses_when_the_split_layout_or_the_order_of_the_money_chan
     w = Fake(second, replies=[{"text": "no"}])
     gate.bind(w.state, PAY, "Submit order", "", first, "user")
     assert gate.approved(w, first, PAY, "Submit order", None) is True and w.asked == []
-    with pytest.raises(Retry, match="did not approve"):
+    with pytest.raises(Halt, match="Nothing was charged"):
         gate.approved(w, second, PAY, "Submit order", None)
     assert len(w.asked) == 1 and w.state["approval"] is None
 
@@ -759,7 +790,7 @@ def test_more_currencies_and_words_count_as_money_without_a_cap(monkeypatch, tex
     checks(monkeypatch)
     w = Fake(page, replies=[{"text": "no"}], preauth=True)
     w.state["site"] = "httpbin.org"
-    with pytest.raises(Retry, match="did not approve"):
+    with pytest.raises(Halt, match="Nothing was charged"):
         gate.approved(w, page, control("Submit order", node=50), "Submit order", None)
     assert len(w.asked) == 1
 
@@ -914,7 +945,7 @@ def test_a_total_split_over_several_text_nodes_is_not_preauthorised_and_the_yes_
     assert w.state["approval"]["amount"] == ""  # the raw page spells the amount in parts: the snapshot guards it
     assert gate.approved(w, page, control("Pay", node=11), "Pay", None) is True and len(w.asked) == 1
     changed = fake_page(text="Checkout\nNet payable\n₹\n1\n,\n999\nPay")
-    w.replies.append({"text": "no"})
+    w.replies.append({"text": "change it"})
     summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹1,999"])
     with pytest.raises(Retry, match="did not approve"):
         gate.approved(w, changed, control("Pay", node=11), "Pay", None)
@@ -1054,12 +1085,12 @@ def test_preauthorisation_is_only_shadowed_until_it_is_switched_on(monkeypatch, 
     summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
     checks(monkeypatch)
     w = Fake(page, replies=[{"text": "no"}], preauth=True, cap=100.0)
-    with pytest.raises(Retry, match="did not approve"):
+    with pytest.raises(Halt, match="Nothing was charged"):
         gate.approved(w, page, PAY, "Pay ₹79", None)
     assert len(w.asked) == 1 and w.said == [] and w.state["preauth_shadow"] is True
     assert w.asked[0]["text"].endswith("\n(You said not to ask. I'm asking anyway until pre-approval is switched on: "
                                        "set JEV_PREAUTH=on.)")
-    plain = Fake(page, replies=[{"text": "no"}], preauth=True, cap=50.0)  # over the cap: an ordinary question
+    plain = Fake(page, replies=[{"text": "change it"}], preauth=True, cap=50.0)  # over the cap: an ordinary question
     with pytest.raises(Retry):
         gate.approved(plain, page, PAY, "Pay ₹79", None)
     assert "JEV_PREAUTH" not in plain.asked[0]["text"] and "preauth_shadow" not in plain.state
@@ -1073,7 +1104,7 @@ def test_a_bench_run_asks_even_with_preauthorisation_switched_on(monkeypatch):
     page = fake_page()
     summary(monkeypatch, ["Diet Coke", "Total ₹79"])
     checks(monkeypatch)
-    w = Fake(page, replies=[{"text": "no"}], preauth=True, cap=100.0)
+    w = Fake(page, replies=[{"text": "change it"}], preauth=True, cap=100.0)
     w.bench = True
     with pytest.raises(Retry):
         gate.approved(w, page, PAY, "Pay ₹79", None)
@@ -1359,7 +1390,7 @@ def with_rule(monkeypatch, memory, *, text=SHOP, site="shop.test", qty=1, limit=
     page = fake_page(text=text)
     summary(monkeypatch, ["Diet Coke 300 ml × 1", "Total ₹79"])
     checks(monkeypatch)
-    w = Fake(page, replies=[{"text": "no"}], **fake)
+    w = Fake(page, replies=[{"text": "change it"}], **fake)  # not a yes, and not a plain no that ends it
     w.memory = memory
     return w, page, rule
 
@@ -1668,7 +1699,7 @@ def test_a_selected_option_whose_label_holds_more_than_one_plain_price_names_no_
     summary(monkeypatch, ["Product: boAt Airdopes 141 Black, Quantity: 1"])
     checks(monkeypatch)
     w = Fake(page, replies=[{"text": "no"}])
-    with pytest.raises(Retry, match="did not approve"):
+    with pytest.raises(Halt, match="Nothing was charged"):
         gate.approved(w, page, VARIANTS[3], "Buy Now", None)
     assert "Selected:" not in w.asked[0]["text"] and NO_TOTAL in w.asked[0]["text"]  # the caveat says to check
 
@@ -1940,6 +1971,6 @@ def test_an_approval_on_a_page_with_money_but_no_total_read_says_to_check_the_to
     summary(monkeypatch, ["Uber Go", "HOUSE OF COMMONS → Kempegowda International Airport Terminal-1"])
     checks(monkeypatch)
     w = Fake(page, replies=[{"text": "no"}])
-    with pytest.raises(Retry, match="did not approve"):
+    with pytest.raises(Halt, match="Nothing was charged"):
         gate.approved(w, page, PAY, "Request Uber Go", None)
     assert (NO_TOTAL in w.asked[0]["text"]) is warned

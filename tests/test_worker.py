@@ -988,7 +988,7 @@ def looking(tmp_path, monkeypatch, *found, replies=()):
     {"cell": "C4", "label": "Orange button", "text": "", "commits": True},
     {"cell": "C4", "label": "Orange button", "text": "Place order", "commits": False}])
 def test_a_control_found_by_sight_that_commits_is_asked_about_before_any_click(tmp_path, monkeypatch, found):
-    w = looking(tmp_path, monkeypatch, found, replies=[{"text": "no"}])
+    w = looking(tmp_path, monkeypatch, found, replies=[{"text": "change it"}])
     script_planner(monkeypatch, LOOK_PLAN)
     jev_checks(monkeypatch)
     w.command("tick")
@@ -1013,7 +1013,7 @@ def test_an_approved_spot_is_clicked_when_looking_finds_the_same_spot(tmp_path, 
 
 def test_a_yes_to_one_spot_does_not_cover_another_spot(tmp_path, monkeypatch):
     other = {**PAY_SPOT, "cell": "A1"}  # the same words, found somewhere else on the screen
-    w = looking(tmp_path, monkeypatch, PAY_SPOT, other, replies=[{"text": "yes"}, {"text": "no"}])
+    w = looking(tmp_path, monkeypatch, PAY_SPOT, other, replies=[{"text": "yes"}, {"text": "change it"}])
     script_planner(monkeypatch, LOOK_PLAN)
     jev_checks(monkeypatch)
     look = {"op": "LOOK", "pick": "", "text": "the pay button"}
@@ -1025,7 +1025,7 @@ def test_a_yes_to_one_spot_does_not_cover_another_spot(tmp_path, monkeypatch):
 
 
 def test_a_yes_to_a_spot_does_not_cover_a_listed_control_with_the_same_label(tmp_path, monkeypatch):
-    w = looking(tmp_path, monkeypatch, PAY_SPOT, replies=[{"text": "yes"}, {"text": "no"}])
+    w = looking(tmp_path, monkeypatch, PAY_SPOT, replies=[{"text": "yes"}, {"text": "change it"}])
     script_planner(monkeypatch, LOOK_PLAN)
     jev_checks(monkeypatch)
     page = w.state["page"]
@@ -1192,7 +1192,7 @@ def test_a_planner_pick_of_a_final_control_in_an_act_subgoal_asks_first(tmp_path
 
 def test_a_maybe_commit_jev_clears_runs_and_is_recorded_for_the_bench(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=fake_page(text="Ola Mini ₹120\nTotal ₹79\nBook Ola Mini", actions=RIDES),
-                    replies=[{"text": "no"}], goal="Book a bike to Indiranagar")
+                    replies=[{"text": "change it"}], goal="Book a bike to Indiranagar")
     script_planner(monkeypatch, turn(subgoals=[sub("open the Ola Mini details")]))
     script_jev(monkeypatch, {"next": "CLICK", "click_target": "Book Ola Mini"})
     jev_checks(monkeypatch, final=("step", 0.9))
@@ -2545,7 +2545,7 @@ def test_a_planner_type_onto_an_element_number_types_into_that_field(tmp_path):
 
 
 def test_a_planner_pick_or_type_by_element_number_clicks_selects_and_is_held_to_the_gates(tmp_path, monkeypatch):
-    w = login_worker(tmp_path, replies=[{"text": "no"}])
+    w = login_worker(tmp_path, replies=[{"text": "change it"}])
     script_planner(monkeypatch, turn())
     jev_checks(monkeypatch)
     page = w.state["page"]
@@ -2735,7 +2735,7 @@ SELECTOR = {**INSTAMART_PAY, "actions": METHODS}
 
 
 def test_the_final_pay_control_beside_a_payment_selector_asks_how_to_pay_first(tmp_path, monkeypatch):
-    w = worker_with(tmp_path, page=SELECTOR, replies=[{"text": "no"}], goal="Order one Diet Coke on Instamart")
+    w = worker_with(tmp_path, page=SELECTOR, replies=[{"text": "change it"}], goal="Order one Diet Coke on Instamart")
     script_planner(monkeypatch, turn())
     jev_checks(monkeypatch)
     with pytest.raises(Retry, match="ASK which payment method first"):  # live instamart: approval for the saved card

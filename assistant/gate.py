@@ -82,6 +82,8 @@ FEE = re.compile(r"^[^\n₹]{0,20}?((?:small cart|delivery|handling|platform|pac
 ITEMS = re.compile(r"\b(\d+) items?\b", re.IGNORECASE)
 BARE = re.compile(NUMBER + SUFFIX, re.IGNORECASE)  # a line that is only a number ("1,299", "1.5 L")
 YES = re.compile(r"\b(yes|yeah|yep|yup|ok|okay|sure|go ahead|book it|confirm|do it|proceed|haan)\b", re.IGNORECASE)
+PLAIN_NO = {"no", "nope", "nah", "nahi", "nahin", "na", "mat", "stop", "cancel", "don't", "dont", "not", "thanks",
+            "thank", "you", "please", "leave", "it", "skip", "pay", "buy", "now", "later"}  # a no that changes nothing
 NOT_YES = re.compile(r"\?|\b(no|not|don'?t|wait|but|instead|cheaper|change|stop|cancel|hold)\b", re.IGNORECASE)
 CAP_WORD = r"\b(?:under|below|max(?:imum)?|up ?to|within|budget|less than|not more than)\s*(?:of\s*)?"
 CAP_BEFORE = re.compile(CAP_WORD + r"(?:₹|rs\.?|inr\b)\s*(" + NUMBER + ")", re.IGNORECASE)  # "under ₹300"
@@ -875,14 +877,18 @@ def approved(w, page, action, label, subgoal):
     if covered:
         question += "\n(Your standing approval for this order would have covered it. It applies once pre-approval is " \
                     "switched on: set JEV_PREAUTH=on.)"
-    reply = w.ask({"kind": "text", "text": question, "approval": True})
-    answer = str(reply.get("text", "")).strip()
+    reply = w.ask({"kind": "text", "text": question, "approval": True,
+                   "options": [{"id": "o1", "label": "Yes"}, {"id": "o2", "label": "No"}]})
+    answer = {"o1": "yes", "o2": "no"}.get(reply.get("option")) or str(reply.get("text", "")).strip()
     s["chat"] += [{"from": "agent", "text": question, "approval": True},  # marked: the final yes teaches nothing
                   {"from": "user", "text": f"“{answer}”", "approval": True}]
     if YES.search(answer) and not NOT_YES.search(answer) and jev.approval(question, answer) == "yes":
         bind(s, action, label, total, page, "user")
         raise StalePage("Approved. Reading the page again before acting.")
     s["approval"] = None  # nothing but a clear yes keeps an earlier approval alive
+    if answer and set(re.findall(r"[a-z']+", answer.lower())) <= PLAIN_NO:  # a plain no ends the purchase here
+        s["outcome"] = "not_approved"
+        raise Halt("done", "You chose not to pay. Nothing was charged.")
     raise Retry(f"The user did not approve: “{answer}”. Nothing was committed; do what they asked.")
 
 
