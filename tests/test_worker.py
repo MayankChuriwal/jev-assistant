@@ -4005,3 +4005,19 @@ def test_an_ishop_read_keeps_its_own_reward_and_not_the_brands_it_suggests(tmp_p
     w.command("tick")
     report = w.told[-1]["text"]
     assert report == "Swiggy gift vouchers on iShop: ₹1,000, ₹2,000. Rewards shown: 3% iCash."
+
+
+def test_a_sign_in_that_asks_a_password_is_switched_to_a_code(tmp_path, monkeypatch, no_wait):
+    # live SmartBuy: after Continue, a registered number gets "Enter Password" and "Request OTP"; the code is the
+    # user's, through the hidden field, never their GyFTR password
+    page = fake_page(url=SMARTBUY, text="Welcome to Instant Vouchers\nEnter Password\nRequest OTP", actions=[
+        {"id": "p", "kind": "fill", "label": "Enter Password", "role": "textbox", "value": "", "node": 1,
+         "constraints": {"type": "password"}},
+        {"id": "o", "kind": "click", "label": "Request OTP", "role": "link", "node": 2},
+        {"id": "c", "kind": "click", "label": "Continue", "role": "button", "node": 3}])
+    w = worker_with(tmp_path, page=page, goal=VOUCHER)
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"] == "Request OTP"
+    w.state["history"].append({"operation": "CLICK", "action": "Request OTP"})
+    assert w.sign_in_step(page) is None  # pressed once already: never again in a row

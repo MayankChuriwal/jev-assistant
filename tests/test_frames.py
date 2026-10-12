@@ -93,3 +93,16 @@ def test_a_frame_that_closes_while_being_attached_is_skipped(browser_at):
     gone = {"type": "iframe", "targetId": "0" * 32, "parentFrameId": main}  # listed, then navigated away
     b._sync_frames([gone])  # Chrome answers "No target with given id found": the page moved on, observe again
     assert "0" * 32 not in b.frames and page["actions"]
+
+
+def test_a_support_chat_frame_is_never_read(browser_at, site):
+    # live SmartBuy: GyFTR's Salesforce chat panel (…my.site.com/ESW…) opened beside the sign-in, and every control
+    # offered was the chat's, so its password box and "Request OTP" were never reached
+    b = browser_at("/next.html")
+    chat = f"{site['b']}/ESWChatBot/index.html"
+    b.evaluate(f"document.body.insertAdjacentHTML('beforeend', '<iframe src=\"{chat}\" width=\"320\" height=\"480\">"
+               "</iframe>')")
+    time.sleep(1.5)  # time for the frame to attach
+    page = b.observe()
+    assert not any("Scroll the latest messages" in (a.get("label") or "") for a in page["actions"])
+    assert "Let’s chat" not in page["text"]

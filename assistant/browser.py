@@ -186,6 +186,9 @@ CARD_INTO_VIEW = r"""((title, word) => {
   }
   return false;
 })"""
+# A support-chat widget's frame (Salesforce's Embedded Service on …my.site.com/ESW…, Intercom, Zendesk, …): never read.
+CHAT_FRAME = re.compile(r"\.my\.site\.com/ESW|/ESW[A-Za-z]|intercom|zendesk|zopim|freshchat|tawk\.to|crisp\.chat|"
+                        r"livechatinc|drift\.com", re.IGNORECASE)
 BUTTON_INTO_VIEW = r"""(word => {
   const norm = s => (s || '').replace(/[\s,]+/g, '').toLowerCase();  // GyFTR's "₹ 1,000" tile reads as ₹1,000
   const button = [...document.querySelectorAll('button, [role="button"], input[type="submit"]')]
@@ -755,7 +758,7 @@ class Browser:
                         PUMP.unregister(self.frames.pop(fid)["session"])
                     continue
                 owner, parent = owners[info["parentFrameId"]]
-                self.frames[fid].update(owner=owner, parent=parent, tab=self.active)
+                self.frames[fid].update(owner=owner, parent=parent, tab=self.active, url=info.get("url") or "")
                 for child in children:
                     owners[child] = (self.frames[fid]["session"], fid)
         for fid in [f for f, info in self.frames.items() if info.get("tab", self.active) == self.active
@@ -779,8 +782,8 @@ class Browser:
         for fid, info in list(self.frames.items()):
             if info["tab"] != self.active or (info["parent"] and info["parent"] not in shown):
                 continue
-            if not self._frame_visible(fid):
-                continue
+            if not self._frame_visible(fid) or CHAT_FRAME.search(info.get("url") or ""):
+                continue  # hidden, or a support chat: never part of a task (live, GyFTR's hid its sign-in)
             try:
                 state = self.evaluate(READ_STATE, info["session"])
             except (StalePage, RuntimeError, TimeoutError):

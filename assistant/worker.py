@@ -847,6 +847,12 @@ class Worker:
         if (note or {}).get("sign-in") != "auto":
             return None
         fills = [a for a in page["actions"] if a["kind"] == "fill"]
+        code = (note.get("otp") or "").lower()  # live SmartBuy: a registered number is asked its password, or a code
+        last = self.state["history"][-1].get("action") if self.state["history"] else None
+        switch = next((a for a in page["actions"] if code and a["kind"] == "click" and a.get("label") != last
+                       and (a.get("label") or "").strip().lower() == code), None)
+        if switch and any((a.get("constraints") or {}).get("type") == "password" for a in fills):
+            return "CLICK", switch, None  # the code comes to the user's phone; their password never comes from us
         phones = [a for a in fills if (a.get("constraints") or {}).get("type") == "tel"
                   or PHONE_BOX.search(a.get("label") or "")]
         if not phones and not any(a.get("group") for a in fills):
