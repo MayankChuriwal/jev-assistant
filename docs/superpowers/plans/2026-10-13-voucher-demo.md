@@ -3,15 +3,25 @@
 Spec: `docs/superpowers/specs/2026-10-13-voucher-demo-design.md`. Executed inline, test-first, one commit per task; the
 unit and browser suites pass before each commit.
 
-- [ ] 1. `final:` site-note flag: a control whose label starts with one of its comma-separated words is a commit
-      outright (`gate.commit_label`). Tests in `tests/test_gate.py`.
-- [ ] 2. A plain No to a purchase approval ends the task: outcome `not_approved`, result "You chose not to pay. Nothing
-      was charged."; any other answer keeps today's Retry. Tests in `tests/test_gate.py` / `tests/test_worker.py`.
-- [ ] 3. Brain: `PORTALS`, `voucher_options`, `voucher_checkout` (portal enum, named brand, read amounts in code, no
-      re-read, `not_approved` mapped), playbook `skills/playbooks/vouchers.md`. Tests in `tests/test_brain.py`.
-- [ ] 4. Site notes `skills/sites/www.gyftr.com.md`, `skills/sites/www.ishoprewards.com.md`,
-      `skills/sites/payments.icici.bank.in.md`; worker `PROFILE_ASKS` and memory `LABELS` gain `icici_user_id`.
-      Tests in `tests/test_worker.py` / `tests/test_skills.py`.
-- [ ] 5. Starter card "Buy a voucher". Test in `tests/test_chat_page.py`.
-- [ ] 6. Brain evals: three voucher cases in `assistant/brain_eval.py`; run them with the real model.
-- [ ] 7. Dry run on the live sites, stopping before anything sends the user an OTP; fix what it shows.
+- [x] 1. `final:` site-note flag: a control whose label starts with one of its comma-separated words is a commit
+      outright (`gate.commit_label`). (a5fe4c0)
+- [x] 2. A purchase approval offers Yes and No; a plain No ends the task: outcome `not_approved`, "You chose not to
+      pay. Nothing was charged."; any other answer keeps today's Retry. (ae1a7ef)
+- [x] 3. Brain: `PORTALS`, `voucher_options`, `voucher_checkout` (portal and brand the user named, read amounts in
+      code, no re-read, `not_approved` mapped), playbook `skills/playbooks/vouchers.md`. (4adc5e7)
+- [x] 4. Site notes for SmartBuy (GyFTR), iShop and ICICI's net banking sign-in; `icici_user_id` asked in the hidden
+      field. (4adc5e7)
+- [x] 5. Starter card "Buy a voucher". (4ae0843)
+- [x] 6. Brain evals: three voucher cases; 15/15 with the real model. (4ae0843)
+- [x] 7. Dry run on the live sites over an empty throwaway memory (so no OTP was sent): both portals reach their
+      sign-in. Fixes it found:
+      - a restart ends sign-ins left open on `keep: page` sites too (7f1c488);
+      - a voucher read is a lookup ("Buy nothing" read as an order) and opens the brand's own page, `brand.swiggy:`
+        (7b8019d), listing the amounts as the page shows them (705f845);
+      - `learn: no` on a note keyed by a path (SmartBuy's) stops the learn offer (615182a);
+      - the worker presses the amount and the note's `cart:` button itself, and `step:` names controls that only lead
+        on (iShop's Buy now) so no yes is asked before the price (ddad177);
+      - the amount's Total and the cart button are scrolled into view when off screen (e9b6f3f).
+
+Live with the user (needs their sign-in): SmartBuy's OTP, cart and checkout up to the approval card; iShop's net
+banking sign-in (User ID, password, any OTP), checkout, its payment-mode question, and the approval card.
