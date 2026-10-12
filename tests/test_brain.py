@@ -467,8 +467,8 @@ def test_a_brands_vouchers_are_read_on_the_portal_the_user_named(tmp_path):
     brain = make(core, model, tmp_path)
     brain.turn("Buy me a Swiggy voucher from SmartBuy")
     assert core.executed == [{  # no word of buying: the read is a lookup, never an order (live, it was refused)
-        "goal": "Show the Swiggy gift vouchers on SmartBuy: every amount with its price, and the reward rate shown. "
-                "Change nothing.",
+        "goal": "Show the Swiggy gift vouchers on SmartBuy: list the amounts its page offers and the reward rate it "
+                "states, reading the page as it is. Press nothing.",
         "url": "https://www.gyftr.com/instantvouchers/swiggy-gv-gift-vouchers", "skill": "lookup",  # its page, no search
         "progress": "Reading Swiggy vouchers on SmartBuy…"}]
     assert rules.lookup_goal(core.executed[0]["goal"], "lookup")

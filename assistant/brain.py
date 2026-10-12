@@ -366,8 +366,10 @@ class Brain:
                     "next": "These are the amounts it sells now: don't read again. Ask which amount, with them as "
                             "options, or call voucher_checkout."}
         note = self.core.library["sites"][PORTALS[portal]]  # no word of buying: a read is a lookup, never an order
-        result = self.core.execute(f"Show the {brand} gift vouchers on {portal}: every amount with its price, and the "
-                                   "reward rate shown. Change nothing.", url=voucher_page(note, brand, "lookup"),
+        # live: "every amount with its price" had the planner select each amount in turn, toggling two of them
+        result = self.core.execute(f"Show the {brand} gift vouchers on {portal}: list the amounts its page offers and "
+                                   "the reward rate it states, reading the page as it is. Press nothing.",
+                                   url=voucher_page(note, brand, "lookup"),
                                    skill="lookup", progress=f"Reading {brand} vouchers on {portal}…")
         if result["status"] == "done":
             amounts = sorted({int(figure.replace(",", "")) for figure in re.findall(r"₹\s?([\d,]+)", result["report"])})
