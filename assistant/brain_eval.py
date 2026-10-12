@@ -70,10 +70,10 @@ class Tools:
                         "Street, Kolkata; Address 3: 9 Lake View, Howrah")
         if "credit report" in goal:
             return done("Dispute raised with Experian. Reference EXP-2026-1012.")
-        if goal.startswith("Show the Swiggy gift vouchers SmartBuy"):
+        if goal.startswith("Show the Swiggy gift vouchers on SmartBuy"):
             return done("Swiggy Money Voucher on SmartBuy: ₹250, ₹500, ₹1,000, ₹2,000. ACCELERATED REWARDS: up to 5X "
                         "reward points or 5% cashback. Monthly limit ₹10,000.")
-        if goal.startswith("Show the Swiggy gift vouchers iShop"):
+        if goal.startswith("Show the Swiggy gift vouchers on iShop"):
             return done("Swiggy Money E-Voucher on iShop: ₹1,000, ₹2,000. Earns 3% iCash.")
         if goal.startswith("Buy a ₹"):  # the demo's No at the approval card
             return done("You chose not to pay. Nothing was charged.", outcome="not_approved")

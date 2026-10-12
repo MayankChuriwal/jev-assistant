@@ -10,6 +10,7 @@ import pytest
 from helpers import until
 
 from assistant import brain as brains
+from assistant import rules
 from assistant import skills
 
 MYUPI = "https://www.upihelp.npci.org.in/"
@@ -465,11 +466,12 @@ def test_a_brands_vouchers_are_read_on_the_portal_the_user_named(tmp_path):
                   ("reply", {"text": "Which amount?", "options": ["₹250", "₹500", "₹1,000", "₹2,000"]}))
     brain = make(core, model, tmp_path)
     brain.turn("Buy me a Swiggy voucher from SmartBuy")
-    assert core.executed == [{
-        "goal": "Show the Swiggy gift vouchers SmartBuy sells: every amount with its price, and the reward rate "
-                "shown. Buy nothing.",
-        "url": "https://www.gyftr.com/instantvouchers", "skill": "lookup",
+    assert core.executed == [{  # no word of buying: the read is a lookup, never an order (live, it was refused)
+        "goal": "Show the Swiggy gift vouchers on SmartBuy: every amount with its price, and the reward rate shown. "
+                "Change nothing.",
+        "url": "https://www.gyftr.com/instantvouchers/swiggy-gv-gift-vouchers", "skill": "lookup",  # its page, no search
         "progress": "Reading Swiggy vouchers on SmartBuy…"}]
+    assert rules.lookup_goal(core.executed[0]["goal"], "lookup")
     assert results(brain, "voucher_options")[0]["report"].startswith("Swiggy Money Voucher on SmartBuy")
 
 
@@ -513,7 +515,8 @@ def test_a_checkout_needs_the_read_and_an_amount_it_showed(tmp_path):
     assert first["status"] == "rejected" and "voucher_options" in first["next"]
     assert odd["status"] == "rejected" and "₹500" in odd["next"]  # the amounts it sells, offered instead
     assert core.executed[-1] == {"goal": "Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy.",
-                                 "url": "https://www.gyftr.com/instantvouchers", "skill": "shopping",
+                                 "url": "https://www.gyftr.com/instantvouchers/swiggy-gv-gift-vouchers",
+                                 "skill": "shopping",
                                  "progress": "Getting your ₹500 Swiggy voucher ready on SmartBuy…"}
     assert bought["status"] == "not_approved" and "nothing was charged" in bought["next"].lower()
     assert "call no other tool" in bought["next"].lower()

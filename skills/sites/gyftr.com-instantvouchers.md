@@ -4,6 +4,7 @@ name: HDFC SmartBuy Instant Vouchers
 aliases: SmartBuy, HDFC SmartBuy, Smart Buy, Instant Vouchers, GyFTR
 start: https://www.gyftr.com/instantvouchers
 learn: no
+brand.swiggy: https://www.gyftr.com/instantvouchers/swiggy-gv-gift-vouchers
 keep: page
 sign-in: auto
 final: Proceed to Pay, Pay Now, Make Payment, Proceed to Payment, Pay ₹, Place Order

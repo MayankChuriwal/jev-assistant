@@ -137,6 +137,12 @@ def instructions():
     return "\n\n".join(parts)
 
 
+def voucher_page(note, brand, skill):
+    """Where a voucher task starts: the brand's own page when its portal's note names it (`brand.swiggy:`), so no
+    search is needed (live, SmartBuy's search suggestion was refused as narrowing the search), else the start."""
+    return note.get(f"brand.{brand.strip().lower()}") or skills.start(note, skill)
+
+
 def arguments(raw):
     try:
         args = json.loads(raw)
@@ -359,9 +365,9 @@ class Brain:
             return {"status": "already_read", "report": self.vouchers[key]["report"],
                     "next": "These are the amounts it sells now: don't read again. Ask which amount, with them as "
                             "options, or call voucher_checkout."}
-        note = self.core.library["sites"][PORTALS[portal]]
-        result = self.core.execute(f"Show the {brand} gift vouchers {portal} sells: every amount with its price, and "
-                                   "the reward rate shown. Buy nothing.", url=skills.start(note, "lookup"),
+        note = self.core.library["sites"][PORTALS[portal]]  # no word of buying: a read is a lookup, never an order
+        result = self.core.execute(f"Show the {brand} gift vouchers on {portal}: every amount with its price, and the "
+                                   "reward rate shown. Change nothing.", url=voucher_page(note, brand, "lookup"),
                                    skill="lookup", progress=f"Reading {brand} vouchers on {portal}…")
         if result["status"] == "done":
             amounts = sorted({int(figure.replace(",", "")) for figure in re.findall(r"₹\s?([\d,]+)", result["report"])})
@@ -386,7 +392,7 @@ class Brain:
             return {"status": "rejected", "reason": "A quantity is 1 to 10.", "next": "Ask how many, 1 to 10."}
         note = self.core.library["sites"][PORTALS[portal]]
         result = self.core.execute(f"Buy a ₹{amount:,} {brand} gift voucher, quantity {quantity}, on {portal}.",
-                                   url=skills.start(note, "shopping"), skill="shopping",
+                                   url=voucher_page(note, brand, "shopping"), skill="shopping",
                                    progress=f"Getting your ₹{amount:,} {brand} voucher ready on {portal}…")
         if result["outcome"] == "not_approved":  # the demo's No at the approval card
             return {"status": "not_approved", "report": result["report"],
