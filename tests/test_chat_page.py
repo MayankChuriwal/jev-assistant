@@ -189,6 +189,13 @@ def test_a_starter_card_sends_its_prompt_and_the_cards_go(chat):
     assert js(chat, "document.querySelector('.starters') === null")
 
 
+def test_the_starter_cards_offer_the_three_demos(chat):
+    assert until(lambda: js(chat, "document.querySelectorAll('.starter').length") == 4)
+    says = js(chat, "[...document.querySelectorAll('.starter')].map(c => c.dataset.say)")
+    assert {"Cancel my subscriptions", "I want to dispute something on my Experian report",
+            "Buy me a Swiggy voucher"} <= set(says)
+
+
 def test_a_live_reply_types_itself_out(chat):
     text = "You have 3 AutoPay mandates: OPENAI LLC, GOOGLE PLAY and AISLE. Which should I cancel?"
     chat.channel.send("local", {"type": "text", "text": {"body": text}})

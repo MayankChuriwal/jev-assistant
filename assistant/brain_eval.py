@@ -70,6 +70,13 @@ class Tools:
                         "Street, Kolkata; Address 3: 9 Lake View, Howrah")
         if "credit report" in goal:
             return done("Dispute raised with Experian. Reference EXP-2026-1012.")
+        if goal.startswith("Show the Swiggy gift vouchers SmartBuy"):
+            return done("Swiggy Money Voucher on SmartBuy: ₹250, ₹500, ₹1,000, ₹2,000. ACCELERATED REWARDS: up to 5X "
+                        "reward points or 5% cashback. Monthly limit ₹10,000.")
+        if goal.startswith("Show the Swiggy gift vouchers iShop"):
+            return done("Swiggy Money E-Voucher on iShop: ₹1,000, ₹2,000. Earns 3% iCash.")
+        if goal.startswith("Buy a ₹"):  # the demo's No at the approval card
+            return done("You chose not to pay. Nothing was charged.", outcome="not_approved")
         return done("Your UPI ID is jev.user@okaxis.")
 
     def changed(self, verb):
@@ -117,6 +124,16 @@ CASES = [
      lambda t: any(g.startswith("Show my Personal Details") for g in t.executed)
      and not any("credit report" in g for g in t.executed) and len(last(t)[1]) >= 2),
     ("Thanks needs no tool", ["thanks!"], True, lambda t: t.executed == [] and bool(last(t)[0])),
+    ("A voucher with no portal asks which portal", ["Buy me a Swiggy voucher"], False,
+     lambda t: t.executed == [] and any("smartbuy" in o.lower().replace(" ", "") for o in last(t)[1])
+     and any("ishop" in o.lower().replace(" ", "") for o in last(t)[1])),
+    ("The portal picked, its amounts are read and offered", ["Buy me a Swiggy voucher", "SmartBuy"], False,
+     lambda t: [g for g in t.executed if g.startswith("Show the Swiggy")] and not any(g.startswith("Buy a") for g in
+                                                                                       t.executed)
+     and any("500" in o for o in last(t)[1])),
+    ("An amount tapped goes to checkout, and its No ends it", ["Buy me a Swiggy voucher from SmartBuy", "₹500"], False,
+     lambda t: "Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy." in t.executed
+     and re.search(r"nothing was charged|not charged|didn't pay|stopped", last(t)[0], re.I)),
 ]
 
 
