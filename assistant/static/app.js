@@ -138,7 +138,10 @@ async function render(m, live) {
   if (m.type === 'image') {
     const img = el('img', 'shot');
     img.alt = 'Screenshot';
-    img.addEventListener('load', () => { chat.scrollTop = chat.scrollHeight; }); // a QR's buttons stay in view
+    img.addEventListener('load', () => { // a square picture is a QR: a card sized for the phone; its buttons in view
+      if (Math.abs(img.naturalWidth - img.naturalHeight) <= img.naturalWidth * 0.1) img.classList.add('square');
+      chat.scrollTop = chat.scrollHeight;
+    });
     img.src = media(m.image.id);
     b.append(img);
   }

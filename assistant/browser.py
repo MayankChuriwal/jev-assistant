@@ -185,6 +185,31 @@ CARD_INTO_VIEW = r"""((title, word) => {
   }
   return false;
 })"""
+# A captcha's picture (MyUPI's letters in an image beside its "Security Verification" box), scrolled into view: its box
+# in page coordinates, or null. One named as a captcha, else the wide picture nearest the captcha's box.
+CAPTCHA_PICTURE = r"""(() => {
+  const words = /captcha|security|verif/i;
+  const named = e => !!e && words.test([e.id, e.getAttribute('class'), e.getAttribute('alt'),
+    e.getAttribute('aria-label'), e.getAttribute('title')].join(' '));
+  const wide = [...document.querySelectorAll('img, canvas, svg')].filter(e => {
+    const r = e.getBoundingClientRect();
+    return r.width >= 60 && r.height >= 18 && r.width <= 520 && r.width / r.height >= 1.5 && r.width / r.height <= 8;
+  });
+  let best = wide.find(e => named(e) || named(e.parentElement));
+  if (!best) {
+    const box = [...document.querySelectorAll('input')].find(i => words.test([i.id, i.name, i.placeholder,
+      i.getAttribute('aria-label'), i.labels && i.labels[0] && i.labels[0].innerText].join(' ')));
+    if (box) {
+      const b = box.getBoundingClientRect();
+      const far = e => { const r = e.getBoundingClientRect(); return Math.hypot(r.x - b.x, r.y - b.y); };
+      best = wide.filter(e => far(e) <= 300).sort((x, y) => far(x) - far(y))[0];
+    }
+  }
+  if (!best) return null;
+  best.scrollIntoView({block: 'center'});
+  const r = best.getBoundingClientRect();
+  return {x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height};
+})"""
 # A labelled grid drawn over the page for one capture, in a closed shadow root: the page's own reads never see it.
 GRID = r"""(cells => {
   document.getElementById('__jev_grid')?.remove();
@@ -897,6 +922,16 @@ class Browser:
             return None
         clip = {"x": max(0, box["x"] - pad), "y": max(0, box["y"] - pad), "width": box["width"] + 2 * pad,
                 "height": box["height"] + 2 * pad, "scale": 2}
+        return self.screenshot(masked=masked, clip=clip, hide=hide)
+
+    def captcha_screenshot(self, masked=(), hide=(), pad=8):
+        """Base64 PNG of the captcha's picture alone, tripled so its letters read on a phone (the whole page sent to
+        the chat left them too small); or None."""
+        box = self.evaluate(f"({CAPTCHA_PICTURE})()")
+        if not box:
+            return None
+        clip = {"x": max(0, box["x"] - pad), "y": max(0, box["y"] - pad), "width": box["width"] + 2 * pad,
+                "height": box["height"] + 2 * pad, "scale": 3}
         return self.screenshot(masked=masked, clip=clip, hide=hide)
 
     def reveal(self, title, word):

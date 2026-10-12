@@ -438,6 +438,15 @@ def test_a_qr_to_scan_is_cut_out_and_enlarged_and_a_page_without_one_gives_none(
     assert width == height and width >= 400  # scrolled to and doubled: a phone reads it off the chat's picture
 
 
+def test_a_captcha_picture_is_cut_out_and_enlarged_and_a_page_without_one_gives_none(browser_at):
+    b = browser_at("/next.html")
+    assert b.captcha_screenshot() is None
+    b.evaluate("document.body.insertAdjacentHTML('beforeend', '<div style=\"height:1500px\"></div><label>Security "
+               "Verification <input></label><canvas class=\"captcha-img\" width=\"150\" height=\"50\"></canvas>')")
+    width, height = struct.unpack(">II", base64.b64decode(b.captcha_screenshot())[16:24])  # PNG header
+    assert width >= 450 and 2.4 <= width / height <= 4  # cut to the picture, below the fold, and tripled
+
+
 def test_a_new_code_replaces_the_digits_a_rejected_one_left_in_the_boxes(browser_at):
     b = browser_at("/next.html")
     b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div>' + [1, 2, 3, 4].map(n => "

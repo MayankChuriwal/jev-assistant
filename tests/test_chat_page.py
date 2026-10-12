@@ -222,3 +222,10 @@ def test_a_progress_line_shows_as_a_status_line_not_a_reply(chat):
     assert until(lambda: js(chat, "document.querySelector('.status-line')?.textContent") ==
                  "Checking your UPI AutoPay mandates on MyUPI…")
     assert js(chat, "document.querySelectorAll('.bubble, .feedback').length") == 0
+
+
+def test_a_square_picture_shows_as_a_qr_card_sized_for_the_phone(chat):
+    media = chat.channel.store(PNG, "image/png")  # 1×1: square, like a QR
+    chat.channel.send("local", {"type": "image", "image": {"id": media}})
+    assert until(lambda: js(chat, "document.querySelector('.shot')?.classList.contains('square')"))
+    assert js(chat, "document.querySelector('.shot').getBoundingClientRect().width") <= 240

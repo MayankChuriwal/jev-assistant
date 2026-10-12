@@ -888,7 +888,8 @@ class Worker:
         clicks = [a for a in page["actions"] if a["kind"] == "click" and a.get("node") is not None]
         typed = any(a["kind"] == "fill" and rules.CAPTCHA_BOX.search(a.get("label") or "") for a in page["actions"])
         marks = [] if typed else ([a for a in clicks if a.get("frame")] or clicks)[:40]  # squares: in their frame
-        image = s["browser"].marked_screenshot(marks, masked=self.secrets.nodes, hide=self.hidden_details())
+        image = (typed and s["browser"].captcha_screenshot(masked=self.secrets.nodes, hide=self.hidden_details())) or \
+            s["browser"].marked_screenshot(marks, masked=self.secrets.nodes, hide=self.hidden_details())  # its picture alone
         reply = self.ask({"kind": "image", "image": image, "captcha": True, "text": "The site wants a check (captcha) "
                           "solved. " + ("Type the text it shows." if typed else "Reply with the numbers of the squares "
                           "to pick, like 2 5 8; or type the text it shows; or say none if there is nothing to pick.")})

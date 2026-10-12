@@ -859,6 +859,7 @@ def test_a_typed_captcha_is_shown_without_numbered_squares(tmp_path):  # MyUPI: 
                               {"id": "e2", "kind": "fill", "label": "Security Verification", "role": "textbox",
                                "value": "", "node": 2, "constraints": {}}])
     w = worker_with(tmp_path, page=page, replies=[{"text": "4653"}])
+    w.browser.captcha_screenshot = Mock(return_value=None)  # its picture not found: the whole page goes
     w.browser.marked_screenshot = Mock(return_value="shot")
     w.relay_captcha(w.state["page"])
     assert w.browser.marked_screenshot.call_args.args[0] == [] and pressed(w) == []
@@ -3722,3 +3723,15 @@ def test_one_mandates_own_panel_never_says_the_chosen_one_is_missing(tmp_path, m
     no_planner(monkeypatch)
     w.command("tick")
     assert w.state["outcome"] is None and w.browser.act.call_args.args[1]["label"] == "UPI Autopay"
+
+
+
+def test_a_typed_captcha_goes_as_its_own_picture_cut_out_large(tmp_path):
+    # the demo: the whole page went to the phone, and the captcha in it was too small to read
+    page = fake_page(actions=[{"id": "e2", "kind": "fill", "label": "Security Verification", "role": "textbox",
+                               "value": "", "node": 2, "constraints": {}}])
+    w = worker_with(tmp_path, page=page, replies=[{"text": "4653"}])
+    w.browser.captcha_screenshot = Mock(return_value="cut")
+    w.browser.marked_screenshot = Mock(return_value="whole")
+    w.relay_captcha(w.state["page"])
+    assert w.asked[0]["image"] == "cut" and not w.browser.marked_screenshot.called

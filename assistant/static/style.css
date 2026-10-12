@@ -54,6 +54,7 @@ main::-webkit-scrollbar { display: none; }
 .title { display: block; margin-bottom: 4px; font-size: 12px; color: #A5B4FC; }
 .cursor { margin-left: 1px; color: var(--accent); }
 .shot { display: block; width: 100%; border-radius: 12px; background: var(--ink); }
+.shot.square { width: min(220px, 100%); margin: 0 auto; padding: 10px; }  /* a QR, scanned off the screen */
 .doc { color: #A5B4FC; }
 .note { align-self: center; padding: 4px 10px; border-radius: 10px; font-size: 11px; color: var(--muted);
         background: var(--companion); }
