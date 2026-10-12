@@ -129,3 +129,21 @@ voucher".
 
 Real payment; voucher codes or PINs (the portal emails or texts them); comparing rewards across portals; brands beyond
 what the portals sell (the tools take any brand the user names).
+
+## 11. Findings from exploring the public pages (13 Oct)
+
+- SmartBuy's vouchers are GyFTR's: `https://www.gyftr.com/instantvouchers` (gyftr.com/hdfcsmartbuy redirects there).
+  Swiggy's page is public (`/instantvouchers/swiggy-gv-gift-vouchers`): an offer choice (ACCELERATED REWARDS, ticked by
+  default: up to 5X points or 5% cashback; or INSTA DEALS: 2.5% instant discount plus 1X), "Choose Denomination" ₹250 ·
+  ₹500 · ₹1,000 · ₹2,000, a savings calculator, a ₹10,000 monthly limit, and a Cart Summary with "View Cart & Buy".
+  A denomination shows "Total Value" and "Add to cart"; Add to cart opens the sign-in: "Enter 10 - digit mobile
+  number", "I agree to the Terms and Condition and Privacy Policy", Continue, then an OTP. Checkout is past the sign-in.
+- iShop is Reward360's `https://www.ishoprewards.com`. A terms pop-up ("Accept & Proceed") comes first; the user chose
+  that Jev presses it itself (its note's `close:`). Vouchers: `/shopping-vouchers`, with a brand search; Swiggy is sold
+  ("Swiggy Money E-Voucher": ₹1,000 · ₹2,000, a quantity stepper, Total, Add to cart, Buy now; 3% iCash). Buy now,
+  signed out, says "Please login using ICICI Bank Net Banking" with "Proceed to Login", which opens
+  `https://payments.icici.bank.in/sm/login-user-id`: User ID, password, a "Use Virtual Keyboard" box, SECURE LOGIN.
+- So `voucher_options` reads with no sign-in on either portal; the sign-in happens once, in `voucher_checkout`. On iShop
+  it is ICICI net banking: the User ID is a saved ID (`icici_user_id`, asked once in the hidden field) and the password
+  goes through the hidden field each time, never kept. ICICI's own `icicibank.com/ishoplogin` link is broken (it
+  sends the browser to `infinitynxt.icicibank.com`, which no longer resolves); iShop's Proceed to Login works.
