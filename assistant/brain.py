@@ -170,9 +170,10 @@ class Brain:
         self.items.append({"role": "user", "content": text})
         trace = {"at": self.clock().isoformat(timespec="seconds"), "heard": text, "steps": []}
         made = set()  # the calls this turn made: the same one again is answered from its result, never run twice
+        reply_only = False  # after a repeat the next step may only reply: live, the same list was asked for five times
         try:
             for step in range(STEPS):
-                think = functools.partial(self.model, final=step == STEPS - 1)
+                think = functools.partial(self.model, final=reply_only or step == STEPS - 1)
                 call, meta = self.core.hidden(think, self.instructions, self.window() + [self.snapshot()], TOOLS)
                 self.items.append(call)
                 started = time.perf_counter()
@@ -194,6 +195,7 @@ class Brain:
                                        "ms": round((time.perf_counter() - started) * 1000)})
                 if result.get("status") in {"sent", "needs_confirmation"}:
                     return
+                reply_only = result.get("status") == "repeat"
             self.core.say("I couldn't finish that. Please say it another way.")
         except Exception as error:  # a model or network failure: one plain line, and the next message starts fresh
             trace["error"] = f"{type(error).__name__}: {error}"
@@ -356,7 +358,7 @@ class Brain:
         if any(c["name"].lower() == payee.lower() for c in result["cards"]):
             return {"verified": "still_listed", "next": "Say MyUPI still lists it: NPCI can take a few minutes to "
                                                         "update. Offer to check again."}
-        return {"verified": "gone"}
+        return {"verified": "gone", "next": "Confirmed on MyUPI: tell the user it's cancelled. Call no other tool."}
 
     def gate(self, verb, payee, reason, until=None):
         """None when this mandate change may run: the user named the payee, or said yes to its card. Else a refusal, or

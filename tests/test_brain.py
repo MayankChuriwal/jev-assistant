@@ -131,8 +131,9 @@ def test_a_payee_the_user_named_is_cancelled_then_checked_on_the_list(tmp_path):
     brain.turn("Cancel my aisle subscription")
     assert [e["goal"] for e in core.executed] == ["Cancel the UPI AutoPay mandate whose payee is AISLE", LIST]
     assert core.executed[0]["progress"] == "Cancelling AISLE's AutoPay on MyUPI…"
-    assert results(brain, "upi_cancel")[0] == {"status": "approved", "verified": "gone",
-                                               "report": "Done: you approved cancelling AISLE's UPI AutoPay …"}
+    assert results(brain, "upi_cancel")[0] == {
+        "status": "approved", "verified": "gone", "report": "Done: you approved cancelling AISLE's UPI AutoPay …",
+        "next": "Confirmed on MyUPI: tell the user it's cancelled. Call no other tool."}
     assert [m["payee"] for m in brain.mandates["list"]] == ["OPENAI LLC", "GOOGLE PLAY"]
 
 
@@ -227,7 +228,8 @@ def test_a_task_the_user_stopped_comes_back_stopped(tmp_path):
 
 def test_the_last_step_may_only_reply(tmp_path):
     core = FakeCore(*[done("Your UPI ID is shown on the home page.") for _ in range(7)])
-    model = Model(*[("upi_task", {"goal": "Show my UPI ID"})] * 7, ("reply", {"text": "Done.", "options": []}))
+    model = Model(*[("upi_task", {"goal": f"Show my UPI ID, try {n}"}) for n in range(7)],  # no repeats
+                  ("reply", {"text": "Done.", "options": []}))
     make(core, model, tmp_path).turn("what's my UPI ID?")
     assert [s["final"] for s in model.seen] == [False] * 7 + [True]
 
@@ -357,3 +359,21 @@ def test_a_qr_the_user_didnt_approve_tells_the_brain_to_stop_there(tmp_path):
     brain.turn("AISLE")
     out = results(brain, "upi_cancel")[0]
     assert out["status"] == "not_approved" and "don't retry" in out["next"]
+
+
+def test_after_a_repeated_call_the_brain_may_only_reply(tmp_path):
+    # live: after AISLE's approved cancel the brain asked for the same list five times (each one blocked as a repeat)
+    core = FakeCore(done("Your UPI AutoPay mandates: …", CARDS))
+    model = Model(("upi_mandates", {}), ("upi_mandates", {}), ("reply", {"text": "Here they are.", "options": []}))
+    make(core, model, tmp_path).turn("what autopays do I have")
+    assert [s["final"] for s in model.seen] == [False, False, True] and len(core.executed) == 1
+
+
+def test_a_cancel_confirmed_gone_tells_the_brain_to_say_so_and_stop(tmp_path):
+    core = FakeCore(done("Done: you approved cancelling AISLE's UPI AutoPay …", CARDS, outcome="approved"),
+                    done("Your UPI AutoPay mandates: …", CARDS[:2]))
+    model = Model(("upi_cancel", {"payee": "AISLE", "reason": None}), ("reply", {"text": "Done.", "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn("cancel aisle")
+    out = results(brain, "upi_cancel")[0]
+    assert out["verified"] == "gone" and "Call no other tool" in out["next"]
