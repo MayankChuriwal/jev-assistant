@@ -23,7 +23,7 @@ unit and browser suites pass before each commit.
         on (iShop's Buy now) so no yes is asked before the price (ddad177);
       - the amount's Total and the cart button are scrolled into view when off screen (e9b6f3f).
 
-Past the sign-in, the whole chain ran on a local replica of SmartBuy's brand page (copied from the live one) and a guessed cart page, with the real brain, worker, Jev and gate: ₹500 → Add to cart → View Cart & Buy → the approval card at "Proceed to Pay ₹500" (Yes / No) → No → "You chose not to pay. Nothing was charged."; the replica's payment page was never requested.
+Past the sign-in, the whole chain ran on a local replica of SmartBuy's brand page (copied from the live one) and its cart page (worded from GyFTR's public scripts: CART SUMMARY, Pay via Reward Points, Deliver to:, You Pay, BUY NOW; 58f2c2f, 80f4518). Final run: ₹500 → Add to cart → View Cart & Buy → the approval card at "BUY NOW" with no payment question → No → "Nothing was charged". An earlier run on a guessed cart page: with the real brain, worker, Jev and gate: ₹500 → Add to cart → View Cart & Buy → the approval card at "Proceed to Pay ₹500" (Yes / No) → No → "You chose not to pay. Nothing was charged."; the replica's payment page was never requested.
 
 Live with the user (needs their sign-in): SmartBuy's OTP, cart and checkout up to the approval card; iShop's net
 banking sign-in (User ID, password, any OTP), checkout, its payment-mode question, and the approval card.
