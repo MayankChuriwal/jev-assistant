@@ -23,6 +23,10 @@ MYUPI = "https://www.upihelp.npci.org.in/"
 LIST = "List all my UPI AutoPay mandates"
 BUREAUS = {"Experian": "consumer.experian.in"}  # each bureau's site note
 BUREAU_IDS = {"Experian": ("experian_ern", "experian_uti")}  # the saved IDs its dispute page asks for
+PORTALS = {"SmartBuy": "gyftr.com/instantvouchers", "iShop": "ishoprewards.com"}  # each voucher portal's site note
+PORTAL_WORDS = {"SmartBuy": re.compile(r"smart\s?buy|hdfc|gyftr", re.I),
+                "iShop": re.compile(r"\bi[\s-]?shop\b|icici", re.I)}  # the user's own words that name a portal
+VOUCHER_WORDS = {"voucher", "vouchers", "e-voucher", "evoucher", "gift", "giftcard", "card", "cards", "money", "gv"}
 IST = ZoneInfo("Asia/Kolkata")
 PLAYBOOKS = Path(__file__).resolve().parents[1] / "skills" / "playbooks"
 ENDED = {"done": "done", "cancelled": "stopped", "failed": "failed", "blocked": "failed"}  # a task's end, as a status
@@ -98,6 +102,14 @@ TOOLS = [
                       "dispute isn't about an account"),
          wrong=text("What the report shows"), correct=text("What it should show"),
          fresh_ids=FRESH_IDS),
+    tool("voucher_options", "Read the gift vouchers a bank's rewards portal sells for one brand: every amount with "
+                            "its price, and the reward rate shown. Buys nothing and needs no sign-in.",
+         portal={"type": "string", "enum": list(PORTALS)}, brand=text("The brand the user named (“Swiggy”)")),
+    tool("voucher_checkout", "Buy a gift voucher on a bank's rewards portal, up to its final pay control: the user "
+                             "says yes or no to paying there.",
+         portal={"type": "string", "enum": list(PORTALS)}, brand=text("The brand the user named"),
+         amount={"type": "integer", "description": "One of the amounts voucher_options read, in rupees"},
+         quantity={"type": "integer", "description": "How many; 1 unless the user asked for more"}),
     tool("browse", "Do any other task on any other site, in a real browser.",
          goal=text("The user's request in their words, with the details the chat already has")),
     tool("memory", "Remember or forget something about the user, or list what you remember. It replies to them "
@@ -149,6 +161,7 @@ class Brain:
         self.items = []  # the conversation, as Responses API input items
         self.mandates = None  # the last read of MyUPI's list: {"read_at": "HH:MM", "list": [{"payee", "details"}]}
         self.read = {}  # (bureau, kind) -> what its report showed: each read is a sign-in, and too many lock it
+        self.vouchers = {}  # (portal, brand) -> {"report", "amounts"}: what a portal sells for a brand, read once
         self.card = self.pending = None  # a confirmation card code sent; it counts for the next message only
         self.heard = ""
         self.inbox, self.busy, self.thread, self.starting = queue.Queue(), False, None, threading.Lock()
@@ -334,6 +347,63 @@ class Brain:
         if result["status"] == "done":
             self.read[(bureau, kind)] = result["report"]
         return self.ended(result)
+
+    def voucher_options(self, portal, brand):
+        """What a portal sells for a brand, read off its public page (no sign-in), once: the user picks an amount from
+        it, and voucher_checkout takes only an amount it showed."""
+        refused = self.voucher_refused(portal, brand)
+        if refused:
+            return refused
+        key = (portal, brand.strip().lower())
+        if key in self.vouchers:  # the Experian lockouts came from re-reads
+            return {"status": "already_read", "report": self.vouchers[key]["report"],
+                    "next": "These are the amounts it sells now: don't read again. Ask which amount, with them as "
+                            "options, or call voucher_checkout."}
+        note = self.core.library["sites"][PORTALS[portal]]
+        result = self.core.execute(f"Show the {brand} gift vouchers {portal} sells: every amount with its price, and "
+                                   "the reward rate shown. Buy nothing.", url=skills.start(note, "lookup"),
+                                   skill="lookup", progress=f"Reading {brand} vouchers on {portal}…")
+        if result["status"] == "done":
+            amounts = sorted({int(figure.replace(",", "")) for figure in re.findall(r"₹\s?([\d,]+)", result["report"])})
+            self.vouchers[key] = {"report": result["report"], "amounts": amounts}
+        return self.ended(result)
+
+    def voucher_checkout(self, portal, brand, amount, quantity):
+        """A voucher bought up to the portal's final pay control, where the user says yes or no: only an amount the
+        read showed, so none is made up."""
+        refused = self.voucher_refused(portal, brand)
+        if refused:
+            return refused
+        read = self.vouchers.get((portal, brand.strip().lower()))
+        if read is None:
+            return {"status": "rejected", "reason": f"{brand}'s amounts on {portal} haven't been read.",
+                    "next": "Read them first with voucher_options, then ask which amount."}
+        if amount not in read["amounts"]:
+            sold = ", ".join(f"₹{a:,}" for a in read["amounts"])
+            return {"status": "rejected", "reason": f"{portal} doesn't sell a ₹{amount:,} {brand} voucher.",
+                    "next": f"Offer the amounts it sells: {sold}."}
+        if not 1 <= quantity <= 10:
+            return {"status": "rejected", "reason": "A quantity is 1 to 10.", "next": "Ask how many, 1 to 10."}
+        note = self.core.library["sites"][PORTALS[portal]]
+        result = self.core.execute(f"Buy a ₹{amount:,} {brand} gift voucher, quantity {quantity}, on {portal}.",
+                                   url=skills.start(note, "shopping"), skill="shopping",
+                                   progress=f"Getting your ₹{amount:,} {brand} voucher ready on {portal}…")
+        if result["outcome"] == "not_approved":  # the demo's No at the approval card
+            return {"status": "not_approved", "report": result["report"],
+                    "next": "Say you stopped before paying and nothing was charged. Call no other tool."}
+        return self.ended(result)
+
+    def voucher_refused(self, portal, brand):
+        """A rejection when the user hasn't named the portal or the brand: each is asked, never guessed."""
+        said = " ".join(i["content"] for i in self.items[-12:] if i.get("role") == "user")
+        if portal not in PORTALS or not PORTAL_WORDS[portal].search(said):
+            return {"status": "rejected", "reason": "The user hasn't said which portal.",
+                    "next": "Ask which portal: SmartBuy (HDFC) or iShop (ICICI), with them as options."}
+        wanted = rules.words(brand) - VOUCHER_WORDS
+        if not wanted or not wanted <= rules.words(said):
+            return {"status": "rejected", "reason": f"The user hasn't named {brand}.",
+                    "next": "Ask which brand they want a voucher for."}
+        return None
 
     def forget_ids(self, bureau):
         for key in BUREAU_IDS.get(bureau, ()):

@@ -81,7 +81,9 @@ PROFILE_ASKS = {"phone": re.compile(r"\b(mobile|phone|contact) number\b", re.IGN
                 "upi_id": re.compile(r"\bupi id\b", re.IGNORECASE),
                 # live: “Please provide a fresh report's ERN and UTI” went out in the open
                 "experian_ern": re.compile(r"\b(ERN|experian reference number)\b", re.IGNORECASE),
-                "experian_uti": re.compile(r"\b(UTI|unique transaction id)\b", re.IGNORECASE)}
+                "experian_uti": re.compile(r"\b(UTI|unique transaction id)\b", re.IGNORECASE),
+                # iShop signs in through ICICI net banking: its User ID is an ID, never asked in the open
+                "icici_user_id": re.compile(r"\b(icici\b.{0,30}\buser ?id|net ?banking user ?id)\b", re.IGNORECASE)}
 # A question that asks how to pay: "How would you like to pay?", "Which payment method…?", "What will you pay with?".
 # A yes/no about going on to pay ("Shall I proceed to payment?") or "how much" asks no such thing.
 HOW_TO_PAY = re.compile(r"\bhow\b(?!\s+(?:much|many|long|soon|often)\b)(?:\s+[\w']+){0,6}?\s+pay(?:ing|ment)?\b|"

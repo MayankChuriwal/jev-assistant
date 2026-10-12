@@ -110,9 +110,11 @@ def test_the_brain_offers_its_tools_and_reads_its_playbooks(tmp_path):
     model = Model(("reply", {"text": "Hi!", "options": []}))
     make(FakeCore(), model, tmp_path).turn("hi")
     assert model.seen[0]["tools"] == ["upi_mandates", "upi_cancel", "upi_pause", "upi_task", "bureau_details",
-                                      "bureau_dispute", "browse", "memory", "reply"]
+                                      "bureau_dispute", "voucher_options", "voucher_checkout", "browse", "memory",
+                                      "reply"]
     assert "UPI AutoPay mandates" in model.seen[0]["instructions"]
     assert "Credit report disputes" in model.seen[0]["instructions"]
+    assert "Gift vouchers" in model.seen[0]["instructions"]
 
 
 def test_a_vague_cancel_reads_the_list_then_asks_which_with_the_payees(tmp_path):
@@ -449,3 +451,69 @@ def test_the_report_is_read_only_for_a_kind_the_user_named(tmp_path):
     brain.turn("I want to dispute something on my Experian report")
     out = results(brain, "bureau_details")[0]
     assert core.executed == [] and out["status"] == "rejected" and "which kind" in out["next"]
+
+
+# ---- gift vouchers on a bank's rewards portal: the amounts are read first, then the checkout goes up to the yes
+
+SWIGGY = done("Swiggy Money Voucher on SmartBuy: ₹250, ₹500, ₹1,000, ₹2,000. Up to 5X reward points or 5% "
+              "cashback. Monthly limit ₹10,000.")
+
+
+def test_a_brands_vouchers_are_read_on_the_portal_the_user_named(tmp_path):
+    core = FakeCore(SWIGGY)
+    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("reply", {"text": "Which amount?", "options": ["₹250", "₹500", "₹1,000", "₹2,000"]}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Buy me a Swiggy voucher from SmartBuy")
+    assert core.executed == [{
+        "goal": "Show the Swiggy gift vouchers SmartBuy sells: every amount with its price, and the reward rate "
+                "shown. Buy nothing.",
+        "url": "https://www.gyftr.com/instantvouchers", "skill": "lookup",
+        "progress": "Reading Swiggy vouchers on SmartBuy…"}]
+    assert results(brain, "voucher_options")[0]["report"].startswith("Swiggy Money Voucher on SmartBuy")
+
+
+@pytest.mark.parametrize("said, missing", [("Buy me a Swiggy voucher", "portal"), ("Buy me a voucher on SmartBuy",
+                                                                                     "brand")])
+def test_a_portal_or_brand_the_user_never_named_is_asked_for_not_guessed(tmp_path, said, missing):
+    core = FakeCore()
+    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("reply", {"text": "Which one?", "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn(said)
+    out = results(brain, "voucher_options")[0]
+    assert core.executed == [] and out["status"] == "rejected" and f"which {missing}" in out["next"].lower()
+
+
+def test_a_brands_vouchers_read_once_are_not_read_again(tmp_path):
+    core = FakeCore(SWIGGY)
+    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("reply", {"text": "Which amount?", "options": ["₹250", "₹500"]}),
+                  ("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("reply", {"text": "Which amount?", "options": ["₹250", "₹500"]}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Buy me a Swiggy voucher from SmartBuy")
+    brain.turn("What were the amounts again?")
+    again = results(brain, "voucher_options")[1]
+    assert len(core.executed) == 1 and again["status"] == "already_read" and again["report"] == SWIGGY["report"]
+
+
+def test_a_checkout_needs_the_read_and_an_amount_it_showed(tmp_path):
+    core = FakeCore(SWIGGY, done("Ready to pay ₹500.", outcome="not_approved"))
+    model = Model(("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "quantity": 1}),
+                  ("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("reply", {"text": "Which amount?", "options": ["₹250", "₹500"]}),
+                  ("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 300, "quantity": 1}),
+                  ("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "quantity": 1}),
+                  ("reply", {"text": "Stopped before paying. Nothing was charged.", "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Buy me a Swiggy voucher from SmartBuy")
+    brain.turn("₹500")
+    first, odd, bought = results(brain, "voucher_checkout")
+    assert first["status"] == "rejected" and "voucher_options" in first["next"]
+    assert odd["status"] == "rejected" and "₹500" in odd["next"]  # the amounts it sells, offered instead
+    assert core.executed[-1] == {"goal": "Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy.",
+                                 "url": "https://www.gyftr.com/instantvouchers", "skill": "shopping",
+                                 "progress": "Getting your ₹500 Swiggy voucher ready on SmartBuy…"}
+    assert bought["status"] == "not_approved" and "nothing was charged" in bought["next"].lower()
+    assert "call no other tool" in bought["next"].lower()

@@ -3785,6 +3785,17 @@ def test_a_question_for_the_ern_or_uti_never_goes_out_in_the_open(tmp_path, monk
     assert w.asked == [] and told in w.state["feedback"][-1]
 
 
+def test_a_question_for_the_icici_user_id_never_goes_out_in_the_open(tmp_path, monkeypatch):
+    # iShop signs in through ICICI net banking: the User ID is an ID, asked in the hidden field and kept
+    w = worker_with(tmp_path, page=fake_page(url="https://payments.icici.bank.in/sm/login-user-id",
+                                             text="LOGIN THROUGH USER ID\nUSER ID\nPASSWORD"),
+                    goal="Buy a ₹1,000 Swiggy gift voucher, quantity 1, on iShop.")
+    script_planner(monkeypatch, turn("ASK", message="What's your ICICI net banking user ID?"))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.asked == [] and "TYPE [profile:icici_user_id]" in w.state["feedback"][-1]
+
+
 def code_typed(submit=None):
     actions = [{"id": "f1", "kind": "fill", "label": "One-time code", "role": "textbox", "value": "[secret]", "node": 1,
                 "constraints": {"inputmode": "numeric"}, **({"submit": submit} if submit else {})},
