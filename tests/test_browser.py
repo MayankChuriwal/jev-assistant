@@ -162,6 +162,18 @@ def test_countdowns_do_not_make_every_decision_stale(browser_at):
     assert not b.fresh(page, find(page, "Verify"))
 
 
+def test_a_bare_otp_resend_countdown_does_not_make_its_form_stale(browser_at):
+    # live SmartBuy: GyFTR's OTP form ticks a bare "37" down beside Resend OTP; every click in it went stale
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<form onsubmit=\"event.preventDefault()\"><p>"
+               "OTP Sent to your Registered Mobile Number</p><label>One-time code <input></label><p>Resend OTP in</p>"
+               "<p id=\"left\">37</p><button type=\"button\">Submit</button></form>'); let n = 37; "
+               "setInterval(() => { document.getElementById('left').textContent = String(--n); }, 150)")
+    page = b.observe()
+    time.sleep(0.6)  # the countdown ticks several times
+    assert b.fresh(page, find(page, "Submit"))
+
+
 def test_fields_know_the_button_that_enter_submits(browser_at):
     page = browser_at("/pay-button.html").observe()
     assert find(page, "CVV", "fill")["submit"] == "Pay ₹79"

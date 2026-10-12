@@ -63,8 +63,13 @@
     .replace(/\b\d+\s?(s|secs?|seconds)\s+(left|remaining)\b/gi, '# $1 $2');
   // Text as a decision's freshness reads it: a rotating placeholder (Search "milk", then Search "bread") and the lines
   // it shows in turn are no change, so its quoted words are dropped and each distinct line counts once.
-  const calm = t => [...new Set(steady(t).replace(/["\u201c][^"\u201d\n]{0,60}["\u201d]/g, '""').split('\n')
-    .map(l => l.trim()).filter(Boolean))].join('\n');
+  // Beside a code's form, a line that is only a number or a clock is its resend countdown (GyFTR's bare "37").
+  const COUNTDOWN = /^(?:\d{1,3}|\d{1,2}:\d{2}|\d{1,3}\s?s(?:ecs?)?)$/i;
+  const calm = t => {
+    const lines = steady(t).replace(/["\u201c][^"\u201d\n]{0,60}["\u201d]/g, '""').split('\n').map(l => l.trim());
+    const otp = /\b(?:otp|resend|one[- ]time|verification code)\b/i.test(t || '');
+    return [...new Set(lines.filter(l => l && !(otp && COUNTDOWN.test(l))))].join('\n');
+  };
   const roles = ['button', 'link', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemradio',
     'menuitemcheckbox', 'option', 'gridcell', 'combobox', 'textbox', 'searchbox', 'spinbutton', 'slider', 'treeitem'];
   const semantic = 'a[href],button,input,textarea,select,summary,[contenteditable="true"],[contenteditable=""],' +

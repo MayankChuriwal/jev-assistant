@@ -101,6 +101,7 @@ def test_smartbuys_cart_buy_now_asks_and_its_view_cart_never_does(monkeypatch):
     assert gate.commit_label(w, "CLICK", click("BUY NOW"), page) == "BUY NOW"
     assert gate.commit_label(w, "CLICK", click("Redeem & Pay ₹500"), page) == "Redeem & Pay ₹500"
     assert gate.commit_label(w, "CLICK", click("View Cart & Buy"), page) is None
+    assert gate.commit_label(w, "CLICK", click("Submit"), page) is None  # live: the sign-in's code, asked as a yes
 
 
 def test_ishops_checkout_asks_at_proceed_to_pay_and_never_at_proceed_to_checkout(monkeypatch):

@@ -9,7 +9,7 @@ keep: page
 cart: Add to cart
 sign-in: auto
 otp: Request OTP
-step: Add to cart, View Cart & Buy, Request OTP, Continue
+step: Add to cart, View Cart & Buy, Request OTP, Continue, Submit
 final: BUY NOW, Pay ₹, Redeem & Pay
 ---
 - HDFC SmartBuy's gift vouchers, sold by GyFTR. The home page lists the brands; "Search Brand" at the top finds one. A brand's page is https://www.gyftr.com/instantvouchers/BRAND-gift-vouchers (Swiggy's: https://www.gyftr.com/instantvouchers/swiggy-gv-gift-vouchers).
