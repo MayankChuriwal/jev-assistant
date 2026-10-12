@@ -34,6 +34,7 @@ LOOKS_LIKE_AN_ID = ("That looks like an ID. Tell me what it is called (like “m
                     "can keep it hidden.")
 PLACEHOLDER = re.compile(r"\[(?:profile|secret):[\w.]+\]")
 CAPTCHA_REPLY = re.compile(r"\S{1,12}|\d+(?:\s*(?:,|&|and)?\s*\d+)*", re.IGNORECASE)  # “F658”, “none”, “2, 5 and 8”
+PLACEHOLDER = re.compile(r"\[profile:([a-z0-9_]+)\]")  # how the user's own details reach the models
 BARE_ID = re.compile(r"[\d\s()+-]*\d[\d\s()+-]*|[A-Za-z0-9]*\d[A-Za-z0-9]*")  # the whole message: a number or a code
 KEPT_OUT = ("That looks like an ID, so I kept it out of the models. When a site needs one I ask for it in the hidden "
             "field, where it goes straight to the page.")
@@ -206,6 +207,10 @@ class Core:
     def reply(self, text, options):
         """The brain's message. Its options become reply buttons (≤ 3) or a list (≤ 10), else numbered lines; a tap comes
         back to the brain as the option's own words, however its button cut them."""
+        # the models see the user's details as [profile:name]: the user sees "your full name", and a button its row's
+        # name ("Name"), never the placeholder (live: “Mobile: [profile:phone]” was a button)
+        text = PLACEHOLDER.sub(lambda m: "your " + LABELS.get(m[1], m[1].replace("_", " ")), text)
+        options = [re.sub(r"\s*:?\s*" + PLACEHOLDER.pattern, "", label).strip() or label for label in options]
         with self.lock:
             tag = f"b{next(self.offer_ids)}"
             self.offered.update({f"{tag}:{n}": label for n, label in enumerate(options, 1)})

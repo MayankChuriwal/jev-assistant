@@ -267,6 +267,16 @@ def test_a_long_option_comes_back_whole_though_its_button_is_cut(world):
     assert world.classified == ["Cancel ONE97 COMMUNICATIONS LIMITED"]
 
 
+def test_a_brain_reply_never_shows_the_placeholders_the_users_details_are_hidden_as(world):
+    # live: Experian's dispute offered “Name: [profile:name]” and “Mobile: [profile:phone]” as buttons
+    world.brain.starts = False
+    world.core.reply("Name: [profile:name]; Mobile: [profile:phone]. Which is wrong?",
+                     ["Name: [profile:name]", "Mobile: [profile:phone]", "Address 1: Howrah"])
+    shown = interactive(world)[-1]["interactive"]
+    assert shown["body"]["text"] == "Name: your full name; Mobile: your phone number. Which is wrong?"
+    assert [b["reply"]["title"] for b in shown["action"]["buttons"]] == ["Name", "Mobile", "Address 1: Howrah"]
+
+
 def test_a_brain_reply_without_options_is_plain_text(world):
     world.core.reply("Done. MyUPI no longer lists AISLE.", [])
     assert bodies(world) == ["Done. MyUPI no longer lists AISLE."] and interactive(world) == []
