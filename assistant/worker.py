@@ -420,7 +420,7 @@ class Worker:
             self.log_refusal("halt", halt)
             self.state["status"] = halt.status
             self.clock()
-            self.say(str(halt))
+            self.say(str(halt), kind="result")  # how it ended: a brain task's report (Experian refused the ERN)
             return self.snapshot()
         finally:
             SECRETS.reset(secrets)
@@ -1590,7 +1590,8 @@ class Worker:
             return scored[0][1]
         hints = "; ".join(f"“{line[:80]}”" for n, line in scored[:3] if n) or "none found"
         raise Retry("DONE needs a quote in text: a short piece of the page text copied exactly, proving it. Lines "
-                    f"that look relevant: {hints}.")
+                    f"that look relevant: {hints}. If the site refused the task (an error it showed), STOP with why "
+                    "instead.")
 
     # ---- acting
 

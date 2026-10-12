@@ -6,7 +6,7 @@ start: https://consumer.experian.in/ECSINDIA-DCE/view/angular/index.html#!/
 learn: no
 ---
 - This is Experian India's page for raising a dispute on a credit report. It opens with two boxes: type [profile:experian_ern] into "Experian Reference Number" and [profile:experian_uti] into "Unique Transaction ID", then press Verify.
-- The ERN is on the top right of the user's Experian report; the UTI is in Experian's email. Both must come from a report pulled in the last 30 days: if the page says they are too old or don't match, DONE saying a fresh Experian report is needed.
+- The ERN is on the top right of the user's Experian report; the UTI is in Experian's email. Both must come from a report pulled in the last 30 days: if the page says they are too old, don't match, or can't be verified ("Error while verifying UTI and ERN"), STOP saying Experian couldn't verify them and a fresh Experian report is needed.
 - After Verify, pick the dispute type from the drop-down: Account Details (an account's status, balance, limit, dates, or an account that isn't the user's), Personal Details, or Credit Enquiry.
 - Find the account by its lender and the last four digits the goal gives. Type the correct value the goal gives in the editable box next to the wrong field; change nothing else.
 - Submit opens a pop-up listing the corrections, with an optional bank-details section: leave it empty. The pop-up's final submit files the dispute and needs the user's yes; Experian then emails an acknowledgement.

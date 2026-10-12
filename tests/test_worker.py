@@ -2458,7 +2458,7 @@ def test_a_download_that_never_arrives_stops_honestly_or_is_named_in_a_paid_task
         assert w.state["status"] not in STOPPED
     w.command("tick")
     assert w.state["status"] == "blocked" and "no file was saved" in w.told[-1]["text"]
-    assert not any(m.get("kind") == "result" for m in w.told)
+    assert [m.get("kind") for m in w.told] == ["result"]  # its stop says why it ended; the bench counts only "done"
     paid = worker_with(tmp_path, page=fake_page(text="Payment successful\nReceipt"),
                        goal="Pay my BESCOM bill and download the receipt")
     paid.state["history"].append({"step": 1, "operation": "CLICK", "action": "Pay ₹79", "committed": True})
@@ -3735,3 +3735,24 @@ def test_a_typed_captcha_goes_as_its_own_picture_cut_out_large(tmp_path):
     w.browser.marked_screenshot = Mock(return_value="whole")
     w.relay_captcha(w.state["page"])
     assert w.asked[0]["image"] == "cut" and not w.browser.marked_screenshot.called
+
+
+def test_a_task_that_stops_says_why_as_its_result(tmp_path, monkeypatch):
+    # live: Experian refused the ERN and UTI; a brain task got no word of why it ended
+    w = worker_with(tmp_path, page=fake_page(text="Error while verifying UTI and ERN"), goal="Raise a dispute")
+    script_planner(monkeypatch, turn("STOP", message="Experian couldn't verify the ERN and UTI: a fresh report is "
+                                                     "needed."))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert w.state["status"] == "blocked"
+    assert w.told[-1] == {"from": "agent", "kind": "result", "text": "Experian couldn't verify the ERN and UTI: a "
+                                                                      "fresh report is needed."}
+
+
+def test_a_done_without_a_quote_hears_it_may_stop_with_why_instead(tmp_path, monkeypatch):
+    # live: the error was a passing pop-up, so no quote could prove DONE; refused five times, then “I'm stuck”
+    w = worker_with(tmp_path, page=fake_page(text="Verify your details"), goal="Raise a dispute")
+    script_planner(monkeypatch, turn("DONE", message="A fresh Experian report is needed."))
+    jev_checks(monkeypatch)
+    w.command("tick")
+    assert "STOP" in w.state["feedback"][-1]
