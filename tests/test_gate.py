@@ -77,6 +77,18 @@ def test_jev_never_clears_a_clear_commit(monkeypatch):
     assert gate.commit_label(Fake(page), "CLICK", PAY, page) == "Pay ₹79"
 
 
+def test_a_control_its_site_note_names_final_commits_without_jevs_check(monkeypatch):
+    # SmartBuy: “Proceed to Pay” was a maybe-commit Jev could clear as a step, opening an order before any yes
+    monkeypatch.setattr(gate.jev, "final", lambda *a: pytest.fail("Jev was asked"))
+    page = fake_page(url="https://www.gyftr.com/instantvouchers/cart")
+    w = Fake(page)
+    w.library = {"sites": {"gyftr.com": {"host": "gyftr.com", "final": "Proceed to Pay, Pay Now", "body": ""}}}
+    pay = {"id": "p", "kind": "click", "label": "Proceed to Pay ₹500", "role": "button", "node": 42}
+    assert gate.commit_label(w, "CLICK", pay, page) == "Proceed to Pay ₹500"
+    other = {"id": "o", "kind": "click", "label": "Add to cart", "role": "button", "node": 43}
+    assert gate.commit_label(w, "CLICK", other, page) is None
+
+
 def test_inside_a_commit_subgoal_jev_confirms_a_control_the_regex_missed(monkeypatch):
     page = fake_page()
     go = {"id": "g", "kind": "click", "label": "Continue", "role": "button", "node": 41}

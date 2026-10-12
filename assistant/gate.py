@@ -503,6 +503,16 @@ def lookup(w, label, sure):
                 "what the page shows and report it.")
 
 
+def final_control(w, action, page):
+    """The control's label when its site note's `final:` names it (words it starts with, comma-separated: SmartBuy's
+    "Proceed to Pay"), else None. Such a control commits outright: Jev's check could clear it as a step to the payment
+    page, which opens an order and the bank's card form before any yes."""
+    note = skills.site_for(page.get("url") or "", getattr(w, "library", {}).get("sites", {})) or {}
+    label = (action.get("label") or "").strip()
+    words = [word.strip().lower() for word in str(note.get("final") or "").split(",") if word.strip()]
+    return label if label and any(label.lower().startswith(word) for word in words) else None
+
+
 def commit_label(w, operation, action, page, key=None, subgoal=None):
     """The words the approval names when this action commits, else None. Two tiers: a control the commit rule
     matches outright always commits (Jev clears only one that may be a step: a payment method named “…Pay” with no
@@ -513,6 +523,9 @@ def commit_label(w, operation, action, page, key=None, subgoal=None):
     if operation not in COMMIT_OPS or (operation == "PRESS_KEY" and key not in {"Enter", "Space"}) or \
             action.get("hover"):
         return None
+    final = final_control(w, action, page)
+    if final:  # its site note names it: no check may clear it as a step to the payment page
+        return lookup(w, final, sure=True)
     page_key = operation == "PRESS_KEY" and action.get("node") is None
     focused = w.state["browser"].focused_label() if page_key else ""
     label = rules.commit_label(operation, action, page, key, focused)
