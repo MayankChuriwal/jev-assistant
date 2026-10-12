@@ -183,18 +183,25 @@
       }
     }
   };
+  // A greyed-out field shows its value as text does (Experian's dispute rows: what the report says, beside its row's
+  // name), but never an ID in it: a PAN, an Aadhaar or a card number stays off the page text.
+  const SHOWN = new Set(['text', 'email', 'tel', 'number', 'search', 'url', 'date']);
+  const shown = e => (e.tagName === 'TEXTAREA' || e.tagName === 'INPUT' && SHOWN.has(e.type)) && e.matches(':disabled');
+  const ID = /\b[A-Z]{5}\d{4}[A-Z]\b|\d(?:[\s-]?\d){11,}/i;
   for (const {root, dx, dy} of roots) {
     const doc = root.ownerDocument || root, start = root.body || root;
-    const walker = doc.createTreeWalker(start, NodeFilter.SHOW_TEXT), range = doc.createRange();
+    const walker = doc.createTreeWalker(start, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT), range = doc.createRange();
     let node;
     while ((node = walker.nextNode()) && length < 6000) {
-      const value = node.textContent.trim(), parent = node.parentElement;
+      const field = node.nodeType === Node.ELEMENT_NODE;
+      if (field && !shown(node)) continue;
+      const value = (field ? node.value : node.textContent).trim(), parent = field ? node : node.parentElement;
       if (!value || !parent || parent.closest('script,style,noscript,template') || !(visible(parent) || twin(parent)))
         continue;
-      range.selectNodeContents(node);
-      const r = range.getBoundingClientRect(), x = r.x + dx, y = r.y + dy;
+      if (!field) range.selectNodeContents(node);
+      const r = (field ? node : range).getBoundingClientRect(), x = r.x + dx, y = r.y + dy;
       if (!(r.width > 0 && r.height > 0 && y + r.height > 0 && y < innerHeight && x + r.width > 0 && x < innerWidth)) continue;
-      words.push(value);
+      words.push(field && ID.test(value) ? '[an ID, hidden]' : value);
       length += value.length;
       if (/\b(drag|drop)\b/i.test(value) && FILE_WORDS.test(value)) dropZone(parent, value, dx, dy);  // not "Drop-off"
     }
