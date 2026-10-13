@@ -118,8 +118,9 @@ TOOLS = [
          portal={"type": "string", "enum": list(PORTALS)}, brand=text("The brand the user named"),
          amount={"type": "integer", "description": "The total the user wants, in rupees (“5k” is 5000)"},
          card=text("The card the user will pay with, in their words (“Regalia Gold”); empty until they name one")),
-    tool("voucher_checkout", "Buy a gift voucher on a bank's rewards portal, up to its final pay control: the user "
-                             "says yes or no to paying there.",
+    tool("voucher_checkout", "Buy the vouchers for a total voucher_savings checked, on a bank's rewards portal, and "
+                             "pay for them: it asks the user for their card details and the bank's one-time password "
+                             "in a hidden field, and asks yes or no once before paying.",
          portal={"type": "string", "enum": list(PORTALS)}, brand=text("The brand the user named"),
          amount={"type": "integer", "description": "The total voucher_savings checked, in rupees"}),
     tool("browse", "Do any other task on any other site, in a real browser.",
@@ -521,6 +522,10 @@ class Brain:
         if result["outcome"] == "not_approved":  # the demo's No at the approval card
             return {"status": "not_approved", "report": result["report"],
                     "next": "Say you stopped before paying and nothing was charged. Call no other tool."}
+        if result["outcome"] == "bought":  # its report is written in code: the order, never a voucher's code
+            return {"status": "bought", "report": result["report"],
+                    "next": "Tell them it's bought, in the report's words: the vouchers, the total and the order. The "
+                            "site sends the codes by SMS and email: never give or ask for one. Call no other tool."}
         return self.ended(result)
 
     def voucher_refused(self, portal, brand):

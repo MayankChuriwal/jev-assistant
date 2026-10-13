@@ -720,3 +720,21 @@ def test_a_read_asks_for_a_total_not_an_amount_from_options(tmp_path):
     out = results(brain, "voucher_options")[0]
     assert "how much" in out["next"].lower() and "no amount options" in out["next"].lower()
     assert "₹10,000" in out["next"]  # the monthly limit, in the question
+
+
+def test_a_bought_checkout_says_so_with_its_order_and_never_a_code(tmp_path):
+    bought = done("Bought ₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000. Order "
+                  "HSB326844797-1791901466. The site sends the codes by SMS and email.", outcome="bought")
+    core = FakeCore(CARDS_READ, bought)
+    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 5000,
+                                       "card": "Regalia Gold"}),
+                  ("reply", {"text": "Get it?", "options": ["Buy it", "Not now"]}),
+                  ("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 5000}),
+                  ("reply", {"text": "Bought.", "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Buy me ₹5,000 of Swiggy vouchers from SmartBuy with my Regalia Gold")
+    brain.turn("Buy it")
+    out = results(brain, "voucher_checkout")[0]
+    assert out["status"] == "bought" and out["report"] == bought["report"]
+    assert "never" in out["next"].lower() and "code" in out["next"].lower()
