@@ -4432,6 +4432,7 @@ def test_the_banks_code_is_sent_under_the_payments_yes(tmp_path, monkeypatch, no
         w.command("tick")
     assert w.browser.act.call_args.args[1]["label"] == "Submit" and w.asked == []  # no second yes
     assert w.state["history"][-1]["committed"]  # watched like the payment it is
+    assert w.told[-1]["text"].startswith("Payment ")  # dry run: "Submit: the site is still working on it"
 
 
 def test_a_confirmed_payment_ends_with_its_order_id_and_never_a_code(tmp_path, monkeypatch, no_wait):

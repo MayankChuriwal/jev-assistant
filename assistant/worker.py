@@ -2120,8 +2120,8 @@ class Worker:
         cleared = self.state.pop("cleared", None)  # a maybe-commit Jev was sure is a step: the bench audits it
         if label and self.unpicked_method(page):
             raise Retry(PICK_METHOD)  # the final control beside a payment selector: the user picks how to pay first
-        if paid:  # watched like the payment it completes
-            label = label or action.get("label") or operation.title()
+        if paid:  # watched like the payment it completes, and named so to the user
+            label = "Payment"
             gate.bind(self.state, action, label, "", page, "user")
         elif label:
             gate.approved(self, page, action, label, sub)  # returns True, or raises StalePage or Retry
