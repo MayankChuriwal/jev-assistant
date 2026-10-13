@@ -33,6 +33,7 @@ CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QR_TRIES = 5  # seconds a mandate's QR may take to render after its Cancel
 LIST_READS, LIST_GAP = 6, 0.7  # MyUPI draws its mandate list a card at a time, over a few seconds
 CART_WAIT = 1.5  # seconds for a cart button's answer (SmartBuy's Add to cart, from its server) to show
+CART_READS = 6  # reads, CART_WAIT apart, for a cart line's count to change after its stepper (live: over 1.5 s)
 CHOSEN = re.compile(r"(Cancel|Pause) the UPI AutoPay mandate whose payee is (.+?)(?: until .+)?$")  # the brain's words
 VOUCHER_READ = re.compile(r"^Show the (.+?) gift vouchers on (.+?): list the amounts")  # the brain's voucher read
 REWARD_LINE = re.compile(r"reward points|cashback|icash|instant discount", re.IGNORECASE)
@@ -996,19 +997,25 @@ class Worker:
         line brought to the order's count by its own stepper, first line first: (its "Decrease quantity" or "Increase
         quantity", page). A value the order doesn't name goes down to none (live, an earlier run's 2 × ₹2,000 sat in
         the cart and Checkout was offered at ₹4,000). Only while the page shows one stepper a line, at most 20 presses;
-        else None."""
+        else None. A cart whose lines are the order is marked for `checkout_step`: on screen alone a line's value shows
+        (live, it sits in a disabled box the whole page's words leave out)."""
         s = self.state
         wanted = voucher_order(s["goal"])
         if not wanted or "voucher value" not in page["text"].lower().replace("\n", " "):
             return None
         steps = ("decrease quantity", "increase quantity")
         last = (s["history"][-1].get("action") or "") if s["history"] else ""
-        if last.lower().startswith(steps):  # its answer comes from the site's server: read once more
-            time.sleep(CART_WAIT)
-            page = self.observe()
+        if last.lower().startswith(steps):  # its answer comes from the site's server: read until it shows (live: a
+            for _ in range(CART_READS):  # second + before it did made ₹6,000 of ₹4,000)
+                time.sleep(CART_WAIT)
+                page = self.observe()
+                if cart_lines(page["text"]) != s.get("cart_seen"):
+                    break
         if sum((h.get("action") or "").lower().startswith(steps) for h in s["history"]) >= 20:
             return None
         lines = cart_lines(page["text"])
+        s["cart_seen"] = lines
+        s["cart_ok"] = self.place_of(page) if sorted(lines) == sorted(wanted.items()) else None
         fewer, more = ([a for a in page["actions"] if a["kind"] == "click"
                         and (a.get("label") or "").lower().startswith(word)] for word in steps)
         if not lines or not len(lines) == len(fewer) == len(more):
@@ -1057,8 +1064,11 @@ class Worker:
 
         if any(final({"actions": [{"kind": "click", "label": h.get("action")}]}) for h in s["history"]):
             return None
-        if sorted(cart_lines(self.page_words())) != sorted(voucher_order(s["goal"]).items()):
-            return None  # the whole cart, on screen or not, is the order first: nothing more, nothing missing
+        if s.get("cart_ok") != self.place_of(page):
+            return None  # its lines, read on screen (`quantity_step`), are the order: nothing more, nothing missing
+        total = re.search(r"total cart value\s*₹\s?([\d,]+)", self.page_words(), re.IGNORECASE)
+        if total and total[1].replace(",", "") != VOUCHER_BUY.match(s["goal"])[1].replace(",", ""):
+            return None  # and its total, anywhere on the page
         control = final(page)
         if not control and any(s["browser"].into_view(name) for name in finals):
             page = self.observe()

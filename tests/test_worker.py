@@ -4157,7 +4157,8 @@ def test_a_carts_required_boxes_are_ticked_without_the_planner(tmp_path, monkeyp
 def test_with_the_boxes_ticked_checkout_below_the_screen_is_pressed_without_asking(tmp_path, monkeypatch, no_wait):
     # live: with the boxes ticked the planner pressed the cart count "1" as the purchase, then got stuck. Checkout
     # only opens GyFTR's payment page now: the user's one yes is at its PROCEED
-    w = worker_with(tmp_path, page=voucher_page(CART, "CART SUMMARY\nYou Pay\n₹ 2,000", "Remove item", "Apply"),
+    w = worker_with(tmp_path, page=voucher_page(CART, "Voucher\nValue\n2,000\nYou Pay\n₹\n2,000\nCART SUMMARY",
+                                                "Decrease quantity", "Increase quantity", "Remove item", "Apply"),
                     goal=SMARTBUY_CART)
     w.state["cards_picked"] = [w.place_of(w.state["page"])]
     w.browser.tick = Mock(return_value={"found": 2, "ticked": []})
@@ -4282,16 +4283,50 @@ def test_a_value_already_in_the_cart_is_not_added_again(tmp_path, no_wait):
     assert w.voucher_step(page)[0]["label"] == "₹ 1,000"
 
 
-def test_checkout_waits_until_the_cart_holds_the_order(tmp_path, no_wait):
-    # the whole cart's words, on screen or not: ₹1,000 missing, then there
-    w = worker_with(tmp_path, page=voucher_page(CART, "You Pay\n₹ 4,000", "Remove item"), goal=FIVE)
-    w.state["agreed_at"] = w.place_of(w.state["page"])
+LIVE_CART = "Voucher\nValue\n2,000\nYou Pay\n₹\n4,000\nVoucher\nValue\n1,000\nYou Pay\n₹\n1,000"
+STEPPERS = ("Decrease quantity", "Increase quantity") * 2
+
+
+def test_checkout_waits_until_the_cart_on_screen_is_the_order(tmp_path, no_wait):
+    # live: a line's value sits in a disabled box, so the whole page's words never show it ("Voucher Value You Pay
+    # ₹ 4,000"), and Checkout never came. The lines are read on screen, where the boxes' values show; the whole page's
+    # Total Cart Value must be the order's too
+    cart = voucher_page(CART, LIVE_CART, *STEPPERS)
+    w = worker_with(tmp_path, page=cart, goal=FIVE)
+    w.state["agreed_at"] = w.place_of(cart)
+    w.browser.texts = Mock(return_value=["Voucher Value You Pay ₹ 4,000 Remove item Voucher Value You Pay ₹ 1,000 "
+                                         "Remove item CART SUMMARY Total Cart Value ₹ 5,000"])
     w.browser.into_view = Mock(return_value=True)
     w.browser.observe.return_value = voucher_page(CART, "You Pay\n₹ 5,000", "Checkout")
-    w.browser.texts = Mock(return_value=["Voucher Value 2,000 You Pay ₹ 4,000", "Total Cart Value ₹ 4,000"])
-    assert w.checkout_step(w.state["page"]) is None
-    w.browser.texts.return_value = ["Voucher Value 2,000 You Pay ₹ 4,000", "Voucher Value 1,000 You Pay ₹ 1,000"]
-    assert w.checkout_step(w.state["page"])[0]["label"] == "Checkout"
+    assert w.checkout_step(cart) is None  # its lines not read yet
+    assert w.quantity_step(cart) is None  # read: the order
+    assert w.checkout_step(cart)[0]["label"] == "Checkout"
+
+
+def test_checkout_never_comes_for_a_cart_that_isnt_the_order(tmp_path, no_wait):
+    short = voucher_page(CART, LIVE_CART.replace("₹\n4,000", "₹\n2,000"), *STEPPERS)  # one ₹2,000, not two
+    w = worker_with(tmp_path, page=short, goal=FIVE)
+    w.state["agreed_at"] = w.place_of(short)
+    w.browser.into_view = Mock(return_value=True)
+    w.browser.observe.return_value = voucher_page(CART, "You Pay\n₹ 5,000", "Checkout")
+    w.browser.texts = Mock(return_value=["Total Cart Value ₹ 5,000"])
+    assert w.quantity_step(short)[0]["label"] == "Increase quantity"
+    assert w.checkout_step(short) is None
+    w.quantity_step(voucher_page(CART, LIVE_CART, *STEPPERS))  # the order on screen, but the total says otherwise
+    w.browser.texts.return_value = ["Total Cart Value ₹ 4,500"]
+    assert w.checkout_step(short) is None
+
+
+def test_a_cart_count_pressed_is_read_until_its_answer_shows(tmp_path, no_wait):
+    # live: SmartBuy's server took longer than one wait, the line still showed one ₹2,000, and + was pressed again
+    # (₹6,000)
+    before = voucher_page(CART, LIVE_CART.replace("₹\n4,000", "₹\n2,000"), *STEPPERS)
+    w = worker_with(tmp_path, page=before, goal=FIVE)
+    assert w.quantity_step(before)[0]["label"] == "Increase quantity"
+    w.state["history"].append({"operation": "CLICK", "action": "Increase quantity"})
+    w.browser.observe.reset_mock()
+    w.browser.observe.side_effect = [before, before, voucher_page(CART, LIVE_CART, *STEPPERS)]
+    assert w.quantity_step(before) is None and w.browser.observe.call_count == 3  # read three times, pressed once
 
 
 def test_a_cart_count_just_lowered_is_read_again_before_lowering_it_once_more(tmp_path, no_wait):
