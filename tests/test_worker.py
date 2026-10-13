@@ -4193,3 +4193,36 @@ def test_a_one_voucher_purchase_never_raises_its_quantity(tmp_path):
     w = worker_with(tmp_path, page=fake_page(url=SMARTBUY, actions=[control]), goal=VOUCHER)
     with pytest.raises(Retry, match="quantity is 1"):
         w.act("CLICK", control, w.state["page"], sub("go to the cart"))
+
+
+def test_a_cart_holding_more_of_the_voucher_than_asked_is_brought_down_to_it(tmp_path, monkeypatch, no_wait):
+    # live: the cart held 2 × ₹2,000 from an earlier run, and Checkout was offered at ₹4,000 for one voucher
+    page = voucher_page(CART, "Deliver to:\nVoucher\nValue\n2,000\nYou Pay\n₹\n4,000\nRemove item\nCART SUMMARY",
+                        "Decrease quantity", "Increase quantity", "Remove item")
+    w = worker_with(tmp_path, page=page, goal=SMARTBUY_CART)
+    w.state["cards_picked"] = [w.place_of(page)]
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"] == "Decrease quantity"
+    one = voucher_page(CART, "Voucher\nValue\n2,000\nYou Pay\n₹\n2,000\nRemove item", "Decrease quantity",
+                       "Increase quantity", "Remove item")
+    w.browser.observe.return_value = one  # its answer, read once more
+    assert w.quantity_step(one) is None  # one, as asked: never down to none
+
+
+def test_a_cart_quantity_is_left_alone_when_its_stepper_is_not_the_vouchers_alone(tmp_path):
+    # two items, two steppers: which one is the voucher's isn't known, so the approval's total is the user's to judge
+    page = voucher_page(CART, "Voucher\nValue\n2,000\nYou Pay\n₹\n4,000\nVoucher\nValue\n500\nYou Pay\n₹\n500",
+                        "Decrease quantity", "Increase quantity", "Decrease quantity", "Increase quantity")
+    w = worker_with(tmp_path, page=page, goal=SMARTBUY_CART)
+    assert w.quantity_step(page) is None
+
+
+def test_a_cart_count_just_lowered_is_read_again_before_lowering_it_once_more(tmp_path, no_wait):
+    # its answer comes from the site's server: read too soon, ₹4,000 still shows, and a second press would empty it
+    stale = voucher_page(CART, "Voucher\nValue\n2,000\nYou Pay\n₹\n4,000", "Decrease quantity", "Remove item")
+    w = worker_with(tmp_path, page=stale, goal=SMARTBUY_CART)
+    w.state["history"].append({"operation": "CLICK", "action": "Decrease quantity"})
+    w.browser.observe.return_value = voucher_page(CART, "Voucher\nValue\n2,000\nYou Pay\n₹\n2,000",
+                                                  "Decrease quantity", "Remove item")
+    assert w.quantity_step(stale) is None and w.browser.observe.called

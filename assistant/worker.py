@@ -578,6 +578,10 @@ class Worker:
             return self.act("CLICK", notice, page, None)
         if self.card_step(page):  # live: the cart's calculator kept Infinia, and the planner asked to pay with it
             return None
+        fewer = self.quantity_step(page)
+        if fewer:  # live: the cart held 2 × ₹2,000 from an earlier run, and Checkout was offered at ₹4,000
+            action, page = fewer
+            return self.act("CLICK", action, page, None)
         if self.agree_step(page):  # live SmartBuy cart: Checkout did nothing until its two required boxes were ticked
             return None
         checkout = self.checkout_step(page)
@@ -949,6 +953,29 @@ class Worker:
         if picked:
             done.append(self.place_of(page))
         return picked
+
+    def quantity_step(self, page):
+        """On a cart holding more of the voucher the brain's checkout names than it asks for (SmartBuy's "Voucher Value
+        2,000 … You Pay ₹ 4,000": two), its one "Decrease quantity" control, until the count is the goal's; never below
+        it, and never when the page has more than one stepper (another item's count is the user's). Else None."""
+        s = self.state
+        wanted = VOUCHER_BUY.match(s["goal"])
+        if not wanted or "voucher value" not in page["text"].lower().replace("\n", " "):
+            return None
+        amount, quantity = int(wanted[1].replace(",", "")), int(wanted[2])
+        last = (s["history"][-1].get("action") or "") if s["history"] else ""
+        if last.lower().startswith("decrease quantity"):  # its answer comes from the site's server: read once more
+            time.sleep(CART_WAIT)
+            page = self.observe()
+        if sum((h.get("action") or "").lower().startswith("decrease quantity") for h in s["history"]) >= 9:
+            return None
+        text = re.sub(r"\s+", " ", page["text"])
+        counts = [round(int(paid.replace(",", "")) / amount) for value, paid in
+                  re.findall(r"Voucher Value ([\d,]+).{0,20}?You Pay ₹ ?([\d,]+)", text)
+                  if int(value.replace(",", "")) == amount]
+        fewer = [a for a in page["actions"] if a["kind"] == "click"
+                 and (a.get("label") or "").lower().startswith("decrease quantity")]
+        return (fewer[0], page) if len(counts) == 1 and counts[0] > quantity and len(fewer) == 1 else None
 
     def agree_step(self, page):
         """The boxes its site note's `agree:` names (words their labels start with, comma-separated: SmartBuy's cart
