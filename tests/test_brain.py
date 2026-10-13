@@ -563,9 +563,9 @@ def test_a_card_the_read_doesnt_list_is_offered_the_ones_it_does(tmp_path):
                   ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Amex Platinum"}),
                   ("reply", {"text": "Which card?", "options": []}))
     brain = make(core, model, tmp_path)
-    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy")
+    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy with my Amex Platinum")
     out = results(brain, "voucher_savings")[0]
-    assert out["status"] == "rejected" and "Regalia Gold" in out["next"]
+    assert out["status"] == "rejected" and "Amex Platinum" in out["reason"] and "Regalia Gold" in out["next"]
 
 
 def test_the_portal_named_messages_ago_still_counts_after_tool_calls(tmp_path):
@@ -587,6 +587,42 @@ def test_the_portal_named_messages_ago_still_counts_after_tool_calls(tmp_path):
                         {"type": "function_call_output", "call_id": f"pad{n}", "output": "{}"}]
     brain.turn("Regalia Gold")
     assert results(brain, "voucher_savings")[0]["status"] == "done"
+
+
+def test_a_card_the_user_never_named_gets_no_savings(tmp_path):
+    # live: the user answered "₹2,000" and the brain picked "Other credit card" itself, savings and effective price too
+    core = FakeCore(CARDS_READ)
+    model = Model(("reply", {"text": "Which portal?", "options": ["SmartBuy (HDFC)", "iShop (ICICI)"]}),
+                  ("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("reply", {"text": "Which amount?", "options": ["₹500", "₹2,000"]}),
+                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 2000,
+                                       "card": "Other credit card"}),
+                  ("reply", {"text": "Which card?", "options": ["Regalia Gold", "Other credit card"]}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Buy me a Swiggy voucher")
+    brain.turn("SmartBuy (HDFC)")
+    brain.turn("₹2,000")
+    out = results(brain, "voucher_savings")[0]
+    assert out["status"] == "rejected" and "which hdfc card" in out["next"].lower() and "Regalia Gold" in out["next"]
+
+
+def test_a_card_named_for_an_earlier_voucher_is_asked_again(tmp_path):
+    # a retake: the card the user named last time is theirs to name again, not the brain's to reuse
+    core = FakeCore(CARDS_READ)
+    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("reply", {"text": "Which amount?", "options": ["₹500"]}),
+                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia Gold"}),
+                  ("reply", {"text": "Get it?", "options": ["Buy it", "Not now"]}),
+                  ("reply", {"text": "Not bought.", "options": []}),
+                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia Gold"}),
+                  ("reply", {"text": "Which card?", "options": ["Regalia Gold"]}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy")
+    brain.turn("Regalia Gold")
+    brain.turn("Not now")
+    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy")
+    first, again = results(brain, "voucher_savings")
+    assert first["status"] == "done" and again["status"] == "rejected"
 
 
 @pytest.mark.parametrize("said", ["Not now", "no", "later", "nahi"])

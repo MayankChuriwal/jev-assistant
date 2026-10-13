@@ -405,6 +405,15 @@ class Brain:
         if not read["cards"]:
             return {"status": "rejected", "reason": f"{portal}'s page lists no savings by card.",
                     "next": "Go on with voucher_checkout."}
+        # only a card the user named since they last asked for this brand: live, the brain picked "Other credit card"
+        # itself, and a retake's card is theirs to name again
+        users = [i["content"] for i in self.items if i.get("role") == "user"]
+        named = rules.words(brand) - VOUCHER_WORDS
+        start = max((n for n, text in enumerate(users) if named and named <= rules.words(text)), default=0)
+        if not (rules.words(card) - CARD_FILLER) & rules.words(" ".join(users[start:])):
+            return {"status": "rejected", "reason": "The user hasn't said which card they'll pay with.",
+                    "next": "Ask which HDFC card they'll pay with, offering the cards the read lists by their short "
+                            "names (" + "; ".join(c["name"] for c in read["cards"]) + "). Never pick one for them."}
         wanted = rules.words(card) - CARD_FILLER
         scored = sorted(((len(wanted & rules.words(c["name"])), -len(rules.words(c["name"]) - wanted), c)
                          for c in read["cards"]), key=lambda x: (x[0], x[1]), reverse=True)
