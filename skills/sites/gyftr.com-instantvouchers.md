@@ -14,6 +14,7 @@ otp: Request OTP
 step: Add to cart, View Cart & Buy, Request OTP, Continue, Submit, Read T&C, I agree to the Terms
 final: Checkout, BUY NOW, Pay ₹, Redeem & Pay
 agree: Read T&C and important instructions, I agree to the Terms and Conditions
+never: Redeem Now, Hello
 ---
 - HDFC SmartBuy's gift vouchers, sold by GyFTR. The home page lists the brands; "Search Brand" at the top finds one. A brand's page is https://www.gyftr.com/instantvouchers/BRAND-gift-vouchers (Swiggy's: https://www.gyftr.com/instantvouchers/swiggy-gv-gift-vouchers).
 - A brand's page shows two offers: ACCELERATED REWARDS (up to 5X reward points or 5% cashback, ticked by default) and INSTA DEALS (an instant discount plus 1X points). Keep ACCELERATED REWARDS unless the user asked for the discount. Under "Choose Denomination" are the amounts (₹250, ₹500, ₹1,000, ₹2,000); the monthly limit and validity are shown above them.

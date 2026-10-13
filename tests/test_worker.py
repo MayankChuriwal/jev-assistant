@@ -637,6 +637,20 @@ def test_a_sites_policy_pages_are_opened_only_when_the_goal_wants_them(tmp_path,
         assert w.browser.act.called
 
 
+@pytest.mark.parametrize("label, refused", [("Redeem Now", True), ("Hello, have a question? Let’s chat.", True),
+                                            ("View Cart & Buy", False)])
+def test_a_control_its_site_note_never_presses_is_refused(tmp_path, label, refused):
+    # live SmartBuy, twice: the planner pressed Redeem Now, left for swiggy.com and typed the voucher into its search
+    control = {"id": "r1", "kind": "click", "label": label, "role": "button", "node": 9}
+    w = worker_with(tmp_path, page=fake_page(url=SMARTBUY, actions=[control]), goal=VOUCHER)
+    if refused:
+        with pytest.raises(Retry, match="never part of a task on this site"):
+            w.act("CLICK", control, w.state["page"], sub("buy it"))
+    else:
+        w.act("CLICK", control, w.state["page"], sub("buy it"))
+        assert w.browser.act.called
+
+
 def myupi_sign_in(phone="", captcha="9EF5", agreed="false"):
     page = fake_page(url="https://www.upihelp.npci.org.in/", text="Security Verification")
     page["actions"] = [

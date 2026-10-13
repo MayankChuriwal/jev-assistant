@@ -1871,6 +1871,11 @@ class Worker:
                     label.lower().startswith("faq") and QUESTION.match(goal)):
                 raise Retry(f"“{label}” only opens the site's policy or help text, which isn't needed for this task: "
                             "go on with the task itself.")  # MyUPI: its Terms, Privacy and FAQs opened again and again
+            note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
+            never = [w.strip().lower() for w in str(note.get("never") or "").split(",") if w.strip()]
+            if any(label.strip().lower().startswith(w) for w in never):  # live SmartBuy: Redeem Now, off to swiggy.com
+                raise Retry(f"“{label}” is never part of a task on this site (its note says so): go on with the task "
+                            "itself.")
             if action.get("role") == "checkbox" and action.get("checked") == "true" and \
                     AGREE.search(action.get("label") or ""):  # MyUPI: ticked and unticked five times over
                 raise Retry(f"“{action['label']}” is already ticked: a second click unticks it. Go on to the next "
