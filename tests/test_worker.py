@@ -3974,6 +3974,32 @@ def test_with_the_total_and_cart_below_the_screen_they_are_scrolled_into_view(tm
     assert w.browser.act.call_args.args[1]["label"] == "Add to cart"
 
 
+def test_with_the_amount_already_in_the_cart_view_cart_and_buy_is_pressed(tmp_path, monkeypatch, no_wait):
+    # live, signed in: the last run's voucher sat in the cart, so the amount showed a quantity stepper and View Cart &
+    # Buy where Add to cart was; the worker stood down and the planner pressed Redeem Now, off to swiggy.com
+    page = voucher_page(SMARTBUY, "Choose Denomination\nTotal Value : ₹ 500\nNet Amount to Pay ₹ 500", "₹ 250",
+                        "Decrease quantity", "Increase quantity", "Redeem Now", "View Cart & Buy")
+    w = worker_with(tmp_path, page=page, goal=VOUCHER)
+    w.browser.into_view = Mock(return_value=False)  # no Add to cart anywhere on the page
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.into_view.call_args_list[0].args == ("Add to cart",)
+    assert w.browser.act.call_args.args[1]["label"] == "View Cart & Buy"
+
+
+def test_an_add_to_cart_below_the_screen_comes_before_view_cart_and_buy_on_it(tmp_path, monkeypatch, no_wait):
+    # a cart holding another voucher shows View Cart & Buy too: the amount chosen still goes in first
+    page = voucher_page(SMARTBUY, "Total Value : ₹ 500", "₹ 250", "View Cart & Buy")
+    w = worker_with(tmp_path, page=page, goal=VOUCHER)
+    w.browser.into_view = Mock(return_value=True)
+    w.browser.observe.return_value = voucher_page(SMARTBUY, "Total Value : ₹ 500", "Add to cart", "View Cart & Buy")
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"] == "Add to cart"
+    w.state["history"].append({"operation": "CLICK", "action": "View Cart & Buy"})
+    assert w.voucher_step(page) is None  # either button pressed: the rest is the planner's and the gate's
+
+
 # ---- a voucher read done by the worker itself: live, the planner noted every amount, then answered CONTINUE where
 # it had to say DONE, and the user was asked "What should I do?"
 

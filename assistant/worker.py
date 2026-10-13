@@ -1018,36 +1018,50 @@ class Worker:
 
     def voucher_step(self, page):
         """A voucher the brain's checkout names (“Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy.”) on a
-        portal whose note names its cart button (`cart:`): (control, page) to press, else None for the planner. The
-        amount's tile until the page's Total shows it, then that button; each scrolled into view when off screen;
-        the tile at most twice, and nothing once the button was pressed (sign-in and checkout are the planner's, and
-        the gate's). A chosen tile leaves the controls offered, so the Total is the proof."""
+        portal whose note names its cart buttons (`cart:`, in order: SmartBuy's "Add to cart, View Cart & Buy"):
+        (control, page) to press, else None for the planner. The amount's tile until the page's Total shows it, then
+        the first of those buttons the page has; each scrolled into view when off screen; the tile at most twice, and
+        nothing once a button was pressed (sign-in and checkout are the planner's, and the gate's). A chosen tile leaves
+        the controls offered, so the Total is the proof. Live, signed in with that amount already in the cart, the page
+        had a quantity stepper and View Cart & Buy where Add to cart was."""
         s = self.state
         wanted = VOUCHER_BUY.match(s["goal"])
-        cart = ((skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}).get("cart")
-        if not wanted or not cart or int(wanted[2]) != 1:
+        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
+        carts = [c.strip() for c in str(note.get("cart") or "").split(",") if c.strip()]
+        if not wanted or not carts or int(wanted[2]) != 1:
             return None
 
         def flat(text):  # "₹ 1,000" and "₹1000" alike
             return re.sub(r"[\s,]", "", text or "").lower()
 
+        def control(p, label):
+            return next((a for a in p["actions"] if a["kind"] == "click" and flat(a.get("label")) == flat(label)), None)
+
+        def chosen(p):
+            return re.search(r"total(?:value)?:?" + re.escape(amount) + r"(?!\d)", flat(p["text"]))
+
         amount, pressed = "₹" + wanted[1].replace(",", ""), [h.get("action") for h in s["history"]]
-        if any(flat(label) == flat(cart) for label in pressed):
+        if any(flat(label) == flat(c) for label in pressed for c in carts):
             return None
         presses = sum(flat(label) == amount for label in pressed)
-        for scrolled in (False, True):
-            chosen = re.search(r"total(?:value)?:?" + re.escape(amount) + r"(?!\d)", flat(page["text"]))
-            button = next((a for a in page["actions"] if a["kind"] == "click" and flat(a.get("label")) == flat(cart)),
-                          None)
-            tile = next((a for a in page["actions"] if a["kind"] == "click" and flat(a.get("label")) == amount), None)
-            if chosen and button:
-                return button, page
-            if tile and not chosen and presses < 2:
+        if not chosen(page):
+            tile = control(page, amount)
+            if tile and presses < 2:
                 return tile, page
-            # off screen: the cart button once the amount was pressed (its Total sits beside it), else the tile
-            if scrolled or not s["browser"].into_view(cart if chosen or presses else amount):
+            # off screen: the tile, else (pressed already) its Total, which sits beside the first cart button
+            if not s["browser"].into_view(carts[0] if presses else amount):
                 return None
             page = self.observe()
+            if not chosen(page):
+                tile = control(page, amount)
+                return (tile, page) if tile and presses < 2 else None
+        for name in carts:  # the note's order: a later one only when the page has no earlier one, on screen or off
+            button = control(page, name)
+            if not button and s["browser"].into_view(name):
+                page = self.observe()
+                button = control(page, name)
+            if button:
+                return button, page
         return None
 
     def row_step(self, page):
