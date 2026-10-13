@@ -4032,8 +4032,6 @@ def test_an_add_to_cart_below_the_screen_comes_before_view_cart_and_buy_on_it(tm
     no_planner(monkeypatch)
     w.command("tick")
     assert w.browser.act.call_args.args[1]["label"] == "Add to cart"
-    w.state["history"].append({"operation": "CLICK", "action": "View Cart & Buy"})
-    assert w.voucher_step(page) is None  # either button pressed: the rest is the planner's and the gate's
 
 
 # ---- a voucher read done by the worker itself: live, the planner noted every amount, then answered CONTINUE where
@@ -4530,3 +4528,66 @@ def test_a_card_detail_is_never_taken_for_the_banks_code(tmp_path, monkeypatch, 
     w.command("tick")  # the bank's code: asked, never the CVV
     assert "one-time password" in w.asked[-1]["text"]
     assert w.browser.act.call_args.kwargs["text"] == "654321"
+
+
+# ---- live, 14 Oct 00:21: after sign-in a value was taken for in the cart and wasn't; with the old lines taken out the
+# cart was empty, and the planner went home, searched, and pressed another offer's Buy Now under the order's own card
+
+HOME = "https://www.gyftR.com/instantvouchers".replace("R", "r")
+TWO_FIFTY = "Buy ₹250 of Swiggy gift vouchers on SmartBuy: 1 × ₹250, paying with Regalia Gold Credit Card."
+
+
+def test_the_orders_own_approval_is_only_for_the_payment_pages_final_control(tmp_path):
+    w = worker_with(tmp_path, page=pay_page(FILLED), goal=FIVE)
+    found = {"total": "₹5,000"}
+    assert w.approval_lines(pay_page(FILLED), found)[0].startswith("₹5,000 of Swiggy gift vouchers")
+    other = voucher_page(HOME, "Swiggy Money Voucher 2.5% OFF", "Swiggy Money Voucher 2.5% OFF Buy Now")
+    assert w.approval_lines(other, found) is None  # the summary model says what that control is
+
+
+def test_the_cart_walk_is_only_on_the_brands_page(tmp_path, no_wait):
+    w = worker_with(tmp_path, page=voucher_page(HOME, "Swiggy", "₹ 250", "View Cart & Buy"), goal=TWO_FIFTY)
+    w.browser.into_view = Mock(return_value=False)
+    assert w.voucher_step(w.state["page"]) is None
+
+
+def test_back_on_the_brands_page_after_the_cart_the_walk_goes_on(tmp_path, no_wait):
+    page = voucher_page(SMARTBUY, "Choose Denomination", "₹ 250", "₹ 500", "View Cart & Buy")
+    w = worker_with(tmp_path, page=page, goal=TWO_FIFTY)
+    w.state["history"] += [{"operation": "CLICK", "action": "View Cart & Buy"},
+                           {"operation": "OPEN_URL", "action": "Open a web address"}]  # the cart sent it back
+    assert w.voucher_step(page)[0]["label"] == "₹ 250"
+
+
+def test_a_chosen_value_with_neither_add_to_cart_nor_its_stepper_is_not_taken_for_in_the_cart(tmp_path, no_wait):
+    # live, right after sign-in: "Total Value : ₹ 250", and no Add to cart anywhere
+    unsettled = voucher_page(SMARTBUY, "Total Value : ₹ 250", "₹ 250", "₹ 500", "View Cart & Buy")
+    w = worker_with(tmp_path, page=unsettled, goal=TWO_FIFTY)
+    w.state["history"] += [{"operation": "CLICK", "action": "₹ 250"}, {"operation": "CLICK", "action": "Add to cart"}]
+    w.browser.into_view = Mock(return_value=False)
+    assert w.voucher_step(unsettled)[0]["label"] == "₹ 250"  # chosen again, to show its button or its stepper
+    assert w.state.get("vouchers_added", []) == []
+
+
+def test_a_cart_missing_a_value_of_the_order_goes_back_to_the_brands_page(tmp_path, no_wait):
+    lines = voucher_page(CART, "Voucher\nValue\n2,000\nYou Pay\n₹\n4,000", "Decrease quantity",
+                         "Increase quantity")
+    w = worker_with(tmp_path, page=lines, goal=FIVE)
+    w.state["vouchers_added"] = [2000, 1000]
+    assert w.quantity_step(lines) is None and w.refill_step(lines) == SMARTBUY
+    assert w.state["vouchers_added"] == [2000]  # ₹1,000 to add again
+
+
+def test_an_empty_cart_goes_back_to_the_brands_page_twice_at_most(tmp_path, no_wait):
+    empty = voucher_page(CART, "Cart item not found!!", "Back To Home")
+    w = worker_with(tmp_path, page=empty, goal=TWO_FIFTY)
+    w.state["vouchers_added"] = [250]
+    assert w.refill_step(empty) == SMARTBUY and w.state["vouchers_added"] == []
+    assert w.refill_step(empty) == SMARTBUY and w.refill_step(empty) is None
+
+
+def test_an_empty_cart_is_left_by_the_worker_itself(tmp_path, monkeypatch, no_wait):
+    w = worker_with(tmp_path, page=voucher_page(CART, "Cart item not found!!", "Back To Home"), goal=TWO_FIFTY)
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[0] == "OPEN_URL" and w.browser.act.call_args.kwargs["url"] == SMARTBUY

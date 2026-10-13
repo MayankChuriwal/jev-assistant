@@ -42,6 +42,7 @@ VOUCHER_BUY = re.compile(r"^Buy ₹([\d,]+) of .+? gift vouchers on .+?: (\d+ ×
 PAYABLE_AMOUNT = re.compile(r"payable amount\s*:?\s*₹\s?([\d,]+(?:\.\d+)?)", re.IGNORECASE)  # GyFTR's pay page
 ORDER_ID = re.compile(r"\border\s*(?:id|no\.?|number)\s*:?\s*([A-Z0-9][A-Z0-9-]{5,})", re.IGNORECASE)
 CART_LINE = re.compile(r"Voucher Value ([\d,]+).{0,20}?You Pay ₹ ?([\d,]+)")  # a SmartBuy cart line: value, its cost
+VOUCHER_BRAND = re.compile(r"^Buy ₹[\d,]+ of (.+?) gift vouchers on ")  # the brand the brain's checkout names
 VOUCHER_CARD = re.compile(r", paying with (.+?)\.$")  # the card the user named, on a portal that lists savings by card
 ROW_FIX = re.compile(r"Dispute type: Personal Details\. The report shows: ([^:]+): .+?\. It should be: (.+?)\.?\s*$",
                      re.DOTALL)  # the brain's dispute: the row it names, and that row's correct value
@@ -612,6 +613,9 @@ class Worker:
         if fewer:  # live: the cart held 2 × ₹2,000 from an earlier run, and Checkout was offered at ₹4,000
             action, page = fewer
             return self.act("CLICK", action, page, None)
+        back = self.refill_step(page)
+        if back:  # live: a value taken for in the cart wasn't, and the planner went home and pressed another offer
+            return self.run(page, "OPEN_URL", self.control(page, "OPEN_URL"), {"url": back}, back)
         if self.agree_step(page):  # live SmartBuy cart: Checkout did nothing until its two required boxes were ticked
             return None
         checkout = self.checkout_step(page)
@@ -1025,6 +1029,37 @@ class Worker:
                 return (down if count > wanted.get(value, 0) else up), page
         return None
 
+    def brand_page(self, page):
+        """The brand's own page on this page's portal, from its note (`brand.swiggy:`), for a voucher purchase; else
+        None."""
+        brand = VOUCHER_BRAND.match(self.state["goal"])
+        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
+        return note.get(f"brand.{brand[1].strip().lower()}") if brand else None
+
+    def refill_step(self, page):
+        """On a voucher cart missing values of the order ("Cart item not found!!", or its lines read on screen with
+        every line it shows at its count): the brand's page to open again, those values to be added there anew;
+        twice at most, else None. Live: after sign-in a value was taken for in the cart and wasn't; with the old lines
+        taken out the cart was empty, and the planner went home and pressed another offer's Buy Now."""
+        s = self.state
+        wanted, url = voucher_order(s["goal"]), self.brand_page(page)
+        if not wanted or not url or s.get("refills", 0) >= 2:
+            return None
+        text = re.sub(r"\s+", " ", page["text"]).lower()
+        if "cart item not found" in text:
+            present = set()
+        else:
+            lines = cart_lines(page["text"])
+            if "voucher value" not in text or not lines or any(n != wanted.get(v, 0) for v, n in lines):
+                return None  # not a cart, or its lines first (`quantity_step`)
+            present = {value for value, _ in lines}
+        missing = [value for value in wanted if value not in present]
+        if not missing:
+            return None
+        s["vouchers_added"] = [value for value in s.get("vouchers_added", []) if value not in missing]
+        s["refills"] = s.get("refills", 0) + 1
+        return url
+
     def agree_step(self, page):
         """The boxes its site note's `agree:` names (words their labels start with, comma-separated: SmartBuy's cart
         "Read T&C and important instructions …", "I agree to the Terms and Conditions") ticked on a purchase, each only
@@ -1122,8 +1157,9 @@ class Worker:
         (`card_form_step`). Dry run: the summary model cut the vouchers' amounts the payment page doesn't show (“2 × +
         1 ×”) and wrote "Seller not specified"."""
         s = self.state
-        if not VOUCHER_BUY.match(s["goal"]):
-            return None
+        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
+        if not VOUCHER_BUY.match(s["goal"]) or not note.get("pay-form"):
+            return None  # live: another offer's Buy Now went out under the order's own lines
         card = VOUCHER_CARD.search(s["goal"])
         return [s["goal"].removeprefix("Buy ").split(", paying with")[0].rstrip("."),
                 *([f"Card: {card[1]}"] if card else []),
@@ -1252,11 +1288,12 @@ class Worker:
         the controls offered, so the Total is the proof. A portal with one button (iShop's Buy now) takes one
         voucher."""
         s = self.state
-        wanted = voucher_order(s["goal"])
+        wanted, url = voucher_order(s["goal"]), self.brand_page(page)
         note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
         carts = [c.strip() for c in str(note.get("cart") or "").split(",") if c.strip()]
-        if not wanted or not carts or (len(carts) == 1 and sum(wanted.values()) != 1):
-            return None
+        if not wanted or not carts or (len(carts) == 1 and sum(wanted.values()) != 1) or not url or \
+                [urlparse(u).path.rstrip("/") for u in (page["url"], url)].count(urlparse(url).path.rstrip("/")) < 2:
+            return None  # the brand's own page alone (live, the planner went home and pressed another offer)
 
         def flat(text):  # "₹ 1,000" and "₹1000" alike
             return re.sub(r"[\s,]", "", text or "").lower()
@@ -1267,9 +1304,13 @@ class Worker:
         def chosen(p, amount):
             return re.search(r"total(?:value)?:?" + re.escape(amount) + r"(?!\d)", flat(p["text"]))
 
+        def stepped(p):  # a value in the cart shows its quantity stepper where Add to cart was
+            return any((a.get("label") or "").lower().startswith(("decrease quantity", "increase quantity"))
+                       for a in p["actions"])
+
         pressed = [h.get("action") for h in s["history"]]
-        if any(flat(label) == flat(carts[-1]) for label in pressed):
-            return None  # its last button pressed: the cart is the next page's
+        if pressed and flat(pressed[-1]) == flat(carts[-1]):
+            return None  # its last button just pressed: the cart is its answer
         added = s.setdefault("vouchers_added", [])
         for value in (v for v in wanted if v not in added):
             amount = f"₹{value}"
@@ -1299,6 +1340,14 @@ class Worker:
                         return None  # pressed, and still offered once its answer had time to come: the planner's
                 elif button:
                     return None if any(flat(label) == flat(add) for label in since) else (button, page)
+                elif not stepped(page):  # neither its button nor its stepper (live, just after sign-in): read once
+                    time.sleep(CART_WAIT)  # more, then choose it again
+                    page = self.observe()
+                    if control(page, add) and not any(flat(label) == flat(add) for label in since):
+                        return control(page, add), page
+                    if not stepped(page):
+                        tile = control(page, amount)
+                        return (tile, page) if tile and len(presses) < 2 else None
             added.append(value)
         button = control(page, carts[-1])
         if not button and s["browser"].into_view(carts[-1]):
