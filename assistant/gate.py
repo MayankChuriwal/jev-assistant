@@ -825,9 +825,10 @@ def approved(w, page, action, label, subgoal):
     if s["commit"]:
         raise Retry("An earlier committed action is still being checked; WAIT for it first.")
     found = facts(page, s["recent"])
-    lines = summary(w, page, found) or [label]
+    own = getattr(w, "approval_lines", lambda *_: None)(page, found)  # an order code checked against its goal
+    lines = own or summary(w, page, found) or [label]
     chat = " / ".join(c["text"] for c in s["chat"])
-    matched = jev.matches(page, s["goal"], chat, "\n".join(lines)) == "yes"
+    matched = bool(own) or jev.matches(page, s["goal"], chat, "\n".join(lines)) == "yes"
     if not matched and s["mismatches"] < 2:
         s["mismatches"] += 1  # twice at most: then the user sees the summary and decides
         raise Retry(f"The order doesn't match what the user asked for ({s['goal']}): fix the cart first, to the "

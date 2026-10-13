@@ -850,7 +850,7 @@ class Worker:
                                   "so I stopped rather than send you more. Please sign in once in the agent's "
                                   "Chrome window, then ask me again.")
         site, label = self.site_name(page), field["label"].rstrip(" *")
-        question = (f"{site} is asking for your card's {label}. Type it here; it stays hidden." if card else
+        question = (f"{site} is asking for your card's {label.rstrip('.')}. Type it here; it stays hidden." if card else
                     f"{site} is asking for the one-time password your bank sent for this payment. Type it here; it "
                     "stays hidden." if s.get("bank_code") else
                     f"{site} is asking for a code or password. Type it here; it stays hidden.")
@@ -1102,6 +1102,19 @@ class Worker:
         control = next((a for a in clicks if (a.get("label") or "").strip().lower().startswith(finals)), None) \
             if finals else None
         return ("act", "CLICK", control, None) if control else None
+
+    def approval_lines(self, page, found):
+        """A voucher purchase's approval, written in code from its goal and the page's payable total, else None: the
+        cart was checked against the goal before Checkout (`checkout_step`) and the payable total against its total
+        (`card_form_step`). Dry run: the summary model cut the vouchers' amounts the payment page doesn't show (“2 × +
+        1 ×”) and wrote "Seller not specified"."""
+        s = self.state
+        if not VOUCHER_BUY.match(s["goal"]):
+            return None
+        card = VOUCHER_CARD.search(s["goal"])
+        return [s["goal"].removeprefix("Buy ").split(", paying with")[0].rstrip("."),
+                *([f"Card: {card[1]}"] if card else []),
+                *([f"Payable: {gate.tight(found['total'])}"] if found["total"] else [])]
 
     def paid(self):
         """Whether this voucher purchase pressed its payment's final control with the user's yes (GyFTR's PROCEED):

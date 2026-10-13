@@ -4369,14 +4369,18 @@ def test_save_card_is_never_ticked(tmp_path):
         w.act("CLICK", page["actions"][6], page, sub("save the card for next time"))
 
 
-def test_with_the_card_form_filled_proceed_asks_the_users_one_yes(tmp_path, monkeypatch, no_wait):
+def test_with_the_card_form_filled_proceed_asks_the_users_one_yes_written_in_code(tmp_path, monkeypatch, no_wait):
+    # dry run: the summary model wrote "Swiggy Money Voucher 2 × + 1 ×" (the payment page shows the total alone) and
+    # "Seller not specified", and Jev's match check said no twice for a page with no vouchers on it. The cart was
+    # checked against the goal in code before Checkout, and the payable total here
     w = worker_with(tmp_path, page=pay_page(FILLED), goal=FIVE)
     no_planner(monkeypatch)
-    jev_checks(monkeypatch)
-    monkeypatch.setattr(planner, "summary", lambda payload: ["Swiggy gift vouchers 2 × ₹2,000 + 1 × ₹1,000",
-                                                             "Payable ₹5,000"])
+    jev_checks(monkeypatch, matches="no")
+    monkeypatch.setattr(planner, "summary", lambda payload: pytest.fail("the summary model was asked"))
     w.command("tick")
-    assert w.asked[0]["approval"] and "I'll press “PROCEED”" in w.asked[0]["text"] and "₹5,000" in w.asked[0]["text"]
+    assert w.asked[0]["approval"] and w.asked[0]["text"] == (
+        "₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000\n• Card: Regalia Gold Credit Card\n"
+        "• Payable: ₹5,000\n\nI'll press “PROCEED” on pay.gyftr.com. Reply yes to go ahead, or tell me what to change.")
     assert not w.browser.act.called  # the user's yes first
 
 
@@ -4462,3 +4466,12 @@ def test_a_bank_page_asking_for_its_code_after_proceed_is_the_payments_next_step
     w.command("tick")  # its code, asked
     assert w.state["history"][-2]["action"] == "PROCEED" and w.state["history"][-1]["action"] == "Enter OTP"
     assert "one-time password" in w.asked[-1]["text"]
+
+
+def test_a_card_detail_is_asked_by_its_name_alone(tmp_path, monkeypatch, no_wait):
+    # dry run: "… asking for your card's CVV No.. Type it here"
+    w = worker_with(tmp_path, page=pay_page(("[secret]", "[profile:name]", "[secret]", "")), goal=FIVE,
+                    replies=[{"text": "123"}])
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert "your card's CVV No. Type it here" in w.asked[0]["text"]
