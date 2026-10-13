@@ -5,6 +5,7 @@ Spec: docs/superpowers/specs/2026-10-12-brain-and-hands-design.md."""
 
 import functools
 import json
+import math
 import queue
 import re
 import threading
@@ -28,6 +29,7 @@ PORTAL_WORDS = {"SmartBuy": re.compile(r"smart\s?buy|hdfc|gyftr", re.I),
                 "iShop": re.compile(r"\bi[\s-]?shop\b|icici", re.I)}  # the user's own words that name a portal
 CARD_SAVING = re.compile(r"([^;:]+?) ₹([\d,]+) (in reward points|cashback|in cash points)")  # a read's card savings
 SAVINGS_ON = re.compile(r"Savings on ₹([\d,]+) by card")  # the amount the portal's own calculator quotes them on
+MONTHLY = re.compile(r"monthly limit:?\s*₹\s?([\d,]+)", re.IGNORECASE)  # a read's cap on a brand's vouchers a month
 CARD_FILLER = {"card", "cards", "my", "the", "hdfc", "bank", "with", "pay", "using"}
 VOUCHER_WORDS = {"voucher", "vouchers", "e-voucher", "evoucher", "gift", "giftcard", "card", "cards", "money", "gv"}
 IST = ZoneInfo("Asia/Kolkata")
@@ -105,19 +107,21 @@ TOOLS = [
                       "dispute isn't about an account"),
          wrong=text("What the report shows"), correct=text("What it should show"),
          fresh_ids=FRESH_IDS),
-    tool("voucher_options", "Read the gift vouchers a bank's rewards portal sells for one brand: every amount with "
-                            "its price, and the reward rate shown. Buys nothing and needs no sign-in.",
+    tool("voucher_options", "Read the gift vouchers a bank's rewards portal sells for one brand: every amount, its "
+                            "monthly limit, and the reward rate shown. Buys nothing and needs no sign-in.",
          portal={"type": "string", "enum": list(PORTALS)}, brand=text("The brand the user named (“Swiggy”)")),
-    tool("voucher_savings", "What the user's card earns on a voucher amount, from the portal's own savings list that "
-                            "voucher_options read: the reward or cashback, and the effective price. Code: no browsing.",
+    tool("voucher_savings", "Check the total the user wants in a brand's vouchers, and what their card earns on it. "
+                            "Code makes the total from the vouchers voucher_options read (the fewest), refuses one "
+                            "they can't make or over the monthly limit with the nearest totals they can, and gives "
+                            "the card's reward or cashback, the effective price and the discount, from the portal's "
+                            "own savings list. Call it as soon as they give a total. Code: no browsing.",
          portal={"type": "string", "enum": list(PORTALS)}, brand=text("The brand the user named"),
-         amount={"type": "integer", "description": "One of the amounts voucher_options read, in rupees"},
-         card=text("The card the user will pay with, in their words (“Regalia Gold”)")),
+         amount={"type": "integer", "description": "The total the user wants, in rupees (“5k” is 5000)"},
+         card=text("The card the user will pay with, in their words (“Regalia Gold”); empty until they name one")),
     tool("voucher_checkout", "Buy a gift voucher on a bank's rewards portal, up to its final pay control: the user "
                              "says yes or no to paying there.",
          portal={"type": "string", "enum": list(PORTALS)}, brand=text("The brand the user named"),
-         amount={"type": "integer", "description": "One of the amounts voucher_options read, in rupees"},
-         quantity={"type": "integer", "description": "How many; 1 unless the user asked for more"}),
+         amount={"type": "integer", "description": "The total voucher_savings checked, in rupees"}),
     tool("browse", "Do any other task on any other site, in a real browser.",
          goal=text("The user's request in their words, with the details the chat already has")),
     tool("memory", "Remember or forget something about the user, or list what you remember. It replies to them "
@@ -149,6 +153,35 @@ def voucher_page(note, brand, skill):
     """Where a voucher task starts: the brand's own page when its portal's note names it (`brand.swiggy:`), so no
     search is needed (live, SmartBuy's search suggestion was refused as narrowing the search), else the start."""
     return note.get(f"brand.{brand.strip().lower()}") or skills.start(note, skill)
+
+
+def vouchers(amount, sizes):
+    """The fewest vouchers of these sizes that make the amount exactly, largest first ({2000: 2, 1000: 1}); else
+    None."""
+    step = math.gcd(*sizes)
+    if amount <= 0 or amount % step:
+        return None
+    best = {0: ()}
+    for total in range(step, amount + 1, step):
+        made = [best[total - size] + (size,) for size in sorted(sizes, reverse=True) if total - size in best]
+        if made:
+            best[total] = min(made, key=len)
+    return {size: best[amount].count(size) for size in sorted(set(best[amount]), reverse=True)} \
+        if amount in best else None
+
+
+def nearest(amount, sizes, limit):
+    """The totals these vouchers make that are nearest the amount, nearest first: the one below it and the one above,
+    never over the limit (₹1,200 of ₹250 steps: ₹1,250, then ₹1,000)."""
+    top = min(limit, amount + max(sizes)) if limit else amount + max(sizes)
+    made = [t for t in range(min(sizes), top + 1, math.gcd(*sizes)) if vouchers(t, sizes)]
+    return sorted([t for t in made if t < amount][-1:] + [t for t in made if t > amount][:1],
+                  key=lambda t: (abs(t - amount), t))
+
+
+def counted(made):
+    """Vouchers as the user reads them: "2 × ₹2,000 + 1 × ₹1,000"."""
+    return " + ".join(f"{n} × ₹{size:,}" for size, n in made.items())
 
 
 def arguments(raw):
@@ -371,8 +404,7 @@ class Brain:
         key = (portal, brand.strip().lower())
         if key in self.vouchers:  # the Experian lockouts came from re-reads
             return {"status": "already_read", "report": self.vouchers[key]["report"],
-                    "next": "These are the amounts it sells now: don't read again. Ask which amount, with them as "
-                            "options, or call voucher_checkout."}
+                    "next": "Don't read again. " + self.how_much(portal, brand, self.vouchers[key])}
         note = self.core.library["sites"][PORTALS[portal]]  # no word of buying: a read is a lookup, never an order
         # live: "every amount with its price" had the planner select each amount in turn, toggling two of them
         result = self.core.execute(f"Show the {brand} gift vouchers on {portal}: list the amounts its page offers and "
@@ -381,13 +413,24 @@ class Brain:
                                    skill="lookup", progress=f"Reading {brand} vouchers on {portal}…")
         if result["status"] == "done":
             report = result["report"]
-            listed, savings = report.split(" Savings on ")[0], SAVINGS_ON.search(report)
+            listed, savings, limit = report.split(". ")[0], SAVINGS_ON.search(report), MONTHLY.search(report)
             amounts = sorted({int(figure.replace(",", "")) for figure in re.findall(r"₹\s?([\d,]+)", listed)})
             cards = [{"name": m[1].strip(), "saving": int(m[2].replace(",", "")), "kind": m[3]}
                      for m in CARD_SAVING.finditer(report[savings.end():])] if savings else []
             self.vouchers[key] = {"report": report, "amounts": amounts, "cards": cards,
-                                  "basis": int(savings[1].replace(",", "")) if savings else None}
+                                  "basis": int(savings[1].replace(",", "")) if savings else None,
+                                  "limit": int(limit[1].replace(",", "")) if limit else None}
+            if amounts:
+                return {**self.ended(result), "next": self.how_much(portal, brand, self.vouchers[key])}
         return self.ended(result)
+
+    @staticmethod
+    def how_much(portal, brand, read):
+        """The question after a read: the total they want, never an amount from options (the user's call, 13 Oct)."""
+        cap = f", up to ₹{read['limit']:,} a month" if read.get("limit") else ""
+        return (f"Ask how much they want in {brand} vouchers in all, with no amount options: {portal} sells "
+                + ", ".join(f"₹{a:,}" for a in read["amounts"]) + f" vouchers, and code makes any total from them{cap}."
+                " Then call voucher_savings with it.")
 
     def voucher_savings(self, portal, brand, amount, card):
         """What the user's card earns on an amount: the portal's own saving for that card (quoted on one amount,
@@ -399,9 +442,9 @@ class Brain:
         if read is None:
             return {"status": "rejected", "reason": f"{brand}'s vouchers on {portal} haven't been read.",
                     "next": "Read them first with voucher_options."}
-        if amount not in read["amounts"]:
-            return {"status": "rejected", "reason": f"{portal} doesn't sell a ₹{amount:,} {brand} voucher.",
-                    "next": "Offer the amounts it sells: " + ", ".join(f"₹{a:,}" for a in read["amounts"]) + "."}
+        unmade = self.unmade(portal, brand, read, amount)
+        if unmade:
+            return unmade
         if not read["cards"]:
             return {"status": "rejected", "reason": f"{portal}'s page lists no savings by card.",
                     "next": "Go on with voucher_checkout."}
@@ -421,16 +464,34 @@ class Brain:
             return {"status": "rejected", "reason": f"{portal} lists no savings for “{card}”.",
                     "next": "Offer the cards it lists: " + "; ".join(c["name"] for c in read["cards"]) + "."}
         chosen = scored[0][2]
-        saving = round(chosen["saving"] * amount / read["basis"])  # money math in code: its rate, on their amount
+        saving = chosen["saving"] * amount // read["basis"]  # money math in code: its rate on their total, rounded down
+        rate = f"{round(chosen['saving'] * 100 / read['basis'], 2):g}%"  # the calculator's own figure for this card
         read["chosen"] = (amount, chosen["name"])
         return {"status": "done", "card": chosen["name"], "amount": f"₹{amount:,}",
-                "earns": f"₹{saving:,} {chosen['kind']}", "effective_price": f"₹{amount - saving:,}",
-                "next": "Tell them what this card earns and the effective price (the site's own estimate), then ask "
-                        "whether to get it, with options."}
+                "vouchers": counted(vouchers(amount, read["amounts"])), "earns": f"₹{saving:,} {chosen['kind']}",
+                "effective_price": f"₹{amount - saving:,}",
+                "discount": f"That's a whopping {rate} effective discount!!!",
+                "next": "Tell them the vouchers, what this card earns and the effective price (the site's own "
+                        "estimate), then the discount line as it is, and ask whether to get it, with options."}
 
-    def voucher_checkout(self, portal, brand, amount, quantity):
-        """A voucher bought up to the portal's final pay control, where the user says yes or no: only an amount the
-        read showed, so none is made up."""
+    @staticmethod
+    def unmade(portal, brand, read, amount):
+        """A rejection when the read's vouchers can't make the total, or it is over the monthly limit, with the
+        nearest totals they can make as options (₹1,200 of Swiggy's ₹250 steps: ₹1,250 or ₹1,000); else None."""
+        limit = read.get("limit")
+        if vouchers(amount, read["amounts"]) and not (limit and amount > limit):
+            return None
+        options = [f"₹{total:,}" for total in nearest(amount, read["amounts"], limit)]
+        why = (f"₹{amount:,} is over {portal}'s monthly limit of ₹{limit:,} for {brand}" if limit and amount > limit
+               else f"₹{amount:,} can't be made from {portal}'s {brand} vouchers ("
+               + ", ".join(f"₹{a:,}" for a in read["amounts"]) + ")")
+        return {"status": "rejected", "reason": why + ".", "options": options,
+                "next": "Say so in one line, and offer the nearest totals it can make as options: "
+                        + ", ".join(options) + "."}
+
+    def voucher_checkout(self, portal, brand, amount):
+        """Vouchers for a total, bought up to the portal's final pay control, where the user says yes or no: made from
+        the vouchers the read showed (the fewest), so none is made up."""
         refused = self.voucher_refused(portal, brand)
         if refused:
             return refused
@@ -438,12 +499,9 @@ class Brain:
         if read is None:
             return {"status": "rejected", "reason": f"{brand}'s amounts on {portal} haven't been read.",
                     "next": "Read them first with voucher_options, then ask which amount."}
-        if amount not in read["amounts"]:
-            sold = ", ".join(f"₹{a:,}" for a in read["amounts"])
-            return {"status": "rejected", "reason": f"{portal} doesn't sell a ₹{amount:,} {brand} voucher.",
-                    "next": f"Offer the amounts it sells: {sold}."}
-        if not 1 <= quantity <= 10:
-            return {"status": "rejected", "reason": "A quantity is 1 to 10.", "next": "Ask how many, 1 to 10."}
+        unmade = self.unmade(portal, brand, read, amount)
+        if unmade:
+            return unmade
         latest = set(re.findall(r"[a-z']+", next((i["content"] for i in reversed(self.items)
                                                    if i.get("role") == "user"), "").lower()))  # "no" too
         if latest & NO and not latest & {"buy", "yes", "get"}:  # dry run: "Not now" started the checkout
@@ -456,9 +514,10 @@ class Brain:
         note = self.core.library["sites"][PORTALS[portal]]
         # the card they named, for the portal's savings calculator: live, it kept Infinia and the planner asked to pay
         card = f", paying with {read['chosen'][1].split(' / ')[0]}" if read["cards"] else ""
-        result = self.core.execute(f"Buy a ₹{amount:,} {brand} gift voucher, quantity {quantity}, on {portal}{card}.",
+        made = counted(vouchers(amount, read["amounts"]))
+        result = self.core.execute(f"Buy ₹{amount:,} of {brand} gift vouchers on {portal}: {made}{card}.",
                                    url=voucher_page(note, brand, "shopping"), skill="shopping",
-                                   progress=f"Getting your ₹{amount:,} {brand} voucher ready on {portal}…")
+                                   progress=f"Getting your ₹{amount:,} of {brand} vouchers ready on {portal}…")
         if result["outcome"] == "not_approved":  # the demo's No at the approval card
             return {"status": "not_approved", "report": result["report"],
                     "next": "Say you stopped before paying and nothing was charged. Call no other tool."}

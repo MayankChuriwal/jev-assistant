@@ -79,7 +79,7 @@ class Tools:
                         "Other Debit Cards* ₹100 cashback.")
         if goal.startswith("Show the Swiggy gift vouchers on iShop"):
             return done("Swiggy Money E-Voucher on iShop: ₹1,000, ₹2,000. Earns 3% iCash.")
-        if goal.startswith("Buy a ₹"):  # the demo's No at the approval card
+        if goal.startswith("Buy ₹"):  # the demo's No at the approval card
             return done("You chose not to pay. Nothing was charged.", outcome="not_approved")
         return done("Your UPI ID is jev.user@okaxis.")
 
@@ -131,20 +131,23 @@ CASES = [
     ("A voucher with no portal asks which portal", ["Buy me a Swiggy voucher"], False,
      lambda t: t.executed == [] and any("smartbuy" in o.lower().replace(" ", "") for o in last(t)[1])
      and any("ishop" in o.lower().replace(" ", "") for o in last(t)[1])),
-    ("The portal picked, its amounts are read and offered", ["Buy me a Swiggy voucher", "SmartBuy"], False,
-     lambda t: [g for g in t.executed if g.startswith("Show the Swiggy")] and not any(g.startswith("Buy a") for g in
+    ("The portal picked, its amounts are read and a total is asked", ["Buy me a Swiggy voucher", "SmartBuy"], False,
+     lambda t: [g for g in t.executed if g.startswith("Show the Swiggy")] and not any(g.startswith("Buy ₹") for g in
                                                                                        t.executed)
-     and any("500" in o for o in last(t)[1])),
-    ("An amount asks for the user's HDFC card, never assuming one", ["Buy me a Swiggy voucher from SmartBuy", "₹500"],
-     False, lambda t: not any(g.startswith("Buy a") for g in t.executed)
+     and not any("₹" in o for o in last(t)[1])),
+    ("A total asks for the user's HDFC card, never assuming one", ["Buy me a Swiggy voucher from SmartBuy", "5000"],
+     False, lambda t: not any(g.startswith("Buy ₹") for g in t.executed)
      and any("regalia" in o.lower() for o in last(t)[1])),
+    ("A total the vouchers can't make offers the nearest", ["Buy me a Swiggy voucher from SmartBuy", "1200"],
+     False, lambda t: not any(g.startswith("Buy ₹") for g in t.executed) and "₹1,250" in last(t)[1]),
     ("“Not now” after the card's saving never starts the checkout",
      ["Buy me a Swiggy voucher from SmartBuy", "₹500", "Regalia Gold", "Not now"], False,
-     lambda t: not any(g.startswith("Buy a") for g in t.executed) and bool(last(t)[0])),
-    ("The card's saving and effective price, then checkout, and its No ends it",
-     ["Buy me a Swiggy voucher from SmartBuy", "₹500", "Regalia Gold", "Buy it"], False,
-     lambda t: any("469" in text for text, _ in t.replies)
-     and "Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy." in t.executed
+     lambda t: not any(g.startswith("Buy ₹") for g in t.executed) and bool(last(t)[0])),
+    ("The vouchers, the card's saving and discount, then checkout, and its No ends it",
+     ["Buy me a Swiggy voucher from SmartBuy", "5000", "Regalia Gold", "Buy it"], False,
+     lambda t: any("4,688" in text and "6.25%" in text for text, _ in t.replies)
+     and "Buy ₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000, paying with Regalia Gold "
+         "Credit Card." in t.executed
      and re.search(r"nothing was charged|not charged|didn't pay|stopped", last(t)[0], re.I)),
 ]
 
