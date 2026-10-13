@@ -3804,7 +3804,7 @@ def test_a_question_for_the_icici_user_id_never_goes_out_in_the_open(tmp_path, m
     # iShop signs in through ICICI net banking: the User ID is an ID, asked in the hidden field and kept
     w = worker_with(tmp_path, page=fake_page(url="https://payments.icici.bank.in/sm/login-user-id",
                                              text="LOGIN THROUGH USER ID\nUSER ID\nPASSWORD"),
-                    goal="Buy a ₹1,000 Swiggy gift voucher, quantity 1, on iShop.")
+                    goal="Buy ₹1,000 of Swiggy gift vouchers on iShop: 1 × ₹1,000.")
     script_planner(monkeypatch, turn("ASK", message="What's your ICICI net banking user ID?"))
     jev_checks(monkeypatch)
     w.command("tick")
@@ -3939,7 +3939,7 @@ def test_a_notice_its_site_note_names_is_closed_without_the_planner(tmp_path, mo
 
 SMARTBUY = "https://www.gyftr.com/instantvouchers/swiggy-gv-gift-vouchers"
 ISHOP = "https://www.ishoprewards.com/shopping-vouchers-details/SVMxMjU%3D"
-VOUCHER = "Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy."
+VOUCHER = "Buy ₹500 of Swiggy gift vouchers on SmartBuy: 1 × ₹500."
 
 
 def voucher_page(url, text, *labels):
@@ -3957,7 +3957,8 @@ def test_the_named_amount_is_pressed_without_the_planner(tmp_path, monkeypatch, 
 
 @pytest.mark.parametrize("url, goal, text, cart", [
     (SMARTBUY, VOUCHER, "Choose Denomination\nTotal Value : ₹ 500", "Add to cart"),
-    (ISHOP, "Buy a ₹1,000 Swiggy gift voucher, quantity 1, on iShop.", "₹1,000\nQuantity\n1\nTotal: ₹1,000", "Buy now")])
+    (ISHOP, "Buy ₹1,000 of Swiggy gift vouchers on iShop: 1 × ₹1,000.", "₹1,000\nQuantity\n1\nTotal: ₹1,000",
+     "Buy now")])
 def test_with_the_amount_chosen_its_cart_button_is_pressed(tmp_path, monkeypatch, no_wait, url, goal, text, cart):
     page = voucher_page(url, text, "₹ 250", cart, "Hello, have a question? Let’s chat.")
     w = worker_with(tmp_path, page=page, goal=goal)
@@ -4112,7 +4113,7 @@ def test_a_voucher_read_lists_each_cards_saving_from_the_portals_calculator(tmp_
 def test_the_users_card_is_picked_in_the_carts_savings_calculator(tmp_path, monkeypatch, no_wait):
     # live: the cart's calculator showed Infinia, its default, and the planner asked to pay with "1. Infinia Credit
     # Card"; the user had said Regalia Gold
-    goal = "Buy a ₹2,000 Swiggy gift voucher, quantity 1, on SmartBuy, paying with Regalia Gold Credit Card."
+    goal = "Buy ₹2,000 of Swiggy gift vouchers on SmartBuy: 1 × ₹2,000, paying with Regalia Gold Credit Card."
     cart = "https://www.gyftr.com/instantvouchers/cart"
     w = worker_with(tmp_path, page=voucher_page(cart, "CART SUMMARY\nYou Pay\n₹ 2,000", "Infinia Credit Card"),
                     goal=goal)
@@ -4126,7 +4127,7 @@ def test_the_users_card_is_picked_in_the_carts_savings_calculator(tmp_path, monk
 
 def test_a_card_list_not_loaded_yet_is_picked_from_once_it_is(tmp_path):
     # live: the first look at the page came before its calculator's cards, and the card was never picked after
-    goal = "Buy a ₹2,000 Swiggy gift voucher, quantity 1, on SmartBuy, paying with Regalia Gold Credit Card."
+    goal = "Buy ₹2,000 of Swiggy gift vouchers on SmartBuy: 1 × ₹2,000, paying with Regalia Gold Credit Card."
     w = worker_with(tmp_path, page=voucher_page(SMARTBUY, "Choose Denomination"), goal=goal)
     w.browser.pick = Mock(side_effect=[False, True])
     assert not w.card_step(w.state["page"]) and w.card_step(w.state["page"])
@@ -4134,7 +4135,9 @@ def test_a_card_list_not_loaded_yet_is_picked_from_once_it_is(tmp_path):
 
 
 CART = "https://www.gyftr.com/instantvouchers/cart"
-SMARTBUY_CART = "Buy a ₹2,000 Swiggy gift voucher, quantity 1, on SmartBuy, paying with Regalia Gold Credit Card."
+SMARTBUY_CART = "Buy ₹2,000 of Swiggy gift vouchers on SmartBuy: 1 × ₹2,000, paying with Regalia Gold Credit Card."
+FIVE = ("Buy ₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000, paying with Regalia Gold Credit "
+        "Card.")
 
 
 def test_a_carts_required_boxes_are_ticked_without_the_planner(tmp_path, monkeypatch, no_wait):
@@ -4159,6 +4162,7 @@ def test_with_the_boxes_ticked_checkout_below_the_screen_is_pressed_and_needs_th
     w.browser.into_view = Mock(return_value=True)
     w.browser.observe.return_value = voucher_page(CART, "You Pay\n₹ 2,000\nI agree to the Terms and Conditions",
                                                   "Receive Gift Voucher on WhatsApp", "Checkout")
+    w.browser.texts = Mock(return_value=["Voucher Value 2,000", "You Pay ₹ 2,000", "Checkout"])  # the whole cart
     no_planner(monkeypatch)
     jev_checks(monkeypatch)
     monkeypatch.setattr(planner, "summary", lambda payload: ["Swiggy gift voucher ₹2,000 × 1", "You Pay ₹2,000"])
@@ -4191,7 +4195,7 @@ def test_after_add_to_cart_view_cart_and_buy_is_pressed_without_the_planner(tmp_
 def test_a_one_voucher_purchase_never_raises_its_quantity(tmp_path):
     control = {"id": "q1", "kind": "click", "label": "Increase quantity (₹ 2,000)", "role": "button", "node": 9}
     w = worker_with(tmp_path, page=fake_page(url=SMARTBUY, actions=[control]), goal=VOUCHER)
-    with pytest.raises(Retry, match="quantity is 1"):
+    with pytest.raises(Retry, match="never raise"):
         w.act("CLICK", control, w.state["page"], sub("go to the cart"))
 
 
@@ -4210,12 +4214,84 @@ def test_a_cart_holding_more_of_the_voucher_than_asked_is_brought_down_to_it(tmp
     assert w.quantity_step(one) is None  # one, as asked: never down to none
 
 
-def test_a_cart_quantity_is_left_alone_when_its_stepper_is_not_the_vouchers_alone(tmp_path):
-    # two items, two steppers: which one is the voucher's isn't known, so the approval's total is the user's to judge
+def test_each_cart_line_is_brought_to_the_orders_count_by_its_own_stepper(tmp_path):
+    # the order is one ₹2,000: its line comes down to one, and the ₹500 nobody asked for is taken out
     page = voucher_page(CART, "Voucher\nValue\n2,000\nYou Pay\n₹\n4,000\nVoucher\nValue\n500\nYou Pay\n₹\n500",
                         "Decrease quantity", "Increase quantity", "Decrease quantity", "Increase quantity")
     w = worker_with(tmp_path, page=page, goal=SMARTBUY_CART)
+    assert w.quantity_step(page)[0] is page["actions"][0]
+    one = voucher_page(CART, "Voucher\nValue\n2,000\nYou Pay\n₹\n2,000\nVoucher\nValue\n500\nYou Pay\n₹\n500",
+                       "Decrease quantity", "Increase quantity", "Decrease quantity", "Increase quantity")
+    assert w.quantity_step(one)[0] is one["actions"][2]
+
+
+def test_a_cart_line_below_its_count_is_raised_by_its_own_stepper(tmp_path):
+    page = voucher_page(CART, "Voucher\nValue\n2,000\nYou Pay\n₹\n2,000\nVoucher\nValue\n1,000\nYou Pay\n₹\n1,000",
+                        "Decrease quantity", "Increase quantity", "Decrease quantity", "Increase quantity")
+    w = worker_with(tmp_path, page=page, goal=FIVE)
+    assert w.quantity_step(page)[0] is page["actions"][1]  # the ₹2,000 line's +: the order has two
+    done = voucher_page(CART, "Voucher\nValue\n2,000\nYou Pay\n₹\n4,000\nVoucher\nValue\n1,000\nYou Pay\n₹\n1,000",
+                        "Decrease quantity", "Increase quantity", "Decrease quantity", "Increase quantity")
+    assert w.quantity_step(done) is None
+
+
+def test_a_cart_whose_steppers_arent_one_a_line_is_left_to_the_planner(tmp_path):
+    page = voucher_page(CART, "Voucher\nValue\n2,000\nYou Pay\n₹\n4,000\nVoucher\nValue\n500\nYou Pay\n₹\n500",
+                        "Decrease quantity", "Increase quantity")  # the second line's below the screen
+    w = worker_with(tmp_path, page=page, goal=SMARTBUY_CART)
     assert w.quantity_step(page) is None
+
+
+def test_an_orders_raise_is_left_to_the_worker_and_never_refused(tmp_path):
+    control = {"id": "q1", "kind": "click", "label": "Increase quantity", "role": "button", "node": 9}
+    w = worker_with(tmp_path, page=voucher_page(CART, "Voucher\nValue\n2,000\nYou Pay\n₹\n2,000"), goal=FIVE)
+    w.state["page"]["actions"] = [control]
+    w.act("CLICK", control, w.state["page"], None)  # two ₹2,000s: raising one is part of the order
+    assert w.browser.act.called
+
+
+def test_each_value_of_an_order_goes_in_the_cart_before_view_cart_and_buy(tmp_path, no_wait):
+    # ₹5,000 is 2 × ₹2,000 + 1 × ₹1,000: each value once on the brand page, largest first; the counts are the cart's
+    tiles = ("₹ 250", "₹ 500", "₹ 1,000", "₹ 2,000")
+    w = worker_with(tmp_path, page=voucher_page(SMARTBUY, "Choose Denomination", *tiles, "View Cart & Buy"), goal=FIVE)
+    w.browser.into_view = Mock(return_value=False)
+
+    def next_press(text, *labels):
+        label = w.voucher_step(voucher_page(SMARTBUY, text, *tiles, *labels, "View Cart & Buy"))[0]["label"]
+        w.state["history"].append({"operation": "CLICK", "action": label})
+        return label
+
+    stepper = ("Decrease quantity", "Increase quantity")
+    assert next_press("Choose Denomination") == "₹ 2,000"
+    assert next_press("Total Value : ₹ 2,000", "Add to cart") == "Add to cart"
+    w.browser.observe.return_value = voucher_page(SMARTBUY, "Total Value : ₹ 2,000", *tiles, *stepper,
+                                                  "View Cart & Buy")  # its answer: in the cart
+    assert next_press("Total Value : ₹ 2,000", "Add to cart") == "₹ 1,000"
+    assert next_press("Total Value : ₹ 1,000", "Add to cart") == "Add to cart"
+    assert next_press("Total Value : ₹ 1,000", *stepper) == "View Cart & Buy"
+    assert w.voucher_step(w.state["page"]) is None  # the cart is the next page's
+
+
+def test_a_value_already_in_the_cart_is_not_added_again(tmp_path, no_wait):
+    tiles = ("₹ 1,000", "₹ 2,000")
+    stepper = ("Decrease quantity", "Increase quantity")
+    page = voucher_page(SMARTBUY, "Total Value : ₹ 2,000", *tiles, *stepper, "View Cart & Buy")
+    w = worker_with(tmp_path, page=page, goal=FIVE)
+    w.state["history"].append({"operation": "CLICK", "action": "₹ 2,000"})
+    w.browser.into_view = Mock(return_value=False)
+    assert w.voucher_step(page)[0]["label"] == "₹ 1,000"
+
+
+def test_checkout_waits_until_the_cart_holds_the_order(tmp_path, no_wait):
+    # the whole cart's words, on screen or not: ₹1,000 missing, then there
+    w = worker_with(tmp_path, page=voucher_page(CART, "You Pay\n₹ 4,000", "Remove item"), goal=FIVE)
+    w.state["agreed_at"] = w.place_of(w.state["page"])
+    w.browser.into_view = Mock(return_value=True)
+    w.browser.observe.return_value = voucher_page(CART, "You Pay\n₹ 5,000", "Checkout")
+    w.browser.texts = Mock(return_value=["Voucher Value 2,000 You Pay ₹ 4,000", "Total Cart Value ₹ 4,000"])
+    assert w.checkout_step(w.state["page"]) is None
+    w.browser.texts.return_value = ["Voucher Value 2,000 You Pay ₹ 4,000", "Voucher Value 1,000 You Pay ₹ 1,000"]
+    assert w.checkout_step(w.state["page"])[0]["label"] == "Checkout"
 
 
 def test_a_cart_count_just_lowered_is_read_again_before_lowering_it_once_more(tmp_path, no_wait):

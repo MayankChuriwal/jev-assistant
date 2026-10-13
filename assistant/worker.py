@@ -36,7 +36,9 @@ CART_WAIT = 1.5  # seconds for a cart button's answer (SmartBuy's Add to cart, f
 CHOSEN = re.compile(r"(Cancel|Pause) the UPI AutoPay mandate whose payee is (.+?)(?: until .+)?$")  # the brain's words
 VOUCHER_READ = re.compile(r"^Show the (.+?) gift vouchers on (.+?): list the amounts")  # the brain's voucher read
 REWARD_LINE = re.compile(r"reward points|cashback|icash|instant discount", re.IGNORECASE)
-VOUCHER_BUY = re.compile(r"^Buy a ₹([\d,]+) .+? gift voucher, quantity (\d+), on ")  # the brain's checkout goal
+VOUCHER_BUY = re.compile(r"^Buy ₹([\d,]+) of .+? gift vouchers on .+?: (\d+ × ₹[\d,]+(?: \+ \d+ × ₹[\d,]+)*)")  # its
+# checkout goal: "Buy ₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000, paying with …"
+CART_LINE = re.compile(r"Voucher Value ([\d,]+).{0,20}?You Pay ₹ ?([\d,]+)")  # a SmartBuy cart line: value, its cost
 VOUCHER_CARD = re.compile(r", paying with (.+?)\.$")  # the card the user named, on a portal that lists savings by card
 ROW_FIX = re.compile(r"Dispute type: Personal Details\. The report shows: ([^:]+): .+?\. It should be: (.+?)\.?\s*$",
                      re.DOTALL)  # the brain's dispute: the row it names, and that row's correct value
@@ -222,6 +224,20 @@ def with_commit(subgoals, rest):
 def asks(goal):
     """Whether the goal is a question ("What did I order last on Swiggy?"): a lookup, even when it names an order."""
     return bool(planner.OPEN_Q.match(goal or "")) or (goal or "").rstrip().endswith("?")
+
+
+def voucher_order(goal):
+    """The vouchers the brain's checkout goal names, by value, largest first ({2000: 2, 1000: 1}), else None."""
+    wanted = VOUCHER_BUY.match(goal)
+    return {int(value.replace(",", "")): int(n) for n, value in re.findall(r"(\d+) × ₹([\d,]+)", wanted[2])} \
+        if wanted else None
+
+
+def cart_lines(text):
+    """A voucher cart's lines as (value, count), in page order: "Voucher Value 2,000 … You Pay ₹ 4,000" is two."""
+    found = [(int(value.replace(",", "")), int(paid.replace(",", "")))
+             for value, paid in CART_LINE.findall(re.sub(r"\s+", " ", text))]
+    return [(value, round(paid / value)) for value, paid in found if value]
 
 
 def plain(text):
@@ -955,27 +971,31 @@ class Worker:
         return picked
 
     def quantity_step(self, page):
-        """On a cart holding more of the voucher the brain's checkout names than it asks for (SmartBuy's "Voucher Value
-        2,000 … You Pay ₹ 4,000": two), its one "Decrease quantity" control, until the count is the goal's; never below
-        it, and never when the page has more than one stepper (another item's count is the user's). Else None."""
+        """On a cart of the brain's vouchers (SmartBuy's lines: "Voucher Value 2,000 … You Pay ₹ 4,000" is two), each
+        line brought to the order's count by its own stepper, first line first: (its "Decrease quantity" or "Increase
+        quantity", page). A value the order doesn't name goes down to none (live, an earlier run's 2 × ₹2,000 sat in
+        the cart and Checkout was offered at ₹4,000). Only while the page shows one stepper a line, at most 20 presses;
+        else None."""
         s = self.state
-        wanted = VOUCHER_BUY.match(s["goal"])
+        wanted = voucher_order(s["goal"])
         if not wanted or "voucher value" not in page["text"].lower().replace("\n", " "):
             return None
-        amount, quantity = int(wanted[1].replace(",", "")), int(wanted[2])
+        steps = ("decrease quantity", "increase quantity")
         last = (s["history"][-1].get("action") or "") if s["history"] else ""
-        if last.lower().startswith("decrease quantity"):  # its answer comes from the site's server: read once more
+        if last.lower().startswith(steps):  # its answer comes from the site's server: read once more
             time.sleep(CART_WAIT)
             page = self.observe()
-        if sum((h.get("action") or "").lower().startswith("decrease quantity") for h in s["history"]) >= 9:
+        if sum((h.get("action") or "").lower().startswith(steps) for h in s["history"]) >= 20:
             return None
-        text = re.sub(r"\s+", " ", page["text"])
-        counts = [round(int(paid.replace(",", "")) / amount) for value, paid in
-                  re.findall(r"Voucher Value ([\d,]+).{0,20}?You Pay ₹ ?([\d,]+)", text)
-                  if int(value.replace(",", "")) == amount]
-        fewer = [a for a in page["actions"] if a["kind"] == "click"
-                 and (a.get("label") or "").lower().startswith("decrease quantity")]
-        return (fewer[0], page) if len(counts) == 1 and counts[0] > quantity and len(fewer) == 1 else None
+        lines = cart_lines(page["text"])
+        fewer, more = ([a for a in page["actions"] if a["kind"] == "click"
+                        and (a.get("label") or "").lower().startswith(word)] for word in steps)
+        if not lines or not len(lines) == len(fewer) == len(more):
+            return None  # a line's stepper off screen, or a line with none: which is whose isn't known
+        for (value, count), down, up in zip(lines, fewer, more):
+            if count != wanted.get(value, 0):
+                return (down if count > wanted.get(value, 0) else up), page
+        return None
 
     def agree_step(self, page):
         """The boxes its site note's `agree:` names (words their labels start with, comma-separated: SmartBuy's cart
@@ -1016,6 +1036,8 @@ class Worker:
 
         if any(final({"actions": [{"kind": "click", "label": h.get("action")}]}) for h in s["history"]):
             return None
+        if sorted(cart_lines(self.page_words())) != sorted(voucher_order(s["goal"]).items()):
+            return None  # the whole cart, on screen or not, is the order first: nothing more, nothing missing
         control = final(page)
         if not control and any(s["browser"].into_view(name) for name in finals):
             page = self.observe()
@@ -1099,18 +1121,20 @@ class Worker:
                 + "; ".join(f"{m[1].strip()} ₹{m[2]} {kinds[m[3]]}" for m in found) + ".")
 
     def voucher_step(self, page):
-        """A voucher the brain's checkout names (“Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy.”) on a
-        portal whose note names its cart buttons (`cart:`, in order: SmartBuy's "Add to cart, View Cart & Buy"):
-        (control, page) to press, else None for the planner. The amount's tile until the page's Total shows it, then
-        the first of those buttons the page has; each scrolled into view when off screen; the tile at most twice, and
-        nothing once a button was pressed (sign-in and checkout are the planner's, and the gate's). A chosen tile leaves
-        the controls offered, so the Total is the proof. Live, signed in with that amount already in the cart, the page
-        had a quantity stepper and View Cart & Buy where Add to cart was."""
+        """The vouchers the brain's checkout names (“Buy ₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 ×
+        ₹1,000.”) put in the cart on a portal whose note names its cart buttons (`cart:`, in order: SmartBuy's "Add to
+        cart, View Cart & Buy"): (control, page) to press, else None for the planner. Each value in turn, largest
+        first: its tile until the page's Total shows it, then Add to cart, unless the page shows it in the cart already
+        (live, signed in with that amount in the cart: a quantity stepper where Add to cart was); then the last button.
+        Each is scrolled into view when off screen; a tile at most twice, Add to cart never twice for a value, and
+        nothing once the last button was pressed (the counts are the cart page's: `quantity_step`). A chosen tile leaves
+        the controls offered, so the Total is the proof. A portal with one button (iShop's Buy now) takes one
+        voucher."""
         s = self.state
-        wanted = VOUCHER_BUY.match(s["goal"])
+        wanted = voucher_order(s["goal"])
         note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
         carts = [c.strip() for c in str(note.get("cart") or "").split(",") if c.strip()]
-        if not wanted or not carts or int(wanted[2]) != 1:
+        if not wanted or not carts or (len(carts) == 1 and sum(wanted.values()) != 1):
             return None
 
         def flat(text):  # "₹ 1,000" and "₹1000" alike
@@ -1119,41 +1143,47 @@ class Worker:
         def control(p, label):
             return next((a for a in p["actions"] if a["kind"] == "click" and flat(a.get("label")) == flat(label)), None)
 
-        def chosen(p):
+        def chosen(p, amount):
             return re.search(r"total(?:value)?:?" + re.escape(amount) + r"(?!\d)", flat(p["text"]))
 
-        amount, pressed = "₹" + wanted[1].replace(",", ""), [h.get("action") for h in s["history"]]
+        pressed = [h.get("action") for h in s["history"]]
         if any(flat(label) == flat(carts[-1]) for label in pressed):
             return None  # its last button pressed: the cart is the next page's
-        presses = sum(flat(label) == amount for label in pressed)
-        if not chosen(page):
-            tile = control(page, amount)
-            if tile and presses < 2:
-                return tile, page
-            # off screen: the tile, else (pressed already) its Total, beside the first cart button the page has (live,
-            # with that amount in the cart there was no Add to cart, only View Cart & Buy)
-            if not (any(s["browser"].into_view(c) for c in carts) if presses else s["browser"].into_view(amount)):
-                return None
-            page = self.observe()
-            if not chosen(page):
+        added = s.setdefault("vouchers_added", [])
+        for value in (v for v in wanted if v not in added):
+            amount = f"₹{value}"
+            presses = [n for n, label in enumerate(pressed) if flat(label) == amount]
+            if not chosen(page, amount):
                 tile = control(page, amount)
-                return (tile, page) if tile and presses < 2 else None
-        for name in carts:  # the note's order: a later one only when the page has no earlier one, on screen or off
-            if sum(flat(label) == flat(name) for label in pressed) >= 2:
-                continue  # pressed twice and still offered: the planner's
-            button = control(page, name)
-            if button and flat(pressed[-1] if pressed else "") == flat(name):  # never twice in a row: a second Add
-                time.sleep(CART_WAIT)  # to cart before the first one's answer would add two
-                page = self.observe()
-                if control(page, name):
+                if tile and len(presses) < 2:
+                    return tile, page
+                # off screen: the tile, else (pressed already) its Total, beside the first cart button the page has
+                # (live, with that amount in the cart there was no Add to cart, only View Cart & Buy)
+                if not (any(s["browser"].into_view(c) for c in carts) if presses else s["browser"].into_view(amount)):
                     return None
-                continue
-            if not button and s["browser"].into_view(name):
                 page = self.observe()
-                button = control(page, name)
-            if button:
-                return button, page
-        return None
+                if not chosen(page, amount):
+                    tile = control(page, amount)
+                    return (tile, page) if tile and len(presses) < 2 else None
+            if len(carts) > 1:  # its Add to cart, unless this value is in the cart already
+                add, since = carts[0], pressed[presses[-1] + 1:] if presses else pressed
+                button = control(page, add)
+                if not button and s["browser"].into_view(add):
+                    page = self.observe()
+                    button = control(page, add)
+                if button and since and flat(since[-1]) == flat(add):  # its answer comes from the site's server: a
+                    time.sleep(CART_WAIT)  # second press before it shows would add two
+                    page = self.observe()
+                    if control(page, add):
+                        return None  # pressed, and still offered once its answer had time to come: the planner's
+                elif button:
+                    return None if any(flat(label) == flat(add) for label in since) else (button, page)
+            added.append(value)
+        button = control(page, carts[-1])
+        if not button and s["browser"].into_view(carts[-1]):
+            page = self.observe()
+            button = control(page, carts[-1])
+        return (button, page) if button else None
 
     def row_step(self, page):
         """A personal detail the brain's dispute names (“The report shows: Address 1: …. It should be: …”) on a site
@@ -1940,9 +1970,9 @@ class Worker:
                     label.lower().startswith("faq") and QUESTION.match(goal)):
                 raise Retry(f"“{label}” only opens the site's policy or help text, which isn't needed for this task: "
                             "go on with the task itself.")  # MyUPI: its Terms, Privacy and FAQs opened again and again
-            buying = VOUCHER_BUY.match(goal)
-            if buying and int(buying[2]) == 1 and label.lower().startswith("increase quantity"):
-                raise Retry("The goal's quantity is 1: never raise it. Go on with the task itself.")  # live: ₹4,000
+            buying = voucher_order(goal)
+            if buying and max(buying.values()) == 1 and label.lower().startswith("increase quantity"):
+                raise Retry("Each voucher in the goal is one: never raise a quantity. Go on with the task itself.")
             note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
             never = [w.strip().lower() for w in str(note.get("never") or "").split(",") if w.strip()]
             if any(label.strip().lower().startswith(w) for w in never):  # live SmartBuy: Redeem Now, off to swiggy.com
