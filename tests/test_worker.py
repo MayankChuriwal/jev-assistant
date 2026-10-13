@@ -4475,3 +4475,22 @@ def test_a_card_detail_is_asked_by_its_name_alone(tmp_path, monkeypatch, no_wait
     no_planner(monkeypatch)
     w.command("tick")
     assert "your card's CVV No. Type it here" in w.asked[0]["text"]
+
+
+@pytest.mark.parametrize("typed", [True, False])
+def test_a_card_detail_is_never_taken_for_the_banks_code(tmp_path, monkeypatch, no_wait, typed):
+    # dry run: the CVV typed on the payment page went into the bank's OTP box, unasked, once the page moved on (its
+    # field gone, its typing forgotten); asked and never typed, it is no code either
+    w = worker_with(tmp_path, page=pay_page(("[secret]", "[profile:name]", "[secret]", "")), goal=FIVE,
+                    replies=[{"text": "123"}, {"text": "654321"}])
+    no_planner(monkeypatch)
+    if not typed:
+        w.browser.act.side_effect = [ExecutionUncertain("lost"), {}]
+    w.command("tick")  # the CVV: asked, then typed (or not: the task stops, and is set going again here)
+    w.state["status"] = "ready"
+    w.state["history"].append(dict(PAID))
+    w.browser.fresh.return_value = False
+    w.browser.observe.return_value = bank_page()
+    w.command("tick")  # the bank's code: asked, never the CVV
+    assert "one-time password" in w.asked[-1]["text"]
+    assert w.browser.act.call_args.kwargs["text"] == "654321"

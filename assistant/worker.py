@@ -858,6 +858,8 @@ class Worker:
         reply = self.ask({"kind": "secret", "text": question})
         answer = str(reply.get("text", "")).strip()
         name = self.keep_secret(answer)
+        if card:  # a card's detail is never a code to type elsewhere (dry run: the CVV went into the bank's OTP box)
+            s.setdefault("card_answers", []).append(name)
         if not card and code_like(answer):
             self.count_code(name)  # a code the user got: a question dropped for a changed page, or "none", isn't one
         s["chat"] += [{"from": "agent", "text": question}, {"from": "user", "text": f"[secret:{name}] (hidden answer)"}]
@@ -870,8 +872,9 @@ class Worker:
         ticking) was asked for again."""
         s = self.state
         name = next(reversed(s["answers"]), None)
-        typed = {entry.get("key") for entry in s["typed"].values()}
-        return name if name and name not in typed and code_like(s["answers"][name]) else None
+        typed = {entry.get("key") for entry in s["typed"].values()} | set(s.get("typed_keys", ()))
+        return name if name and name not in typed and name not in s.get("card_answers", ()) \
+            and code_like(s["answers"][name]) else None
 
     def count_code(self, name):
         """One more code toward CODE_ASKS, once per answer: when the user's reply is a code, or a hidden answer is
@@ -2401,6 +2404,7 @@ class Worker:
         typing = s.pop("typing", None)
         if typing:
             s["typed"][typing[0]] = typing[1]
+            s.setdefault("typed_keys", []).append(typing[1]["key"])  # had by a field, though the field may go
             if not rules.CARD_DETAIL.search(typing[0][1]):
                 self.count_code(typing[1]["key"])  # a code or password typed counts, once, however it was asked
         if commit:
