@@ -901,7 +901,9 @@ def watch(w, label, goal):
     commit = s["commit"]
     since, told, unclear = commit["since"], False, 0
     while True:
-        verdict = jev.after_commit(s["page"], goal, label)
+        # a payment's bank asking for its one-time password: its next step, never a model's "processing" to wait on
+        bank = getattr(w, "bank_box", None)
+        verdict = "next_step" if bank and bank(s["page"]) else jev.after_commit(s["page"], goal, label)
         if verdict == "processing":
             if w.elapsed() - since >= w.processing_ms:
                 s["commit"] = None

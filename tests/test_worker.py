@@ -1,6 +1,7 @@
 """The worker over a mock browser with Jev and the planner scripted: who decides each step, what reaches the
 user, and what reaches a model."""
 
+import contextlib
 import json
 import time
 from pathlib import Path
@@ -4153,10 +4154,11 @@ def test_a_carts_required_boxes_are_ticked_without_the_planner(tmp_path, monkeyp
     assert not w.browser.act.called  # the page's own boxes, ticked only when unticked: never toggled off
 
 
-def test_with_the_boxes_ticked_checkout_below_the_screen_is_pressed_and_needs_the_users_yes(tmp_path, monkeypatch,
-                                                                                          no_wait):
-    # live: with the boxes ticked the planner pressed the cart count "1" as the purchase, then got stuck
-    w = worker_with(tmp_path, page=voucher_page(CART, "CART SUMMARY\nYou Pay\n₹ 2,000", "Remove item", "Apply"), goal=SMARTBUY_CART)
+def test_with_the_boxes_ticked_checkout_below_the_screen_is_pressed_without_asking(tmp_path, monkeypatch, no_wait):
+    # live: with the boxes ticked the planner pressed the cart count "1" as the purchase, then got stuck. Checkout
+    # only opens GyFTR's payment page now: the user's one yes is at its PROCEED
+    w = worker_with(tmp_path, page=voucher_page(CART, "CART SUMMARY\nYou Pay\n₹ 2,000", "Remove item", "Apply"),
+                    goal=SMARTBUY_CART)
     w.state["cards_picked"] = [w.place_of(w.state["page"])]
     w.browser.tick = Mock(return_value={"found": 2, "ticked": []})
     w.browser.into_view = Mock(return_value=True)
@@ -4165,11 +4167,9 @@ def test_with_the_boxes_ticked_checkout_below_the_screen_is_pressed_and_needs_th
     w.browser.texts = Mock(return_value=["Voucher Value 2,000", "You Pay ₹ 2,000", "Checkout"])  # the whole cart
     no_planner(monkeypatch)
     jev_checks(monkeypatch)
-    monkeypatch.setattr(planner, "summary", lambda payload: ["Swiggy gift voucher ₹2,000 × 1", "You Pay ₹2,000"])
     w.command("tick")
     assert w.browser.into_view.call_args.args == ("Checkout",)
-    assert w.asked[0]["approval"] and "I'll press “Checkout”" in w.asked[0]["text"]
-    assert not w.browser.act.called  # the user's yes first
+    assert w.browser.act.call_args.args[1]["label"] == "Checkout" and w.asked == []
 
 
 def test_a_brand_page_with_no_boxes_is_left_alone(tmp_path):
@@ -4302,3 +4302,163 @@ def test_a_cart_count_just_lowered_is_read_again_before_lowering_it_once_more(tm
     w.browser.observe.return_value = voucher_page(CART, "Voucher\nValue\n2,000\nYou Pay\n₹\n2,000",
                                                   "Decrease quantity", "Remove item")
     assert w.quantity_step(stale) is None and w.browser.observe.called
+
+
+# ---- paying: GyFTR's payment page (pay.gyftr.com, as the live run read it), the user's one yes at PROCEED, the
+# bank's one-time password, and the order's end
+
+PAY = "https://pay.gyftr.com/"
+PAY_TEXT = ("Bill Details\nBill Value\n₹ 5,000\nOrder Id :\nHSB326844797-1791901466\nMobile Number :\n[profile:phone]\n"
+            "Payable Amount\n₹ 5,000\nPayment Method\nCard\nValid\nCard Number\n*\nName On Card\n*\nExpiry\n*\n"
+            "CVV No.\n*\nSave card securely for your future transactions\nWallet\nPROCEED")
+FILLED = ("[secret]", "[profile:name]", "[secret]", "[secret]")
+
+
+def pay_page(values=("", "", "", ""), saved="false", text=PAY_TEXT):
+    """GyFTR's payment page: its card boxes hold `values` (number, name, expiry, CVV)."""
+    boxes = [{"id": f"p{n}", "kind": "fill", "label": label, "role": "textbox", "value": value, "node": n,
+              "constraints": {}} for n, (label, value) in
+             enumerate(zip(("Valid Card Number *", "Name On Card *", "Expiry *", "CVV No. *"), values), 2)]
+    return fake_page(url=PAY, text=text, actions=[
+        {"id": "p1", "kind": "click", "label": "Card", "role": "button", "node": 1}, *boxes,
+        {"id": "p6", "kind": "click", "label": "clickable in “CVV No. *”", "role": "clickable", "node": 6},
+        {"id": "p7", "kind": "click", "label": "Save card securely for your future transactions", "role": "checkbox",
+         "checked": saved, "node": 7},
+        {"id": "p8", "kind": "click", "label": "wallet Wallet", "role": "button", "node": 8},
+        {"id": "p9", "kind": "click", "label": "PROCEED", "role": "button", "node": 9}])
+
+
+def test_on_the_pay_page_the_card_number_is_asked_hidden_first(tmp_path, monkeypatch, no_wait):
+    # live: the planner typed a placeholder it made up for the CVV, and was refused
+    w = worker_with(tmp_path, page=pay_page(), goal=FIVE, replies=[{"text": "4111 1111 1111 1111"}])
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.asked[0]["kind"] == "secret" and "Valid Card Number" in w.asked[0]["text"]
+    assert w.browser.act.call_args.args[1]["label"] == "Valid Card Number *"
+    assert w.browser.act.call_args.kwargs["text"].replace(" ", "") == "4111111111111111"
+    assert "4111" not in json.dumps([w.state["chat"], w.state["history"], w.trace()])
+
+
+def test_the_name_on_the_card_comes_from_the_profile(tmp_path, monkeypatch, no_wait):
+    w = worker_with(tmp_path, page=pay_page(("[secret]", "", "", "")), goal=FIVE)
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"] == "Name On Card *" and w.asked == []
+    assert w.browser.act.call_args.kwargs["text"] == "Mayank Churiwal"
+
+
+def test_the_expiry_and_cvv_are_asked_hidden_in_turn(tmp_path, monkeypatch, no_wait):
+    w = worker_with(tmp_path, page=pay_page(("[secret]", "[profile:name]", "", "")), goal=FIVE,
+                    replies=[{"text": "08/29"}])
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert "Expiry" in w.asked[0]["text"] and w.browser.act.call_args.args[1]["label"] == "Expiry *"
+
+
+def test_a_ticked_save_card_box_is_unticked(tmp_path, monkeypatch, no_wait):
+    w = worker_with(tmp_path, page=pay_page(FILLED, saved="true"), goal=FIVE)
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"].startswith("Save card")
+
+
+def test_save_card_is_never_ticked(tmp_path):
+    page = pay_page()
+    w = worker_with(tmp_path, page=page, goal=FIVE)
+    with pytest.raises(Retry, match="never"):
+        w.act("CLICK", page["actions"][6], page, sub("save the card for next time"))
+
+
+def test_with_the_card_form_filled_proceed_asks_the_users_one_yes(tmp_path, monkeypatch, no_wait):
+    w = worker_with(tmp_path, page=pay_page(FILLED), goal=FIVE)
+    no_planner(monkeypatch)
+    jev_checks(monkeypatch)
+    monkeypatch.setattr(planner, "summary", lambda payload: ["Swiggy gift vouchers 2 × ₹2,000 + 1 × ₹1,000",
+                                                             "Payable ₹5,000"])
+    w.command("tick")
+    assert w.asked[0]["approval"] and "I'll press “PROCEED”" in w.asked[0]["text"] and "₹5,000" in w.asked[0]["text"]
+    assert not w.browser.act.called  # the user's yes first
+
+
+def test_a_payable_over_the_orders_total_stops_before_paying(tmp_path, monkeypatch, no_wait):
+    text = PAY_TEXT.replace("Payable Amount\n₹ 5,000", "Payable Amount\n₹ 5,500")
+    w = worker_with(tmp_path, page=pay_page(FILLED, text=text), goal=FIVE)
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.state["status"] == "blocked" and "Nothing was charged" in w.told[-1]["text"]
+    assert not w.browser.act.called and w.asked == []
+
+
+def test_after_proceed_the_card_form_is_left_alone(tmp_path):
+    w = worker_with(tmp_path, page=pay_page(), goal=FIVE)
+    w.state["history"].append({"operation": "CLICK", "action": "PROCEED", "committed": True, "approved": "user"})
+    assert w.card_form_step(w.state["page"]) is None
+
+
+BANK = "https://acs.hdfcbank.com/acs/otp"
+PAID = {"operation": "CLICK", "action": "PROCEED", "committed": True, "approved": "user"}
+
+
+def bank_page(value=""):
+    return fake_page(url=BANK, text="HDFC BANK\nMerchant: GyFTR\nAmount: ₹ 5,000\nEnter OTP\nResend OTP", actions=[
+        {"id": "b1", "kind": "fill", "label": "Enter OTP", "role": "textbox", "value": value, "node": 1,
+         "constraints": {}, "submit": "Submit"},
+        {"id": "b2", "kind": "click", "label": "Submit", "role": "button", "node": 2},
+        {"id": "b3", "kind": "click", "label": "Resend OTP", "role": "button", "node": 3},
+        {"id": "b4", "kind": "click", "label": "Cancel", "role": "button", "node": 4}])
+
+
+def test_after_the_payments_yes_the_banks_code_is_asked_hidden(tmp_path, monkeypatch, no_wait):
+    w = worker_with(tmp_path, page=bank_page(), goal=FIVE, replies=[{"text": "123456"}])
+    w.state["history"].append(dict(PAID))
+    w.state["code_asks"] = 1  # the sign-in's code, earlier in the task: the bank's gets its own tries
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.asked[0]["kind"] == "secret" and "one-time password" in w.asked[0]["text"]
+    assert w.browser.act.call_args.args[1]["label"] == "Enter OTP"
+
+
+def test_the_banks_code_is_sent_under_the_payments_yes(tmp_path, monkeypatch, no_wait):
+    w = worker_with(tmp_path, page=bank_page("[secret]"), goal=FIVE)
+    w.state["history"] += [dict(PAID), {"operation": "TYPE_TEXT", "action": "Enter OTP", "text": "[secret:answer2]"}]
+    no_planner(monkeypatch)
+    jev_checks(monkeypatch, after_commit="processing")
+    w.processing_ms = 0  # watched once, then left
+    with contextlib.suppress(Exception):
+        w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"] == "Submit" and w.asked == []  # no second yes
+    assert w.state["history"][-1]["committed"]  # watched like the payment it is
+
+
+def test_a_confirmed_payment_ends_with_its_order_id_and_never_a_code(tmp_path, monkeypatch, no_wait):
+    thanks = fake_page(url="https://www.gyftr.com/instantvouchers/thank-you",
+                       text="Thank you! Your order is placed.\nSwiggy Money Voucher ₹ 2,000\n"
+                            "Voucher Code: SWG-ABCD-1234\nPIN: 9876",
+                       actions=[{"id": "t1", "kind": "click", "label": "My Orders", "role": "link", "node": 1}])
+    w = worker_with(tmp_path, page=bank_page("[secret]"), goal=FIVE)
+    w.state["recent"] = [PAY_TEXT]  # the payment page showed the order's id
+    w.state["history"] += [dict(PAID), {"operation": "TYPE_TEXT", "action": "Enter OTP", "text": "[secret:answer2]"}]
+    w.browser.observe.return_value = thanks
+    no_planner(monkeypatch)
+    jev_checks(monkeypatch)  # the site confirms it
+    w.command("tick")  # the code sent
+    w.command("tick")  # the end, in code
+    report = w.told[-1]["text"]
+    assert w.state["status"] == "done" and w.state["outcome"] == "bought"
+    assert report == ("Bought ₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000. Order "
+                      "HSB326844797-1791901466. The site sends the codes by SMS and email.")
+
+
+def test_a_bank_page_asking_for_its_code_after_proceed_is_the_payments_next_step(tmp_path, monkeypatch, no_wait):
+    # never left to a model's "processing": the code would expire while the worker waited
+    w = worker_with(tmp_path, page=pay_page(FILLED), goal=FIVE, replies=[{"text": "yes"}, {"text": "123456"}])
+    no_planner(monkeypatch)
+    jev_checks(monkeypatch, after_commit="processing")
+    monkeypatch.setattr(planner, "summary", lambda payload: ["Swiggy gift vouchers 2 × ₹2,000 + 1 × ₹1,000"])
+    w.processing_ms, w.outcome_pause = 0, 0  # a wait would end the task at once
+    w.command("tick")  # the user's yes
+    w.browser.observe.return_value = bank_page()
+    w.command("tick")  # PROCEED, then the bank's page
+    w.command("tick")  # its code, asked
+    assert w.state["history"][-2]["action"] == "PROCEED" and w.state["history"][-1]["action"] == "Enter OTP"
+    assert "one-time password" in w.asked[-1]["text"]

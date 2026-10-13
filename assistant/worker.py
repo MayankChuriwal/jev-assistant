@@ -38,6 +38,8 @@ VOUCHER_READ = re.compile(r"^Show the (.+?) gift vouchers on (.+?): list the amo
 REWARD_LINE = re.compile(r"reward points|cashback|icash|instant discount", re.IGNORECASE)
 VOUCHER_BUY = re.compile(r"^Buy ₹([\d,]+) of .+? gift vouchers on .+?: (\d+ × ₹[\d,]+(?: \+ \d+ × ₹[\d,]+)*)")  # its
 # checkout goal: "Buy ₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000, paying with …"
+PAYABLE_AMOUNT = re.compile(r"payable amount\s*:?\s*₹\s?([\d,]+(?:\.\d+)?)", re.IGNORECASE)  # GyFTR's pay page
+ORDER_ID = re.compile(r"\border\s*(?:id|no\.?|number)\s*:?\s*([A-Z0-9][A-Z0-9-]{5,})", re.IGNORECASE)
 CART_LINE = re.compile(r"Voucher Value ([\d,]+).{0,20}?You Pay ₹ ?([\d,]+)")  # a SmartBuy cart line: value, its cost
 VOUCHER_CARD = re.compile(r", paying with (.+?)\.$")  # the card the user named, on a portal that lists savings by card
 ROW_FIX = re.compile(r"Dispute type: Personal Details\. The report shows: ([^:]+): .+?\. It should be: (.+?)\.?\s*$",
@@ -584,7 +586,18 @@ class Worker:
         sending = self.code_submit(page)
         if sending:  # live: Experian's OTP was typed and never sent; the planner waited eleven times
             operation, action, key = sending
-            return self.act(operation, action, page, None, key=key)
+            return self.act(operation, action, page, None, key=key, paid=self.paid())
+        if self.bought(page):  # the payment confirmed: the end, in code, so no voucher's code reaches a model
+            return None
+        code = self.otp_step(page)
+        if code:  # the bank's one-time password for the payment the user said yes to
+            return self.ask_code(page, {"targets": {"type_text_target": code}})
+        form = self.card_form_step(page)
+        if form:  # live: the planner made up a placeholder for the CVV, and the card form was never filled
+            if form[0] == "ask":
+                return self.ask_code(page, {"targets": {"type_text_target": form[1]}})
+            _, operation, action, text = form
+            return self.act(operation, action, page, None, text=text)
         chosen = self.mandate_step(page)
         if chosen:  # the demo: the planner never scrolled to AISLE's card and reached for GOOGLE PLAY's until stuck
             action, page = chosen
@@ -829,12 +842,17 @@ class Worker:
         if fresh:  # sent a moment ago, to the planner's own question or before the page moved on: typed, not asked
             inputs, shown = self.value(field, f"[secret:{fresh}]", page)
             return self.run(page, "TYPE_TEXT", field, inputs, shown, goal="type what the user sent")
+        if not card and s["code_asks"] >= CODE_ASKS and s.get("bank_code"):
+            raise Halt("blocked", f"Your bank didn't take the one-time password after {CODE_ASKS} tries, so I "
+                                  "stopped. Your bank's SMS will say whether anything was charged.")
         if not card and s["code_asks"] >= CODE_ASKS:  # each code usually means a new one sent to the user's phone
             raise Halt("blocked", f"Signing in to {rules.host(page['url'])} isn't working after {CODE_ASKS} codes, "
                                   "so I stopped rather than send you more. Please sign in once in the agent's "
                                   "Chrome window, then ask me again.")
-        site = self.site_name(page)
-        question = (f"{site} is asking for your card's {field['label']}. Type it here; it stays hidden." if card else
+        site, label = self.site_name(page), field["label"].rstrip(" *")
+        question = (f"{site} is asking for your card's {label}. Type it here; it stays hidden." if card else
+                    f"{site} is asking for the one-time password your bank sent for this payment. Type it here; it "
+                    "stays hidden." if s.get("bank_code") else
                     f"{site} is asking for a code or password. Type it here; it stays hidden.")
         self.steady(page)  # a page still switching screens gets read again first
         reply = self.ask({"kind": "secret", "text": question})
@@ -1021,12 +1039,12 @@ class Worker:
         return False
 
     def checkout_step(self, page):
-        """On the page whose named boxes are all ticked (`agree_step`), its note's first `final:` control (SmartBuy's
-        Checkout, below the cart's first screen), scrolled into view: (control, page) for the gate, which asks the user
-        before it. Once only; else None."""
+        """On the page whose named boxes are all ticked (`agree_step`), its note's `checkout:` control (SmartBuy's
+        Checkout, below the cart's first screen, which opens the payment page), scrolled into view: (control, page);
+        the gate asks the user before it only when it pays. Once only; else None."""
         s = self.state
         note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
-        finals = [w.strip() for w in str(note.get("final") or "").split(",") if w.strip()]
+        finals = [w.strip() for w in str(note.get("checkout") or "").split(",") if w.strip()]
         if not finals or s.get("agreed_at") != self.place_of(page) or not VOUCHER_BUY.match(s["goal"]):
             return None
 
@@ -1043,6 +1061,83 @@ class Worker:
             page = self.observe()
             control = final(page)
         return (control, page) if control else None
+
+    def card_form_step(self, page):
+        """On a payment page whose note names its card form (`pay-form:`, the words its boxes' labels start with, in
+        order: GyFTR's pay.gyftr.com), in a voucher purchase whose goal names the card: the next step, ("ask", box) for
+        a card detail (number, expiry, CVV: through the hidden field, each time, never kept), ("act", operation,
+        control, text) otherwise, else None. Its Card method when the boxes aren't shown, the name on the card from the
+        profile, a ticked "Save card" box unticked, then its `final:` control (PROCEED), once: the gate asks the user
+        there, their one yes for the payment. A payable amount above the order's total stops the task first."""
+        s = self.state
+        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
+        words = [w.strip().lower() for w in str(note.get("pay-form") or "").split(",") if w.strip()]
+        wanted = VOUCHER_BUY.match(s["goal"])
+        if not words or not wanted or not VOUCHER_CARD.search(s["goal"]):
+            return None
+        finals = tuple(w.strip().lower() for w in str(note.get("final") or "").split(",") if w.strip())
+        pressed = [(h.get("action") or "").strip().lower() for h in s["history"]]
+        if any(label.startswith(finals) for label in pressed if finals):
+            return None  # paid: the bank's page is next
+        clicks = [a for a in page["actions"] if a["kind"] == "click"]
+        boxes = [next((a for a in page["actions"] if a["kind"] == "fill"
+                       and (a.get("label") or "").strip().lower().startswith(word)), None) for word in words]
+        if not any(boxes):
+            card = next((a for a in clicks if (a.get("label") or "").strip().lower() == "card"), None)
+            return ("act", "CLICK", card, None) if card and "card" not in pressed else None
+        if None in boxes:
+            return None  # a box off screen or missing: the planner's
+        for box in boxes:
+            if not box.get("value"):
+                return ("ask", box) if rules.CARD_DETAIL.search(box.get("label") or "") else \
+                    ("act", "TYPE_TEXT", box, "[profile:name]")
+        saved = next((a for a in clicks if a.get("role") == "checkbox" and a.get("checked") == "true"
+                      and (a.get("label") or "").lower().startswith("save card")), None)
+        if saved:
+            return "act", "CLICK", saved, None  # never kept on the site either
+        total, due = int(wanted[1].replace(",", "")), PAYABLE_AMOUNT.search(page["text"])
+        if due and float(due[1].replace(",", "")) > total:
+            raise Halt("blocked", f"The payment page asks ₹{due[1]} for your ₹{total:,} of vouchers, so I stopped "
+                                  "before paying. Nothing was charged.")
+        control = next((a for a in clicks if (a.get("label") or "").strip().lower().startswith(finals)), None) \
+            if finals else None
+        return ("act", "CLICK", control, None) if control else None
+
+    def paid(self):
+        """Whether this voucher purchase pressed its payment's final control with the user's yes (GyFTR's PROCEED):
+        the bank's one-time password that follows is part of that payment, and their yes covers sending it."""
+        return bool(VOUCHER_BUY.match(self.state["goal"])) and any(
+            h.get("committed") and h.get("approved") == "user" for h in self.state["history"])
+
+    def bank_box(self, page):
+        """After the payment the user said yes to (`paid`), the bank's one-time password box still empty, else None."""
+        return next((a for a in page["actions"] if rules.secret_field(a) and a.get("value") != "[secret]"
+                     and not rules.CARD_DETAIL.search(a.get("label") or "")), None) if self.paid() else None
+
+    def otp_step(self, page):
+        """The bank's one-time password box (`bank_box`), for `ask_code` to fill through the hidden field; its tries
+        are counted afresh, apart from the sign-in's code. Else None."""
+        s = self.state
+        box = self.bank_box(page)
+        if box and not s.get("bank_code"):
+            s["bank_code"], s["code_asks"] = True, 0
+        return box
+
+    def bought(self, page):
+        """A voucher purchase whose payment the site confirmed (`paid`, then a commit it confirmed, with no code box
+        left to fill): the task ends with its report written in code, from the goal and the order's id (on this page,
+        else the payment page before it), never the page's words: a voucher's code or PIN never reaches a model or the
+        chat. True when it ended."""
+        s = self.state
+        if not s["done"] or not self.paid() or any(rules.secret_field(a) for a in page["actions"]):
+            return False
+        order = next((m[1] for text in [page["text"], *reversed(s["recent"])] if (m := ORDER_ID.search(text))), None)
+        bought = "Bought " + s["goal"].removeprefix("Buy ").split(", paying with")[0].rstrip(".")
+        s["held"] = None
+        self.say(f"{bought}." + (f" Order {order}." if order else "") + " The site sends the codes by SMS and email.",
+                 kind="result")
+        s["status"], s["outcome"] = "done", "bought"
+        return True
 
     def voucher_read(self, page):
         """The brain's voucher read (“Show the Swiggy gift vouchers on SmartBuy: list the amounts …”) on a portal whose
@@ -1957,8 +2052,9 @@ class Worker:
 
     # ---- acting
 
-    def act(self, operation, action, page, sub, key=None, text=None):
-        """One operation through the gate: a commit runs only with an approval or a valid pre-authorisation."""
+    def act(self, operation, action, page, sub, key=None, text=None, paid=False):
+        """One operation through the gate: a commit runs only with an approval or a valid pre-authorisation. `paid`:
+        the bank's one-time password sent for the payment the user said yes to, a commit their yes covers."""
         if operation == "CLICK":
             action = self.card_add(action, sub)
             if action.get("picture") and action.get("role") != "link" and CHOOSES.search((sub or {}).get("do") or ""):
@@ -1975,7 +2071,8 @@ class Worker:
                 raise Retry("Each voucher in the goal is one: never raise a quantity. Go on with the task itself.")
             note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
             never = [w.strip().lower() for w in str(note.get("never") or "").split(",") if w.strip()]
-            if any(label.strip().lower().startswith(w) for w in never):  # live SmartBuy: Redeem Now, off to swiggy.com
+            if any(label.strip().lower().startswith(w) for w in never) and not (  # unticking one is no step on
+                    action.get("role") == "checkbox" and action.get("checked") == "true"):  # live: Redeem Now
                 raise Retry(f"“{label}” is never part of a task on this site (its note says so): go on with the task "
                             "itself.")
             if action.get("role") == "checkbox" and action.get("checked") == "true" and \
@@ -2007,7 +2104,10 @@ class Worker:
         cleared = self.state.pop("cleared", None)  # a maybe-commit Jev was sure is a step: the bench audits it
         if label and self.unpicked_method(page):
             raise Retry(PICK_METHOD)  # the final control beside a payment selector: the user picks how to pay first
-        if label:
+        if paid:  # watched like the payment it completes
+            label = label or action.get("label") or operation.title()
+            gate.bind(self.state, action, label, "", page, "user")
+        elif label:
             gate.approved(self, page, action, label, sub)  # returns True, or raises StalePage or Retry
         ran = self.run(page, operation, action, inputs, shown, commit=label, goal=(sub or {}).get("do", ""),
                        cleared=cleared)

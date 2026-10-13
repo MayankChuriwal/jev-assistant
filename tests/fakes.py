@@ -122,6 +122,7 @@ def worker_with(tmp_path, *, replies=(), page=None, goal="Order Diet Coke on Ins
     browser = Mock(fresh=Mock(return_value=True), observe=Mock(return_value=page), act=Mock(return_value={}),
                    screenshot=Mock(return_value="iVBORw0KGgo="), focused_label=Mock(return_value=""),
                    tick=Mock(return_value={"found": 0, "ticked": []}), pick=Mock(return_value=False),
+                   texts=Mock(return_value=[]),
                    downloads=[], pending_downloads=[])
     asked, told, queue = [], [], list(replies)
     w = Worker(page["url"], goal, memory=owner, browser=browser, trace_dir=tmp_path / "traces",
