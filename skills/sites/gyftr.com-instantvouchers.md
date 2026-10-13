@@ -5,7 +5,7 @@ aliases: SmartBuy, HDFC SmartBuy, Smart Buy, Instant Vouchers, GyFTR
 start: https://www.gyftr.com/instantvouchers
 learn: no
 brand.swiggy: https://www.gyftr.com/instantvouchers/swiggy-gv-gift-vouchers
-keep: page
+keep: tab
 cart: Add to cart, View Cart & Buy
 cards: .custom_dropdown .dropdown-menu li
 offers: ACCELERATED REWARDS, INSTA DEALS

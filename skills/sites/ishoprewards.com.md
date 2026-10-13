@@ -5,7 +5,7 @@ aliases: iShop, ICICI iShop, i Shop, iShop Rewards, Reward360
 start: https://www.ishoprewards.com/shopping-vouchers
 learn: no
 brand.swiggy: https://www.ishoprewards.com/shopping-vouchers-details/SVMxMjU%3D
-keep: page
+keep: tab
 cart: Buy now
 close: Accept & Proceed
 step: Add to cart, Buy now, Proceed to Login, Proceed to Checkout, Proceed to cart

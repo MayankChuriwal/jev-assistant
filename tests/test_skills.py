@@ -115,3 +115,9 @@ def test_every_site_a_goal_names_is_found_in_the_goals_order():
     assert skills.named_all("Order Diet Coke on Swiggy Instamart", sites) == [skills.named("Diet Coke on Swiggy",
                                                                                           sites)]
     assert skills.named_all("Book a table on EazyDiner", sites) == []
+
+
+@pytest.mark.parametrize("site", ["gyftr.com/instantvouchers", "ishoprewards.com"])
+def test_a_voucher_portal_keeps_its_tab_but_each_purchase_starts_on_its_own_page(site):
+    # dry run: a second purchase began on the cart the first one left, scrolled to its foot; its summary was empty
+    assert skills.load_sites()[site]["keep"] == "tab"
