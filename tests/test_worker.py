@@ -3987,6 +3987,21 @@ def test_with_the_amount_already_in_the_cart_view_cart_and_buy_is_pressed(tmp_pa
     assert w.browser.act.call_args.args[1]["label"] == "View Cart & Buy"
 
 
+def test_a_pressed_amount_already_in_the_cart_scrolls_to_view_cart_and_buy(tmp_path, monkeypatch, no_wait):
+    # live, signed in: after ₹2,000 was pressed only "Cart Summary … Total Cart Value ₹ 2,000" showed; its Total and
+    # stepper sat below the screen with no Add to cart to scroll to, and the planner pressed Redeem Now
+    pressed = voucher_page(SMARTBUY, "Choose Denomination\n₹ 250\nCart Summary\n₹ 500\nTotal Cart Value\n₹ 500",
+                           "Redeem Now")
+    w = worker_with(tmp_path, page=pressed, goal=VOUCHER)
+    w.state["history"].append({"operation": "CLICK", "action": "₹ 500"})
+    w.browser.into_view = Mock(side_effect=lambda word: word == "View Cart & Buy")
+    w.browser.observe.return_value = voucher_page(SMARTBUY, "Total Value : ₹ 500\nNet Amount to Pay ₹ 500",
+                                                  "Decrease quantity", "Increase quantity", "View Cart & Buy")
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"] == "View Cart & Buy"
+
+
 def test_an_add_to_cart_below_the_screen_comes_before_view_cart_and_buy_on_it(tmp_path, monkeypatch, no_wait):
     # a cart holding another voucher shows View Cart & Buy too: the amount chosen still goes in first
     page = voucher_page(SMARTBUY, "Total Value : ₹ 500", "₹ 250", "View Cart & Buy")
@@ -4088,6 +4103,15 @@ def test_the_users_card_is_picked_in_the_carts_savings_calculator(tmp_path, monk
     assert w.browser.pick.call_args.args == (".custom_dropdown .dropdown-menu li", "Regalia Gold Credit Card")
     assert not w.browser.act.called
     assert not w.card_step(w.state["page"])  # once a page
+
+
+def test_a_card_list_not_loaded_yet_is_picked_from_once_it_is(tmp_path):
+    # live: the first look at the page came before its calculator's cards, and the card was never picked after
+    goal = "Buy a ₹2,000 Swiggy gift voucher, quantity 1, on SmartBuy, paying with Regalia Gold Credit Card."
+    w = worker_with(tmp_path, page=voucher_page(SMARTBUY, "Choose Denomination"), goal=goal)
+    w.browser.pick = Mock(side_effect=[False, True])
+    assert not w.card_step(w.state["page"]) and w.card_step(w.state["page"])
+    assert not w.card_step(w.state["page"]) and w.browser.pick.call_count == 2
 
 
 def test_a_carts_required_boxes_are_ticked_without_the_planner(tmp_path, monkeypatch, no_wait):

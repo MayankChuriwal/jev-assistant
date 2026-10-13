@@ -938,11 +938,13 @@ class Worker:
         done = s.setdefault("cards_picked", [])
         if not card or not note.get("cards") or self.place_of(page) in done:
             return False
-        done.append(self.place_of(page))
-        try:
-            return s["browser"].pick(note["cards"], card[1])
+        try:  # live, the first look came before the calculator's cards: tried again each step until picked
+            picked = s["browser"].pick(note["cards"], card[1])
         except (StalePage, RuntimeError, TimeoutError):
             return False  # the planner goes on; the approval still shows the cart's own figures
+        if picked:
+            done.append(self.place_of(page))
+        return picked
 
     def agree_step(self, page):
         """A box its site note's `agree:` names (words its label starts with, comma-separated: SmartBuy's cart "Read
@@ -1067,8 +1069,9 @@ class Worker:
             tile = control(page, amount)
             if tile and presses < 2:
                 return tile, page
-            # off screen: the tile, else (pressed already) its Total, which sits beside the first cart button
-            if not s["browser"].into_view(carts[0] if presses else amount):
+            # off screen: the tile, else (pressed already) its Total, beside the first cart button the page has (live,
+            # with that amount in the cart there was no Add to cart, only View Cart & Buy)
+            if not (any(s["browser"].into_view(c) for c in carts) if presses else s["browser"].into_view(amount)):
                 return None
             page = self.observe()
             if not chosen(page):
