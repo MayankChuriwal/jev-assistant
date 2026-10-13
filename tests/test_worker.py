@@ -4426,10 +4426,29 @@ def test_a_payable_over_the_orders_total_stops_before_paying(tmp_path, monkeypat
     assert not w.browser.act.called and w.asked == []
 
 
-def test_after_proceed_the_card_form_is_left_alone(tmp_path):
-    w = worker_with(tmp_path, page=pay_page(), goal=FIVE)
-    w.state["history"].append({"operation": "CLICK", "action": "PROCEED", "committed": True, "approved": "user"})
-    assert w.card_form_step(w.state["page"]) is None
+def test_proceed_is_pressed_once_a_fill(tmp_path):
+    w = worker_with(tmp_path, page=pay_page(FILLED), goal=FIVE)
+    w.state["history"] += [{"operation": "TYPE_TEXT", "action": "CVV No. *"},
+                           {"operation": "CLICK", "action": "PROCEED", "committed": True, "approved": "user"}]
+    assert w.card_form_step(w.state["page"]) is None  # pressed for this fill: the bank's page is next
+
+
+def test_a_card_form_the_page_emptied_after_proceed_is_filled_again(tmp_path):
+    # live: "Please manually enter your card number", the Card tab pressed, and the boxes came back empty
+    emptied = pay_page()
+    w = worker_with(tmp_path, page=emptied, goal=FIVE)
+    w.state["history"] += [{"operation": "TYPE_TEXT", "action": "CVV No. *"},
+                           {"operation": "CLICK", "action": "PROCEED", "committed": True, "approved": "user"}]
+    assert w.card_form_step(emptied) == ("ask", emptied["actions"][1])
+
+
+def test_proceed_is_never_pressed_on_an_empty_card_form(tmp_path):
+    # live: the planner pressed PROCEED on the emptied form, and the task ended "can't tell whether PROCEED went
+    # through"
+    page = pay_page(("", "[profile:name]", "", ""))
+    w = worker_with(tmp_path, page=page, goal=FIVE)
+    with pytest.raises(Retry, match="card form"):
+        w.act("CLICK", page["actions"][-1], page, sub("pay"))
 
 
 BANK = "https://acs.hdfcbank.com/acs/otp"

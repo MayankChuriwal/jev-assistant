@@ -31,6 +31,7 @@ MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})
 VIEWPORT = {"width": 1280, "height": 800}  # a common laptop: sites laid out for it keep their right column in view
 MAX_SHOWN_PDF = 25 * 1024 * 1024  # a PDF Chrome shows in its viewer (no download) is kept up to this size
 DATE_TYPES = {"date", "time", "datetime-local", "month", "week"}
+KEY_GAP = 0.06  # seconds between a card detail's key presses, as a person types
 KEYS = {  # name: (key, code, keyCode, text, modifiers)
     "Enter": ("Enter", "Enter", 13, "\r", 0),
     "Escape": ("Escape", "Escape", 27, None, 0),
@@ -1089,7 +1090,22 @@ class Browser:
             return
         self._mouse(*self._point(action))
         self._select_all()
+        if rules.CARD_DETAIL.search(action.get("label") or ""):  # live, pay.gyftr.com: a number typed in one go was
+            for char in text:  # refused, "Please manually enter your card number for security reasons."
+                self._key(char)
+            return
         self.input("Input.insertText", text=text)
+
+    def _key(self, char):
+        """One character as a person types it: its key pressed (keydown with its text, then keyup), a moment apart."""
+        code = f"Digit{char}" if char.isdigit() else f"Key{char.upper()}" if char.isalpha() else \
+            {"/": "Slash", " ": "Space", "-": "Minus"}.get(char, "")
+        keycode = ord(char.upper()) if char.isalnum() else {"/": 191, " ": 32, "-": 189}.get(char, 0)
+        self.input("Input.dispatchKeyEvent", type="keyDown", key=char, code=code, text=char,
+                   windowsVirtualKeyCode=keycode, nativeVirtualKeyCode=keycode)
+        self.input("Input.dispatchKeyEvent", type="keyUp", key=char, code=code, windowsVirtualKeyCode=keycode,
+                   nativeVirtualKeyCode=keycode)
+        time.sleep(KEY_GAP)
 
     def _select_all(self):
         modifiers = 4 if sys.platform == "darwin" else 2

@@ -1125,8 +1125,6 @@ class Worker:
             return None
         finals = tuple(w.strip().lower() for w in str(note.get("final") or "").split(",") if w.strip())
         pressed = [(h.get("action") or "").strip().lower() for h in s["history"]]
-        if any(label.startswith(finals) for label in pressed if finals):
-            return None  # paid: the bank's page is next
         clicks = [a for a in page["actions"] if a["kind"] == "click"]
         boxes = [next((a for a in page["actions"] if a["kind"] == "fill"
                        and (a.get("label") or "").strip().lower().startswith(word)), None) for word in words]
@@ -1139,6 +1137,10 @@ class Worker:
             if not box.get("value"):
                 return ("ask", box) if rules.CARD_DETAIL.search(box.get("label") or "") else \
                     ("act", "TYPE_TEXT", box, "[profile:name]")
+        filled = max((n for n, h in enumerate(s["history"]) if h.get("operation") == "TYPE_TEXT"
+                      and (h.get("action") or "").strip().lower().startswith(tuple(words))), default=-1)
+        if finals and any(label.startswith(finals) for label in pressed[filled + 1:]):
+            return None  # pressed for this fill: the bank's page is next (live, the page emptied the form: filled anew)
         saved = next((a for a in clicks if a.get("role") == "checkbox" and a.get("checked") == "true"
                       and (a.get("label") or "").lower().startswith("save card")), None)
         if saved:
@@ -2146,6 +2148,13 @@ class Worker:
                 raise Retry("Each voucher in the goal is one: never raise a quantity. Go on with the task itself.")
             note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
             never = [w.strip().lower() for w in str(note.get("never") or "").split(",") if w.strip()]
+            form = [w.strip().lower() for w in str(note.get("pay-form") or "").split(",") if w.strip()]
+            finals = tuple(w.strip().lower() for w in str(note.get("final") or "").split(",") if w.strip())
+            if form and finals and label.strip().lower().startswith(finals) and any(
+                    a["kind"] == "fill" and not a.get("value") and (a.get("label") or "").strip().lower().startswith(
+                        tuple(form)) for a in page["actions"]):  # live: PROCEED on the form the page had emptied
+                raise Retry(f"“{label}” pays: the card form is filled first, by the system (the card's details come "
+                            "from the user through the hidden field). Go on with the task itself.")
             if any(label.strip().lower().startswith(w) for w in never) and not (  # unticking one is no step on
                     action.get("role") == "checkbox" and action.get("checked") == "true"):  # live: Redeem Now
                 raise Retry(f"“{label}” is never part of a task on this site (its note says so): go on with the task "

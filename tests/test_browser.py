@@ -833,3 +833,17 @@ def test_a_name_written_as_markup_reads_as_its_words(browser_at):
 def test_a_page_laid_out_for_a_common_laptop_width_shows_its_right_column(browser_at):
     page = browser_at("/wide.html").observe()  # live invoice: Amazon's Invoice link sat at x=1157, off a 1120 view
     assert find(page, "Invoice")
+
+
+def test_a_card_detail_is_typed_key_by_key(browser_at):
+    # live, pay.gyftr.com: a card number typed in one go was refused, "Please manually enter your card number for
+    # security reasons."
+    b = browser_at("/guards.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<label for=card>Valid Card Number *</label>"
+               "<input id=card>'); window.keys = 0; window.pasted = false;"
+               "card.addEventListener('keydown', () => keys++);"
+               "card.addEventListener('input', e => { if ((e.data || '').length > 1) pasted = true; });")
+    page = b.observe()
+    b.act("TYPE_TEXT", find(page, "Valid Card Number", "fill"), page, text="4111111111111111")
+    assert b.evaluate("card.value") == "4111111111111111"
+    assert b.evaluate("keys") >= 16 and b.evaluate("pasted") is False
