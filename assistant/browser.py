@@ -204,6 +204,21 @@ PICK = r"""((selector, word) => {
   item?.click();
   return !!item;
 })"""
+# The page's boxes whose labels start with one of `words`, each clicked only while unticked: SmartBuy's cart keeps
+# them below its first screen, and a click on a ticked one unticks it. How many it found, and the ones it ticked.
+TICK = r"""(words => {
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  let found = 0;
+  const ticked = [];
+  for (const label of document.querySelectorAll('label')) {
+    const text = norm(label.textContent);
+    const box = label.control || label.querySelector('input[type="checkbox"]');
+    if (!box || box.type !== 'checkbox' || !words.some(w => text.startsWith(w))) continue;
+    found += 1;
+    if (!box.checked) { box.click(); ticked.push(text); }
+  }
+  return {found, ticked};
+})"""
 # A captcha's picture (MyUPI's letters in an image beside its "Security Verification" box), scrolled into view: its box
 # in page coordinates, or null. One named as a captcha, else the wide picture nearest the captcha's box.
 CAPTCHA_PICTURE = r"""(() => {
@@ -965,6 +980,11 @@ class Browser:
         """Click the item `selector` matches whose words start with `word`, shown or not (the user's card in SmartBuy's
         closed savings menu): True when there was one."""
         return bool(self.evaluate(f"({PICK})({json.dumps(selector)}, {json.dumps(word)})"))
+
+    def tick(self, words):
+        """Tick the boxes whose labels start with one of `words` (lower case) while they are unticked, shown or not:
+        {"found": how many there are, "ticked": the labels ticked now}."""
+        return self.evaluate(f"({TICK})({json.dumps(words)})") or {"found": 0, "ticked": []}
 
     def texts(self, selector):
         """The words of every element `selector` matches, shown or not (SmartBuy's savings by card sit in a closed

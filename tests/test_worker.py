@@ -3633,6 +3633,7 @@ def no_wait(monkeypatch):
     from assistant import worker as module
 
     monkeypatch.setattr(module, "LIST_GAP", 0)
+    monkeypatch.setattr(module, "CART_WAIT", 0)
 
 
 def test_on_myupi_the_mandate_list_is_read_again_until_two_reads_match(tmp_path, no_wait):
@@ -3965,14 +3966,18 @@ def test_with_the_amount_chosen_its_cart_button_is_pressed(tmp_path, monkeypatch
     assert w.browser.act.call_args.args[1]["label"] == cart
 
 
-def test_an_amount_pressed_twice_without_taking_is_the_planners(tmp_path):
+def test_an_amount_pressed_twice_without_taking_is_the_planners(tmp_path, no_wait):
     page = voucher_page(SMARTBUY, "Choose Denomination", "₹ 250", "₹ 500")
     w = worker_with(tmp_path, page=page, goal=VOUCHER)
     w.state["history"] += [{"operation": "CLICK", "action": "₹ 500"}] * 2
     w.browser.into_view = Mock(return_value=False)
     assert w.voucher_step(page) is None
-    w.state["history"] = [{"operation": "CLICK", "action": "Add to cart"}]  # in the cart: the rest is the planner's
-    assert w.voucher_step(voucher_page(SMARTBUY, "Total Value : ₹ 500", "Add to cart")) is None
+    # Add to cart just pressed and still offered once its answer had time to come: never a second one in a row (two
+    # vouchers), the planner's
+    added = voucher_page(SMARTBUY, "Total Value : ₹ 500", "Add to cart")
+    w.state["history"] = [{"operation": "CLICK", "action": "Add to cart"}]
+    w.browser.observe.return_value = added
+    assert w.voucher_step(added) is None
 
 
 def test_with_the_total_and_cart_below_the_screen_they_are_scrolled_into_view(tmp_path, monkeypatch, no_wait):
@@ -4128,23 +4133,63 @@ def test_a_card_list_not_loaded_yet_is_picked_from_once_it_is(tmp_path):
     assert not w.card_step(w.state["page"]) and w.browser.pick.call_count == 2
 
 
+CART = "https://www.gyftr.com/instantvouchers/cart"
+SMARTBUY_CART = "Buy a ₹2,000 Swiggy gift voucher, quantity 1, on SmartBuy, paying with Regalia Gold Credit Card."
+
+
 def test_a_carts_required_boxes_are_ticked_without_the_planner(tmp_path, monkeypatch, no_wait):
     # live SmartBuy cart: Checkout did nothing until "Read T&C …" and "I agree to the Terms and Conditions" were ticked;
-    # the user approved Checkout three times, and the planner asked to press the T&C line as a purchase
-    cart = "https://www.gyftr.com/instantvouchers/cart"
-    boxes = [{"id": "t", "kind": "click", "role": "checkbox", "checked": "false", "node": 1,
-              "label": "Read T&C and important instructions of brands before proceeding toBUY NOW"},
-             {"id": "w", "kind": "click", "role": "checkbox", "checked": "false", "node": 2,
-              "label": "Receive Gift Voucher on WhatsApp"},
-             {"id": "a", "kind": "click", "role": "checkbox", "checked": "false", "node": 3,
-              "label": "I agree to the Terms and Conditions"},
-             {"id": "c", "kind": "click", "role": "button", "label": "Checkout", "node": 4}]
-    w = worker_with(tmp_path, page=fake_page(url=cart, text="CART SUMMARY\nYou Pay\n₹ 2,000", actions=boxes),
-                    goal=VOUCHER)
-    w.state["history"].append({"operation": "CLICK", "action": "Add to cart"})  # the amount's step is done
+    # they sit below its first screen, each click toggles, and the planner ticked and unticked one seven times
+    w = worker_with(tmp_path, page=voucher_page(CART, "CART SUMMARY\nYou Pay\n₹ 2,000", "Remove item", "Apply"), goal=SMARTBUY_CART)
+    w.state["cards_picked"] = [w.place_of(w.state["page"])]  # the card is picked already
+    w.browser.tick = Mock(return_value={"found": 2, "ticked": ["read t&c and important instructions"]})
     no_planner(monkeypatch)
     w.command("tick")
-    assert w.browser.act.call_args.args[1]["label"].startswith("Read T&C")
-    w.state["history"].append({"operation": "CLICK", "action": boxes[0]["label"]})
-    boxes[0]["checked"] = "true"
-    assert w.agree_step(w.state["page"])["label"] == "I agree to the Terms and Conditions"  # never the WhatsApp box
+    assert w.browser.tick.call_args.args == (["read t&c and important instructions",
+                                              "i agree to the terms and conditions"],)
+    assert not w.browser.act.called  # the page's own boxes, ticked only when unticked: never toggled off
+
+
+def test_with_the_boxes_ticked_checkout_below_the_screen_is_pressed_and_needs_the_users_yes(tmp_path, monkeypatch,
+                                                                                          no_wait):
+    # live: with the boxes ticked the planner pressed the cart count "1" as the purchase, then got stuck
+    w = worker_with(tmp_path, page=voucher_page(CART, "CART SUMMARY\nYou Pay\n₹ 2,000", "Remove item", "Apply"), goal=SMARTBUY_CART)
+    w.state["cards_picked"] = [w.place_of(w.state["page"])]
+    w.browser.tick = Mock(return_value={"found": 2, "ticked": []})
+    w.browser.into_view = Mock(return_value=True)
+    w.browser.observe.return_value = voucher_page(CART, "You Pay\n₹ 2,000\nI agree to the Terms and Conditions",
+                                                  "Receive Gift Voucher on WhatsApp", "Checkout")
+    no_planner(monkeypatch)
+    jev_checks(monkeypatch)
+    monkeypatch.setattr(planner, "summary", lambda payload: ["Swiggy gift voucher ₹2,000 × 1", "You Pay ₹2,000"])
+    w.command("tick")
+    assert w.browser.into_view.call_args.args == ("Checkout",)
+    assert w.asked[0]["approval"] and "I'll press “Checkout”" in w.asked[0]["text"]
+    assert not w.browser.act.called  # the user's yes first
+
+
+def test_a_brand_page_with_no_boxes_is_left_alone(tmp_path):
+    w = worker_with(tmp_path, page=voucher_page(SMARTBUY, "Choose Denomination"), goal=SMARTBUY_CART)
+    w.browser.tick = Mock(return_value={"found": 0, "ticked": []})
+    assert not w.agree_step(w.state["page"]) and w.checkout_step(w.state["page"]) is None
+
+
+def test_after_add_to_cart_view_cart_and_buy_is_pressed_without_the_planner(tmp_path, monkeypatch, no_wait):
+    # live: once Add to cart was pressed the worker stood down, and the planner pressed Increase quantity (₹4,000)
+    page = voucher_page(SMARTBUY, "Total Value : ₹ 500\nNet Amount to Pay ₹ 500", "Decrease quantity",
+                        "Increase quantity", "View Cart & Buy")
+    w = worker_with(tmp_path, page=page, goal=VOUCHER)
+    w.state["history"] += [{"operation": "CLICK", "action": "₹ 500"}, {"operation": "CLICK", "action": "Add to cart"}]
+    w.browser.into_view = Mock(return_value=False)
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.act.call_args.args[1]["label"] == "View Cart & Buy"
+    w.state["history"].append({"operation": "CLICK", "action": "View Cart & Buy"})
+    assert w.voucher_step(page) is None  # the cart is the next page's
+
+
+def test_a_one_voucher_purchase_never_raises_its_quantity(tmp_path):
+    control = {"id": "q1", "kind": "click", "label": "Increase quantity (₹ 2,000)", "role": "button", "node": 9}
+    w = worker_with(tmp_path, page=fake_page(url=SMARTBUY, actions=[control]), goal=VOUCHER)
+    with pytest.raises(Retry, match="quantity is 1"):
+        w.act("CLICK", control, w.state["page"], sub("go to the cart"))

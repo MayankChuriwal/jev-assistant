@@ -32,6 +32,7 @@ COMMIT_DROPS = 3  # an order's replan with no commit (none left in the old plan 
 CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QR_TRIES = 5  # seconds a mandate's QR may take to render after its Cancel
 LIST_READS, LIST_GAP = 6, 0.7  # MyUPI draws its mandate list a card at a time, over a few seconds
+CART_WAIT = 1.5  # seconds for a cart button's answer (SmartBuy's Add to cart, from its server) to show
 CHOSEN = re.compile(r"(Cancel|Pause) the UPI AutoPay mandate whose payee is (.+?)(?: until .+)?$")  # the brain's words
 VOUCHER_READ = re.compile(r"^Show the (.+?) gift vouchers on (.+?): list the amounts")  # the brain's voucher read
 REWARD_LINE = re.compile(r"reward points|cashback|icash|instant discount", re.IGNORECASE)
@@ -577,9 +578,12 @@ class Worker:
             return self.act("CLICK", notice, page, None)
         if self.card_step(page):  # live: the cart's calculator kept Infinia, and the planner asked to pay with it
             return None
-        ticking = self.agree_step(page)
-        if ticking:  # live SmartBuy cart: Checkout did nothing until its two required boxes were ticked
-            return self.act("CLICK", ticking, page, None)
+        if self.agree_step(page):  # live SmartBuy cart: Checkout did nothing until its two required boxes were ticked
+            return None
+        checkout = self.checkout_step(page)
+        if checkout:  # live: with the boxes ticked the planner pressed the cart count "1" as the purchase
+            action, page = checkout
+            return self.act("CLICK", action, page, None)
         if self.voucher_read(page):  # live: the planner noted every amount, then said CONTINUE where DONE was due
             return None
         buying = self.voucher_step(page)
@@ -947,19 +951,49 @@ class Worker:
         return picked
 
     def agree_step(self, page):
-        """A box its site note's `agree:` names (words its label starts with, comma-separated: SmartBuy's cart "Read
-        T&C and important instructions …", "I agree to the Terms and Conditions"), unticked on a purchase: the box to
-        tick, once each, else None. The final control does nothing until they are ticked, and the user's yes there
-        covers them; a box the note doesn't name (Receive Gift Voucher on WhatsApp) is never ticked."""
+        """The boxes its site note's `agree:` names (words their labels start with, comma-separated: SmartBuy's cart
+        "Read T&C and important instructions …", "I agree to the Terms and Conditions") ticked on a purchase, each only
+        while unticked: they sit below the cart's first screen and a click on a ticked one unticks it (live, the planner
+        toggled one seven times). The final control does nothing until they are ticked, and the user's yes there covers
+        them; a box the note doesn't name (Receive Gift Voucher on WhatsApp) is never ticked. True when it ticked one;
+        with every named box ticked, the page is marked ready for its final control."""
         s = self.state
         note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
         words = [w.strip().lower() for w in str(note.get("agree") or "").split(",") if w.strip()]
-        if not words or not VOUCHER_BUY.match(s["goal"]):
+        if not words or not VOUCHER_BUY.match(s["goal"]) or s.get("agree_tries", 0) >= 3:
+            return False
+        try:
+            boxes = s["browser"].tick(words)
+        except (StalePage, RuntimeError, TimeoutError):
+            return False
+        if boxes["ticked"]:
+            s["agree_tries"] = s.get("agree_tries", 0) + 1  # a box that never stays ticked is the planner's
+            return True
+        if boxes["found"]:
+            s["agreed_at"] = self.place_of(page)
+        return False
+
+    def checkout_step(self, page):
+        """On the page whose named boxes are all ticked (`agree_step`), its note's first `final:` control (SmartBuy's
+        Checkout, below the cart's first screen), scrolled into view: (control, page) for the gate, which asks the user
+        before it. Once only; else None."""
+        s = self.state
+        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
+        finals = [w.strip() for w in str(note.get("final") or "").split(",") if w.strip()]
+        if not finals or s.get("agreed_at") != self.place_of(page) or not VOUCHER_BUY.match(s["goal"]):
             return None
-        ticked = {h.get("action") for h in s["history"] if h.get("operation") == "CLICK"}
-        return next((a for a in page["actions"] if a.get("role") == "checkbox" and a.get("checked") != "true"
-                     and a.get("label") not in ticked
-                     and any((a.get("label") or "").strip().lower().startswith(w) for w in words)), None)
+
+        def final(p):
+            return next((a for name in finals for a in p["actions"] if a["kind"] == "click"
+                         and (a.get("label") or "").strip().lower().startswith(name.lower())), None)
+
+        if any(final({"actions": [{"kind": "click", "label": h.get("action")}]}) for h in s["history"]):
+            return None
+        control = final(page)
+        if not control and any(s["browser"].into_view(name) for name in finals):
+            page = self.observe()
+            control = final(page)
+        return (control, page) if control else None
 
     def voucher_read(self, page):
         """The brain's voucher read (“Show the Swiggy gift vouchers on SmartBuy: list the amounts …”) on a portal whose
@@ -1062,8 +1096,8 @@ class Worker:
             return re.search(r"total(?:value)?:?" + re.escape(amount) + r"(?!\d)", flat(p["text"]))
 
         amount, pressed = "₹" + wanted[1].replace(",", ""), [h.get("action") for h in s["history"]]
-        if any(flat(label) == flat(c) for label in pressed for c in carts):
-            return None
+        if any(flat(label) == flat(carts[-1]) for label in pressed):
+            return None  # its last button pressed: the cart is the next page's
         presses = sum(flat(label) == amount for label in pressed)
         if not chosen(page):
             tile = control(page, amount)
@@ -1078,7 +1112,15 @@ class Worker:
                 tile = control(page, amount)
                 return (tile, page) if tile and presses < 2 else None
         for name in carts:  # the note's order: a later one only when the page has no earlier one, on screen or off
+            if sum(flat(label) == flat(name) for label in pressed) >= 2:
+                continue  # pressed twice and still offered: the planner's
             button = control(page, name)
+            if button and flat(pressed[-1] if pressed else "") == flat(name):  # never twice in a row: a second Add
+                time.sleep(CART_WAIT)  # to cart before the first one's answer would add two
+                page = self.observe()
+                if control(page, name):
+                    return None
+                continue
             if not button and s["browser"].into_view(name):
                 page = self.observe()
                 button = control(page, name)
@@ -1871,6 +1913,9 @@ class Worker:
                     label.lower().startswith("faq") and QUESTION.match(goal)):
                 raise Retry(f"“{label}” only opens the site's policy or help text, which isn't needed for this task: "
                             "go on with the task itself.")  # MyUPI: its Terms, Privacy and FAQs opened again and again
+            buying = VOUCHER_BUY.match(goal)
+            if buying and int(buying[2]) == 1 and label.lower().startswith("increase quantity"):
+                raise Retry("The goal's quantity is 1: never raise it. Go on with the task itself.")  # live: ₹4,000
             note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
             never = [w.strip().lower() for w in str(note.get("never") or "").split(",") if w.strip()]
             if any(label.strip().lower().startswith(w) for w in never):  # live SmartBuy: Redeem Now, off to swiggy.com

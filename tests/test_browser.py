@@ -508,6 +508,20 @@ def test_pick_clicks_a_closed_dropdowns_item_by_its_first_words(browser_at):
     assert b.pick(".custom_dropdown .dropdown-menu li", "Amex Platinum") is False
 
 
+def test_tick_ticks_only_the_named_boxes_still_unticked_by_their_labels(browser_at):
+    # SmartBuy's cart: React boxes below the first screen, each click toggling; the WhatsApp box is never named
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '"
+               "<input type=\"checkbox\" id=\"a\"><label for=\"a\">Read T&amp;C and important instructions <b>BUY "
+               "NOW</b></label><input type=\"checkbox\" id=\"w\"><label for=\"w\">Receive Gift Voucher on "
+               "WhatsApp</label><input type=\"checkbox\" id=\"t\" checked><label for=\"t\">I agree to the Terms "
+               "and Conditions</label>')")
+    words = ["read t&c and important instructions", "i agree to the terms and conditions"]
+    assert b.tick(words) == {"found": 2, "ticked": ["read t&c and important instructions buy now"]}
+    assert b.evaluate("[a.checked, w.checked, t.checked]") == [True, False, True]  # the ticked one stays ticked
+    assert b.tick(words) == {"found": 2, "ticked": []}
+
+
 def test_a_quantity_button_with_no_words_is_named_by_its_class_not_the_price_beside_it(browser_at):
     # live SmartBuy cart: <button class="decreaseQty"></button> was offered as "button in “Total Value : ₹ 2,000”"
     # (1 of 2), read as a pay button, and asked as the purchase's yes
