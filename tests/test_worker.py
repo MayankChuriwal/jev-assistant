@@ -4075,6 +4075,21 @@ def test_a_voucher_read_lists_each_cards_saving_from_the_portals_calculator(tmp_
                            "Credit Cards* ₹100 cashback; Zapp Account ₹100 in cash points.")
 
 
+def test_the_users_card_is_picked_in_the_carts_savings_calculator(tmp_path, monkeypatch, no_wait):
+    # live: the cart's calculator showed Infinia, its default, and the planner asked to pay with "1. Infinia Credit
+    # Card"; the user had said Regalia Gold
+    goal = "Buy a ₹2,000 Swiggy gift voucher, quantity 1, on SmartBuy, paying with Regalia Gold Credit Card."
+    cart = "https://www.gyftr.com/instantvouchers/cart"
+    w = worker_with(tmp_path, page=voucher_page(cart, "CART SUMMARY\nYou Pay\n₹ 2,000", "Infinia Credit Card"),
+                    goal=goal)
+    w.browser.pick = Mock(return_value=True)
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.browser.pick.call_args.args == (".custom_dropdown .dropdown-menu li", "Regalia Gold Credit Card")
+    assert not w.browser.act.called
+    assert not w.card_step(w.state["page"])  # once a page
+
+
 def test_a_carts_required_boxes_are_ticked_without_the_planner(tmp_path, monkeypatch, no_wait):
     # live SmartBuy cart: Checkout did nothing until "Read T&C …" and "I agree to the Terms and Conditions" were ticked;
     # the user approved Checkout three times, and the planner asked to press the T&C line as a purchase

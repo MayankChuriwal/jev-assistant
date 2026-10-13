@@ -589,6 +589,21 @@ def test_the_portal_named_messages_ago_still_counts_after_tool_calls(tmp_path):
     assert results(brain, "voucher_savings")[0]["status"] == "done"
 
 
+def test_the_users_card_goes_into_the_checkout_goal(tmp_path):
+    # live: the worker never knew the card, so the cart's calculator kept Infinia and the planner asked how to pay
+    core = FakeCore(CARDS_READ, done("Ready to pay ₹500.", outcome="not_approved"))
+    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
+                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia Gold"}),
+                  ("reply", {"text": "Get it?", "options": ["Buy it", "Not now"]}),
+                  ("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "quantity": 1}),
+                  ("reply", {"text": "Stopped before paying. Nothing was charged.", "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy with my Regalia Gold")
+    brain.turn("Buy it")
+    assert core.executed[-1]["goal"] == ("Buy a ₹500 Swiggy gift voucher, quantity 1, on SmartBuy, paying with "
+                                         "Regalia Gold Credit Card.")
+
+
 def test_a_card_the_user_never_named_gets_no_savings(tmp_path):
     # live: the user answered "₹2,000" and the brain picked "Other credit card" itself, savings and effective price too
     core = FakeCore(CARDS_READ)

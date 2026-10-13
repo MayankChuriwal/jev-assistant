@@ -495,6 +495,19 @@ def test_texts_reads_a_closed_dropdowns_items(browser_at):
     assert b.texts(".nothing-here") == []
 
 
+def test_pick_clicks_a_closed_dropdowns_item_by_its_first_words(browser_at):
+    # SmartBuy's cart: the user's card, picked in the savings calculator's closed menu (Infinia is its default)
+    b = browser_at("/next.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div class=\"custom_dropdown\"><button id=\"shown\">"
+               "Infinia</button><ul class=\"dropdown-menu\" style=\"display:none\">"
+               "<li onclick=\"shown.textContent = 1\">Regalia Credit Card <span>Save ₹ 100 via RP</span></li>"
+               "<li onclick=\"shown.textContent = 2\">Regalia Gold Credit Card / Biz Power <span>Save ₹ 125</span></li>"
+               "</ul></div>')")
+    assert b.pick(".custom_dropdown .dropdown-menu li", "Regalia Gold Credit Card") is True
+    assert b.texts("#shown") == ["2"]  # never the plain Regalia above it
+    assert b.pick(".custom_dropdown .dropdown-menu li", "Amex Platinum") is False
+
+
 def test_a_quantity_button_with_no_words_is_named_by_its_class_not_the_price_beside_it(browser_at):
     # live SmartBuy cart: <button class="decreaseQty"></button> was offered as "button in “Total Value : ₹ 2,000”"
     # (1 of 2), read as a pay button, and asked as the purchase's yes

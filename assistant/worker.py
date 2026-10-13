@@ -36,6 +36,7 @@ CHOSEN = re.compile(r"(Cancel|Pause) the UPI AutoPay mandate whose payee is (.+?
 VOUCHER_READ = re.compile(r"^Show the (.+?) gift vouchers on (.+?): list the amounts")  # the brain's voucher read
 REWARD_LINE = re.compile(r"reward points|cashback|icash|instant discount", re.IGNORECASE)
 VOUCHER_BUY = re.compile(r"^Buy a ₹([\d,]+) .+? gift voucher, quantity (\d+), on ")  # the brain's checkout goal
+VOUCHER_CARD = re.compile(r", paying with (.+?)\.$")  # the card the user named, on a portal that lists savings by card
 ROW_FIX = re.compile(r"Dispute type: Personal Details\. The report shows: ([^:]+): .+?\. It should be: (.+?)\.?\s*$",
                      re.DOTALL)  # the brain's dispute: the row it names, and that row's correct value
 MANDATE_CANCEL = re.compile(r"(?:cancel|revoke)\b", re.IGNORECASE)  # a card's Cancel: the UPI app does the rest
@@ -574,6 +575,8 @@ class Worker:
         notice = self.notice_step(page)
         if notice:  # live: Experian's “… wait for 30 days …” was read as an instruction, and waited on twenty times
             return self.act("CLICK", notice, page, None)
+        if self.card_step(page):  # live: the cart's calculator kept Infinia, and the planner asked to pay with it
+            return None
         ticking = self.agree_step(page)
         if ticking:  # live SmartBuy cart: Checkout did nothing until its two required boxes were ticked
             return self.act("CLICK", ticking, page, None)
@@ -924,6 +927,22 @@ class Worker:
         last = self.state["history"][-1].get("action") if self.state["history"] else None
         return next((a for a in page["actions"] if words and a["kind"] == "click" and a.get("label") != last
                      and words in (a.get("label") or "").lower()), None)
+
+    def card_step(self, page):
+        """The card the brain's checkout names (“…, paying with Regalia Gold Credit Card.”) picked in its portal's
+        savings calculator (the note's `cards:` list, SmartBuy's closed menu, Infinia by default), once a page: the
+        cart's savings are that card's then, and no one asks how to pay. True when it was picked."""
+        s = self.state
+        card = VOUCHER_CARD.search(s["goal"]) if VOUCHER_BUY.match(s["goal"]) else None
+        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
+        done = s.setdefault("cards_picked", [])
+        if not card or not note.get("cards") or self.place_of(page) in done:
+            return False
+        done.append(self.place_of(page))
+        try:
+            return s["browser"].pick(note["cards"], card[1])
+        except (StalePage, RuntimeError, TimeoutError):
+            return False  # the planner goes on; the approval still shows the cart's own figures
 
     def agree_step(self, page):
         """A box its site note's `agree:` names (words its label starts with, comma-separated: SmartBuy's cart "Read

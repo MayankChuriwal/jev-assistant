@@ -196,6 +196,14 @@ BUTTON_INTO_VIEW = r"""(word => {
   button?.scrollIntoView({block: 'center'});
   return !!button;
 })"""
+# The item `selector` matches whose words start with `word`, clicked shown or not: SmartBuy's savings calculator keeps
+# its cards in a closed menu, and "Regalia Gold Credit Card / …" is never the plain "Regalia Credit Card".
+PICK = r"""((selector, word) => {
+  const norm = s => (s || '').replace(/\s+/g, '').toLowerCase();
+  const item = [...document.querySelectorAll(selector)].find(e => norm(e.textContent).startsWith(norm(word)));
+  item?.click();
+  return !!item;
+})"""
 # A captcha's picture (MyUPI's letters in an image beside its "Security Verification" box), scrolled into view: its box
 # in page coordinates, or null. One named as a captcha, else the wide picture nearest the captcha's box.
 CAPTCHA_PICTURE = r"""(() => {
@@ -952,6 +960,11 @@ class Browser:
         """Scroll the card titled `title` until its `word` control is in view (MyUPI listed AISLE below the fold, so its
         Cancel was never offered): True when that card was found."""
         return bool(self.evaluate(f"({CARD_INTO_VIEW})({json.dumps(title)}, {json.dumps(word)})"))
+
+    def pick(self, selector, word):
+        """Click the item `selector` matches whose words start with `word`, shown or not (the user's card in SmartBuy's
+        closed savings menu): True when there was one."""
+        return bool(self.evaluate(f"({PICK})({json.dumps(selector)}, {json.dumps(word)})"))
 
     def texts(self, selector):
         """The words of every element `selector` matches, shown or not (SmartBuy's savings by card sit in a closed

@@ -454,7 +454,9 @@ class Brain:
                     "next": "Ask which HDFC card they'll pay with, offering the cards the read lists, then show what "
                             "it earns with voucher_savings before buying."}
         note = self.core.library["sites"][PORTALS[portal]]
-        result = self.core.execute(f"Buy a ₹{amount:,} {brand} gift voucher, quantity {quantity}, on {portal}.",
+        # the card they named, for the portal's savings calculator: live, it kept Infinia and the planner asked to pay
+        card = f", paying with {read['chosen'][1].split(' / ')[0]}" if read["cards"] else ""
+        result = self.core.execute(f"Buy a ₹{amount:,} {brand} gift voucher, quantity {quantity}, on {portal}{card}.",
                                    url=voucher_page(note, brand, "shopping"), skill="shopping",
                                    progress=f"Getting your ₹{amount:,} {brand} voucher ready on {portal}…")
         if result["outcome"] == "not_approved":  # the demo's No at the approval card
