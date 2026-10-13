@@ -39,6 +39,7 @@ VOUCHER_READ = re.compile(r"^Show the (.+?) gift vouchers on (.+?): list the amo
 REWARD_LINE = re.compile(r"reward points|cashback|icash|instant discount", re.IGNORECASE)
 VOUCHER_BUY = re.compile(r"^Buy ₹([\d,]+) of .+? gift vouchers on .+?: (\d+ × ₹[\d,]+(?: \+ \d+ × ₹[\d,]+)*)")  # its
 # checkout goal: "Buy ₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000, paying with …"
+BANK_SUBMIT = re.compile(r"\s*(?:submit|confirm|verify|authenticate|pay)\s*$", re.IGNORECASE)  # an OTP page's own
 PAYABLE_AMOUNT = re.compile(r"payable amount\s*:?\s*₹\s?([\d,]+(?:\.\d+)?)", re.IGNORECASE)  # GyFTR's pay page
 ORDER_ID = re.compile(r"\border\s*(?:id|no\.?|number)\s*:?\s*([A-Z0-9][A-Z0-9-]{5,})", re.IGNORECASE)
 CART_LINE = re.compile(r"Voucher Value ([\d,]+).{0,20}?You Pay ₹ ?([\d,]+)")  # a SmartBuy cart line: value, its cost
@@ -938,6 +939,9 @@ class Worker:
             return None  # the site took it (the field is gone), or it isn't a code's
         button = next((a for a in page["actions"] if a["kind"] == "click" and field.get("submit")
                        and a.get("label") == field["submit"]), None)
+        if not button and self.paid():  # live, HDFC's OTP page: Enter sent nothing, and its SUBMIT is a link
+            button = next((a for a in page["actions"] if a["kind"] == "click"
+                           and BANK_SUBMIT.match(a.get("label") or "")), None)
         return ("CLICK", button, None) if button else ("PRESS_KEY", field, "Enter")
 
     def mandate_step(self, page):
@@ -1046,6 +1050,12 @@ class Worker:
         if not wanted or not url or s.get("refills", 0) >= 2:
             return None
         text = re.sub(r"\s+", " ", page["text"]).lower()
+        for _ in range(CART_READS if "cart item not found" in text else 0):  # live: shown while the cart loads
+            time.sleep(CART_WAIT)
+            page = self.observe()
+            text = re.sub(r"\s+", " ", page["text"]).lower()
+            if "cart item not found" not in text:
+                break
         if "cart item not found" in text:
             present = set()
         else:

@@ -60,6 +60,8 @@
   const steady = t => String(t ?? '').replace(/\b(in|within)\s+\d{1,2}:\d{2}\b/gi, '$1 #:##')
     .replace(/\b(resend(?:\s+(?:otp|code|sms))?)\s+\d{1,2}\s*:\s*\d{1,2}(?!\d)/gi, '$1 #:##')  // GyFTR: "Resend 0:41Submit"
     .replace(/\b\d{1,2}:\d{2}\s+(left|remaining)\b/gi, '#:## $1')
+    .replace(/\b(after|out after)\s+\d{1,2}:\d{2}\b/gi, '$1 #:##')  // HDFC's OTP page: "time out after 2:11 seconds"
+    .replace(/\b\d{1,2}:\d{2}\s+(seconds?|secs?|minutes?|mins?)\b/gi, '#:## $1')
     .replace(/\b(in|within)\s+\d+\s?(s|secs?|seconds)\b/gi, '$1 # $2')
     .replace(/\b\d+\s?(s|secs?|seconds)\s+(left|remaining)\b/gi, '# $1 $2');
   // Text as a decision's freshness reads it: a rotating placeholder (Search "milk", then Search "bread") and the lines

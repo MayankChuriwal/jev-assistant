@@ -847,3 +847,16 @@ def test_a_card_detail_is_typed_key_by_key(browser_at):
     b.act("TYPE_TEXT", find(page, "Valid Card Number", "fill"), page, text="4111111111111111")
     assert b.evaluate("card.value") == "4111111111111111"
     assert b.evaluate("keys") >= 16 and b.evaluate("pasted") is False
+
+
+def test_a_banks_countdown_never_makes_its_submit_stale(browser_at):
+    # live, HDFC's OTP page: "This page automatically time out after 2:11 seconds" ticked, and every yes to its SUBMIT
+    # was read as a page that had changed
+    b = browser_at("/guards.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<form><label for=otp>Enter OTP Here</label>"
+               "<input id=otp autocomplete=one-time-code><a href=# id=go>SUBMIT</a><a href=#>Cancel</a>"
+               "<p>This page automatically time out after <b id=tick>2:11</b> seconds</p></form>')")
+    page = b.observe()
+    submit = find(page, "SUBMIT", "click")
+    b.evaluate("tick.textContent = '2:10'")
+    assert b.fresh(page, submit)

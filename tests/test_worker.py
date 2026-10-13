@@ -4610,3 +4610,30 @@ def test_an_empty_cart_is_left_by_the_worker_itself(tmp_path, monkeypatch, no_wa
     no_planner(monkeypatch)
     w.command("tick")
     assert w.browser.act.call_args.args[0] == "OPEN_URL" and w.browser.act.call_args.kwargs["url"] == SMARTBUY
+
+
+def test_a_cart_still_loading_is_read_again_before_its_called_empty(tmp_path, no_wait):
+    # live, 01:36: "Cart item not found!!" shows while SmartBuy's cart loads; it held the order, and was left twice
+    empty = voucher_page(CART, "Cart item not found!!", "Back To Home")
+    w = worker_with(tmp_path, page=empty, goal=TWO_FIFTY)
+    w.browser.observe.side_effect = [empty, voucher_page(CART, "Voucher\nValue\n250\nYou Pay\n₹\n250",
+                                                         "Decrease quantity", "Increase quantity")]
+    assert w.refill_step(empty) is None and w.state.get("refills", 0) == 0
+
+
+def test_the_banks_code_is_sent_with_its_own_submit_link_under_the_payments_yes(tmp_path, monkeypatch, no_wait):
+    # live, HDFC: Enter in "Enter OTP Here" sent nothing; its SUBMIT is a link, and was asked about again
+    page = fake_page(url=BANK, text="Merchant Name:\nGYFTR VIA SMARTBUY\nTotal Charge:\n₹1250.00", actions=[
+        {"id": "b1", "kind": "fill", "label": "Enter OTP Here", "role": "textbox", "value": "[secret]", "node": 1,
+         "constraints": {}},
+        {"id": "b2", "kind": "click", "label": "Resend OTP", "role": "link", "node": 2},
+        {"id": "b3", "kind": "click", "label": "SUBMIT", "role": "link", "node": 3},
+        {"id": "b4", "kind": "click", "label": "Cancel (in “SUBMIT”)", "role": "link", "node": 4}])
+    w = worker_with(tmp_path, page=page, goal=FIVE)
+    w.state["history"] += [dict(PAID), {"operation": "TYPE_TEXT", "action": "Enter OTP Here",
+                                        "text": "[secret:answer2]"}]
+    no_planner(monkeypatch)
+    jev_checks(monkeypatch, after_commit="processing")
+    w.processing_ms = 0
+    w.command("tick")
+    assert w.browser.act.call_args.args[:2] == ("CLICK", page["actions"][2]) and w.asked == []
