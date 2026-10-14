@@ -28,9 +28,10 @@ SECRET_ASK = re.compile(r"\b(otp|one[- ]?time (pass(word|code)?|code)|verificati
                         r"password|cvv|cvc|pin(?![\s-]?code)|\d[- ]?digit code|"
                         r"code (we |that was |you )?(sent|received))\b", re.IGNORECASE)
 TO_RECEIVE = re.compile(r"\b(phone|mobile|e-?mail)\b.*\b(to|for) (receive|get)\b", re.IGNORECASE)
+# a captcha to solve, in the page's words or a box's (BESCOM's "Enter Image Captcha here")
 CHALLENGE = re.compile(r"i'?m not a robot|select all (the )?(images|squares)|click verify once|"
                        r"type the (text|characters|word)|verify (that )?you are (a )?human|press and hold|"
-                       r"are you a robot|refresh captcha|enter (the )?captcha|captcha code", re.IGNORECASE)
+                       r"are you a robot|refresh captcha|enter (the )?(image )?captcha|captcha code", re.IGNORECASE)
 # Payment methods named with "pay" (UPI Scan and Pay, Pay on Delivery): choosing one pays nothing by itself.
 METHOD = re.compile(r"\b(upi|cash|card|wallets?|net ?banking|pay later|pay on delivery|cash on delivery|scan and pay|"
                     r"amazon pay|google pay|gpay|phonepe|paytm)\b", re.IGNORECASE)

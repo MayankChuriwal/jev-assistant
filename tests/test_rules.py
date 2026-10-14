@@ -410,3 +410,10 @@ TEN_DIGITS = {"constraints": {"type": "tel", "maxlength": 10, "pattern": "[0-9]{
 def test_an_indian_mobile_fits_a_ten_digit_phone_box(value, typed):
     assert rules.fit_phone(value, TEN_DIGITS) == typed
     assert rules.fit_phone("+91 98765 43210", {"constraints": {"type": "tel"}}) == "+91 98765 43210"  # no limit
+
+
+@pytest.mark.parametrize("label", ["Enter Image Captcha here", "Enter the image captcha", "Enter captcha"])
+def test_a_captcha_box_named_for_its_picture_is_a_challenge(label):
+    # live BESCOM: "Enter Image Captcha here" went unrecognised, so its picture waited on the page model
+    page = {"text": "Quick Payment\nAccount ID\nContinue", "actions": [{"kind": "fill", "label": label}]}
+    assert rules.captcha_challenge(page)
