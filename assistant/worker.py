@@ -34,6 +34,10 @@ ACTOR_TURNS, ACTOR_IDLE, ACTOR_BAD = 25, 3, 3  # a bill's page-model turns: in a
 # words a store's suggestion of a brand's own voucher adds ("Zomato Gift Card", "Swiggy E-Gift Voucher Product")
 VOUCHER_WORDS = {"gift", "card", "cards", "voucher", "vouchers", "e", "egift", "evoucher", "gv", "money", "instant",
                  "new", "product", "products"}
+DECLINED = re.compile(r"\b(?:declined|payment (?:has )?failed|transaction (?:has )?failed|payment (?:was )?"
+                      r"unsuccessful|transaction (?:was )?unsuccessful)\b", re.IGNORECASE)  # a card the bank refused
+READ_NEVER = re.compile(r"\b(?:add to cart|add|buy|buy now|checkout|check out|proceed to pay|pay)\b",
+                        re.IGNORECASE)  # what a read never presses
 READ_TURNS = 10  # a store's read: past this, it ends with what it read (live, Grab Deals opened and closed a panel)
 CONFIRM_READS, CONFIRM_GAP = 15, 2.0  # reads of the page, seconds apart, after the user says they paid a QR
 SUBGOAL_STEPS = 12
@@ -410,7 +414,7 @@ class Worker:
         if self.masking():  # after the yes, a voucher's code or PIN on screen reaches no model, trace or chat
             page["text"], page["title"] = money.mask_codes(page["text"]), money.mask_codes(page["title"])
             for action in page["actions"]:
-                for key in ("label", "value"):
+                for key in ("label", "value", "current_value"):
                     if action.get(key):
                         action[key] = money.mask_codes(str(action[key]))
         return page
@@ -1995,6 +1999,10 @@ class Worker:
         image = s["browser"].screenshot(masked=self.secrets.nodes, hide=self.hidden_details()) if look else None
         body = actor.payload(s["goal"], self.job_guide(page), page, s["job_facts"], s["actor_last"], problems,
                              [f"{c['from']}: {c['text']}" for c in s["chat"][-12:]])
+        if self.masking():  # the address too: an order page may carry a code in its query
+            where = urlparse(body["page"]["address"])
+            body["page"]["address"] = where._replace(path=money.mask_codes(where.path),
+                                                     query=money.mask_codes(where.query), fragment="").geturl()
         s["actor_page"] = body["page"]  # the trace's: what the model read last, to check how the task ended
         answer, meta = actor.turn(body, image=image if isinstance(image, str) else None, kind=self.job["kind"])
         s["actor_log"] = (s["actor_log"] + [{"turn": s["actor_turns"], "url": page["url"], "end": answer["end"],
@@ -2052,6 +2060,10 @@ class Worker:
                 continue
             before, replies, label = len(s["history"]), self.replies(), action.get("label") or operation.title()
             text = (extra.get("text") or "").strip()
+            if self.job["kind"] == "voucher_read" and operation == "CLICK" and READ_NEVER.search(label):
+                s["feedback"].append(f"“{label}” was not pressed: a read never adds to a cart, buys or pays; read the "
+                                     "brand's page and end with done.")  # review: it left a cart for the next one
+                break
             if self.job["kind"] == "voucher_read" and operation == "TYPE_TEXT" and (
                     text in {"[ask]", "[captcha]"} or PLACEHOLDER.search(text)):  # a read asks the user nothing
                 s["outcome"] = "unread"
@@ -2452,6 +2464,11 @@ class Worker:
         if job["kind"] == "voucher_read":
             s["outcome"] = "unread"
             return Halt("blocked", why)
+        if self.paid() and job["kind"] == "voucher" and DECLINED.search(s["page"]["text"]):  # the page says so
+            self.end_payment("failed")
+            s["outcome"] = "not_bought"
+            return Halt("blocked", f"{why} Not bought: the payment was declined, so no {job['brand']} vouchers were "
+                                   "bought. Any amount your bank held for it is released by the bank.")
         if self.paid():
             self.end_payment("unclear")
             s["outcome"] = "unclear"

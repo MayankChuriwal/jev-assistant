@@ -114,17 +114,31 @@ def split(amounts, total):
         if total in best else None
 
 
-RANGE = re.compile(r"(?:between\s+)?₹\s?([\d,]+)\s*(?:and|to|-|–)\s*₹\s?([\d,]+)", re.IGNORECASE)
+RUPEES = re.compile(r"(?:₹|\brs\.?|\binr)\s*([\d,]+)", re.IGNORECASE)  # an amount marked as rupees, any way
+RANGE = re.compile(r"(?:₹|\brs\.?|\binr)\s*[\d,]+\s*(?:and|to|-|–)\s*(?:₹|\brs\.?|\binr)\s*[\d,]+", re.IGNORECASE)
+
+
+def amount_list(text):
+    """Every rupee amount a store's page lists ("₹500", "Rs. 1000", "INR 2,000"; with no rupee sign anywhere, its
+    numbers of 10 or more), smallest first."""
+    marked = [n for n in RUPEES.findall(str(text or "")) if n.strip(",")]
+    found = marked or [n for n in re.findall(r"\d[\d,]*", str(text or "")) if int(n.replace(",", "")) >= 10]
+    return sorted({int(n.replace(",", "")) for n in found})
+
+
+def limit_of(text):
+    """A limit's rupees ("Up to 2 vouchers of ₹10,000 a month" → 10000), else None."""
+    found = RUPEES.search(str(text or ""))
+    return int(found[1].replace(",", "")) if found and found[1].strip(",") else None
 
 
 def amount_range(text):
     """(lowest, highest) when a store takes any amount in a range ("Enter a value between ₹500 and ₹10,000",
-    "₹100 - ₹5,000"); else None."""
-    found = RANGE.search(str(text or ""))
-    if not found:
+    "₹100 - ₹5,000"); else None. A list of amounts ("₹250 - ₹500 - ₹1,000") is no range."""
+    listed = amount_list(text)
+    if not RANGE.search(str(text or "")) or len(RUPEES.findall(str(text or ""))) != 2 or len(listed) != 2:
         return None
-    low, high = int(found[1].replace(",", "")), int(found[2].replace(",", ""))
-    return (low, high) if low < high else None
+    return tuple(listed)
 
 
 def nearest(total, amounts, limit):
@@ -169,7 +183,8 @@ def reward(text):
         return {"kind": "multiplier", "value": Decimal(found[1])}
     found = PERCENT.search(str(text or ""))
     if found:
-        return {"kind": "back", "value": Decimal(found[1])}
+        off = re.search(r"\b(off|discount)\b", str(text), re.IGNORECASE)  # "Flat 3% OFF": paid less, nothing back
+        return {"kind": "off" if off else "back", "value": Decimal(found[1])}
     return {"kind": None, "value": None}
 
 
@@ -194,6 +209,8 @@ def value(facts, card, amount, cap=None):
     amount = Decimal(amount)
     offer, rate = reward(facts.get("reward")), card_rate(card)
     discount, fee = money_off(facts.get("discount"), amount), money_off(facts.get("fee"), amount)
+    if offer["kind"] == "off":  # a discount read as the reward: the same money off, counted once
+        discount = max(discount, (amount * offer["value"] / 100).quantize(Decimal("0.01")))
     payable = (amount - discount + fee).quantize(Decimal("0.01"))
     points = back = None
     point = Decimal(str(card["point"])) if (card or {}).get("point") not in (None, "") else None
@@ -207,7 +224,7 @@ def value(facts, card, amount, cap=None):
         back = (amount * offer["value"] / 100).quantize(Decimal("0.01"))
         if "₹" in str(cap or ""):
             back = min(back, rupees(cap))
-    ranked = back is not None or (offer["kind"] is None and bool(discount or fee))
+    ranked = back is not None or (offer["kind"] in {None, "off"} and bool(discount or fee))
     return {"points": points, "back": back, "discount": discount, "fee": fee, "payable": payable,
             "effective": (payable - (back or 0)).quantize(Decimal("0.01")) if ranked else None, "ranked": ranked,
             "basis": f"at ₹{point} a point" if points is not None and point is not None else ""}

@@ -198,7 +198,8 @@ def test_the_masks_placeholder_is_no_order_number(tmp_path, monkeypatch):
 
 def test_the_payment_pages_own_order_id_is_no_proof(tmp_path, monkeypatch):
     # review I2b: pay.gyftr.com shows "Order Id" before paying; a failed payment back on it was reported bought
-    pay = page("Bill Details\nOrder Id :\n230145678912\nPayable Amount: ₹5,000\nPayment failed", url="https://pay.gyftr.com/")
+    pay = page("Bill Details\nOrder Id :\n230145678912\nPayable Amount: ₹5,000\nPlease wait",
+               url="https://pay.gyftr.com/")
     w = worker_with(tmp_path, page=pay, goal=GOAL)
     paid(w)
     w.state["paid_url"] = "https://pay.gyftr.com/"
@@ -272,3 +273,48 @@ def test_a_fee_after_the_yes_asks_a_new_yes(tmp_path, monkeypatch):
     w.command("tick")
     approval = next(m for m in w.asked if m.get("approval"))
     assert "Payable with the site's fee: ₹5,125" in approval["text"] and w.state["outcome"] == "not_approved"
+
+
+def test_a_payment_the_page_says_was_declined_is_not_bought(tmp_path, monkeypatch):
+    # spec §5: a card declined after the yes is recorded failed and reported "Not bought"
+    w = worker_with(tmp_path, page=page("Transaction declined by your bank. Please try another card."), goal=GOAL)
+    paid(w)
+    w.state["payment_id"] = w.memory.payment_started("SmartBuy", money.voucher_key("Swiggy"), "5000", "Infinia")
+    script(monkeypatch, answer(end="stop", say="The bank declined the card."))
+    w.command("tick")
+    assert w.state["outcome"] == "not_bought" and "Not bought" in w.told[-1]["text"]
+    assert w.memory.payments("SmartBuy", "voucher_swiggy")[0]["status"] == "failed"
+
+
+def test_a_read_never_adds_to_a_cart(tmp_path, monkeypatch):
+    # review: a read could press "Add to cart" (a step, not a commit) and leave a cart for the next purchase
+    add = {"id": "add", "kind": "click", "label": "Add to cart", "role": "button", "node": 4}
+    w = worker_with(tmp_path, page=page("Swiggy\n₹500 ₹1,000", extra=[add]), goal=READ)
+    script(monkeypatch, answer([("click", "1", None)]))
+    w.command("tick")
+    assert not w.browser.act.called and any("never" in f for f in w.state["feedback"])
+
+
+def test_a_standing_approval_never_stands_in_for_the_purchases_yes(tmp_path, monkeypatch):
+    # review: with pre-approval on, a standing rule could commit a purchase with no yes, no row and no masking
+    from assistant import gate
+    monkeypatch.setenv("JEV_PREAUTH", "on")
+    monkeypatch.setattr(gate, "preauthorised", lambda *a: True)
+    monkeypatch.setattr(gate, "standing", lambda *a: {"id": 1, "site": "gyftr.com", "cap": 10000})
+    w = worker_with(tmp_path, page=page(CART), goal=GOAL, replies=[{"option": "o2"}])
+    script(monkeypatch, answer([("click", "1", None)], cart="Swiggy ₹2,000 × 2 Swiggy ₹1,000 × 1", payable="₹5,000"))
+    w.command("tick")
+    assert any(m.get("approval") for m in w.asked)
+
+
+def test_after_the_yes_a_dropdowns_value_and_the_address_are_masked(tmp_path, monkeypatch):
+    # review: a select's current value and the page's address reached the model unmasked
+    pick = {"id": "s", "kind": "select", "label": "Your vouchers", "role": "combobox", "node": 2,
+            "value": "QWER7890TYUI", "current_value": "QWER7890TYUI"}
+    w = worker_with(tmp_path, page=page(ORDER, url="https://www.gyftr.com/order?code=ZXCV5678ASDF", extra=[pick]),
+                    goal=GOAL)
+    paid(w)
+    seen = script(monkeypatch, answer([("wait", None, None)]))
+    w.command("tick")
+    sent = json.dumps(seen[0][0], ensure_ascii=False)
+    assert "QWER7890TYUI" not in sent and "ZXCV5678ASDF" not in sent and "www.gyftr.com" in sent

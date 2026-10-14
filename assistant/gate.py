@@ -842,7 +842,8 @@ def approved(w, page, action, label, subgoal):
     if total and not rules.amount_shown(total, page["text"]):
         total = ""  # the raw page spells it differently (a number split in parts): approval_valid would void the yes
     shadow = covered = False
-    if matched and preauthorised(s, found, page):
+    money_job = bool(getattr(w, "job", None))  # a payment or purchase: only the user's own yes, ever (review)
+    if matched and not money_job and preauthorised(s, found, page):
         if w.bench:
             s["bench_preauth"] = True  # a bench run logs what it would have done, then asks like any other
         elif os.environ.get("JEV_PREAUTH", "shadow") != "on":
@@ -851,7 +852,8 @@ def approved(w, page, action, label, subgoal):
             w.say("Placing: " + " · ".join(lines))
             bind(s, action, label, total, page, "preauth")
             return True
-    elif matched and s["cap"] is None and (rule := standing(w, found, page)):  # the user's own cap always wins
+    elif matched and not money_job and s["cap"] is None and (rule := standing(w, found, page)):  # the user's own cap
+        # always wins
         if w.bench:
             s["bench_standing"] = True  # logged: a bench run never uses a standing approval
         elif os.environ.get("JEV_PREAUTH", "shadow") != "on":

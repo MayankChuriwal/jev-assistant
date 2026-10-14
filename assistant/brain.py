@@ -24,6 +24,7 @@ LIST = "List all my UPI AutoPay mandates"
 BUREAUS = {"Experian": "consumer.experian.in"}  # each bureau's site note
 BUREAU_IDS = {"Experian": ("experian_ern", "experian_uti")}  # the saved IDs its dispute page asks for
 READ_FOR = timedelta(hours=24)  # a store's read of a brand is reused this long
+SIGN_IN = re.compile(r"sign[- ]?in|log ?in|login", re.IGNORECASE)  # why a store's prices weren't read: its sign-in
 VOUCHER_WORDS = {"voucher", "vouchers", "e-voucher", "evoucher", "gift", "giftcard", "card", "cards", "money", "gv"}
 BILLERS = {meta["name"]: host for host, meta in skills.load_sites().items() if meta.get("bill")}  # their own sites
 IST = ZoneInfo("Asia/Kolkata")
@@ -428,8 +429,7 @@ class Brain:
         """A brand's offers for a total on every store the user's cards fit: each store read in the browser (or a
         read under READ_FOR old reused), each offer valued in code for each card that fits, the best first."""
         said = " ".join([i["content"] for i in self.items if i.get("role") == "user"][-6:])
-        wanted = rules.words(brand) - VOUCHER_WORDS
-        if not wanted or not wanted <= rules.words(said):
+        if not self.named(brand, said):
             return {"status": "rejected", "reason": f"The user hasn't named {brand}.",
                     "next": "Ask which brand they want vouchers for."}
         if amount <= 0:
@@ -454,19 +454,19 @@ class Brain:
                 facts = {**facts, "discount": None}  # and its instant discount are one or the other: its default counts
             if facts is None:
                 unread.append({"portal": name, "why": why})
-                for card in fitting:  # still buyable: its amounts show once signed in
-                    self.offers[(name, card)] = {"brand": brand, "amount": amount, "split": None, "reward": None}
+                if SIGN_IN.search(why):  # its prices show once signed in: still buyable, by its total
+                    for card in fitting:
+                        self.offers[(name, card)] = {"brand": brand, "amount": amount, "split": None, "reward": None}
                 continue
-            amounts = sorted({int(a.replace(",", "")) for a in re.findall(r"₹\s?([\d,]+)", facts.get("amounts") or "")})
-            limit = money.rupees(facts.get("limit")) if "₹" in str(facts.get("limit") or "") else None
+            amounts, limit = money.amount_list(facts.get("amounts")), money.limit_of(facts.get("limit"))
             made = money.split(amounts, amount)
             span = money.amount_range(facts.get("amounts"))
             if span:  # live, Woohoo's Zomato card: any amount in a range, so the total is one voucher
                 made = {amount: 1} if span[0] <= amount <= span[1] else None
-                amounts = list(span)
             for card in fitting:
                 if not made or (limit is not None and amount > limit):
-                    options = money.nearest(amount, amounts, int(limit) if limit is not None else None)
+                    options = [min(max(amount, span[0]), span[1], limit or span[1])] if span else \
+                        money.nearest(amount, amounts, limit)
                     offers.append({"portal": name, "card": card, "vouchers": None, "ranked": False, "effective": None,
                                    "nearest": [f"₹{total:,}" for total in options], "limit": facts.get("limit")})
                     continue
@@ -489,8 +489,18 @@ class Brain:
                 "offers": [self.offer_line(o) for o in ranked], "unread": unread,
                 "next": "Show the top three offers as options (“SmartBuy + Infinia”), each with its effective price "
                         "and the rupees a point used, plus “Not now”. An offer with nearest totals can't make this "
-                        "total: offer those instead. Name stores that couldn't be read in one line; they can still be "
-                        "picked. Never work out a price yourself."}
+                        "total: offer those instead. Name stores that couldn't be read in one line, with why; one "
+                        "that needs a sign-in to show prices can still be picked. Never work out a price yourself."}
+
+    @staticmethod
+    def named(brand, said):
+        """Whether the user's words name this brand: its words of 3 letters or more, or, for a short brand ("H&M",
+        "1mg"), its letters and digits as they wrote them."""
+        wanted = rules.words(brand) - VOUCHER_WORDS
+        if wanted:
+            return wanted <= rules.words(said)
+        compact = re.sub(r"[^a-z0-9]", "", brand.lower())
+        return bool(compact) and any(compact == re.sub(r"[^a-z0-9]", "", w.lower()) for w in re.split(r"\s+", said))
 
     @staticmethod
     def offer_line(offer):
@@ -538,6 +548,7 @@ class Brain:
                           "come by SMS and email: never give or ask for one. Call no other tool.",
                 "not_approved": "They chose not to buy: say nothing was bought or charged. Call no other tool.",
                 "bought_before": "Say you didn't buy them again. Call no other tool.",
+                "not_bought": "Say it isn't bought, in the report's words, and offer to try another card or store.",
                 "unclear": "Tell them, in the report's words, not to buy again until they've checked their SMS and "
                            "email. Call no other tool."}
         if result["outcome"] in said:

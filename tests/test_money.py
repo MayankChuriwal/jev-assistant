@@ -258,3 +258,21 @@ def test_no_live_reward_read_is_no_lower_reward():
     intent = money.job_intent(money.voucher_goal("SmartBuy", "Swiggy", 5000, {2000: 2, 1000: 1}, "Infinia",
                                                  compared="5X Reward Points"))
     assert not any("Lower" in line for line in money.voucher_lines(intent, {"payable": "₹5,000"}))
+
+
+def test_a_percent_off_reward_is_a_discount_counted_once():
+    # review: "3% off" in reward counted as cash back, and twice when the page's discount said it too
+    assert money.reward("Flat 3% OFF") == {"kind": "off", "value": Decimal(3)}
+    once = money.value({"reward": "Flat 3% OFF", "discount": "3% Discount"}, INFINIA, 5000)
+    assert once["discount"] == Decimal("150.00") and once["back"] is None and once["effective"] == Decimal("4850.00")
+    assert money.reward("Earn 5% cashback")["kind"] == "back"
+
+
+def test_amounts_limits_and_ranges_read_in_any_rupee_form():
+    # review: "Rs."/"INR" amounts read as none; "2 vouchers of ₹10,000" read as a limit of 2; a list read as a range
+    assert money.amount_list("Rs. 500, Rs.1000 and INR 2,000") == [500, 1000, 2000]
+    assert money.amount_list("₹ 250, ₹ 500") == [250, 500]
+    assert money.amount_list("500, 1000, 2000") == [500, 1000, 2000]  # no rupee sign at all: the numbers
+    assert money.limit_of("Up to 2 vouchers of ₹10,000 a month") == 10000 and money.limit_of("No limit") is None
+    assert money.amount_range("₹250 - ₹500 - ₹1,000 - ₹2,000") is None
+    assert money.amount_range("Enter a value between Rs. 500 and Rs. 10,000") == (500, 10000)

@@ -691,3 +691,28 @@ def test_only_the_last_comparisons_offers_are_buyable(tmp_path):
     brain.voucher_compare("Zomato", 2000)
     brain.items.append({"role": "user", "content": "iShop + Sapphiro"})
     assert brain.buy_voucher("iShop", "Swiggy", 5000, "Sapphiro")["status"] == "rejected"
+
+
+def test_a_short_brand_like_h_and_m_can_be_compared(tmp_path):
+    # review: the brand check needed a word of 3 or more letters, so "H&M" could never be compared
+    brain, core = voucher_brain(tmp_path, said=["get me 2000 of H&M vouchers"], cards=["Infinia"], reads={
+        "SmartBuy": {"amounts": "₹1,000 ₹2,000", "reward": "5X Reward Points"}})
+    assert brain.voucher_compare("H&M", 2000)["status"] == "done"
+    assert brain.voucher_compare("Zara", 2000)["status"] == "rejected"  # still never a brand they didn't name
+
+
+def test_a_total_outside_a_stores_range_is_offered_its_nearest_end(tmp_path):
+    # review: a range store's nearest totals fell outside its range
+    brain, core = voucher_brain(tmp_path, said=["Zomato 12000"], cards=["Infinia"], reads={
+        "Woohoo": {"amounts": "Enter a value between ₹500 and ₹10,000", "discount": "2%"}})
+    result = brain.voucher_compare("Zomato", 12000)
+    assert result["status"] == "unmade" and result["options"] == ["₹10,000"]
+
+
+def test_a_store_that_doesnt_sell_the_brand_is_not_buyable(tmp_path):
+    # review: unread stores were buyable whatever the reason; only one that hides prices behind a sign-in is
+    brain, core = voucher_brain(tmp_path, said=["Swiggy 2000", "SBI Card"], cards=["SimplyCLICK"], reads={
+        "SBI Card": "The SBI Card store doesn't sell Swiggy vouchers."})
+    result = brain.voucher_compare("Swiggy", 2000)
+    assert result["unread"][0]["portal"] == "SBI Card"
+    assert brain.buy_voucher("SBI Card", "Swiggy", 2000, "SimplyCLICK")["status"] == "rejected"
