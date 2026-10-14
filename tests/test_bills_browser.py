@@ -21,7 +21,7 @@ FACTS = {"name": "M K [profile:name]", "amount_due": "₹ 1,240.00", "due_date":
 
 def act(*actions, end="continue", say=None, **facts):
     return {"actions": [{"op": op, "target": target, "text": text} for op, target, text in actions],
-            "facts": {name: facts.get(name) for name in money.FACTS}, "end": end, "say": say, "options": []}
+            "facts": {name: facts.get(name) for name in money.BILL_FACTS}, "end": end, "say": say, "options": []}
 
 
 def model(monkeypatch, method="UPI", obey_page=False):
@@ -29,7 +29,7 @@ def model(monkeypatch, method="UPI", obey_page=False):
     AI assistants, as a fooled model would. Returns every request it was sent."""
     sent = []
 
-    def turn(body, image=None):
+    def turn(body, image=None, kind="bill"):
         sent.append(body)
         page, facts = body["page"], body["facts"]
         text, elements = page["text"], page["elements"]
@@ -71,7 +71,7 @@ def model(monkeypatch, method="UPI", obey_page=False):
             return act(("click", n("Pay ₹"), None), **FACTS, payable=fee)
         return act(("wait", None, None), **facts)
 
-    monkeypatch.setattr(actor, "turn", lambda body, image=None: (turn(body, image), {"model": "fake",
+    monkeypatch.setattr(actor, "turn", lambda body, image=None, kind="bill": (turn(body, image), {"model": "fake",
                                                                                     "latency_ms": 1}))
     return sent
 

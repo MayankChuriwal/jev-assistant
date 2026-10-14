@@ -36,7 +36,7 @@ def bill_page(text=BILL_TEXT, url=BOARD, extra=()):
 
 def answer(actions=(), end="continue", say=None, options=(), **facts):
     return {"actions": [{"op": op, "target": target, "text": text} for op, target, text in actions],
-            "facts": {name: facts.get(name) for name in money.FACTS}, "end": end, "say": say,
+            "facts": {name: facts.get(name) for name in money.BILL_FACTS}, "end": end, "say": say,
             "options": list(options)}
 
 
@@ -44,7 +44,7 @@ def script(monkeypatch, *answers):
     """The page model's answers in order (the last one repeats). Returns the payloads it was shown."""
     queue, seen = list(answers), []
 
-    def turn(body, image=None):
+    def turn(body, image=None, kind="bill"):
         seen.append(body)
         return (queue.pop(0) if len(queue) > 1 else queue[0]), {"model": "fake", "latency_ms": 1}
 
@@ -74,7 +74,7 @@ def test_a_fact_the_page_doesnt_show_is_refused(tmp_path, monkeypatch):
     w = bill_worker(tmp_path)
     script(monkeypatch, answer(name="M K [profile:name]", amount_due="₹ 1,420", due_date="20-10-2026"))
     w.command("tick")
-    assert "amount_due" not in w.state["bill_facts"] and w.state["bill_facts"]["name"] == "M K [profile:name]"
+    assert "amount_due" not in w.state["job_facts"] and w.state["job_facts"]["name"] == "M K [profile:name]"
     assert any("isn't on the page" in f for f in w.state["feedback"])
 
 
@@ -131,7 +131,7 @@ def test_the_bills_approval_is_written_in_code_and_asked_once(tmp_path, monkeypa
 
 def paid(w):
     w.state["history"].append({"operation": "CLICK", "action": "Pay Now", "committed": True, "approved": "user"})
-    w.state.update(bill_facts=dict(FACTS), bill_checked=True, approved_pay="1240", offer="1240")
+    w.state.update(job_facts=dict(FACTS), checked=True, approved_pay="1240", offer="1240")
 
 
 GATEWAY = "https://pgi.billdesk.com/pgi/ve1_2/pay"
@@ -236,7 +236,7 @@ def test_a_stop_after_the_yes_says_dont_pay_again(tmp_path, monkeypatch):
 def test_a_page_opened_by_typing_its_address_never_takes_a_payment(tmp_path, monkeypatch):
     w = bill_worker(tmp_path, page=bill_page(url="https://bescom-pay.example/bill"))
     w.state["typed_hosts"].append("bescom-pay.example")
-    w.state.update(bill_facts=dict(FACTS))
+    w.state.update(job_facts=dict(FACTS))
     jev_checks(monkeypatch)
     script(monkeypatch, answer([("click", "2", None)], **FACTS))
     w.command("tick")
@@ -298,7 +298,7 @@ def test_a_method_the_user_picks_joins_the_goal(tmp_path, monkeypatch):
     w = bill_worker(tmp_path, page=gateway(), replies=[{"option": "o1"}])
     script(monkeypatch, answer(end="ask", say="Pay by UPI or card?", options=["UPI", "Card"]))
     w.command("tick")
-    assert w.state["goal"].endswith(", by UPI.") and w.bill["method"] == "UPI"
+    assert w.state["goal"].endswith(", by UPI.") and w.job["method"] == "UPI"
 
 
 def test_decode_qr_reads_a_upi_link_from_a_picture():
@@ -416,5 +416,5 @@ def test_the_trace_keeps_the_page_the_model_read_last(tmp_path, monkeypatch):
     w = bill_worker(tmp_path, page=bill_page(text=BILL_TEXT.replace("₹ 1,240.00", "₹ 0.00")))
     script(monkeypatch, answer(**{**FACTS, "amount_due": "₹ 0.00"}))
     w.command("tick")
-    page = w.trace()["bill"]["actor_page"]
+    page = w.trace()["job"]["actor_page"]
     assert "₹ 0.00" in page["text"] and page["elements"]

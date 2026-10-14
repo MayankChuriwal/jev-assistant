@@ -1244,7 +1244,7 @@ def test_a_brain_tasks_result_comes_back_to_the_brain_not_the_chat(world):
         tell("Your UPI AutoPay mandates:\n• AISLE ₹ 499")]
     result = world.core.execute(LIST_GOAL, url=MYUPI, skill="account")
     assert result == {"status": "done", "outcome": None, "report": "Your UPI AutoPay mandates:\n• AISLE ₹ 499",
-                      "cards": [{"name": "AISLE", "details": "AISLE ₹ 499"}]}
+                      "cards": [{"name": "AISLE", "details": "AISLE ₹ 499"}], "facts": {}}
     assert not any("AISLE" in b for b in bodies(world))
 
 

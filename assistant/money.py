@@ -10,7 +10,9 @@ from urllib.parse import parse_qsl, urlparse
 PAID_WINDOW = timedelta(days=25)  # a bill paid within this many days is asked about before paying it again
 BILL_GOAL = re.compile(r"^Pay the (.+?) bill for account \[profile:([a-z][a-z0-9_]{1,39})\]: "
                        r"(?:the amount due|exactly ₹([\d,]+))(?:, by (UPI|card))?\.$")
-FACTS = ("name", "amount_due", "due_date", "payable", "payee", "reference")
+BILL_FACTS = ("name", "amount_due", "due_date", "payable", "payee", "reference")
+VOUCHER_FACTS = ("amounts", "reward", "discount", "fee", "limit", "cart", "payable", "order_id")
+FACTS = {"bill": BILL_FACTS, "voucher": VOUCHER_FACTS, "voucher_read": VOUCHER_FACTS}  # what each job reads
 AMOUNT = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{2,3})+|\d+)(?:\.(\d{1,2}))?(?![\d,])")
 UPI_LINK = re.compile(r"upi://pay\?[^\s\"'<>\\]+", re.IGNORECASE)
 HIDDEN_NAME = "[profile:name]"
@@ -31,6 +33,12 @@ def bill_intent(goal):
         return None
     return {"biller": found[1], "account": found[2],
             "amount": int(found[3].replace(",", "")) if found[3] else None, "method": found[4]}
+
+
+def job_intent(goal):
+    """The money job this goal names, with its kind: a bill's payment; else None."""
+    bill = bill_intent(goal)
+    return {"kind": "bill", **bill} if bill else None
 
 
 def account_key(biller):

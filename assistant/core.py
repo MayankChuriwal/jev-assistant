@@ -607,7 +607,8 @@ class Core:
         state = task.worker.state if task.worker else {}
         page = state.get("page") or {}
         return {"status": task.status, "outcome": state.get("outcome"), "report": task.result or "",
-                "cards": [{"name": c, "details": d} for c, d in zip(page.get("cards") or [], page.get("card_lines") or [])]}
+                "cards": [{"name": c, "details": d} for c, d in zip(page.get("cards") or [], page.get("card_lines") or [])],
+                "facts": dict(state.get("job_facts") or {})}  # a money job's facts, as the page showed them
 
     def notify(self, task, message):
         """A task's message: a brain task's result goes back to the brain; everything else reaches the chat now."""

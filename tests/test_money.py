@@ -103,3 +103,8 @@ def test_paid_before_means_a_payment_in_the_window_or_one_still_open():
     assert money.paid_before([old, failed], now) is None
     assert money.paid_before([old, recent], now) is recent
     assert money.paid_before([open_], now) is open_
+
+
+def test_job_intent_reads_a_bill_goal_as_a_bill():
+    assert money.job_intent(money.goal_for("BESCOM", "bescom_account"))["kind"] == "bill"
+    assert money.job_intent("Order Diet Coke on Instamart") is None
