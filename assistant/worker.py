@@ -2576,8 +2576,9 @@ class Worker:
             s["errors"].append({"step": len(s["history"]), "error": f"payment record: {error}"})
 
     def settle_payment(self):
-        """A bill's task stopped with its payment's record still "started": failed when nothing was charged (a No, the
-        QR not paid, nothing due), else unclear (stopped after the user's yes was acted on: it may have gone through)."""
+        """A bill's task stopped with its payment's record still "started": failed when nothing was charged (a No,
+        the QR not paid, nothing due), else unclear (stopped after the user's yes was acted on: it may have gone
+        through)."""
         s = self.state
         if not self.bill or s["payment_id"] is None or s.get("payment_status"):
             return
