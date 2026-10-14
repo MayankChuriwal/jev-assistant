@@ -156,6 +156,17 @@ def test_a_upi_qr_for_the_approved_amount_goes_to_the_user_with_app_links(tmp_pa
     assert w.state["qr_sent"] and not w.browser.act.called
 
 
+def test_a_qr_the_page_keeps_hidden_is_never_handed_over(tmp_path, monkeypatch):
+    # dry run: the gateway kept its QR (and its link) in the page before UPI was chosen, and it went out unasked
+    w = bill_worker(tmp_path, page=gateway(), replies=[])
+    paid(w)
+    w.browser.evaluate = Mock(return_value=LINK)
+    w.browser.qr_screenshot = Mock(return_value=None)  # not on screen
+    seen = script(monkeypatch, answer(end="ask", say="Pay by UPI or card?", options=["UPI", "Card"]))
+    w.command("tick")
+    assert not w.state["qr_sent"] and seen and w.asked[0]["text"] == "Pay by UPI or card?"
+
+
 def test_a_qr_for_another_amount_is_never_sent(tmp_path, monkeypatch):
     w = bill_worker(tmp_path, page=gateway())
     paid(w)
@@ -182,6 +193,27 @@ def test_a_paid_bill_is_reported_in_code_with_its_reference(tmp_path, monkeypatc
         "site.")
     row = w.memory.payments("BESCOM", "bescom_account")[0]
     assert (row["status"], row["reference"]) == ("paid", "BD7H2K99")
+
+
+def test_a_card_payment_is_proved_by_the_reference_on_the_receipt(tmp_path, monkeypatch):
+    # dry run: the bank's "Processing…" screen made the watch call SUBMIT a step, and the paid bill ended "unclear"
+    thanks = fake_page(url=BOARD, text="Payment Successful\nTransaction Reference: BD7H2K99\nAmount Paid: ₹ 1,240.00",
+                       actions=[{"id": "t1", "kind": "click", "label": "Print Receipt", "role": "button", "node": 1}])
+    w = bill_worker(tmp_path, page=thanks)
+    paid(w)
+    w.browser.evaluate, w.browser.qr_screenshot = Mock(return_value=None), Mock(return_value=None)
+    script(monkeypatch, answer(end="done", say="Payment successful", **{**FACTS, "reference": "BD7H2K99"}))
+    w.command("tick")
+    assert w.state["outcome"] == "paid" and "Reference BD7H2K99" in w.told[-1]["text"]
+
+
+def test_a_done_with_no_proof_after_the_yes_is_unclear_never_paid(tmp_path, monkeypatch):
+    w = bill_worker(tmp_path, page=gateway("Processing your payment…"))
+    paid(w)
+    w.browser.evaluate, w.browser.qr_screenshot = Mock(return_value=None), Mock(return_value=None)
+    script(monkeypatch, answer(end="done", say="Looks done", **FACTS))
+    w.command("tick")
+    assert w.state["outcome"] == "unclear" and "don't pay again" in w.told[-1]["text"]
 
 
 def test_done_before_any_payment_is_refused(tmp_path, monkeypatch):

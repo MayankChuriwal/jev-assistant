@@ -2333,7 +2333,8 @@ class Worker:
         if s["actor_turns"] > ACTOR_TURNS:
             raise self.bill_halt(f"I took {ACTOR_TURNS} turns on {rules.host(page['url'])} without finishing, so I "
                                  "stopped.")
-        problems = list(dict.fromkeys(s["feedback"] + s["notes"][-3:]))
+        notes = [n for n in s["notes"][-3:] if "only a step" not in n]  # the gate's word for its planner, not this
+        problems = list(dict.fromkeys(s["feedback"] + notes))
         s["feedback"] = []
         look = s.pop("actor_look", False)
         image = s["browser"].screenshot(masked=self.secrets.nodes, hide=self.hidden_details()) if look else None
@@ -2567,21 +2568,27 @@ class Worker:
             s["errors"].append({"step": len(s["history"]), "error": f"payment record: {error}"})
 
     def payment_qr(self):
-        """(the UPI link, the QR's picture) the page shows now; either may be None."""
+        """(the UPI link, the QR's picture) for a QR on screen now, else (None, None). The link is the picture's own,
+        decoded (what the user's app will scan), else the one in the page's markup. A QR the page keeps hidden (a
+        gateway's UPI tab not chosen yet) is none: dry run, its link went out before the user picked UPI."""
         b = self.state["browser"]
-        try:
-            markup = b.evaluate(UPI_IN_PAGE)
-        except Exception:
-            markup = None
-        link = money.upi_link(markup) if isinstance(markup, str) else None
         image = b.qr_screenshot(masked=self.secrets.nodes, hide=self.hidden_details())
-        image = image if isinstance(image, str) else None
-        return link or (decode_qr(image) if image else None), image
+        if not isinstance(image, str):
+            return None, None
+        link = decode_qr(image)
+        if link is None:
+            try:
+                markup = b.evaluate(UPI_IN_PAGE)
+            except Exception:
+                markup = None
+            link = money.upi_link(markup) if isinstance(markup, str) else None
+        return link, image
 
     def pay_qr(self, page):
-        """Whether the payment the user said yes to now shows a UPI QR to hand them (read by the gate's watch too)."""
+        """Whether the payment the user said yes to now shows a UPI QR on screen to hand them (read by the gate's
+        watch too)."""
         s = self.state
-        return bool(self.bill) and self.paid() and not s["qr_sent"] and any(self.payment_qr())
+        return bool(self.bill) and self.paid() and not s["qr_sent"] and self.payment_qr()[1] is not None
 
     def qr_hand_off(self, page):
         """The QR goes to the user only when it pays the approved amount to a named UPI address: its picture and
@@ -2622,10 +2629,14 @@ class Worker:
 
     def bill_done(self, say):
         """The page model says the task is done. Paid only when the user's yes was acted on and the site confirmed
-        it (or they paid the QR): the report is written in code. Done without a payment is no ending."""
+        it (the gate's watch, the reference on the page, or their word on the QR): the report is written in code. Done
+        without a payment is no ending."""
         s, intent = self.state, self.bill
-        if self.paid() and (s["done"] or s["qr_sent"]):
-            reference = s["bill_facts"].get("reference")
+        reference = s["bill_facts"].get("reference")
+        shown = bool(reference) and money.grounded(reference, s["page"]["text"])  # the receipt on screen now
+        # dry run: the bank's "Processing…" screen made the gate's watch call SUBMIT a step, so its receipt, with the
+        # reference the page shows, is the proof
+        if self.paid() and (s["done"] or s["qr_sent"] or shown):
             amount = money.shown(Decimal(s["approved_pay"])) if s["approved_pay"] else "your bill"
             account = self.account_value()
             self.end_payment("paid", reference or "")
@@ -3223,7 +3234,9 @@ class Worker:
             "jev": s["jev"], "turns": s["turns"], "meter": s["meter"], "escalations": s["escalations"],
             "margins": s["margins"], "replay": s["replay"], "files": [self.file_name(f) for f in s["files"]],
             "errors": s["errors"], "refusals": s["refusals_log"][-REFUSALS_KEPT:], "stuck_why": s["stuck_why"],
-            "standing_error": s.get("standing_error"),
+            "standing_error": s.get("standing_error"), "outcome": s.get("outcome"),
+            **({"bill": {k: s.get(k) for k in ("bill", "bill_facts", "actor_log", "payment_id", "approved_pay",
+                                               "qr_sent", "typed_hosts", "actor_turns")}} if self.bill else {}),
         })
 
     def save_trace(self):
