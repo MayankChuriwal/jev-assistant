@@ -516,6 +516,21 @@ def named_control(w, action, page, flag):
     return label if label and any(label.lower().startswith(word) for word in words) else None
 
 
+LEADS_TO_PAY = re.compile(r"\s*(?:pay|buy|checkout|check out|proceed|place|confirm|redeem)\b", re.IGNORECASE)
+
+
+def brand_product(w, action, page):
+    """On a voucher job, a control that names the goal's brand is the brand's voucher ("MakeMyTrip e-Pay", "Amazon Pay
+    Gift Card"), not a pay button: unless it starts as one ("Pay", "Buy", "Checkout") or shows a price."""
+    job = getattr(w, "job", None)
+    if not job or job.get("kind") not in {"voucher", "voucher_read"}:
+        return False
+    label = action.get("label") or ""
+    brand = {word for word in re.findall(r"[a-z0-9]{3,}", job["brand"].lower())}
+    return bool(brand) and brand <= set(re.findall(r"[a-z0-9]{3,}", label.lower())) and \
+        not LEADS_TO_PAY.match(label) and not rules.PRICE.search(label)
+
+
 def commit_label(w, operation, action, page, key=None, subgoal=None):
     """The words the approval names when this action commits, else None. Two tiers: a control the commit rule
     matches outright always commits (Jev clears only one that may be a step: a payment method named “…Pay” with no
@@ -526,6 +541,8 @@ def commit_label(w, operation, action, page, key=None, subgoal=None):
     if operation not in COMMIT_OPS or (operation == "PRESS_KEY" and key not in {"Enter", "Space"}) or \
             action.get("hover"):
         return None
+    if brand_product(w, action, page):
+        return None  # the voucher's own product ("MakeMyTrip e-Pay", "Amazon Pay Gift Card"), never a pay button
     final = named_control(w, action, page, "final")
     if final:  # its site note names it: no check may clear it as a step to the payment page
         return lookup(w, final, sure=True)

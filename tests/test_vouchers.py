@@ -321,3 +321,24 @@ def test_after_the_yes_a_dropdowns_value_and_the_address_are_masked(tmp_path, mo
     w.command("tick")
     sent = json.dumps(seen[0][0], ensure_ascii=False)
     assert "QWER7890TYUI" not in sent and "ZXCV5678ASDF" not in sent and "www.gyftr.com" in sent
+
+
+def test_a_read_presses_a_product_whose_name_says_pay(tmp_path, monkeypatch):
+    # live sweep: "MakeMyTrip e-Pay", the brand's own voucher, was refused as a pay control on every GyFTR store
+    option = {"id": "o", "kind": "click", "label": "MakeMyTrip e-Pay", "role": "option", "node": 4}
+    w = worker_with(tmp_path, page=page("Search", extra=[option]),
+                    goal=money.read_goal("SmartBuy", "MakeMyTrip", 5000))
+    script(monkeypatch, answer([("click", "1", None)]))
+    w.command("tick")
+    assert w.browser.act.called and w.browser.act.call_args.args[1]["label"] == "MakeMyTrip e-Pay"
+
+
+def test_a_brands_own_product_is_no_pay_control_but_a_pay_button_is():
+    # live sweep: "MakeMyTrip e-Pay" and "Amazon Pay Gift Card" were taken for pay buttons; they are the brand's vouchers
+    from assistant import gate
+    store = "https://www.gyftr.com/instantvouchers"
+    for brand, label, commits in (("MakeMyTrip", "MakeMyTrip e-Pay", False), ("Amazon", "Amazon Pay Gift Card", False),
+                                  ("Amazon", "Pay ₹5,000", True), ("Amazon", "Buy Amazon Pay voucher now", True)):
+        class W:
+            job = {"kind": "voucher", "brand": brand}
+        assert bool(gate.brand_product(W, {"label": label}, {"url": store})) is not commits, label

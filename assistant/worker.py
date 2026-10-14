@@ -33,8 +33,9 @@ READ_SPEND = 0.30  # a voucher store's read: a few pages, nothing bought
 ACTOR_TURNS, ACTOR_IDLE, ACTOR_BAD = 25, 3, 3  # a bill's page-model turns: in all, in a row with no progress, refused
 DECLINED = re.compile(r"\b(?:declined|payment (?:has )?failed|transaction (?:has )?failed|payment (?:was )?"
                       r"unsuccessful|transaction (?:was )?unsuccessful)\b", re.IGNORECASE)  # a card the bank refused
-READ_NEVER = re.compile(r"\b(?:add to cart|add|buy|buy now|checkout|check out|proceed to pay|pay)\b",
-                        re.IGNORECASE)  # what a read never presses
+READ_NEVER = re.compile(r"\s*(?:add to cart|add\b|buy\b|checkout|check out|proceed to pay|pay\b)",
+                        re.IGNORECASE)  # what a read never presses: a control that starts so ("MakeMyTrip e-Pay" is
+# a product)
 READ_TURNS = 10  # a store's read: past this, it ends with what it read (live, Grab Deals opened and closed a panel)
 CONFIRM_READS, CONFIRM_GAP = 15, 2.0  # reads of the page, seconds apart, after the user says they paid a QR
 SUBGOAL_STEPS = 12
@@ -2057,7 +2058,7 @@ class Worker:
                 continue
             before, replies, label = len(s["history"]), self.replies(), action.get("label") or operation.title()
             text = (extra.get("text") or "").strip()
-            if self.job["kind"] == "voucher_read" and operation == "CLICK" and READ_NEVER.search(label):
+            if self.job["kind"] == "voucher_read" and operation == "CLICK" and READ_NEVER.match(label):
                 s["feedback"].append(f"“{label}” was not pressed: a read never adds to a cart, buys or pays; read the "
                                      "brand's page and end with done.")  # review: it left a cart for the next one
                 break
