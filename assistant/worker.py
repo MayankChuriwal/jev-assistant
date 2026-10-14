@@ -491,6 +491,7 @@ class Worker:
         except Halt as halt:
             self.log_refusal("halt", halt)
             self.state["status"] = halt.status
+            self.settle_payment()
             self.clock()
             self.say(str(halt), kind="result")  # how it ended: a brain task's report (Experian refused the ERN)
             return self.snapshot()
@@ -1244,8 +1245,9 @@ class Worker:
         else the payment page before it), never the page's words: a voucher's code or PIN never reaches a model or the
         chat. True when it ended."""
         s = self.state
-        if not s["done"] or not self.paid() or any(rules.secret_field(a) for a in page["actions"]):
-            return False
+        if not VOUCHER_BUY.match(s["goal"]) or not s["done"] or not self.paid() or \
+                any(rules.secret_field(a) for a in page["actions"]):
+            return False  # a bill's ending is its own (bill_done): its proof is the receipt's reference
         order = next((m[1] for text in [page["text"], *reversed(s["recent"])] if (m := ORDER_ID.search(text))), None)
         bought = "Bought " + s["goal"].removeprefix("Buy ").split(", paying with")[0].rstrip(".")
         s["held"] = None
@@ -2346,8 +2348,8 @@ class Worker:
                                              "say": answer.get("say"), "ms": meta["latency_ms"]}])[-40:]
         self.take_facts(answer.get("facts") or {}, page)
         self.bill_checks()
-        seen = (page.get("fingerprint"), json.dumps(s["bill_facts"], sort_keys=True), len(s["history"]),
-                self.replies())
+        seen = (page.get("fingerprint"), json.dumps(s["bill_facts"], sort_keys=True), self.replies())  # its own waits
+        # are no progress: a page that never changes stops it after ACTOR_IDLE turns
         s["actor_idle"] = s["actor_idle"] + 1 if seen == s["actor_seen"] else 0
         s["actor_seen"] = seen
         if s["actor_idle"] >= ACTOR_IDLE:
@@ -2402,6 +2404,9 @@ class Worker:
                     break
                 text = s["captcha_text"][0]
             if operation == "TYPE_TEXT" and text == "[ask]":
+                if rules.host(page["url"]) in s["typed_hosts"]:  # a code for a page the biller's site never led to
+                    raise self.bill_halt(f"{rules.host(page['url'])}, a page I opened by typing its address, asked for "
+                                         "a code or password, so I stopped and didn't ask you for it.")
                 if not secret_field(action):
                     results.append(f"“{label}” isn't a box for a secret: type its value or a [profile:…] placeholder")
                     break
@@ -2422,8 +2427,10 @@ class Worker:
                          text=text if operation == "TYPE_TEXT" else None)
             last = s["history"][-1] if len(s["history"]) > before else {}
             results.append(f"{operation.lower()} “{label}”: {last.get('changed') or 'done'}")
+            moved = last.get("after_spot") != last.get("spot") or last.get("url") != page["url"]  # new controls or
+            # address: a typed value alone changes the page's fingerprint, not what the rest of the list was chosen on
             page = s["page"]
-            if s["status"] != "ready" or s["commit"] or self.replies() > replies or last.get("page_changed") \
+            if s["status"] != "ready" or s["commit"] or self.replies() > replies or moved \
                     or last.get("committed") or not last:
                 break
         return None
@@ -2562,10 +2569,20 @@ class Worker:
         s = self.state
         if s["payment_id"] is None:
             return
+        s["payment_status"] = status
         try:
             self.memory.payment_ended(s["payment_id"], status, reference)
         except Exception as error:
             s["errors"].append({"step": len(s["history"]), "error": f"payment record: {error}"})
+
+    def settle_payment(self):
+        """A bill's task stopped with its payment's record still "started": failed when nothing was charged (a No, the
+        QR not paid, nothing due), else unclear (stopped after the user's yes was acted on: it may have gone through)."""
+        s = self.state
+        if not self.bill or s["payment_id"] is None or s.get("payment_status"):
+            return
+        nothing = s.get("outcome") in {"not_approved", "not_paid", "already_paid", "nothing_due"}
+        self.end_payment("unclear" if self.paid() and not nothing else "failed")
 
     def payment_qr(self):
         """(the UPI link, the QR's picture) for a QR on screen now, else (None, None). The link is the picture's own,
@@ -2628,15 +2645,15 @@ class Worker:
         return None
 
     def bill_done(self, say):
-        """The page model says the task is done. Paid only when the user's yes was acted on and the site confirmed
-        it (the gate's watch, the reference on the page, or their word on the QR): the report is written in code. Done
-        without a payment is no ending."""
+        """The page model says the task is done. Paid only when the user's yes was acted on and the proof is there:
+        the reference on the page, or their word on the QR. The report is written in code. Done without a payment is
+        no ending."""
         s, intent = self.state, self.bill
         reference = s["bill_facts"].get("reference")
         shown = bool(reference) and money.grounded(reference, s["page"]["text"])  # the receipt on screen now
         # dry run: the bank's "Processing…" screen made the gate's watch call SUBMIT a step, so its receipt, with the
         # reference the page shows, is the proof
-        if self.paid() and (s["done"] or s["qr_sent"] or shown):
+        if self.paid() and (s["qr_sent"] or shown):  # the gate's watch alone can call a gateway page "confirmed"
             amount = money.shown(Decimal(s["approved_pay"])) if s["approved_pay"] else "your bill"
             account = self.account_value()
             self.end_payment("paid", reference or "")

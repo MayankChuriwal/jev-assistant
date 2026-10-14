@@ -1,0 +1,28 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Payment Gateway</title></head>
+<body><h3>Payment Gateway</h3><p>Merchant: ELECTRICITY BOARD</p><p id="total"></p>
+<p>Choose a payment method</p><button id="tupi">UPI</button> <button id="tcard">Credit / Debit Card</button>
+<div id="upi" hidden><p>Scan the QR code with any UPI app</p><img id="qr" alt="UPI QR code" width="264" height="264"></div>
+<div id="card" hidden><label for="no">Card Number</label> <input id="no" inputmode="numeric" maxlength="19">
+<label for="exp">Expiry (MM/YY)</label> <input id="exp" maxlength="5">
+<label for="cvv">CVV</label> <input id="cvv" type="password" maxlength="3">
+<label><input type="checkbox" id="save" checked> Save card for faster payments</label>
+<button id="paycard"></button></div><p id="msg"></p>
+<script>
+window.log = [];
+const variant = new URLSearchParams(location.search).get('variant') || '';
+const payable = variant === 'fee' ? '1,263.00' : '1,240.00';
+total.textContent = variant === 'fee' ? 'Bill ₹ 1,240.00 · Convenience fee ₹ 23.00 · Total ₹ 1,263.00' : 'Amount: ₹ 1,240.00';
+paycard.textContent = 'Pay ₹ ' + payable;
+const qrAmount = variant === 'wrongqr' ? '12400' : '1240';
+qr.src = 'bill-qr-' + qrAmount + '.png';
+if (variant !== 'nolink') qr.dataset.upi = 'upi://pay?pa=board.pg@bank&pn=ELECTRICITY%20BOARD&am=' + qrAmount + '.00&tr=BD7H2K99&cu=INR';
+const back = 'http://127.0.0.1:' + location.port + '/bill-receipt.html';
+tupi.onclick = () => { upi.hidden = false; card.hidden = true;
+  setInterval(() => { if (window.paid) location.href = back + '?by=upi'; }, 300); };
+tcard.onclick = () => { card.hidden = false; upi.hidden = true; };
+paycard.onclick = () => {
+  if (no.value.replace(/\s/g, '').length < 15 || !/^\d\d\/\d\d$/.test(exp.value) || cvv.value.length !== 3) {
+    msg.textContent = 'Please enter valid card details.'; return; }
+  location.href = 'bill-otp.html?saved=' + save.checked + '&last4=' + no.value.replace(/\s/g, '').slice(-4);
+};
+</script></body></html>

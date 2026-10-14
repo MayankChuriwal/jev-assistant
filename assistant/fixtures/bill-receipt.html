@@ -1,0 +1,5 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Payment Receipt</title></head>
+<body><h2>Payment Successful</h2><p>Transaction Reference: BD7H2K99</p><p>Amount Paid: ₹ 1,240.00</p>
+<p id="how"></p><button>Print Receipt</button>
+<script>const q = new URLSearchParams(location.search);
+how.textContent = 'Paid by ' + (q.get('by') || '') + (q.get('saved') === 'true' ? ' (card saved)' : '');</script></body></html>

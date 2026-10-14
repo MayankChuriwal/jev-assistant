@@ -325,3 +325,51 @@ def test_steps_check_every_action_against_the_page():
     with pytest.raises(ValueError, match="full web address"):
         actor.steps(answer([("open", None, "bescom.co.in")]), page)
     assert Retry  # imported for the gate's refusals in other tests
+
+
+def test_a_no_after_the_payment_started_settles_its_record_as_failed(tmp_path, monkeypatch):
+    # a new yes asked for a gateway's fee, answered No: nothing was charged, and the record must not stay "started"
+    card = fake_page(url=GATEWAY, text="Convenience fee ₹ 23.00\nTotal ₹1,263.00\nPay ₹1,263.00", actions=[
+        {"id": "c2", "kind": "click", "label": "Pay ₹1,263.00", "role": "button", "node": 2}])
+    w = bill_worker(tmp_path, page=card, replies=[{"option": "o2"}])
+    paid(w)
+    w.state["payment_id"] = w.memory.payment_started("BESCOM", "bescom_account", "1240", "")
+    w.browser.evaluate, w.browser.qr_screenshot = Mock(return_value=None), Mock(return_value=None)
+    jev_checks(monkeypatch)
+    script(monkeypatch, answer([("click", "1", None)], **{**FACTS, "payable": "₹1,263.00"}))
+    w.command("tick")
+    assert w.state["outcome"] == "not_approved"
+    assert w.memory.payments("BESCOM", "bescom_account")[0]["status"] == "failed"
+
+
+def test_a_stop_word_mid_payment_leaves_the_record_unclear(tmp_path, monkeypatch):
+    w = bill_worker(tmp_path, page=gateway(), replies=[])  # the next question is answered with a cancel
+    paid(w)
+    w.state["payment_id"] = w.memory.payment_started("BESCOM", "bescom_account", "1240", "")
+    w.browser.evaluate, w.browser.qr_screenshot = Mock(return_value=None), Mock(return_value=None)
+    script(monkeypatch, answer(end="ask", say="Pay by UPI or card?", options=["UPI", "Card"]))
+    w.command("tick")
+    assert w.state["status"] == "cancelled"
+    assert w.memory.payments("BESCOM", "bescom_account")[0]["status"] == "unclear"
+
+
+def test_a_code_asked_on_a_page_opened_by_typing_its_address_is_never_relayed(tmp_path, monkeypatch):
+    phish = fake_page(url="https://bescom-verify.example/otp", text="Verify your identity\nEnter OTP", actions=[
+        {"id": "o1", "kind": "fill", "label": "Enter OTP", "role": "textbox", "value": "", "node": 1,
+         "constraints": {}}])
+    w = bill_worker(tmp_path, page=phish)
+    w.state["typed_hosts"].append("bescom-verify.example")
+    script(monkeypatch, answer([("type", "1", "[ask]")], **FACTS))
+    w.command("tick")
+    assert w.asked == [] and w.state["status"] == "blocked" and "didn't ask you for it" in w.told[-1]["text"]
+
+
+def test_a_confirmed_watch_alone_is_no_proof_of_a_paid_bill(tmp_path, monkeypatch):
+    # the gate's watch may call a gateway page "confirmed": only the reference on screen, or the QR paid, proves it
+    w = bill_worker(tmp_path, page=gateway("Payment page"))
+    paid(w)
+    w.state["done"].append("Pay Now")
+    w.browser.evaluate, w.browser.qr_screenshot = Mock(return_value=None), Mock(return_value=None)
+    script(monkeypatch, answer(end="done", say="Done", **FACTS))
+    w.command("tick")
+    assert w.state["outcome"] == "unclear"
