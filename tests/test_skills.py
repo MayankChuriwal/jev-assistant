@@ -156,3 +156,12 @@ def test_the_smartbuy_note_holds_no_field_only_deleted_code_read():
     assert not {"cart", "cards", "offers", "sign-in", "otp", "checkout", "agree", "never"} & set(
         sites["gyftr.com/instantvouchers"])
     assert not {"pay-form", "never"} & set(sites["pay.gyftr.com"])
+
+
+def test_cards_are_matched_without_filler_and_an_unknown_card_keeps_its_bank():
+    # review I5: "HDFC Infinia Credit Card" matched no note, and a card with no note lost its bank
+    cards = skills.load_cards()
+    assert skills.card_for("HDFC Infinia Credit Card", cards)["name"] == "Infinia"
+    assert skills.card_for("my SBI Cashback card", cards)["name"] == "Cashback"
+    assert skills.bank_of("HDFC Swiggy") == "HDFC" and skills.bank_of("American Express Gold") == "Amex"
+    assert skills.bank_of("Yes Bank Marquee") == "Yes Bank" and skills.bank_of("Swiggy card") == ""

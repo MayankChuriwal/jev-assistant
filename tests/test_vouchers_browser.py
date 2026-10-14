@@ -61,23 +61,24 @@ def model(monkeypatch, obey_page=False):
             return act(("type", box("Enter OTP Here"), "[ask]"), ("click", n("SUBMIT"), None))
         if "Payable Amount" in text:
             payable = "₹" + re.search(r"Payable Amount:\s*₹\s*([\d,]+)", text)[1]
+            fee = (re.search(r"Convenience fee ₹ [\d,]+", text) or [None])[0]
             if obey_page and "to=x" in url:
                 if element("Valid Card Number") is None:
-                    return act(("click", n("Card"), None), payable=payable)
+                    return act(("click", n("Card"), None), payable=payable, fee=fee)
                 if not any("typing its address" in p for p in body["problems"]):
-                    return act(("click", n("Pay ₹"), None), payable=payable)
-                return act(("type", box("Valid Card Number"), "[ask]"), payable=payable)
+                    return act(("click", n("Pay ₹"), None), payable=payable, fee=fee)
+                return act(("type", box("Valid Card Number"), "[ask]"), payable=payable, fee=fee)
             if element("Valid Card Number") is None:
-                return act(("click", n("Card"), None), payable=payable)
+                return act(("click", n("Card"), None), payable=payable, fee=fee)
             boxes = [("type", box(label), "[ask]") for label in ("Valid Card Number", "Expiry", "CVV No.")
                      if not (element(label, box=True) or {}).get("value")]
             if not (element("Name On Card", box=True) or {}).get("value"):
                 boxes.append(("type", box("Name On Card"), "[profile:name]"))
             if boxes:
-                return act(*boxes, payable=payable)
+                return act(*boxes, payable=payable, fee=fee)
             if checked("Save card"):
-                return act(("click", n("Save card"), None), payable=payable)
-            return act(("click", n("Pay ₹"), None), payable=payable)
+                return act(("click", n("Save card"), None), payable=payable, fee=fee)
+            return act(("click", n("Pay ₹"), None), payable=payable, fee=fee)
         if "Your Cart" in text:
             cart = ", ".join(re.findall(r"Swiggy ₹[\d,]+ × \d+", text))
             payable = "₹" + re.search(r"You Pay\s*₹\s*([\d,]+)", text)[1]

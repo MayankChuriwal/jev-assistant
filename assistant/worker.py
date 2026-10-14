@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 from . import actor, executor, gate, jev, learn, money, planner, replay, rules, skills, views
 from .browser import Browser, ExecutionUncertain, StalePage, TabsClosed, unique
@@ -22,6 +23,7 @@ from .model import METER, action_space, new_meter, spent
 from .privacy import SECRETS, Secrets, storable, variants
 
 STOPPED = {"done", "blocked", "failed", "cancelled"}
+IST = ZoneInfo("Asia/Kolkata")
 PRIVATE = {"browser", "answers", "ids"}  # hold secret values
 MAX_ACTIONS = 150
 MAX_MINUTES = 30
@@ -45,7 +47,7 @@ QR_TRIES = 5  # seconds a mandate's QR may take to render after its Cancel
 LIST_READS, LIST_GAP = 6, 0.7  # MyUPI draws its mandate list a card at a time, over a few seconds
 CHOSEN = re.compile(r"(Cancel|Pause) the UPI AutoPay mandate whose payee is (.+?)(?: until .+)?$")  # the brain's words
 BANK_SUBMIT = re.compile(r"\s*(?:submit|confirm|verify|authenticate|pay)\s*$", re.IGNORECASE)  # an OTP page's own
-ORDER_ID = re.compile(r"\border\s*(?:id|no\.?|number)\s*:?\s*([A-Z0-9][A-Z0-9-]{5,})", re.IGNORECASE)
+ORDER_TOKEN = re.compile(r"(?=[A-Za-z0-9-]*\d)[A-Za-z0-9][A-Za-z0-9-]{4,}")  # an order's number: 5 or more, a digit
 ROW_FIX = re.compile(r"Dispute type: Personal Details\. The report shows: ([^:]+): .+?\. It should be: (.+?)\.?\s*$",
                      re.DOTALL)  # the brain's dispute: the row it names, and that row's correct value
 MANDATE_CANCEL = re.compile(r"(?:cancel|revoke)\b", re.IGNORECASE)  # a card's Cancel: the UPI app does the rest
@@ -414,9 +416,10 @@ class Worker:
         return page
 
     def masking(self):
-        """Whether pages are masked as they are read: a voucher purchase whose yes was acted on."""
+        """Whether pages are masked as they are read: a voucher purchase whose yes was acted on (its payment started,
+        or a commit made with the user's yes)."""
         job, state = getattr(self, "job", None), getattr(self, "state", None) or {}
-        return bool(job and job["kind"] == "voucher" and state.get("approved_pay"))
+        return bool(job and job["kind"] == "voucher" and (state.get("approved_pay") or self.paid()))
 
     def observe(self):
         page = self.settled(self.clean(self.state["browser"].observe()))
@@ -487,9 +490,11 @@ class Worker:
         except Halt as halt:
             self.log_refusal("halt", halt)
             self.state["status"] = halt.status
+            warning = self.stop_warning() if halt.status == "cancelled" else ""
             self.settle_payment()
             self.clock()
-            self.say(str(halt), kind="result")  # how it ended: a brain task's report (Experian refused the ERN)
+            self.say(str(halt) + warning, kind="result")  # how it ended: a brain task's report (Experian refused
+            # the ERN)
             return self.snapshot()
         finally:
             SECRETS.reset(secrets)
@@ -1018,6 +1023,16 @@ class Worker:
         payable = total if total and money.grounded(total, page["text"]) else s["job_facts"].get("payable")
         if money.rupees(payable) is None:
             raise Retry("Put the amount to pay, as the page shows it, in facts.payable before pressing pay.")
+        total = Decimal(intent["amount"])
+        excess = money.rupees(payable) - total
+        if excess > max(money.money_off(s["job_facts"].get("fee"), total), total * Decimal("0.03")) + 1:
+            s["cart_refusals"] += 1  # review: a ₹7,000 cart read as the goal's ₹5,000 went out as "the site's fee"
+            if s["cart_refusals"] >= 3:
+                raise self.job_halt(f"The amount to pay stayed {money.shown(money.rupees(payable))}, more than the "
+                                    f"{money.shown(total)} you asked for, so I stopped before paying.")
+            raise Retry(f"The amount to pay is {money.shown(money.rupees(payable))}, {money.shown(excess)} more than "
+                        f"the {money.shown(total)} asked: the cart holds more than the goal's vouchers. Fix the cart, "
+                        "then read it again into facts.cart and facts.payable.")
         s["offer"] = str(money.rupees(payable))  # what a yes now approves
         return money.voucher_lines(intent, {**s["job_facts"], "payable": payable})
 
@@ -1029,7 +1044,10 @@ class Worker:
             h.get("committed") and h.get("approved") == "user" for h in self.state["history"])
 
     def bank_box(self, page):
-        """After the payment the user said yes to (`paid`), the bank's one-time password box still empty, else None."""
+        """After the payment the user said yes to (`paid`), the bank's one-time password box still empty, else None.
+        Never on a page opened by typing its address (review: an injected "complete your payment" page would get it)."""
+        if rules.host(page.get("url") or "") in self.state.get("typed_hosts", ()):
+            return None
         return next((a for a in page["actions"] if rules.secret_field(a) and a.get("value") != "[secret]"
                      and not rules.CARD_DETAIL.search(a.get("label") or "")), None) if self.paid() else None
 
@@ -1868,6 +1886,8 @@ class Worker:
             gate.bind(self.state, action, label, "", page, "user")
         elif label:
             gate.approved(self, page, action, label, sub)  # returns True, or raises StalePage or Retry
+            if self.job and self.job["kind"] in {"bill", "voucher"}:  # the yes acted on, by whatever control or key
+                self.start_payment()  # carries it (review: Enter in the CVV box): its row first, then the masking
         ran = self.run(page, operation, action, inputs, shown, commit=label, goal=(sub or {}).get("do", ""),
                        cleared=cleared)
         card = rules.CARD_ACTION.match(action.get("label") or "") if operation == "CLICK" else None
@@ -2177,23 +2197,25 @@ class Worker:
         s, intent = self.state, self.job
         brand, portal = intent["brand"], intent["portal"]
         try:
-            earlier = money.paid_before(self.memory.payments(portal, money.voucher_key(brand)),
-                                        datetime.now(timezone.utc), money.VOUCHER_WINDOW)
+            rows = self.memory.payments(portal)  # this brand's, and any purchase on the store never settled
+            mine = [r for r in rows if r["account"] == money.voucher_key(brand)
+                    or r["status"] in {"started", "unclear"}]
+            earlier = money.paid_before(mine, datetime.now(timezone.utc), money.VOUCHER_WINDOW)
         except Exception:  # memory unreachable: no record to check, so the user is asked
             earlier = {"status": "unknown"}
         if earlier is None:
             return
+        when = earlier.get("created_at")
+        when = when.astimezone(IST) if when else None  # the user's own clock, not the database's
         if earlier["status"] == "paid":
             question = (f"You bought {money.shown(earlier['amount'])} of {brand} vouchers on {portal} at "
-                        f"{earlier['created_at']:%H:%M %d %b}" + (f" (order {earlier['reference']})"
-                                                                   if earlier.get("reference") else "")
-                        + ". Buy again?")
+                        f"{when:%H:%M on %d %b}" + (f" (order {earlier['reference']})"
+                                                     if earlier.get("reference") else "") + ". Buy again?")
         elif earlier["status"] == "unknown":
             question = f"I can't check my record of your voucher purchases just now. Buy {brand} vouchers anyway?"
         else:
-            question = (f"A {money.shown(earlier['amount'])} {brand} purchase on {portal} on "
-                        f"{earlier['created_at']:%d %b} was never confirmed, so it may have gone through. Buy again "
-                        "anyway?")
+            question = (f"A {money.shown(earlier['amount'])} voucher purchase on {portal} at {when:%H:%M on %d %b} "
+                        "was never confirmed, so it may have gone through. Buy again anyway?")
         if not self.bill_yes(question, "Buy again"):
             s["outcome"] = "bought_before"
             raise Halt("done", f"Not bought again: no {brand} vouchers were bought.")
@@ -2250,6 +2272,7 @@ class Worker:
         """The yes is about to be acted on: the payment's row is written "started" first (never twice)."""
         s = self.state
         s["approved_pay"] = s["offer"] or s["approved_pay"]
+        s.setdefault("paid_url", s["page"].get("url"))  # where the yes was acted on: no proof of its own success
         if s["payment_id"] is not None or not s["approved_pay"]:
             return
         job = self.job
@@ -2269,6 +2292,22 @@ class Worker:
             self.memory.payment_ended(s["payment_id"], status, reference)
         except Exception as error:
             s["errors"].append({"step": len(s["history"]), "error": f"payment record: {error}"})
+
+    def stop_warning(self):
+        """The user stopped a money job after their yes was acted on: it may have gone through, so its record and
+        outcome are unclear, and they hear what to check before trying again (review: they were told nothing more
+        would be done). Else ""."""
+        s, job = self.state, self.job
+        if not job or job["kind"] not in {"bill", "voucher"} or not self.paid() or s.get("outcome") in {"bought",
+                                                                                                         "paid"}:
+            return ""
+        self.end_payment("unclear")
+        s["outcome"] = "unclear"
+        if job["kind"] == "voucher":
+            return (f" Your {job['brand']} vouchers may already be bought: check your SMS and email before buying "
+                    "again.")
+        return (f" Your payment to {job['biller']} may already have gone through: don't pay again until you've checked "
+                "your bank's SMS or the biller's site.")
 
     def settle_payment(self):
         """A money job stopped with its payment's record still "started": failed when nothing was charged (a No, the
@@ -2365,11 +2404,13 @@ class Worker:
     def voucher_done(self, say):
         """Bought only when the user's yes was acted on and the order's number is on the page now; the report names
         the order, never a code."""
-        s, intent = self.state, self.job
-        order = s["job_facts"].get("order_id")
-        if not (order and money.grounded(order, s["page"]["text"])):
-            found = ORDER_ID.search(s["page"]["text"])
-            order = found[1] if found else None
+        s, intent, page = self.state, self.job, self.state["page"]
+        named = money.ORDER_ID.search(page["text"])
+        order = next((o for o in (s["job_facts"].get("order_id"), named[1] if named else None)
+                      if o and ORDER_TOKEN.fullmatch(o) and o in page["text"]), None)  # never the mask's "[code]"
+        if page.get("url") == s.get("paid_url") or any(rules.CARD_DETAIL.search(a.get("label") or "")
+                                                       for a in page["actions"] if a["kind"] == "fill"):
+            order = None  # the page the yes was acted on (GyFTR's shows an Order Id before paying): no proof
         if self.paid() and order:
             self.end_payment("paid", order)
             s["status"], s["outcome"] = "done", "bought"

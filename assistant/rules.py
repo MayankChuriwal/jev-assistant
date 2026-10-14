@@ -216,7 +216,9 @@ def captcha_challenge(page):
 # where a captcha's text (or a sum's answer: Tata Power-DDL's "Enter addition of two numbers") is typed
 CAPTCHA_BOX = re.compile(r"captcha|security verification|image code|characters shown|addition of two numbers|"
                          r"sum of (?:the )?two numbers", re.IGNORECASE)
-CARD_DETAIL = re.compile(r"\b(cvv|cvc|card (number|no\.?|details?)|expir(y|ation)( date)?|upi pin)\b", re.IGNORECASE)
+CARD_DETAIL = re.compile(r"\b(cvv|cvc|card (number|no\.?|details?)|expir(y|ation)( date)?|upi pin|"
+                         r"card'?s? last (?:4|four) digits|last (?:4|four) digits of (?:your |the )?card)\b",
+                         re.IGNORECASE)  # Axis Grab Deals signs in with the card's last four digits
 PRICE = re.compile(r"[₹$€£]\s?\d(?:[\d,]*\d)?(?:\.\d+)?|\bRs\.?\s?\d(?:[\d,]*\d)?(?:\.\d+)?", re.IGNORECASE)
 
 

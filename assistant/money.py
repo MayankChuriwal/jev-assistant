@@ -47,8 +47,10 @@ MULTIPLIER = re.compile(r"(\d+(?:\.\d+)?)\s*[x×](?![a-z])", re.IGNORECASE)  # "
 PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")  # "5% cashback", "10% GV coins", "2.5%"
 EARN = re.compile(r"^\s*(\d+(?:\.\d+)?)\s+per\s+(\d+)\s*$")  # a card note's base earn: "5 per 150"
 CART = (re.compile(r"(\d+)\s*[x×]\s*₹\s?([\d,]+)"), re.compile(r"₹\s?([\d,]+)\s*[x×]\s*(\d+)"))
-CODE_LABEL = re.compile(r"\b(code|pin|voucher (?:no|number)|card (?:no|number)|claim)\b", re.IGNORECASE)
-PROOF_LABEL = re.compile(r"\b(order|transaction|txn|reference|ref)\b", re.IGNORECASE)
+ORDER_LABEL = re.compile(r"\border\s*(?:id|no\.?|number)\b\s*[:#-]?\s*$", re.IGNORECASE)  # a bare label: id below it
+ORDER_ID = re.compile(r"\border\s*(?:id|no\.?|number)\b\s*[:#-]?\s*([A-Za-z0-9][A-Za-z0-9-]{4,})", re.IGNORECASE)
+RUPEE_BEFORE = re.compile(r"(?:₹|\brs\.?|\binr)\s*$", re.IGNORECASE)
+DECIMAL_AFTER = re.compile(r"\.\d")
 TOKEN = re.compile(r"(?<![\w-])(?=[A-Za-z0-9-]*\d)[A-Za-z0-9][A-Za-z0-9-]{3,}(?![\w-])")  # letters and digits
 
 
@@ -84,9 +86,14 @@ def read_goal(portal, brand, amount):
             "and the monthly limit. Buy nothing.")
 
 
+BRAND_FILLER = {"money", "gift", "voucher", "vouchers", "card", "cards", "e", "egift", "evoucher", "gv", "instant"}
+
+
 def voucher_key(brand):
-    """A voucher purchase's record key, where a bill's names its account: "Swiggy Money" → voucher_swiggy_money."""
-    return ("voucher_" + (re.sub(r"[^a-z0-9]+", "_", str(brand).lower()).strip("_") or "brand"))[:40].rstrip("_")
+    """A voucher purchase's record key, where a bill's names its account: the brand's own words, so "Swiggy",
+    "Swiggy Money" and "Swiggy vouchers" are one record (voucher_swiggy)."""
+    kept = [w for w in re.findall(r"[a-z0-9]+", str(brand).lower()) if w not in BRAND_FILLER]
+    return ("voucher_" + ("_".join(kept) or "brand"))[:40].rstrip("_")
 
 
 def split(amounts, total):
@@ -127,7 +134,11 @@ def nearest(total, amounts, limit):
     if not sizes:
         return []
     top = min(limit, total + max(sizes)) if limit else total + max(sizes)
-    made = [t for t in range(min(sizes), top + 1, math.gcd(*sizes)) if split(sizes, t)]
+    reached, made = {0}, []  # every total these vouchers make, in one pass (review: a split per total took 79 s)
+    for t in range(math.gcd(*sizes), top + 1, math.gcd(*sizes)):
+        if any(t - size in reached for size in sizes):
+            reached.add(t)
+            made.append(t)
     return sorted([t for t in made if t < total][-1:] + [t for t in made if t > total][:1],
                   key=lambda t: (abs(t - total), t))
 
@@ -214,34 +225,41 @@ def voucher_lines(intent, facts):
     lines = [f"Buy ₹{intent['amount']:,} of {intent['brand']} vouchers on {intent['portal']}",
              counted(intent["split"]) if intent["split"] else f"Vouchers making ₹{intent['amount']:,}",
              f"Paying with {intent['card']}"]
-    payable = rupees(facts.get("payable"))
-    if payable is not None:
-        lines.append(f"Payable with the site's fee: {shown(payable)}" if payable > intent["amount"]
-                     else f"Payable: {shown(payable)}")
+    payable, total = rupees(facts.get("payable")), Decimal(intent["amount"])
+    if payable is not None and payable > total:
+        fee = money_off(facts.get("fee"), total)
+        lines.append(f"Payable with the site's fee: {shown(payable)}" if fee and payable - total <= fee + 1 else
+                     f"Payable: {shown(payable)} ({shown(payable - total)} more than the {shown(total)} asked)")
+    elif payable is not None:
+        lines.append(f"Payable: {shown(payable)}")
     if facts.get("reward"):
         lines.append(f"Reward shown now: {facts['reward']}")
     now, then = reward(facts.get("reward")), reward(intent.get("compared"))
-    if then["value"] is not None and (now["kind"] != then["kind"] or now["value"] < then["value"]):
+    if then["value"] is not None and now["value"] is not None and (now["kind"] != then["kind"]
+                                                                   or now["value"] < then["value"]):
         lines.append(f"Lower than when compared: {intent['compared']}")
     return lines
 
 
 def mask_codes(text):
-    """Page text with voucher codes and PINs hidden. On a line naming a code or PIN (or the line after a bare such
-    label), every run of 4 or more letters and digits holding a digit becomes [code]; elsewhere every run of 10 or
-    more does, except on a line naming an order, transaction or reference (or the line after a bare such label): the
-    proof the purchase needs."""
-    out, carry = [], None
+    """Page text after a purchase's yes, with every voucher code and PIN hidden: deny by default. Every run of 4 or more
+    letters and digits holding a digit becomes [code], except a rupee amount (₹, Rs or INR before it, or a decimal
+    after it) and the one order number an "Order ID / No / Number" label names, on its line or the next: the proof."""
+    out, label_above = [], False
     for line in str(text or "").split("\n"):
-        code, proof = bool(CODE_LABEL.search(line)), bool(PROOF_LABEL.search(line))
-        kind = "code" if code else "proof" if proof else carry
-        if kind == "code":
-            out.append(TOKEN.sub("[code]", line))
-        elif kind == "proof":
-            out.append(line)
-        else:
-            out.append(TOKEN.sub(lambda m: "[code]" if len(m[0]) >= 10 else m[0], line))
-        carry = ("code" if code else "proof" if proof else None) if not TOKEN.search(line) else None
+        named = ORDER_ID.search(line)
+        keep = named[1] if named else None
+        if keep is None and label_above:
+            first = TOKEN.search(line)
+            keep = first[0] if first else None
+        label_above = bool(ORDER_LABEL.search(line)) and named is None
+
+        def hide(found, line=line, keep=keep):
+            if found[0] == keep or RUPEE_BEFORE.search(line[:found.start()]) or DECIMAL_AFTER.match(line, found.end()):
+                return found[0]
+            return "[code]"
+
+        out.append(TOKEN.sub(hide, line))
     return "\n".join(out)
 
 

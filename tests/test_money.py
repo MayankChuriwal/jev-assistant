@@ -177,7 +177,7 @@ def test_the_approval_says_what_is_bought_and_flags_a_worse_reward():
                          "Paying with Infinia", "Payable: ₹5,000"]
     assert "Reward shown now: 5X Reward Points" in lines
     assert any(line.startswith("Lower than when compared") for line in lines)
-    fee = money.voucher_lines(intent, {"payable": "₹5,125", "reward": "10X reward points"})
+    fee = money.voucher_lines(intent, {"payable": "₹5,125", "fee": "₹125", "reward": "10X reward points"})
     assert "Payable with the site's fee: ₹5,125" in fee and not any("Lower" in line for line in fee)
 
 
@@ -196,7 +196,8 @@ def test_a_voucher_bought_today_is_asked_about_again():
     row = {"status": "paid", "created_at": now - timedelta(hours=3), "amount": 5000, "reference": "GV1"}
     assert money.paid_before([row], now, money.VOUCHER_WINDOW) == row
     assert money.paid_before([{**row, "created_at": now - timedelta(hours=30)}], now, money.VOUCHER_WINDOW) is None
-    assert money.voucher_key("Swiggy Money") == "voucher_swiggy_money"
+    assert money.voucher_key("Swiggy Money") == money.voucher_key("Swiggy vouchers") == "voucher_swiggy"  # review I4
+    assert money.voucher_key("Amazon Pay Gift Card") == "voucher_amazon_pay"
 
 
 def test_a_compared_reward_with_its_own_full_stops_still_reads_back():
@@ -212,3 +213,48 @@ def test_a_store_that_takes_any_amount_in_a_range_makes_any_total_in_it():
     assert money.amount_range("Enter a value between ₹500 and ₹10,000") == (500, 10000)
     assert money.amount_range("₹100 - ₹5,000") == (100, 5000)
     assert money.amount_range("₹500, ₹1,000") is None
+
+
+@pytest.mark.parametrize("page, secrets", [
+    ("Voucher Code\tPIN\tExpiry\nQWER7890\t482913\t2027\nZXCV5678\t551177\t2027", ["QWER7890", "482913", "ZXCV5678",
+                                                                                     "551177"]),
+    ("Your order is confirmed. Voucher: ABCD1234EFGH5678", ["ABCD1234EFGH5678"]),
+    ("Order Details\nSwiggy E-Gift Voucher ABCD1234EFGH5678", ["ABCD1234EFGH5678"]),
+    ("Passcode: 9911\neGV Number: 123456789\nYour codes\nAB12CD34", ["9911", "123456789", "AB12CD34"]),
+    ("Gift Card: 6001 2345 6789 0123", ["6001", "2345", "6789", "0123"]),
+])
+def test_after_the_yes_every_code_like_run_is_masked(page, secrets):
+    # review C2: tables, order lines, headings, other labels and spaced card numbers all leaked
+    masked = money.mask_codes(page)
+    assert not any(secret in masked for secret in secrets), masked
+
+
+def test_amounts_and_the_one_order_number_stay_readable():
+    page = "Order ID: GV7Q2M44K1 Voucher Code: ABCD-1234\nYou Pay ₹5000.00\nPayable Amount: ₹ 5,000\nRs. 2500 back"
+    masked = money.mask_codes(page)
+    assert "GV7Q2M44K1" in masked and "ABCD-1234" not in masked
+    assert "₹5000.00" in masked and "₹ 5,000" in masked and "Rs. 2500" in masked
+
+
+def test_an_amount_above_the_total_is_a_fee_only_when_the_page_shows_one():
+    intent = money.job_intent(money.voucher_goal("SmartBuy", "Swiggy", 5000, {2000: 2, 1000: 1}, "Infinia"))
+    assert "Payable with the site's fee: ₹5,125" in money.voucher_lines(intent, {"payable": "₹5,125",
+                                                                                 "fee": "Convenience fee ₹ 125"})
+    assert "Payable: ₹7,000 (₹2,000 more than the ₹5,000 asked)" in money.voucher_lines(intent, {"payable": "₹7,000"})
+
+
+def test_nearest_is_quick_on_awkward_amounts():
+    # review: nearest(20000, [99, 500], None) took 79 s, the brain's thread held all that time
+    import time
+    started = time.perf_counter()
+    below, above = sorted(money.nearest(20000, [99, 500], None))
+    assert time.perf_counter() - started < 1
+    assert below < 20000 < above and money.split([99, 500], below) and money.split([99, 500], above)
+    assert money.nearest(1200, [250, 500], None) == [1250, 1000]
+
+
+def test_no_live_reward_read_is_no_lower_reward():
+    # review: "Lower than when compared" went out when the page simply showed no reward
+    intent = money.job_intent(money.voucher_goal("SmartBuy", "Swiggy", 5000, {2000: 2, 1000: 1}, "Infinia",
+                                                 compared="5X Reward Points"))
+    assert not any("Lower" in line for line in money.voucher_lines(intent, {"payable": "₹5,000"}))

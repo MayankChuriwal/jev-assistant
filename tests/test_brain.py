@@ -512,7 +512,7 @@ def test_set_cards_saves_names_only_and_flags_unknown_cards(tmp_path):
     result = brain.set_cards(["HDFC Infinia", "ICICI Sapphiro", "Kotak League"])
     assert result["cards"] == ["Infinia", "Sapphiro", "Kotak League"] and result["unranked"] == ["Kotak League"]
     assert core.memory.facts("preference")[0]["text"] == "Infinia; Sapphiro; Kotak League"
-    assert "Your cards: Infinia (HDFC), Sapphiro (ICICI), Kotak League." in brain.snapshot()["content"]
+    assert "Your cards: Infinia (HDFC), Sapphiro (ICICI), Kotak League (Kotak)." in brain.snapshot()["content"]
 
 
 def test_compare_reads_only_the_stores_the_cards_fit_and_ranks_them(tmp_path):
@@ -669,3 +669,25 @@ def test_a_store_taking_any_amount_in_a_range_buys_the_total_as_one_voucher(tmp_
         "Woohoo": {"amounts": "Enter a value between ₹500 and ₹10,000", "discount": "2%"}})
     offer = next(o for o in brain.voucher_compare("Zomato", 2750)["offers"] if o["portal"] == "Woohoo")
     assert offer["vouchers"] == "1 × ₹2,750" and offer["effective"] == "₹2,695"
+
+
+def test_a_card_with_no_note_is_compared_on_its_banks_store(tmp_path):
+    # review I5 / spec §3.1: a card with no note is saved with its bank, and its bank's store is read, unranked
+    brain, core = voucher_brain(tmp_path, said=["Swiggy 2000"], cards=["HDFC Swiggy"], reads={
+        "SmartBuy": {"amounts": "₹1,000 ₹2,000", "reward": "5X Reward Points"}})
+    result = brain.voucher_compare("Swiggy", 2000)
+    assert "SmartBuy" in read_portals(core)
+    smartbuy = next(o for o in result["offers"] if o["portal"] == "SmartBuy")
+    assert smartbuy["card"] == "HDFC Swiggy" and smartbuy["effective"] is None  # unranked: its points' worth unknown
+
+
+def test_only_the_last_comparisons_offers_are_buyable(tmp_path):
+    # review: offers from an older comparison stayed buyable
+    brain, core = voucher_brain(tmp_path, said=["Swiggy 5000", "and Zomato 2000"], cards=["Infinia", "Sapphiro"],
+                                reads={"SmartBuy": {"amounts": "₹1,000 ₹2,000", "reward": "5X Reward Points"},
+                                       "iShop": {"amounts": "₹1,000 ₹2,000", "reward": "3% iCash"}})
+    brain.voucher_compare("Swiggy", 5000)
+    brain.set_cards(["Infinia"])  # the user no longer has the Sapphiro
+    brain.voucher_compare("Zomato", 2000)
+    brain.items.append({"role": "user", "content": "iShop + Sapphiro"})
+    assert brain.buy_voucher("iShop", "Swiggy", 5000, "Sapphiro")["status"] == "rejected"

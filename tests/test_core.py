@@ -47,6 +47,12 @@ class FakeAgent:
         self.state["memory"].append(f"User update: {text}")
         self.state["approval"] = None
 
+    def stop_warning(self):
+        return ""  # a money job's warning when stopped after its yes: none here
+
+    def settle_payment(self):
+        pass
+
     def settle(self):
         self.state["files"].extend(self.late)  # downloads that finished after the last step
 
@@ -540,6 +546,20 @@ def test_a_stop_after_a_payment_says_it_may_have_gone_through(world):
     gate.set()
     assert until(lambda: "Stopped Order Diet Coke. Pay ₹79 may already have gone through; check it before trying "
                          "again." in bodies(world))
+
+
+def test_a_stop_after_a_purchases_yes_says_what_to_check(world):
+    # review I1: the user's stop between steps after the yes said only "Stopped …"; the money job's warning goes out
+    gate = threading.Event()
+    world.scripts["Buy vouchers"] = [lambda agent: setattr(agent, "stop_warning", lambda: " Your Swiggy vouchers may "
+                                                           "already be bought: check your SMS and email before buying "
+                                                           "again."), hold(gate)]
+    text(world, "Buy vouchers")
+    assert until(lambda: world.agents.get("Buy vouchers"))
+    text(world, "stop")
+    gate.set()
+    assert until(lambda: any("Stopped Buy vouchers. Your Swiggy vouchers may already be bought" in b
+                             for b in bodies(world)))
 
 
 def test_a_task_that_finished_is_never_reported_stopped(world):

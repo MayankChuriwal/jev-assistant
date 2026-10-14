@@ -698,7 +698,9 @@ class Core:
                 commit = task.worker.state.get("commit")
                 pending = f" {commit['label']} may already have gone through; check it before trying again." \
                     if commit else ""
-                self.ended(task, f"Stopped {task.title}.{pending}")
+                warning = task.worker.stop_warning()  # a payment the user said yes to may have gone through
+                task.worker.settle_payment()
+                self.ended(task, f"Stopped {task.title}.{warning or pending}")
             if task.worker:
                 self.payees.update((task.worker.state.get("page") or {}).get("cards") or [])  # its mandates, by name
                 try:

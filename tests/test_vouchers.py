@@ -4,7 +4,7 @@ decide about money. No Chrome, no models."""
 import json
 
 import pytest
-from fakes import fake_page, worker_with
+from fakes import fake_page, jev_checks, worker_with
 
 from assistant import actor, money, planner
 from assistant import worker as module
@@ -168,3 +168,107 @@ def test_a_stores_suggestion_of_the_brands_gift_card_is_no_narrowing(tmp_path):
     assert w.narrows({"label": "Zomato E-Gift Voucher Zomato E-Gift Voucher Product"}) == set()  # live, Woohoo
     assert w.narrows({"label": "Zomato E-Gift Card Zomato E-Gift Card Product (1 of 2)"}) == set()  # its twin's mark
     assert w.narrows({"label": "Zomato Gold Membership"}) == {"gold", "membership"}
+
+
+def test_a_yes_acted_on_by_a_key_starts_the_payment_and_the_masking(tmp_path, monkeypatch):
+    # review C1: Enter in the CVV box submits the pay form; the yes was acted on, but no row and no masking followed
+    cvv = {"id": "c", "kind": "fill", "label": "CVV", "role": "textbox", "value": "[secret]", "node": 3,
+           "constraints": {}, "submit": "Pay ₹5,000"}
+    w = worker_with(tmp_path, page=page("Payable Amount: ₹5,000\nCVV", extra=[cvv]), goal=GOAL,
+                    replies=[{"option": "o1"}])
+    w.state.update(cart_ok=True, checked=True)
+    w.state["job_facts"].update(cart="Swiggy ₹2,000 × 2 Swiggy ₹1,000 × 1", payable="₹5,000")
+    jev_checks(monkeypatch, after_commit="next_step")
+    script(monkeypatch, answer([("key", "1", "Enter")], payable="₹5,000"))
+    w.command("tick")  # the yes is asked
+    w.command("tick")  # and acted on by the key
+    assert any(h.get("committed") and h.get("operation") == "PRESS_KEY" for h in w.state["history"])
+    assert w.state["approved_pay"] == "5000" and w.state["payment_id"] is not None and w.masking()
+
+
+def test_the_masks_placeholder_is_no_order_number(tmp_path, monkeypatch):
+    # review I2a: grounded("[code]", "Voucher Code: [code]") was taken for the order's proof
+    w = worker_with(tmp_path, page=page("Thank you\nVoucher Code: ABCD-EFGH-1234-5678"), goal=GOAL)
+    paid(w)
+    w.state["paid_url"] = "https://pay.gyftr.com/"
+    script(monkeypatch, answer(end="done", say="Done", order_id="[code]"))
+    w.command("tick")
+    assert w.state["outcome"] == "unclear"
+
+
+def test_the_payment_pages_own_order_id_is_no_proof(tmp_path, monkeypatch):
+    # review I2b: pay.gyftr.com shows "Order Id" before paying; a failed payment back on it was reported bought
+    pay = page("Bill Details\nOrder Id :\n230145678912\nPayable Amount: ₹5,000\nPayment failed", url="https://pay.gyftr.com/")
+    w = worker_with(tmp_path, page=pay, goal=GOAL)
+    paid(w)
+    w.state["paid_url"] = "https://pay.gyftr.com/"
+    script(monkeypatch, answer(end="done", say="Done", order_id="230145678912"))
+    w.command("tick")
+    assert w.state["outcome"] == "unclear" and "Bought" not in w.told[-1]["text"]
+
+
+def test_a_payable_far_above_the_total_gets_no_yes(tmp_path, monkeypatch):
+    # review I3: the page's cart held ₹7,000; the model read it as the goal's ₹5,000, and ₹7,000 went out as "fee"
+    w = worker_with(tmp_path, page=page(CART.replace("₹2,000 × 2", "₹2,000 × 3").replace("You Pay ₹5,000",
+                                                                                         "You Pay ₹7,000")), goal=GOAL)
+    script(monkeypatch, answer([("click", "1", None)], cart="Swiggy ₹2,000 × 2 Swiggy ₹1,000 × 1", payable="₹7,000"))
+    w.command("tick")
+    assert not any(m.get("approval") for m in w.asked)
+    assert any("₹2,000 more than" in f for f in w.state["feedback"])
+
+
+def test_a_purchase_never_settled_on_the_store_asks_whatever_its_brand(tmp_path, monkeypatch):
+    # review I4: an unclear Zomato purchase on SmartBuy, then Swiggy there: the user is asked before buying again
+    w = worker_with(tmp_path, page=page(CART), goal=GOAL, replies=[{"option": "o2"}])
+    row = w.memory.payment_started("SmartBuy", money.voucher_key("Zomato"), "2000", "Infinia")
+    w.memory.payment_ended(row, "unclear")
+    script(monkeypatch, answer(cart="Swiggy ₹2,000 × 2 Swiggy ₹1,000 × 1", payable="₹5,000"))
+    w.command("tick")
+    assert w.state["outcome"] == "bought_before" and "never confirmed" in w.asked[0]["text"]
+
+
+def test_the_users_stop_after_the_yes_says_it_may_be_bought(tmp_path, monkeypatch):
+    # review I1: the user's own stop after the yes was answered "Cancelled. Nothing more will be done."
+    otp = {"id": "o", "kind": "fill", "label": "Enter OTP", "role": "textbox", "value": "", "node": 1,
+           "constraints": {}}
+    w = worker_with(tmp_path, page=page("Authenticate the transaction\nEnter OTP", url="https://acs.bank.in/otp",
+                                        extra=[otp]), goal=GOAL)  # no replies: the user stops at the code
+    paid(w)
+    w.state["payment_id"] = w.memory.payment_started("SmartBuy", money.voucher_key("Swiggy"), "5000", "Infinia")
+    script(monkeypatch, answer([("wait", None, None)]))
+    w.command("tick")
+    assert w.state["outcome"] == "unclear" and "check your SMS and email" in w.told[-1]["text"]
+    assert w.memory.payments("SmartBuy", "voucher_swiggy")[0]["status"] == "unclear"
+
+
+def test_after_the_yes_no_code_is_asked_for_a_page_opened_by_typing_its_address(tmp_path, monkeypatch):
+    # review I6: otp_step asked for the bank's code on any page with a code box once the yes was acted on
+    otp = {"id": "o", "kind": "fill", "label": "Enter OTP", "role": "textbox", "value": "", "node": 1,
+           "constraints": {}}
+    w = worker_with(tmp_path, page=page("Complete your payment\nEnter OTP", url="https://pay-verify.example/otp",
+                                        extra=[otp]), goal=GOAL, replies=[{"text": "123456"}])
+    paid(w)
+    w.state["typed_hosts"].append("pay-verify.example")
+    script(monkeypatch, answer([("type", "1", "[ask]")]))
+    w.command("tick")
+    assert not any(m["kind"] == "secret" for m in w.asked) and w.state["status"] == "blocked"
+
+
+def test_a_cards_last_four_digits_go_through_the_hidden_field():
+    # review: Axis Grab Deals signs in with the card's last four digits; [ask] there was refused
+    assert module.secret_field({"kind": "fill", "label": "Last 4 digits of your card"})
+    assert module.secret_field({"kind": "fill", "label": "Enter card's last four digits"})
+    assert not module.secret_field({"kind": "fill", "label": "Last 4 digits of your bank account"})
+
+
+def test_a_fee_after_the_yes_asks_a_new_yes(tmp_path, monkeypatch):
+    # review: the voucher path had no test for a payable that rose after the yes (bills' rides tests only)
+    fee_page = fake_page(url="https://pay.gyftr.com/", text="Payable Amount: ₹5,125\nConvenience fee ₹125", actions=[
+        {"id": "pay", "kind": "click", "label": "Pay ₹5,125", "role": "button", "node": 9}])
+    w = worker_with(tmp_path, page=fee_page, goal=GOAL, replies=[{"option": "o2"}])
+    paid(w)
+    w.state["cart_ok"] = True
+    script(monkeypatch, answer([("click", "1", None)], payable="₹5,125", fee="Convenience fee ₹125"))
+    w.command("tick")
+    approval = next(m for m in w.asked if m.get("approval"))
+    assert "Payable with the site's fee: ₹5,125" in approval["text"] and w.state["outcome"] == "not_approved"

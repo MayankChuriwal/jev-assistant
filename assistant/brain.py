@@ -401,7 +401,7 @@ class Brain:
 
     def card_note(self, name):
         """A card's note (its bank, base earn, rupees a point), else just its name: its offers can't be valued."""
-        return skills.card_for(name, self.cards) or {"name": name, "bank": ""}
+        return skills.card_for(name, self.cards) or {"name": name, "bank": skills.bank_of(name)}
 
     def set_cards(self, cards):
         """The user's cards, saved by name only: each matched to its card note where there is one."""
@@ -446,6 +446,7 @@ class Brain:
                     "next": "Say so, naming the stores covered: " + ", ".join(
                         f"{name} ({', '.join(note['banks'])})" for name, note in portals.items()) + "."}
         offers, unread = [], []
+        self.offers = {}  # only this comparison's offers can be bought (review: an older one's stayed buyable)
         for n, (name, note) in enumerate(stores, 1):
             facts, why = self.read_store(name, note, brand, amount, f"Reading {brand} on {name}… {n} of {len(stores)}")
             fitting = [card for card in cards if skills.fits(note, self.card_note(card))]

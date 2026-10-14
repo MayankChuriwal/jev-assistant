@@ -63,14 +63,31 @@ def load_cards(folder=FOLDER / "cards"):
     return {meta["name"]: {"aliases": [], **meta} for meta, _ in map(read, sorted(Path(folder).glob("*.md")))}
 
 
+CARD_FILLER = {"credit", "debit", "card", "cards", "my", "the", "a", "an"}
+BANKS = (("HDFC", r"hdfc"), ("ICICI", r"icici"), ("Axis", r"axis"), ("SBI", r"sbi"),
+         ("Amex", r"amex|american express"), ("IndusInd", r"indusind"), ("Yes Bank", r"yes bank"),
+         ("Kotak", r"kotak"), ("IDFC FIRST", r"idfc"), ("AU", r"\bau\b"), ("RBL", r"rbl"), ("HSBC", r"hsbc"))
+
+
+def card_words(text):
+    return " ".join(w for w in re.findall(r"[a-z0-9]+", str(text or "").lower()) if w not in CARD_FILLER)
+
+
 def card_for(said, cards):
-    """The card note the user's words name (its name, an alias, or its bank and name), else None."""
-    words = " ".join(re.findall(r"[a-z0-9]+", str(said or "").lower()))
+    """The card note the user's words name (its name, an alias, or its bank and name; "credit card" and the like
+    don't count), else None."""
+    words = card_words(said)
     for card in cards.values():
         names = [card["name"], *card["aliases"], f"{card['bank']} {card['name']}"]
-        if any(words == " ".join(re.findall(r"[a-z0-9]+", name.lower())) for name in names):
+        if words and any(words == card_words(name) for name in names):
             return card
     return None
+
+
+def bank_of(said):
+    """The bank a card's name says it is from ("HDFC Swiggy" → HDFC), else ""."""
+    text = str(said or "").lower()
+    return next((bank for bank, words in BANKS if re.search(rf"\b(?:{words})\b", text)), "")
 
 
 def portals(sites):

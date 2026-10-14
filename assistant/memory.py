@@ -304,11 +304,12 @@ class Memory:
 
         self.run(work)
 
-    def payments(self, biller, account):
-        """This biller's payments for this account, newest first."""
+    def payments(self, biller, account=None):
+        """This biller's payments for this account (every account's, with none named), newest first."""
         return self.run(lambda cur: cur.execute(
-            "SELECT id, biller, amount, method, reference, status, created_at FROM payments WHERE lower(biller) = "
-            "lower(%s) AND account = %s ORDER BY created_at DESC, id DESC", (biller, account)).fetchall())
+            "SELECT id, biller, account, amount, method, reference, status, created_at FROM payments WHERE "
+            "lower(biller) = lower(%s) AND (%s::text IS NULL OR account = %s) ORDER BY created_at DESC, id DESC",
+            (biller, account, account)).fetchall())
 
     # ---- events
 
