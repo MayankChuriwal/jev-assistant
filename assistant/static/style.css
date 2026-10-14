@@ -122,3 +122,6 @@ form { flex: none; display: flex; align-items: flex-end; gap: 10px; margin: 0 8p
   .disclaimer { padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
 }
 @media (prefers-reduced-motion: reduce) { .choice, .activity .mark { animation: none; } }
+
+.links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.app-link { padding: 6px 12px; border-radius: 999px; border: 1px solid #A5B4FC; color: #A5B4FC; text-decoration: none; }

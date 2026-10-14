@@ -1,18 +1,20 @@
 ---
 name: bills-recharges
-description: Pay a bill or recharge a phone or DTH (mobile, DTH, electricity, water) on Paytm, Amazon, or the provider's site
-inputs: provider, plan or amount?
-sites: paytm.com, amazon.in
-uses: payment, sign-in
-summary: provider, account or number, plan or bill amount, payment method, total
-report: transaction id, amount, provider
+description: Pay a bill or recharge (electricity, water, DTH, gas, broadband, FASTag) on the biller's own website
+inputs: provider, amount?
+sites:
+uses: payment
+summary: biller, account, amount due, due date, payment method, total
+report: transaction id, amount, biller
 ---
 ## Plan
-1. Open the site's recharge or bill page for that kind of service.
-2. Enter the mobile number ([profile:phone] for "my number") or the account number as [profile:<key>] (see the rules); choose the provider and circle when asked.
-3. For a recharge: find the plan the user named (by price or benefits); ASK when several plans have that price.
-4. For a bill: fetch the bill and read the amount due; the approval shows it.
-5. Choose the payment method the user picks; pay: the final control is the commit. Then report.
+1. On the biller's own pay page, type the account placeholder the goal gives into its account, consumer or customer number box, and get the bill.
+2. Read the bill: the name on it, the amount due, the due date. Put them in facts before any pay button.
+3. For a recharge or an amount the goal names, type that amount; else leave the amount the site fills in.
+4. Press the pay button: the system asks the user's yes itself. Then follow the payment pages to the method the user picked.
+5. UPI: choose the QR to scan; the system sends it to the user. Card: type [ask] into each card box.
+6. After paying, read the page's confirmation and its reference, then end with done.
 ## Rules
-- An account, consumer, or customer number comes from the user through the hidden field: TYPE [profile:<key>] into the site's field (for example [profile:consumer_number]) and the system asks the user for it hidden; never ASK for it in chat, and never guess or reuse another one.
-- Give a plan's validity and data with its price.
+- The account number is only ever the goal's [profile:…] placeholder: never another number, never asked in chat.
+- A bill that shows nothing due, or an error about the account, ends with done or stop quoting the page.
+- Never save a card, take an offer, sign up, or change the user's details.

@@ -2,16 +2,20 @@
 and System Two (planner.py: mini plans, resolves what Jev is unsure about, and writes). The gate (gate.py) guards
 every commit. The user is asked only for what they alone can give, and no model ever sees a secret."""
 
+import base64
 import html
+import io
 import itertools
 import json
 import re
 import sys
 import time
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import executor, gate, jev, learn, planner, replay, rules, skills, views
+from . import actor, executor, gate, jev, learn, money, planner, replay, rules, skills, views
 from .browser import Browser, ExecutionUncertain, StalePage, TabsClosed, unique
 from .errors import Halt, Retry
 from .memory import HOME, KEY, LABELS, Memory, StoreError, Unstorable
@@ -23,6 +27,9 @@ PRIVATE = {"browser", "answers", "ids"}  # hold secret values
 MAX_ACTIONS = 150
 MAX_MINUTES = 30
 MAX_SPEND = 0.25
+BILL_SPEND = 1.00  # a bill's page model reads every page at high effort: its own, higher model-spend cap
+ACTOR_TURNS, ACTOR_IDLE, ACTOR_BAD = 25, 3, 3  # a bill's page-model turns: in all, in a row with no progress, refused
+CONFIRM_READS, CONFIRM_GAP = 15, 2.0  # reads of the page, seconds apart, after the user says they paid a QR
 SUBGOAL_STEPS = 12
 STUCK_AT = 8
 STUCK = "I'm stuck on"  # how stuck() begins its question: a bench run stops there rather than answer it
@@ -79,6 +86,18 @@ CONTAINERS = {"", "generic", "group", "region", "main", "document", "presentatio
 TALKING = {"ASK", "TELL", "DONE", "STOP"}
 TRACE_STEP = ("step", "subgoal", "operation", "action", "title", "text", "key", "files", "page_changed", "url",
               "changed", "effect", "committed", "approved", "elapsed_ms", "unconfirmed", "spot", "typed_ok")
+# The first upi://pay link anywhere in the page's markup, its same-origin frames included: a gateway's QR carries it
+UPI_IN_PAGE = """(() => {
+  const docs = [document];
+  for (const f of document.querySelectorAll('iframe')) {
+    try { if (f.contentDocument) docs.push(f.contentDocument); } catch (e) {}
+  }
+  for (const d of docs) {
+    const m = d.documentElement.outerHTML.match(/upi:\\/\\/pay\\?[^"'<>\\s]+/i);
+    if (m) return m[0];
+  }
+  return null;
+})()"""
 PLACEHOLDER = re.compile(r"\[(profile|secret):([\w.]+)\]")
 CODE_WORDS = re.compile(r"\b(otp|passcode|password|cvv|pin(?![\s-]?code)|"  # a PIN code or promo code is no secret
                         r"(?<!pin )(?<!pin-)(?<!promo )(?<!zip )(?<!postal )code)\b", re.IGNORECASE)
@@ -151,6 +170,17 @@ def code_like(answer):
     """Whether a hidden reply is a code the site sent (letters and digits, at least one digit, spaces and dashes
     aside), not words such as "it never came"."""
     return bool(re.fullmatch(r"(?=\D*\d)[^\W_]{3,12}", re.sub(r"[\s-]", "", str(answer or ""))))
+
+
+def decode_qr(image):
+    """The text of the QR code in a base64 PNG (a gateway's UPI QR drawn on a canvas), else None."""
+    try:
+        import zxingcpp
+        from PIL import Image
+        found = zxingcpp.read_barcodes(Image.open(io.BytesIO(base64.b64decode(image))))
+    except Exception:  # no reader installed, or no picture: the QR stays unread, and nothing is sent
+        return None
+    return next((r.text for r in found if r.text.lower().startswith("upi://pay")), None)
 
 
 def picked(answer, options):
@@ -301,6 +331,12 @@ class Worker:
         self.state = self.new_state(self.browser, goal, title or goal[:60], page)
         self.state.update(skill=skill, preauth=preauth, cap=cap, site=skills.bare(urlparse(url).netloc.lower()),
                           start=url)
+        self.bill = money.bill_intent(goal)  # a bill's payment: the page model acts, money.py decides about money
+        self.max_spend = BILL_SPEND if self.bill else MAX_SPEND
+        if self.bill:
+            self.state.update(bill=dict(self.bill), bill_facts={}, actor_turns=0, actor_idle=0, actor_bad=0,
+                              actor_last=[], actor_log=[], actor_seen=None, typed_hosts=[], payment_id=None,
+                              qr_sent=False, bill_checked=False, offer=None, approved_pay=None)
         self.habit = habit
         if habit:
             self.state["replay"] = replay.start(habit, sameness)
@@ -553,8 +589,8 @@ class Worker:
             reason = f"Stopped at the {MAX_ACTIONS}-action limit."
         elif self.elapsed() - s["waited_ms"] > MAX_MINUTES * 60000:
             reason = f"Stopped after {MAX_MINUTES} minutes."
-        elif spent(s["meter"]) > MAX_SPEND:
-            reason = f"Stopped at the ${MAX_SPEND:.2f} model-spend limit."
+        elif spent(s["meter"]) > self.max_spend:
+            reason = f"Stopped at the ${self.max_spend:.2f} model-spend limit."
         if reason:
             raise Halt("blocked", reason + self.pending())
 
@@ -633,6 +669,8 @@ class Worker:
         if fixing:  # live: the planner opened other rows, cancelled the address it typed, and left the page
             operation, action, text, page = fixing
             return self.act(operation, action, page, None, text=text)
+        if self.bill:  # a bill's payment: the page model chooses each step; money.py and the gate decide about money
+            return self.bill_step(page)
         if s["reason"]:
             return self.think(page)
         sub = self.subgoal()
@@ -1169,6 +1207,8 @@ class Worker:
         (`card_form_step`). Dry run: the summary model cut the vouchers' amounts the payment page doesn't show (“2 × +
         1 ×”) and wrote "Seller not specified"."""
         s = self.state
+        if self.bill:
+            return self.bill_lines(page, found)
         note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
         if not VOUCHER_BUY.match(s["goal"]) or not note.get("pay-form"):
             return None  # live: another offer's Buy Now went out under the order's own lines
@@ -1178,9 +1218,10 @@ class Worker:
                 *([f"Payable: {gate.tight(found['total'])}"] if found["total"] else [])]
 
     def paid(self):
-        """Whether this voucher purchase pressed its payment's final control with the user's yes (GyFTR's PROCEED):
-        the bank's one-time password that follows is part of that payment, and their yes covers sending it."""
-        return bool(VOUCHER_BUY.match(self.state["goal"])) and any(
+        """Whether this voucher purchase or bill pressed its payment's control with the user's yes (GyFTR's PROCEED, a
+        biller's Pay): the bank's one-time password and the gateway's steps that follow are part of that payment, and
+        their yes covers them."""
+        return bool(VOUCHER_BUY.match(self.state["goal"]) or self.bill) and any(
             h.get("committed") and h.get("approved") == "user" for h in self.state["history"])
 
     def bank_box(self, page):
@@ -2266,6 +2307,347 @@ class Worker:
                  "NPCI's list can take a few minutes to show it, and the account with the merchant itself isn't "
                  "closed." if approved else f"Nothing was changed: {payee}'s UPI AutoPay stays active.", kind="result")
         s["status"], s["outcome"] = "done", "approved" if approved else "not_approved"
+
+    # ---- a bill's payment: the page model (actor.py) chooses each step; money.py and the gate decide about money
+
+    def bill_step(self, page):
+        """One step of a bill's payment. The user's yes is acted on at once; a UPI QR in the payment they said yes to
+        goes to them; otherwise the page model reads the page and its actions run, one at a time, through the gate."""
+        s = self.state
+        approval = s["approval"] or {}
+        if approval.get("by") == "user" and approval.get("target"):  # their yes: its control is pressed now
+            target = next((a for a in page["actions"] if a.get("kind") == "click" and a.get("node") is not None
+                           and (a.get("frame"), a["node"]) == approval["target"]), None)
+            if target is not None:
+                self.start_payment()
+                return self.act("CLICK", target, page, None)
+        if self.pay_qr(page):
+            return self.qr_hand_off(page)
+        return self.bill_turn(page)
+
+    def bill_turn(self, page):
+        """One turn of the page model: its facts kept when the page shows them, the checks once the bill is read, and
+        its ending or its actions."""
+        s = self.state
+        s["actor_turns"] += 1
+        if s["actor_turns"] > ACTOR_TURNS:
+            raise self.bill_halt(f"I took {ACTOR_TURNS} turns on {rules.host(page['url'])} without finishing, so I "
+                                 "stopped.")
+        problems = list(dict.fromkeys(s["feedback"] + s["notes"][-3:]))
+        s["feedback"] = []
+        look = s.pop("actor_look", False)
+        image = s["browser"].screenshot(masked=self.secrets.nodes, hide=self.hidden_details()) if look else None
+        body = actor.payload(s["goal"], self.bill_guide(page), page, s["bill_facts"], s["actor_last"], problems,
+                             [f"{c['from']}: {c['text']}" for c in s["chat"][-12:]])
+        answer, meta = actor.turn(body, image=image if isinstance(image, str) else None)
+        s["actor_log"] = (s["actor_log"] + [{"turn": s["actor_turns"], "url": page["url"], "end": answer["end"],
+                                             "actions": answer.get("actions"), "facts": answer.get("facts"),
+                                             "say": answer.get("say"), "ms": meta["latency_ms"]}])[-40:]
+        self.take_facts(answer.get("facts") or {}, page)
+        self.bill_checks()
+        seen = (page.get("fingerprint"), json.dumps(s["bill_facts"], sort_keys=True), len(s["history"]),
+                self.replies())
+        s["actor_idle"] = s["actor_idle"] + 1 if seen == s["actor_seen"] else 0
+        s["actor_seen"] = seen
+        if s["actor_idle"] >= ACTOR_IDLE:
+            raise self.bill_halt(f"I'm making no progress on {rules.host(page['url'])}, so I stopped.")
+        end, say = answer["end"], (answer.get("say") or "").strip()
+        if end == "ask":
+            return self.bill_ask(say, answer.get("options") or [])
+        if end == "done":
+            return self.bill_done(say)
+        if end == "stop":
+            raise self.bill_halt(say or "I couldn't go on with this page, so I stopped.")
+        try:
+            plan = actor.steps(answer, page)
+        except ValueError as why:
+            s["actor_bad"] += 1
+            if s["actor_bad"] >= ACTOR_BAD:
+                raise self.bill_halt("The page model kept answering with actions this page can't take, so I "
+                                     "stopped.") from why
+            s["feedback"].append(f"Nothing ran: {why}")
+            return None
+        s["actor_bad"] = 0
+        return self.run_plan(plan, page)
+
+    def bill_guide(self, page):
+        """What the page model reads besides the page: the task's skill and the site's note."""
+        skill = self.skill() or {}
+        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
+        return "\n\n".join(part for part in (skill.get("body", ""), note.get("body", "")) if part)
+
+    def run_plan(self, plan, page):
+        """The model's actions in order, each through `act` (and so the gate). The list stops at a page change, a
+        commit, a question to the user, or a check the page fails."""
+        s = self.state
+        results = s["actor_last"] = []
+        for operation, action, extra in plan:
+            if operation == "CHECK":
+                shown = money.words(extra["text"]) in money.words(page["text"])
+                results.append(f"check “{extra['text']}”: {'shown' if shown else 'NOT on the page; the rest was left'}")
+                if not shown:
+                    break
+                continue
+            if operation == "LOOK":
+                s["actor_look"] = True
+                results.append("look: a screenshot comes with the next turn")
+                continue
+            before, replies, label = len(s["history"]), self.replies(), action.get("label") or operation.title()
+            text = (extra.get("text") or "").strip()
+            if operation == "TYPE_TEXT" and text == "[captcha]":
+                if not self.captcha_pending():
+                    self.relay_captcha(page)
+                    results.append(f"“{label}”: the captcha went to the user")
+                    break
+                text = s["captcha_text"][0]
+            if operation == "TYPE_TEXT" and text == "[ask]":
+                if not secret_field(action):
+                    results.append(f"“{label}” isn't a box for a secret: type its value or a [profile:…] placeholder")
+                    break
+                if action.get("value") == "[secret]":
+                    results.append(f"“{label}” already holds the user's hidden answer")
+                    continue
+                self.ask_code(page, {"targets": {"type_text_target": action}})
+            elif operation == "OPEN_URL":
+                host = rules.host(extra["url"])
+                if skills.bare(host.lower()) != s["site"] and host not in s["typed_hosts"]:
+                    s["typed_hosts"].append(host)  # opened by typing its address: it never takes a payment
+                self.run(page, "OPEN_URL", action, {"url": extra["url"]}, extra["url"])
+            elif operation == "CLICK":
+                commit = self.rides(page) and gate.commit_label(self, operation, action, page)
+                self.act(operation, action, page, None, paid=bool(commit))
+            else:
+                self.act(operation, action, page, None, key=extra.get("key"),
+                         text=text if operation == "TYPE_TEXT" else None)
+            last = s["history"][-1] if len(s["history"]) > before else {}
+            results.append(f"{operation.lower()} “{label}”: {last.get('changed') or 'done'}")
+            page = s["page"]
+            if s["status"] != "ready" or s["commit"] or self.replies() > replies or last.get("page_changed") \
+                    or last.get("committed") or not last:
+                break
+        return None
+
+    def bill_ask(self, say, options):
+        """The page model's question to the user. A choice of how to pay becomes part of the goal, so the gate and
+        the card rules know the user picked it."""
+        s = self.state
+        if not say:
+            s["feedback"].append("An ask needs the question in say.")
+            return None
+        offered = [{"id": f"o{n}", "label": label} for n, label in enumerate(options[:4], 1)]
+        reply = self.ask({"kind": "choice" if offered else "text", "text": say, "options": offered})
+        answer = next((o["label"] for o in offered if o["id"] == reply.get("option")), None) or \
+            str(reply.get("text", "")).strip()
+        s["chat"] += [{"from": "agent", "text": say}, {"from": "user", "text": answer}]
+        method = "UPI" if re.search(r"\bupi\b", answer, re.I) else "card" if re.search(r"\bcard\b", answer, re.I) \
+            else None
+        if method and self.bill["method"] is None and rules.METHOD.search(" ".join([say, *options])):
+            self.bill["method"] = s["bill"]["method"] = method
+            s["goal"] = money.goal_for(self.bill["biller"], self.bill["account"], self.bill["amount"], method)
+        return None
+
+    def take_facts(self, facts, page):
+        """The model's facts that the page (or one read a moment ago) shows; the rest are refused, said back to it."""
+        s = self.state
+        texts = [page["text"], *s["recent"][-4:]]
+        for name in money.FACTS:
+            value = str(facts.get(name) or "").strip()
+            if not value or value == s["bill_facts"].get(name):
+                continue
+            if any(money.grounded(value, text) for text in texts):
+                s["bill_facts"][name] = value
+            else:
+                s["feedback"].append(f"The fact {name} “{value}” isn't on the page, so it wasn't kept: copy it as "
+                                     "the page shows it.")
+
+    def bill_checks(self):
+        """Once the bill's amount is read: nothing due ends the task; a name on the bill that isn't the user's, and a
+        payment made already (or never settled), each ask first."""
+        s, intent = self.state, self.bill
+        due = money.to_pay(intent, s["bill_facts"])
+        if due is None or s["bill_checked"]:
+            return
+        s["bill_checked"] = True
+        biller = intent["biller"]
+        if intent["amount"] is None and due == 0:
+            s["outcome"] = "nothing_due"
+            raise Halt("done", f"Nothing is due on your {biller} bill, so I paid nothing.")
+        name = s["bill_facts"].get("name")
+        if money.name_match(name, self.profile_name()) == "mismatch" and not self.bill_yes(
+                f"This {biller} bill is in the name of {name}. Is it yours, and should I pay it?", "Yes, pay it"):
+            s["outcome"] = "not_approved"
+            raise Halt("done", f"Stopped: you said this {biller} bill isn't one to pay. Nothing was paid.")
+        try:
+            earlier = money.paid_before(self.memory.payments(biller, intent["account"]),
+                                        datetime.now(timezone.utc))
+        except Exception:  # memory unreachable: no record to check, so the user is asked
+            earlier = {"status": "unknown"}
+        if earlier is None:
+            return
+        if earlier["status"] == "paid":
+            question = (f"You paid {money.shown(earlier['amount'])} to {biller} on "
+                        f"{earlier['created_at']:%d %b}" + (f" (reference {earlier['reference']})"
+                                                           if earlier.get("reference") else "") + ". Pay again?")
+        elif earlier["status"] == "unknown":
+            question = f"I can't check my record of your {biller} payments just now. Pay this bill anyway?"
+        else:
+            question = (f"A {money.shown(earlier['amount'])} payment to {biller} on {earlier['created_at']:%d %b} was "
+                        "never confirmed, so it may have gone through. Pay again anyway?")
+        if not self.bill_yes(question, "Pay again"):
+            s["outcome"] = "already_paid"
+            raise Halt("done", f"Not paid again: your {biller} bill stays as it is.")
+
+    def bill_yes(self, question, yes):
+        reply = self.ask({"kind": "choice", "text": question,
+                          "options": [{"id": "o1", "label": yes}, {"id": "o2", "label": "No"}]})
+        text = str(reply.get("text", "")).strip()
+        said = reply.get("option") == "o1" or (bool(gate.YES.search(text)) and not gate.NOT_YES.search(text))
+        self.state["chat"] += [{"from": "agent", "text": question}, {"from": "user", "text": yes if said else "No"}]
+        return said
+
+    def profile_name(self):
+        try:
+            return self.state["ids"].get("name") or self.memory.id_value("name")
+        except (KeyError, StoreError):
+            return ""
+
+    def account_value(self):
+        key = self.bill["account"]
+        try:
+            return self.state["ids"].get(key) or self.memory.id_value(key)
+        except (KeyError, StoreError):
+            return ""
+
+    def bill_lines(self, page, found):
+        """A bill's approval, written in code from its intent and the facts the page showed: never before the bill
+        is read, and never on a page opened by typing its address."""
+        s, intent = self.state, self.bill
+        if money.to_pay(intent, s["bill_facts"]) is None:
+            raise Retry("Read the bill first: the name on it, its amount due and due date go in facts before any pay "
+                        "button.")
+        if rules.host(page["url"]) in s["typed_hosts"]:
+            raise Retry("This page was opened by typing its address, so it can't take a payment: pay only on the "
+                        "biller's own site or the pages its buttons lead to.")
+        total = found.get("total")
+        payable = total if total and money.grounded(total, page["text"]) else s["bill_facts"].get("payable")
+        facts = {**s["bill_facts"], "payable": payable}
+        s["offer"] = str(money.rupees(payable) or money.to_pay(intent, s["bill_facts"]))  # what a yes now approves
+        return money.approval_lines(intent, facts, account=self.account_value())
+
+    def rides(self, page):
+        """Whether a pay control on this page is part of the payment the user said yes to: the yes came, this page
+        wasn't opened by typing its address, and it asks no more than they approved."""
+        s = self.state
+        if not self.paid() or rules.host(page["url"]) in s["typed_hosts"] or not s["approved_pay"]:
+            return False
+        approved = Decimal(s["approved_pay"])
+        shown = [gate.facts(page, s["recent"])["total"], s["bill_facts"].get("payable")]
+        values = [money.rupees(v) for v in shown if v and money.grounded(v, page["text"])]
+        return all(v is None or v <= approved for v in values)
+
+    def start_payment(self):
+        """The yes is about to be acted on: the payment's row is written "started" first (never twice)."""
+        s = self.state
+        s["approved_pay"] = s["offer"] or s["approved_pay"]
+        if s["payment_id"] is not None or not s["approved_pay"]:
+            return
+        try:
+            s["payment_id"] = self.memory.payment_started(self.bill["biller"], self.bill["account"],
+                                                          s["approved_pay"], self.bill["method"] or "")
+        except Exception as error:  # the payment still needs its record: the trace keeps why it has none
+            s["errors"].append({"step": len(s["history"]), "error": f"payment record: {error}"})
+
+    def end_payment(self, status, reference=""):
+        s = self.state
+        if s["payment_id"] is None:
+            return
+        try:
+            self.memory.payment_ended(s["payment_id"], status, reference)
+        except Exception as error:
+            s["errors"].append({"step": len(s["history"]), "error": f"payment record: {error}"})
+
+    def payment_qr(self):
+        """(the UPI link, the QR's picture) the page shows now; either may be None."""
+        b = self.state["browser"]
+        try:
+            markup = b.evaluate(UPI_IN_PAGE)
+        except Exception:
+            markup = None
+        link = money.upi_link(markup) if isinstance(markup, str) else None
+        image = b.qr_screenshot(masked=self.secrets.nodes, hide=self.hidden_details())
+        image = image if isinstance(image, str) else None
+        return link or (decode_qr(image) if image else None), image
+
+    def pay_qr(self, page):
+        """Whether the payment the user said yes to now shows a UPI QR to hand them (read by the gate's watch too)."""
+        s = self.state
+        return bool(self.bill) and self.paid() and not s["qr_sent"] and any(self.payment_qr())
+
+    def qr_hand_off(self, page):
+        """The QR goes to the user only when it pays the approved amount to a named UPI address: its picture and
+        buttons that open their UPI app. They pay with their PIN; the page is then read for the confirmation."""
+        s, biller = self.state, self.bill["biller"]
+        link, image = self.payment_qr()
+        approved = Decimal(s["approved_pay"] or "0")
+        problem = money.qr_problem(link, approved) if link else "I couldn't read the UPI QR's amount and payee"
+        if problem:
+            self.end_payment("failed")
+            raise Halt("blocked", f"{problem}, so I stopped before you paid. Nothing was paid.")
+        params = money.upi_params(link)
+        s["qr_sent"] = True
+        question = (f"Scan this QR with your UPI app, or tap your app below, and pay {money.shown(approved)} to "
+                    f"{params.get('pn') or params['pa']} for your {biller} bill with your UPI PIN. Nothing is paid "
+                    "until you do.")
+        reply = self.ask({"kind": "choice", "image": image, "text": question,
+                          "links": [{"label": label, "url": url} for label, url in money.app_links(link)],
+                          "options": [{"id": "o1", "label": "I paid"}, {"id": "o2", "label": "I didn't pay"}]})
+        text = str(reply.get("text", "")).strip()
+        said = reply.get("option") == "o1" or (bool(re.search(r"\b(paid|done|yes)\b", text, re.I))
+                                               and not NEGATION.search(text))
+        s["chat"] += [{"from": "agent", "text": question}, {"from": "user", "text": "I paid" if said else
+                                                             "I didn't pay"}]
+        if not said:
+            self.end_payment("failed")
+            s["status"], s["outcome"] = "done", "not_paid"
+            self.say(f"Not paid: nothing went to {biller}, and your bill is still due.", kind="result")
+            return None
+        s["notes"].append("The user says they paid the QR in their UPI app: read the page for the payment's "
+                          "confirmation and its reference.")
+        for _ in range(CONFIRM_READS):  # the gateway moves on to the biller's receipt once the bank answers
+            again = self.observe()
+            if again["fingerprint"] != page["fingerprint"]:
+                break
+            time.sleep(CONFIRM_GAP)
+        return None
+
+    def bill_done(self, say):
+        """The page model says the task is done. Paid only when the user's yes was acted on and the site confirmed
+        it (or they paid the QR): the report is written in code. Done without a payment is no ending."""
+        s, intent = self.state, self.bill
+        if self.paid() and (s["done"] or s["qr_sent"]):
+            reference = s["bill_facts"].get("reference")
+            amount = money.shown(Decimal(s["approved_pay"])) if s["approved_pay"] else "your bill"
+            account = self.account_value()
+            self.end_payment("paid", reference or "")
+            s["status"], s["outcome"] = "done", "paid"
+            self.say(f"Paid {amount} to {intent['biller']}" + (f" for account ••{account[-4:]}" if account else "")
+                     + "." + (f" Reference {reference}." if reference else " The page showed no reference.")
+                     + f" It may take a few days to show on {intent['biller']}'s site.", kind="result")
+            return None
+        if self.paid():
+            raise self.bill_halt(say or "The site didn't confirm the payment.")
+        s["feedback"].append("DONE refused: no payment has been made. Finish paying, or stop saying why.")
+        return None
+
+    def bill_halt(self, why):
+        """The stop for a bill: after the user's yes the payment may have gone through, so it is never repeated."""
+        s = self.state
+        if self.paid():
+            self.end_payment("unclear")
+            s["outcome"] = "unclear"
+            return Halt("blocked", f"{why} Your payment to {self.bill['biller']} may already have gone through: don't "
+                                   "pay again until you've checked your bank's SMS or the biller's site.")
+        return Halt("blocked", f"{why} Nothing was paid.")
 
     def inputs(self, operation, action, page, sub, key=None, text=None):
         """(browser inputs, what the history shows) for one operation."""

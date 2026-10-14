@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import jev, model, rules, skills
+from . import jev, model, money, rules, skills
 from .memory import HOME
 from .privacy import Secrets
 
@@ -32,6 +32,7 @@ SAVINGS_ON = re.compile(r"Savings on ₹([\d,]+) by card")  # the amount the por
 MONTHLY = re.compile(r"monthly limit:?\s*₹\s?([\d,]+)", re.IGNORECASE)  # a read's cap on a brand's vouchers a month
 CARD_FILLER = {"card", "cards", "my", "the", "hdfc", "bank", "with", "pay", "using"}
 VOUCHER_WORDS = {"voucher", "vouchers", "e-voucher", "evoucher", "gift", "giftcard", "card", "cards", "money", "gv"}
+BILLERS = {meta["name"]: host for host, meta in skills.load_sites().items() if meta.get("bill")}  # their own sites
 IST = ZoneInfo("Asia/Kolkata")
 PLAYBOOKS = Path(__file__).resolve().parents[1] / "skills" / "playbooks"
 ENDED = {"done": "done", "cancelled": "stopped", "failed": "failed", "blocked": "failed"}  # a task's end, as a status
@@ -123,6 +124,18 @@ TOOLS = [
                              "in a hidden field, and asks yes or no once before paying.",
          portal={"type": "string", "enum": list(PORTALS)}, brand=text("The brand the user named"),
          amount={"type": "integer", "description": "The total voucher_savings checked, in rupees"}),
+    tool("pay_bill", "Pay one of the user's bills on the biller's own website, in a real browser. It reads the bill, "
+                     "checks the name on it and that something is due, asks yes or no once with the amount, and the "
+                     "user pays by UPI (a QR, or a tap that opens their UPI app) or by card (its details and the bank's "
+                     "one-time password in a hidden field). It asks for the account number itself, hidden. Billers "
+                     "whose website it knows: " + ", ".join(BILLERS) + ".",
+         biller=text("The biller as the user names it (“BESCOM”, “Adani Electricity”)"),
+         amount={"type": ["integer", "null"], "description": "Rupees, only when the user named an amount to pay; "
+                                                            "null pays the amount due"},
+         method={"type": ["string", "null"], "enum": ["UPI", "card", None],
+                 "description": "How the user said they'll pay; null when they didn't"},
+         site=text("The biller's own website, only for a biller not listed, once the user confirmed it is the "
+                   "official one; else empty")),
     tool("browse", "Do any other task on any other site, in a real browser.",
          goal=text("The user's request in their words, with the details the chat already has")),
     tool("memory", "Remember or forget something about the user, or list what you remember. It replies to them "
@@ -148,6 +161,19 @@ def instructions():
         meta, body = skills.read(path)
         parts.append(f"{meta['name']} ({meta['when']})\n{body}")
     return "\n\n".join(parts)
+
+
+def biller_note(sites, biller):
+    """(its name, its site note) for a biller the user named, by the note's name or an alias; else (None, None)."""
+    said = money.words(biller)
+    for note in sites.values():
+        if not note.get("bill"):
+            continue
+        names = [note.get("name", ""), *note.get("aliases", [])]
+        if any(said == money.words(n) or (len(money.words(n)) >= 4 and f" {money.words(n)} " in f" {said} ")
+               for n in names):
+            return note["name"], note
+    return None, None
 
 
 def voucher_page(note, brand, skill):
@@ -569,6 +595,32 @@ class Brain:
                 + f" The report shows: {wrong}. It should be: {correct}.")
         result = self.core.execute(goal, url=skills.start(note, "account"), skill="account",
                                    progress=f"Opening {bureau}'s dispute page…")
+        return self.ended(result)
+
+    def pay_bill(self, biller, amount=None, method=None, site=""):
+        """One bill paid on the biller's own website: a known biller's site note, else a site the user confirmed. Its
+        money rules live in the worker (money.py); the brain only names the bill."""
+        name, note = biller_note(self.core.library["sites"], biller)
+        if note is None and not site.strip():
+            return {"status": "rejected", "reason": f"I don't know {biller}'s own website.",
+                    "next": "Ask the user for the biller's official website, and say you'll pay only there; once they "
+                            "confirm it, call pay_bill with site. Never search for one."}
+        url = skills.start(note, "bills-recharges") if note else (site.strip() if "://" in site
+                                                                   else "https://" + site.strip())
+        name = name or biller.strip()
+        goal = money.goal_for(name, money.account_key(name), amount, method)
+        result = self.core.execute(goal, url=url, skill="bills-recharges", progress=f"Getting your {name} bill…")
+        outcome, report = result["outcome"], result["report"]
+        said = {"paid": "Tell them it's paid, in the report's words: the amount, the account and the reference. Call "
+                        "no other tool.",
+                "nothing_due": "Say nothing is due, in the report's words. Nothing was paid.",
+                "not_approved": "They chose not to pay: say nothing was paid. Call no other tool.",
+                "not_paid": "Say it isn't paid and the bill is still due. Call no other tool.",
+                "already_paid": "Say you didn't pay it again. Call no other tool.",
+                "unclear": "Tell them, in the report's words, not to pay again until they've checked their bank's SMS "
+                           "or the biller's site. Call no other tool."}
+        if outcome in said:
+            return {"status": outcome, "report": report, "next": said[outcome]}
         return self.ended(result)
 
     def browse(self, goal):

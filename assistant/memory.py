@@ -27,7 +27,10 @@ SCHEMA_NAME = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 FACT_KINDS = ("address", "preference", "default_app", "fact")
 LABELS = {"name": "full name", "phone": "phone number", "email": "email address", "upi_id": "UPI ID",
           "experian_ern": "Experian Reference Number (ERN)", "experian_uti": "Experian Unique Transaction ID (UTI)",
-          "bank_account_last4": "last 4 digits of your bank account", "icici_user_id": "ICICI net banking User ID"}
+          "bank_account_last4": "last 4 digits of your bank account", "icici_user_id": "ICICI net banking User ID",
+          "bescom_account": "BESCOM account number", "adani_electricity_account": "Adani Electricity account (CA) number",
+          "tata_power_ddl_account": "Tata Power-DDL CA number", "bses_rajdhani_account": "BSES Rajdhani account number",
+          "msedcl_account": "MSEDCL consumer number"}
 RECALL_FACTS, RECALL_CHARS, CLOSE = 12, 1500, 0.2
 NOTES_PER_SITE = 30
 RULE_DAYS = 30
@@ -122,6 +125,19 @@ CREATE TABLE IF NOT EXISTS events (
   undone boolean NOT NULL DEFAULT false,
   purged boolean NOT NULL DEFAULT false
 );
+CREATE TABLE IF NOT EXISTS payments (
+  id bigserial PRIMARY KEY,
+  biller text NOT NULL,
+  account text NOT NULL CHECK (account ~ '^[a-z][a-z0-9_]{1,39}$'),
+  amount numeric(12, 2) NOT NULL CHECK (amount > 0),
+  method text NOT NULL DEFAULT '',
+  reference text NOT NULL DEFAULT '',
+  status text NOT NULL CHECK (status IN ('started', 'paid', 'failed', 'unclear')),
+  task text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS payments_account ON payments (lower(biller), account, created_at DESC);
 CREATE TABLE IF NOT EXISTS schema_version (version integer NOT NULL);
 """
 
@@ -260,6 +276,37 @@ class Memory:
                 cur.execute("INSERT INTO schema_version (version) VALUES (%s)", (VERSION,))
 
         self.run(work)
+
+    # ---- payments: one row per bill payment, written "started" before its pay control is pressed
+
+    def payment_started(self, biller, account, amount, method="", task=""):
+        """A payment about to be made: its row's id. `account` is the saved ID's key, never its value."""
+        if not KEY.match(account or ""):
+            raise ValueError(f"A payment names its account by the saved ID's key, not {account!r}.")
+
+        def work(cur):
+            row = cur.execute("INSERT INTO payments (biller, account, amount, method, status, task) VALUES "
+                              "(%s, %s, %s, %s, 'started', %s) RETURNING id",
+                              (biller, account, str(amount), method or "", task)).fetchone()
+            self.log(cur, "agent", "payment_started", f"payments:{row['id']}")
+            return row["id"]
+
+        return self.run(work)
+
+    def payment_ended(self, payment_id, status, reference=""):
+        """How a started payment ended: paid, failed, or unclear (it may have gone through)."""
+        def work(cur):
+            cur.execute("UPDATE payments SET status = %s, reference = %s, updated_at = now() WHERE id = %s",
+                        (status, privacy.storable(reference) and reference or "", payment_id))
+            self.log(cur, "agent", "payment_" + status, f"payments:{payment_id}")
+
+        self.run(work)
+
+    def payments(self, biller, account):
+        """This biller's payments for this account, newest first."""
+        return self.run(lambda cur: cur.execute(
+            "SELECT id, biller, amount, method, reference, status, created_at FROM payments WHERE lower(biller) = "
+            "lower(%s) AND account = %s ORDER BY created_at DESC, id DESC", (biller, account)).fetchall())
 
     # ---- events
 

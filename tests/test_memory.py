@@ -24,7 +24,7 @@ def test_open_makes_the_schema_once_and_opening_again_is_harmless(memory, databa
     tables = memory.run(lambda cur: [r["table_name"] for r in cur.execute(
         "SELECT table_name FROM information_schema.tables WHERE table_schema = %s ORDER BY table_name",
         (memory.schema,)).fetchall()])
-    assert tables == ["approvals", "events", "facts", "habits", "ids", "notes", "schema_version"]
+    assert tables == ["approvals", "events", "facts", "habits", "ids", "notes", "payments", "schema_version"]
     again = Memory.open(database_url, schema=memory.schema, key=TEST_KEY)
     try:
         assert again.run(lambda cur: cur.execute("SELECT version FROM schema_version").fetchall()) == [{"version": 1}]
@@ -443,3 +443,18 @@ def test_a_memory_on_the_default_schema_refuses_to_drop_it():
     never = Memory("postgresql://never-the-real-memory@127.0.0.1:1/none", memories.SCHEMA, None)  # never connects
     with pytest.raises(ValueError, match="Refusing"):
         never.drop()
+
+
+def test_a_payment_is_recorded_started_then_settled_with_its_reference(memory):
+    first = memory.payment_started("BESCOM", "bescom_account", "1240", "UPI", task="t1")
+    memory.payment_ended(first, "paid", "BD123456")
+    memory.payment_ended(memory.payment_started("BWSSB", "bwssb_account", "300", "card"), "unclear")
+    rows = memory.payments("BESCOM", "bescom_account")
+    assert [(r["status"], r["reference"], str(r["amount"])) for r in rows] == [("paid", "BD123456", "1240.00")]
+    assert memory.payments("bescom", "bescom_account") == rows  # the biller's name, whatever its case
+    assert memory.payments("BWSSB", "bwssb_account")[0]["status"] == "unclear"
+
+
+def test_a_payment_never_keeps_an_account_number_only_its_key(memory):
+    with pytest.raises(ValueError):
+        memory.payment_started("BESCOM", "1234567890", "1240", "UPI")

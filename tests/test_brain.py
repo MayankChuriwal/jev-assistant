@@ -112,8 +112,9 @@ def test_the_brain_offers_its_tools_and_reads_its_playbooks(tmp_path):
     make(FakeCore(), model, tmp_path).turn("hi")
     assert model.seen[0]["tools"] == ["upi_mandates", "upi_cancel", "upi_pause", "upi_task", "bureau_details",
                                       "bureau_dispute", "voucher_options", "voucher_savings", "voucher_checkout",
-                                      "browse", "memory", "reply"]
+                                      "pay_bill", "browse", "memory", "reply"]
     assert "UPI AutoPay mandates" in model.seen[0]["instructions"]
+    assert "Bills (paying an electricity bill" in model.seen[0]["instructions"]
     assert "Credit report disputes" in model.seen[0]["instructions"]
     assert "Gift vouchers" in model.seen[0]["instructions"]
 
@@ -738,3 +739,44 @@ def test_a_bought_checkout_says_so_with_its_order_and_never_a_code(tmp_path):
     out = results(brain, "voucher_checkout")[0]
     assert out["status"] == "bought" and out["report"] == bought["report"]
     assert "never" in out["next"].lower() and "code" in out["next"].lower()
+
+
+# ---- bills: pay_bill names the bill; the worker's money rules do the rest
+
+def test_a_bill_is_paid_on_the_billers_own_site_with_an_exact_goal(tmp_path):
+    core = FakeCore(done("Paid ₹1,240 to BESCOM for account ••7890. Reference BD7H2K99.", outcome="paid"))
+    model = Model(("pay_bill", {"biller": "bescom", "amount": None, "method": "UPI", "site": ""}),
+                  ("reply", {"text": "Paid.", "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn("pay my bescom bill by upi")
+    assert core.executed == [{"goal": "Pay the BESCOM bill for account [profile:bescom_account]: the amount due, by UPI.",
+                              "url": "https://bescom.co.in/bescom/main/quick-payment", "skill": "bills-recharges",
+                              "progress": "Getting your BESCOM bill…"}]
+    out = results(brain, "pay_bill")[0]
+    assert out["status"] == "paid" and "BD7H2K99" in out["report"]
+
+
+def test_an_unknown_billers_site_is_asked_for_never_searched(tmp_path):
+    core = FakeCore()
+    model = Model(("pay_bill", {"biller": "Torrent Power", "amount": None, "method": None, "site": ""}),
+                  ("reply", {"text": "What's Torrent Power's website?", "options": []}))
+    brain = make(core, model, tmp_path)
+    brain.turn("pay my torrent power bill")
+    out = results(brain, "pay_bill")[0]
+    assert core.executed == [] and out["status"] == "rejected" and "official website" in out["next"]
+
+
+def test_a_confirmed_site_for_an_unlisted_biller_is_used_as_given(tmp_path):
+    core = FakeCore(done("", outcome="nothing_due"))
+    model = Model(("pay_bill", {"biller": "Torrent Power", "amount": 500, "method": None,
+                                "site": "connect.torrentpower.com"}), ("reply", {"text": "Nothing due.", "options": []}))
+    make(core, model, tmp_path).turn("yes that's their site")
+    assert core.executed[0]["url"] == "https://connect.torrentpower.com"
+    assert core.executed[0]["goal"] == ("Pay the Torrent Power bill for account [profile:torrent_power_account]: "
+                                        "exactly ₹500.")
+
+
+def test_the_brain_lists_the_billers_it_knows():
+    tool = next(t for t in brains.TOOLS if t["name"] == "pay_bill")
+    for biller in ("BESCOM", "Adani Electricity", "Tata Power-DDL", "BSES Rajdhani", "MSEDCL"):
+        assert biller in tool["description"]

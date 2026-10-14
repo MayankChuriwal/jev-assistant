@@ -874,7 +874,7 @@ def approved(w, page, action, label, subgoal):
     host = rules.host(page["url"]).removeprefix("www.")
     question = "\n".join([lines[0], *(f"• {line}" for line in lines[1:])]) + \
         f"\n\nI'll press “{label}” on {host}. Reply yes to go ahead, or tell me what to change."
-    if found["total"] is None and shows_money(page["text"]):  # a summary line may hold no amount, or none at all
+    if found["total"] is None and not own and shows_money(page["text"]):  # a summary line may hold no amount
         question += "\n(I couldn't read the total on this page — check it on the site before you say yes.)"
     if shadow:
         question += "\n(You said not to ask. I'm asking anyway until pre-approval is switched on: set JEV_PREAUTH=on.)"
@@ -903,8 +903,10 @@ def watch(w, label, goal):
     since, told, unclear = commit["since"], False, 0
     while True:
         # a payment's bank asking for its one-time password: its next step, never a model's "processing" to wait on
-        bank = getattr(w, "bank_box", None)
-        verdict = "next_step" if bank and bank(s["page"]) else jev.after_commit(s["page"], goal, label)
+        bank, qr = getattr(w, "bank_box", None), getattr(w, "pay_qr", None)
+        # …or a UPI QR the user pays in their own app: the worker hands it over, never a wait on "processing"
+        verdict = "next_step" if (bank and bank(s["page"])) or (qr and qr(s["page"])) else \
+            jev.after_commit(s["page"], goal, label)
         if verdict == "processing":
             if w.elapsed() - since >= w.processing_ms:
                 s["commit"] = None

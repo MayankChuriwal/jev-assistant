@@ -46,6 +46,8 @@ def render(message, question_id=None, image_id=None, title=None, tag=None):
         payloads += text_payloads(text + "\n\n" + "\n".join(lines) + "\n\nReply with a number.")
     else:
         payloads += text_payloads(text)
+    if message.get("links"):  # buttons that open an app (a UPI payment): under the message, never a reply
+        payloads[-1]["x_links"] = [{"label": link["label"], "url": link["url"]} for link in message["links"]]
     if question_id is not None:
         for payload in payloads:
             payload["x_question"] = question_id

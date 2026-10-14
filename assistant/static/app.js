@@ -151,6 +151,16 @@ async function render(m, live) {
     link.download = m.document.filename || '';
     b.append(link);
   }
+  if (m.x_links) { // apps that open this payment (a UPI QR's): tapped on the phone, they open the UPI app
+    const row = el('div', 'links');
+    for (const link of m.x_links) {
+      if (!/^(upi|gpay|phonepe|paytmmp):\/\//.test(link.url)) continue;
+      const a = el('a', 'app-link', link.label);
+      a.href = link.url;
+      row.append(a);
+    }
+    b.append(row);
+  }
   if (m.type === 'interactive') choices(b, m);
   if (m.type === 'text') feedback(b);
   if (m.x_expects && m.x_expects.file) document.body.classList.add('wants-file');
