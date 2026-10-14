@@ -613,8 +613,9 @@ class Worker:
         pressed = self.mandate_cancel_pressed()
         if pressed:  # its hand-off was cut short (reading the click's result failed): the QR still goes next
             return self.hand_off(pressed)
-        if self.captcha_unasked(page):  # MyUPI: the planner wandered the sign-in page and never sent it
-            return self.relay_captcha(page)
+        if not self.bill and self.captcha_unasked(page):  # MyUPI: the planner wandered the sign-in page and never
+            return self.relay_captcha(page)  # sent it (a bill's page model asks it last: live BESCOM's expired while
+            # the account number, asked after it, waited on the user)
         box = self.captcha_box(page) if self.captcha_pending() else None
         if box:  # the text the user read, typed now: the planner left it, and Continue stayed disabled
             inputs, shown = self.value(box, self.state["captcha_text"][0], page)
@@ -2342,6 +2343,7 @@ class Worker:
         image = s["browser"].screenshot(masked=self.secrets.nodes, hide=self.hidden_details()) if look else None
         body = actor.payload(s["goal"], self.bill_guide(page), page, s["bill_facts"], s["actor_last"], problems,
                              [f"{c['from']}: {c['text']}" for c in s["chat"][-12:]])
+        s["actor_page"] = body["page"]  # the trace's: what the model read last, to check how the task ended
         answer, meta = actor.turn(body, image=image if isinstance(image, str) else None)
         s["actor_log"] = (s["actor_log"] + [{"turn": s["actor_turns"], "url": page["url"], "end": answer["end"],
                                              "actions": answer.get("actions"), "facts": answer.get("facts"),
@@ -2398,10 +2400,15 @@ class Worker:
             before, replies, label = len(s["history"]), self.replies(), action.get("label") or operation.title()
             text = (extra.get("text") or "").strip()
             if operation == "TYPE_TEXT" and text == "[captcha]":
+                if action.get("value") and s["captcha_text"] and action["value"] == s["captcha_text"][0]:
+                    results.append(f"“{label}” already holds the user's captcha answer")  # live BESCOM: asked twice
+                    continue
                 if not self.captcha_pending():
                     self.relay_captcha(page)
-                    results.append(f"“{label}”: the captcha went to the user")
-                    break
+                    if not self.captcha_pending():  # squares picked, or none to pick: the model sees the page again
+                        results.append(f"“{label}”: the captcha went to the user")
+                        break
+                    replies = self.replies()  # their answer is for this box: typed now, and the list goes on
                 text = s["captcha_text"][0]
             if operation == "TYPE_TEXT" and text == "[ask]":
                 if rules.host(page["url"]) in s["typed_hosts"]:  # a code for a page the biller's site never led to
@@ -3253,8 +3260,9 @@ class Worker:
             "margins": s["margins"], "replay": s["replay"], "files": [self.file_name(f) for f in s["files"]],
             "errors": s["errors"], "refusals": s["refusals_log"][-REFUSALS_KEPT:], "stuck_why": s["stuck_why"],
             "standing_error": s.get("standing_error"), "outcome": s.get("outcome"),
-            **({"bill": {k: s.get(k) for k in ("bill", "bill_facts", "actor_log", "payment_id", "approved_pay",
-                                               "qr_sent", "typed_hosts", "actor_turns")}} if self.bill else {}),
+            **({"bill": {k: s.get(k) for k in ("bill", "bill_facts", "actor_log", "actor_page", "payment_id",
+                                               "approved_pay", "qr_sent", "typed_hosts", "actor_turns")}}
+               if self.bill else {}),
         })
 
     def save_trace(self):

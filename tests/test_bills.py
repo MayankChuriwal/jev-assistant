@@ -373,3 +373,48 @@ def test_a_confirmed_watch_alone_is_no_proof_of_a_paid_bill(tmp_path, monkeypatc
     script(monkeypatch, answer(end="done", say="Done", **FACTS))
     w.command("tick")
     assert w.state["outcome"] == "unclear"
+
+
+def captcha_board(captcha=""):
+    """BESCOM's Quick Payment: the account box, its image captcha's box, Continue."""
+    return fake_page(url=BOARD, text="Quick Payment\nAccount ID\nEnter Image Captcha here\nContinue", actions=[
+        {"id": "a1", "kind": "fill", "label": "Account No.", "role": "spinbutton", "value": "", "node": 1,
+         "constraints": {}},
+        {"id": "a2", "kind": "fill", "label": "Enter Image Captcha here", "role": "textbox", "value": captcha,
+         "node": 2, "constraints": {}},
+        {"id": "a3", "kind": "click", "label": "Continue", "role": "button", "node": 3},
+        {"id": "wait", "kind": "wait", "label": "Wait", "node": None}])
+
+
+def test_the_captcha_is_asked_after_the_account_number_and_continue_follows_it(tmp_path, monkeypatch):
+    # live BESCOM: the captcha went first, the account number was answered 1h43m later, and the captcha had expired
+    w = worker_with(tmp_path, page=captcha_board(), goal=GOAL, profile={"bescom_account": ""},
+                    replies=[{"text": "1234567890"}, {"text": "7K3P9"}])
+    script(monkeypatch, answer([("type", "1", "[profile:bescom_account]"), ("type", "2", "[captcha]"),
+                                ("click", "3", None)]))
+    w.command("tick")
+    w.command("tick")
+    assert [bool(m.get("captcha")) for m in w.asked] == [False, True]
+    acts = [(c.args[0], c.kwargs.get("text")) for c in w.browser.act.call_args_list]
+    assert acts[-2:] == [("TYPE_TEXT", "7K3P9"), ("CLICK", None)]
+
+
+def test_a_captcha_box_holding_the_users_answer_is_never_asked_again(tmp_path, monkeypatch):
+    # live BESCOM: the model typed [captcha] into a box already holding the answer, and the same picture was asked twice
+    w = bill_worker(tmp_path, page=captcha_board(), replies=[{"text": "XYH65W"}])
+    script(monkeypatch, answer([("type", "1", "[profile:bescom_account]"), ("type", "2", "[captcha]"),
+                                ("click", "3", None)]))
+    w.command("tick")
+    w.browser.observe.return_value, w.browser.fresh.return_value = captcha_board(captcha="XYH65W"), False
+    w.command("tick")
+    assert sum(bool(m.get("captcha")) for m in w.asked) == 1
+    assert [c.args[0] for c in w.browser.act.call_args_list].count("CLICK") == 2
+
+
+def test_the_trace_keeps_the_page_the_model_read_last(tmp_path, monkeypatch):
+    # live BESCOM: "nothing due" couldn't be checked, as no trace kept the page that said ₹0
+    w = bill_worker(tmp_path, page=bill_page(text=BILL_TEXT.replace("₹ 1,240.00", "₹ 0.00")))
+    script(monkeypatch, answer(**{**FACTS, "amount_due": "₹ 0.00"}))
+    w.command("tick")
+    page = w.trace()["bill"]["actor_page"]
+    assert "₹ 0.00" in page["text"] and page["elements"]

@@ -53,10 +53,10 @@ def model(monkeypatch, method="UPI", obey_page=False):
                 address = re.search(r"Open (\S+) and pay", text)[1]
                 return act(("open", None, address), **shown)
             return act(("click", n("Pay Now"), None), **shown)
-        if "Account ID" in text and not value("Account ID"):
-            return act(("type", n("Account ID"), "[profile:bescom_account]"), ("click", n("Get Bill"), None))
-        if "Account ID" in text:
-            return act(("click", n("Get Bill"), None))
+        if "Account ID" in text:  # the account, then the captcha last (it expires), then Get Bill
+            boxes = [] if value("Account ID") else [("type", n("Account ID"), "[profile:bescom_account]")]
+            boxes += [] if value("Enter Captcha") else [("type", n("Enter Captcha"), "[captcha]")]
+            return act(*boxes, ("click", n("Get Bill"), None))
         if "Choose a payment method" in text:
             fee = "₹ 1,263.00" if "1,263.00" in text else None
             if method == "UPI":
