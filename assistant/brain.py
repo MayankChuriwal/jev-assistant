@@ -497,8 +497,8 @@ class Brain:
                 "limit": offer.get("limit"), "nearest": offer["nearest"]}
 
     def read_store(self, name, note, brand, amount, progress):
-        """(what the store showed for the brand, "") from a read in the browser, or a read under READ_FOR old; else
-        (None, why it couldn't be read). Only a read that found amounts is kept."""
+        """(what the store showed for the brand, "") from a read in the browser that found its amounts, however it
+        ended, or a read under READ_FOR old; else (None, why it couldn't be read)."""
         key = (name, brand.strip().lower())
         kept = self.reads.get(key)
         if kept and self.clock() - kept[0] < READ_FOR:
@@ -506,7 +506,7 @@ class Brain:
         result = self.core.execute(money.read_goal(name, brand, amount), url=voucher_page(note, brand, "vouchers"),
                                    skill="vouchers", progress=progress)
         facts = result.get("facts") or {}
-        if result.get("outcome") == "read" and facts.get("amounts"):
+        if facts.get("amounts"):  # live, IndusInd: its amounts read, then its tab closed: what was read still counts
             self.reads[key] = (self.clock(), dict(facts))
             return dict(facts), ""
         return None, result.get("report") or "It couldn't be read."

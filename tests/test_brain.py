@@ -10,7 +10,7 @@ import pytest
 from helpers import until
 
 from assistant import brain as brains
-from assistant import money, rules
+from assistant import money
 from assistant import skills
 
 MYUPI = "https://www.upihelp.npci.org.in/"
@@ -641,3 +641,15 @@ def test_the_brain_lists_the_billers_it_knows():
     tool = next(t for t in brains.TOOLS if t["name"] == "pay_bill")
     for biller in ("BESCOM", "Adani Electricity", "Tata Power-DDL", "BSES Rajdhani", "MSEDCL"):
         assert biller in tool["description"]
+
+
+def test_a_read_that_ended_badly_after_reading_the_amounts_still_counts(tmp_path):
+    # live, IndusInd: amounts and discount read, then the store's tab closed and the read ended "blocked"
+    brain, core = voucher_brain(tmp_path, said=["Swiggy 2000"], cards=["Legend"])
+    core.reads = {}
+    core.execute = lambda goal, **kw: (core.executed.append({"goal": goal, **kw}) or {
+        **done("The browser tab closed, so I stopped.", status="blocked"),
+        "facts": {"amounts": "₹250, ₹500, ₹2,000", "discount": "1.5%"}})
+    offers = brain.voucher_compare("Swiggy", 2000)["offers"]
+    assert any(o["portal"] == "IndusInd" and o["vouchers"] == "1 × ₹2,000" and o["effective"] == "₹1,970"
+               for o in offers)

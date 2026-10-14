@@ -5,6 +5,7 @@ aliases: Yes Bank GyFTR, YES vouchers
 start: https://www.gyftr.com/yesbank
 banks: Yes Bank
 learn: no
+brand.swiggy: https://www.gyftr.com/yesbank/brand/swiggy-gv-gift-vouchers
 step: Add to cart, View Cart & Buy, Request OTP, Continue, Submit, Read T&C, I agree to the Terms, Checkout
 final: BUY NOW, Pay ₹, Redeem & Pay
 keep: tab

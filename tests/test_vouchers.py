@@ -61,6 +61,8 @@ def test_a_read_returns_the_offers_facts_and_asks_nothing(tmp_path, monkeypatch)
     w.command("tick")
     assert w.state["outcome"] == "read" and w.state["job_facts"]["reward"] == "5X Reward Points"
     assert w.asked == [] and seen[0][2] == "voucher_read"
+    assert w.told[-1]["text"] == ("Read SmartBuy: amounts: ₹500 ₹1,000 ₹2,000; reward: 5X Reward Points; limit: "
+                                  "Monthly limit ₹10,000.")
 
 
 @pytest.mark.parametrize("typed", ["[ask]", "[captcha]", "[profile:phone]"])
@@ -138,3 +140,30 @@ def test_vouchers_bought_today_ask_before_buying_again(tmp_path, monkeypatch):
     script(monkeypatch, answer(cart="Swiggy ₹2,000 × 2 Swiggy ₹1,000 × 1", payable="₹5,000"))
     w.command("tick")
     assert w.state["outcome"] == "bought_before" and "GV1" in w.asked[0]["text"]
+
+
+def test_a_read_that_would_ask_the_user_stops_unread(tmp_path, monkeypatch):
+    # live, Axis Grab Deals: the loop guard's "I'm stuck … What should I do?" went to the user from a read
+    w = worker_with(tmp_path, page=page("Swiggy\n₹500 ₹1,000"), goal=READ)
+    with pytest.raises(module.Halt):
+        w.ask({"kind": "text", "text": "I'm stuck on SmartBuy. What should I do?"})
+    assert w.state["outcome"] == "unread" and w.asked == []
+
+
+def test_a_read_past_its_turns_ends_with_what_it_read(tmp_path, monkeypatch):
+    # live, Axis Grab Deals: amounts and discount read by turn 4, then nine turns opening and closing an offer panel
+    w = worker_with(tmp_path, page=page("Swiggy\n₹500 ₹1,000\n2% OFF"), goal=READ)
+    seen = script(monkeypatch, answer([("wait", None, None)]))
+    w.state["job_facts"].update(amounts="₹500 ₹1,000", discount="2% OFF")  # read in earlier turns
+    w.state["actor_turns"] = module.READ_TURNS
+    w.command("tick")
+    assert w.state["outcome"] == "read" and seen == [] and w.told[-1]["text"].startswith("Read SmartBuy: amounts")
+
+
+def test_a_stores_suggestion_of_the_brands_gift_card_is_no_narrowing(tmp_path):
+    # live, SmartBuy: "Zomato Gift Card" was refused as adding "card, gift" to the search, and Enter found nothing
+    w = worker_with(tmp_path, page=page("Search"), goal=money.read_goal("SmartBuy", "Zomato", 2000))
+    w.state["history"].append({"operation": "TYPE_TEXT", "action": "input search", "text": "Zomato"})
+    assert w.narrows({"label": "Zomato Gift Card"}) == set()
+    assert w.narrows({"label": "Zomato E-Gift Voucher Zomato E-Gift Voucher Product"}) == set()  # live, Woohoo
+    assert w.narrows({"label": "Zomato Gold Membership"}) == {"gold", "membership"}

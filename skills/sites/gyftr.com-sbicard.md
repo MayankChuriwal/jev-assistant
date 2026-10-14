@@ -5,6 +5,7 @@ aliases: SBI Card E-Store, SBI Card GyFTR, SBI vouchers
 start: https://www.gyftr.com/sbicard
 banks: SBI
 learn: no
+brand.swiggy: https://www.gyftr.com/sbicard/brands/swiggy-gv-gift-vouchers
 step: Add to cart, View Cart & Buy, Request OTP, Continue, Submit, Read T&C, I agree to the Terms, Checkout
 final: BUY NOW, Pay ₹, Redeem & Pay
 keep: tab

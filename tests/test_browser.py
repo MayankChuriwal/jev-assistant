@@ -823,3 +823,17 @@ def test_a_banks_countdown_never_makes_its_submit_stale(browser_at):
     submit = find(page, "SUBMIT", "click")
     b.evaluate("tick.textContent = '2:10'")
     assert b.fresh(page, submit)
+
+
+def test_a_ticking_count_or_typing_placeholder_never_makes_a_decision_stale(browser_at):
+    # live, iShop: "148+", "210+" ticked beside its search box, whose placeholder typed brand names out letter by
+    # letter; every action came back stale, and the read gave up
+    b = browser_at("/counter.html")
+    page = b.observe()
+    search = find(page, "Search brands")
+    time.sleep(0.4)  # the count ticks up several times
+    assert b.fresh(page, search) and b.fresh(page, find(page, "Search"))
+    typed = next(a for a in page["actions"] if a["kind"] == "fill" and a["label"].startswith("Search B"))
+    assert b.fresh(page, typed)  # its placeholder typed more letters meanwhile
+    b.evaluate("document.getElementById('cart').textContent = 'Cart 1'")
+    assert not b.fresh(page, find(page, "Search"))  # a change that isn't a count still counts

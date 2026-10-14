@@ -29,6 +29,10 @@ MAX_SPEND = 0.25
 BILL_SPEND = 1.00  # a bill's or a purchase's page model reads every page at high effort: its own, higher cap
 READ_SPEND = 0.30  # a voucher store's read: a few pages, nothing bought
 ACTOR_TURNS, ACTOR_IDLE, ACTOR_BAD = 25, 3, 3  # a bill's page-model turns: in all, in a row with no progress, refused
+# words a store's suggestion of a brand's own voucher adds ("Zomato Gift Card", "Swiggy E-Gift Voucher Product")
+VOUCHER_WORDS = {"gift", "card", "cards", "voucher", "vouchers", "e", "egift", "evoucher", "gv", "money", "instant",
+                 "new", "product", "products"}
+READ_TURNS = 10  # a store's read: past this, it ends with what it read (live, Grab Deals opened and closed a panel)
 CONFIRM_READS, CONFIRM_GAP = 15, 2.0  # reads of the page, seconds apart, after the user says they paid a QR
 SUBGOAL_STEPS = 12
 STUCK_AT = 8
@@ -363,6 +367,9 @@ class Worker:
         """One question to the user; returns the reply. Secret replies never enter the log."""
         if self.asker is None:
             raise Halt("blocked", "This step needs you, but no one is attached to answer.")
+        if getattr(self, "job", None) and self.job["kind"] == "voucher_read":  # a read asks the user nothing (live:
+            self.state["outcome"] = "unread"  # Grab Deals' "I'm stuck … What should I do?" went to the user)
+            raise Halt("blocked", f"{self.job['portal']}'s page needed more than a read, so I didn't read it.")
         if self.state["held"] and repeats(message["text"], self.state["held"]):
             self.state["held"] = None  # the update held a step was this question: it goes once, as the question
         self.release()
@@ -1497,6 +1504,8 @@ class Worker:
         if not typed & label:
             return set()  # not a suggestion of what was typed: a search button, another control
         said = typed | executor.words(s["goal"]) | executor.words(" ".join(self.user_words()))
+        if self.job and self.job["kind"] in {"voucher", "voucher_read"}:  # live, SmartBuy: "Zomato Gift Card" is the
+            said |= VOUCHER_WORDS  # brand's voucher, not another product
         return label - said - FILLER
 
     @staticmethod
@@ -1944,6 +1953,10 @@ class Worker:
         read, a purchase's before anything), and its ending or its actions."""
         s = self.state
         s["actor_turns"] += 1
+        if self.job["kind"] == "voucher_read" and s["actor_turns"] > READ_TURNS:
+            if s["job_facts"].get("amounts"):
+                return self.read_done()
+            raise self.job_halt(f"I couldn't find the amounts on {rules.host(page['url'])} in {READ_TURNS} turns.")
         if s["actor_turns"] > ACTOR_TURNS:
             raise self.job_halt(f"I took {ACTOR_TURNS} turns on {rules.host(page['url'])} without finishing, so I "
                                  "stopped.")
@@ -2343,7 +2356,9 @@ class Worker:
                                  "stop saying why there are none.")
             return None
         s["status"], s["outcome"] = "done", "read"
-        self.say(f"Read {self.job['portal']}.", kind="result")
+        read = "; ".join(f"{name}: {value}" for name, value in s["job_facts"].items()
+                         if name in {"amounts", "reward", "discount", "fee", "limit"})
+        self.say(f"Read {self.job['portal']}: {read}.", kind="result")
         return None
 
     def voucher_done(self, say):

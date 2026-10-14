@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Rewards</title></head>
+<body>
+<div id="top"><input id="q" aria-label="Search brands"><input id="typed" placeholder="Search B"><span>Up to 29% iCash</span><span id="brands">100+</span>
+<button id="go">Search</button><p id="cart">Cart 0</p></div>
+<script>
+  // live, iShop: its brand count ticks up ("148+", "210+") beside the search box, as the page settles
+  let n = 100;
+  setInterval(() => { n += 7; document.getElementById('brands').textContent = n + '+'; }, 50);
+  // …and its search box's placeholder types brand names out letter by letter ("Search B", "Search De", "Search Decathl")
+  const names = ['Bigbasket', 'Decathlon Omni', 'Swiggy Money'];
+  let at = 0, len = 1;
+  setInterval(() => { const w = names[at]; document.getElementById('typed').placeholder = 'Search ' + w.slice(0, len);
+    if (++len > w.length) { len = 1; at = (at + 1) % names.length; } }, 40);
+</script>
+</body>
+</html>

@@ -68,8 +68,11 @@
   // it shows in turn are no change, so its quoted words are dropped and each distinct line counts once.
   // Beside a code's form, a line that is only a number or a clock is its resend countdown (GyFTR's bare "37").
   const COUNTDOWN = /^(?:\d{1,3}|\d{1,2}:\d{2}|\d{1,3}\s?s(?:ecs?)?)$/i;
+  const TICKER = /(?<![\d,.])\d[\d,]*\+(?![\w₹])/g;
   const calm = t => {
-    const lines = steady(t).replace(/["\u201c][^"\u201d\n]{0,60}["\u201d]/g, '""').split('\n').map(l => l.trim());
+    // a count ticking up as the page settles (live, iShop: "148+", "210+") is no change either
+    const lines = steady(t).replace(/["\u201c][^"\u201d\n]{0,60}["\u201d]/g, '""').replace(TICKER, '#+')
+      .split('\n').map(l => l.trim());
     const otp = /\b(?:otp|resend|one[- ]time|verification code)\b/i.test(t || '');
     return [...new Set(lines.filter(l => l && !(otp && COUNTDOWN.test(l))))].join('\n');
   };
@@ -400,7 +403,10 @@
     if (!e?.isConnected || !reachable(e)) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
     if (scope && !memo.has(scope)) memo.set(scope, calm(scope.innerText?.slice(0, 6000)));
-    return [identity(e), role(e), calm(name(e)), safe(e) ? e.value ?? null : null, e.checked ?? null, e.selectedIndex ?? null,
+    // a box named only by its placeholder: the placeholder may type itself out (live, iShop's "Search Decathl…")
+    const named = name(e), hint = e.getAttribute?.('placeholder');
+    return [identity(e), role(e), calm(hint && named === hint.trim() ? '' : named), safe(e) ? e.value ?? null : null,
+      e.checked ?? null, e.selectedIndex ?? null,
       e.readOnly ?? null, e.matches(':disabled'), e.getAttribute('aria-disabled'), e.getAttribute('aria-expanded'),
       e.getAttribute('aria-checked'), e.getAttribute('aria-selected'), e.getAttribute('href'), memo.get(scope) ?? ''];
   };

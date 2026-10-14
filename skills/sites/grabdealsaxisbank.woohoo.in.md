@@ -6,6 +6,7 @@ start: https://grabdealsaxisbank.woohoo.in
 banks: Axis
 cap: ₹1,000
 learn: no
+brand.swiggy: https://grabdealsaxisbank.woohoo.in/en-in/swiggy-new-e-gift-voucher
 keep: tab
 ---
 - Axis Bank's Grab Deals voucher store, run by Pine Labs (Woohoo). Offers by brand: a percent cashback or a points multiplier ("5% or 5X"), capped at ₹1,000 cashback (or 5,000 EDGE points) a month.

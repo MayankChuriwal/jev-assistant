@@ -5,6 +5,7 @@ aliases: IndusInd Insta Vouchers, IndusInd GyFTR
 start: https://www.gyftr.com/indusindinstavouchers
 banks: IndusInd
 learn: no
+brand.swiggy: https://www.gyftr.com/indusindinstavouchers/brand/swiggy-gv-gift-vouchers
 step: Add to cart, View Cart & Buy, Request OTP, Continue, Submit, Read T&C, I agree to the Terms, Checkout
 final: BUY NOW, Pay ₹, Redeem & Pay
 keep: tab

@@ -3,9 +3,12 @@
 Read `docs/superpowers/specs/2026-10-01-system-one-agent-design.md` and
 `docs/superpowers/specs/2026-10-01-phase-b-learning-design.md` before editing. Loop: Jev chooses each browser
 step inside a subgoal; GPT-4.1 mini plans the subgoals, resolves what Jev is unsure about, and writes every word; the
-gate guards every commit. A bill's payment (a `money.goal_for` goal; spec
-`docs/superpowers/specs/2026-10-14-finance-agent-bills-design.md`) runs on the page model instead (`actor.py`,
-gpt-6-luna): short action lists on numbered elements, each run through the gate; `money.py` decides about money.
+gate guards every commit. A money job runs on the page model instead (`actor.py`, gpt-6-luna): short action lists on
+numbered elements, each run through the gate; `money.py` decides about money. The jobs (`money.job_intent`): a bill's
+payment (`money.goal_for`; spec `docs/superpowers/specs/2026-10-14-finance-agent-bills-design.md`), and a voucher
+store's read or a voucher purchase (`money.read_goal`, `money.voucher_goal`; spec
+`docs/superpowers/specs/2026-10-14-finance-agent-vouchers-design.md`). After a purchase's yes every page is masked as it
+is read (`money.mask_codes`) and no screenshot goes to a model: a voucher's code or PIN reaches no model, trace or chat.
 
 - Input is a natural-language goal. Task and site know-how lives in `skills/*.md` and `skills/sites/*.md`, never in
   code.

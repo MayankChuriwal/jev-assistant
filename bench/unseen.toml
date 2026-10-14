@@ -419,3 +419,13 @@ end = "gate"
 require = ["FASTag", "500"]
 rule = "The approval card recharges the user's FASTag with ₹500 on its issuer's own site."
 answers = [['\b(captcha|code|otp|vehicle|tag|wallet|account|number|yours|name)\b', "@user"]]
+
+[[task]]
+id = "voucher-gyftr-read"
+category = "vouchers"
+goal = "Read the Swiggy vouchers on GyFTR for ₹2,000: every amount, the reward, any discount or fee, and the monthly limit. Buy nothing."
+url = "https://www.gyftr.com/"
+skill = "vouchers"
+end = "result"
+require = ["₹"]
+rule = "The report names the Swiggy vouchers' amounts on GyFTR's own store (www.gyftr.com), and any reward or discount it states; nothing was added to a cart or bought."
