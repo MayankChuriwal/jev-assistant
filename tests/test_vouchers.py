@@ -61,8 +61,8 @@ def test_a_read_returns_the_offers_facts_and_asks_nothing(tmp_path, monkeypatch)
     w.command("tick")
     assert w.state["outcome"] == "read" and w.state["job_facts"]["reward"] == "5X Reward Points"
     assert w.asked == [] and seen[0][2] == "voucher_read"
-    assert w.told[-1]["text"] == ("Read SmartBuy: amounts: ₹500 ₹1,000 ₹2,000; reward: 5X Reward Points; limit: "
-                                  "Monthly limit ₹10,000.")
+    assert w.told[-1]["text"] == ("Read the Swiggy vouchers on SmartBuy: amounts: ₹500 ₹1,000 ₹2,000; reward: 5X "
+                                  "Reward Points; limit: Monthly limit ₹10,000.")
 
 
 @pytest.mark.parametrize("typed", ["[ask]", "[captcha]", "[profile:phone]"])
@@ -157,7 +157,7 @@ def test_a_read_past_its_turns_ends_with_what_it_read(tmp_path, monkeypatch):
     w.state["job_facts"].update(amounts="₹500 ₹1,000", discount="2% OFF")  # read in earlier turns
     w.state["actor_turns"] = module.READ_TURNS
     w.command("tick")
-    assert w.state["outcome"] == "read" and seen == [] and w.told[-1]["text"].startswith("Read SmartBuy: amounts")
+    assert w.state["outcome"] == "read" and seen == [] and w.told[-1]["text"].startswith("Read the Swiggy vouchers on SmartBuy: amounts")
 
 
 def test_a_stores_suggestion_of_the_brands_gift_card_is_no_narrowing(tmp_path):

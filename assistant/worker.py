@@ -36,7 +36,8 @@ DECLINED = re.compile(r"\b(?:declined|payment (?:has )?failed|transaction (?:has
 READ_NEVER = re.compile(r"\s*(?:add to cart|add\b|buy\b|checkout|check out|proceed to pay|pay\b)",
                         re.IGNORECASE)  # what a read never presses: a control that starts so ("MakeMyTrip e-Pay" is
 # a product)
-READ_TURNS = 10  # a store's read: past this, it ends with what it read (live, Grab Deals opened and closed a panel)
+READ_TURNS = 14  # a store's read: past this, it ends with what it read (live, Grab Deals opened and closed a panel;
+# a store with no note can take a search, its results and a brand page twice over)
 CONFIRM_READS, CONFIRM_GAP = 15, 2.0  # reads of the page, seconds apart, after the user says they paid a QR
 SUBGOAL_STEPS = 12
 STUCK_AT = 8
@@ -2408,7 +2409,7 @@ class Worker:
         s["status"], s["outcome"] = "done", "read"
         read = "; ".join(f"{name}: {value}" for name, value in s["job_facts"].items()
                          if name in {"amounts", "reward", "discount", "fee", "limit"})
-        self.say(f"Read {self.job['portal']}: {read}.", kind="result")
+        self.say(f"Read the {self.job['brand']} vouchers on {self.job['portal']}: {read}.", kind="result")
         return None
 
     def voucher_done(self, say):
