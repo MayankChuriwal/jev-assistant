@@ -157,7 +157,8 @@ def test_a_read_past_its_turns_ends_with_what_it_read(tmp_path, monkeypatch):
     w.state["job_facts"].update(amounts="₹500 ₹1,000", discount="2% OFF")  # read in earlier turns
     w.state["actor_turns"] = module.READ_TURNS
     w.command("tick")
-    assert w.state["outcome"] == "read" and seen == [] and w.told[-1]["text"].startswith("Read the Swiggy vouchers on SmartBuy: amounts")
+    assert w.state["outcome"] == "read" and seen == []
+    assert w.told[-1]["text"].startswith("Read the Swiggy vouchers on SmartBuy: amounts")
 
 
 def test_a_stores_suggestion_of_the_brands_gift_card_is_no_narrowing(tmp_path):
