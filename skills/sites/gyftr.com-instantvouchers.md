@@ -5,6 +5,7 @@ aliases: SmartBuy, HDFC SmartBuy, Smart Buy, Instant Vouchers, GyFTR
 start: https://www.gyftr.com/instantvouchers
 banks: HDFC
 cap: 3000 points
+either: yes
 learn: no
 brand.swiggy: https://www.gyftr.com/instantvouchers/swiggy-gv-gift-vouchers
 keep: tab

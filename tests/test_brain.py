@@ -653,3 +653,19 @@ def test_a_read_that_ended_badly_after_reading_the_amounts_still_counts(tmp_path
     offers = brain.voucher_compare("Swiggy", 2000)["offers"]
     assert any(o["portal"] == "IndusInd" and o["vouchers"] == "1 × ₹2,000" and o["effective"] == "₹1,970"
                for o in offers)
+
+
+def test_a_stores_offers_that_are_one_or_the_other_count_only_the_points(tmp_path):
+    # live, SmartBuy: ACCELERATED REWARDS' 5X and INSTA DEALS' 2.5% off were both read; they are one or the other
+    brain, core = voucher_brain(tmp_path, said=["Swiggy 5000"], cards=["Infinia"], reads={
+        "SmartBuy": {"amounts": "₹1,000 ₹2,000", "reward": "Upto 5X Reward Points / 5% Cashback",
+                     "discount": "Flat 2.5% Off"}})
+    best = next(o for o in brain.voucher_compare("Swiggy", 5000)["offers"] if o["portal"] == "SmartBuy")
+    assert best["payable"] == "₹5,000" and best["effective"] == "₹4,167"
+
+
+def test_a_store_taking_any_amount_in_a_range_buys_the_total_as_one_voucher(tmp_path):
+    brain, core = voucher_brain(tmp_path, said=["Zomato 2,750"], cards=["Infinia"], reads={
+        "Woohoo": {"amounts": "Enter a value between ₹500 and ₹10,000", "discount": "2%"}})
+    offer = next(o for o in brain.voucher_compare("Zomato", 2750)["offers"] if o["portal"] == "Woohoo")
+    assert offer["vouchers"] == "1 × ₹2,750" and offer["effective"] == "₹2,695"

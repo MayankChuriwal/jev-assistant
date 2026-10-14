@@ -449,6 +449,8 @@ class Brain:
         for n, (name, note) in enumerate(stores, 1):
             facts, why = self.read_store(name, note, brand, amount, f"Reading {brand} on {name}… {n} of {len(stores)}")
             fitting = [card for card in cards if skills.fits(note, self.card_note(card))]
+            if facts and note.get("either") == "yes" and facts.get("reward"):  # live, SmartBuy: its points offer
+                facts = {**facts, "discount": None}  # and its instant discount are one or the other: its default counts
             if facts is None:
                 unread.append({"portal": name, "why": why})
                 for card in fitting:  # still buyable: its amounts show once signed in
@@ -457,6 +459,10 @@ class Brain:
             amounts = sorted({int(a.replace(",", "")) for a in re.findall(r"₹\s?([\d,]+)", facts.get("amounts") or "")})
             limit = money.rupees(facts.get("limit")) if "₹" in str(facts.get("limit") or "") else None
             made = money.split(amounts, amount)
+            span = money.amount_range(facts.get("amounts"))
+            if span:  # live, Woohoo's Zomato card: any amount in a range, so the total is one voucher
+                made = {amount: 1} if span[0] <= amount <= span[1] else None
+                amounts = list(span)
             for card in fitting:
                 if not made or (limit is not None and amount > limit):
                     options = money.nearest(amount, amounts, int(limit) if limit is not None else None)

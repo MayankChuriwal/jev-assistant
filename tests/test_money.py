@@ -205,3 +205,10 @@ def test_a_compared_reward_with_its_own_full_stops_still_reads_back():
     assert intent["card"] == "Sapphiro" and intent["compared"] == "6X Reward Points T&C apply"
     assert money.job_intent(money.voucher_goal("iShop", "Swiggy", 2000, {2000: 1}, "Sapphiro",
                                                compared="2.5% back"))["compared"] == "2.5% back"
+
+
+def test_a_store_that_takes_any_amount_in_a_range_makes_any_total_in_it():
+    # live, Woohoo's Zomato card: "Enter a value between ₹500 and ₹10,000"
+    assert money.amount_range("Enter a value between ₹500 and ₹10,000") == (500, 10000)
+    assert money.amount_range("₹100 - ₹5,000") == (100, 5000)
+    assert money.amount_range("₹500, ₹1,000") is None

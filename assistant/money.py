@@ -107,6 +107,19 @@ def split(amounts, total):
         if total in best else None
 
 
+RANGE = re.compile(r"(?:between\s+)?₹\s?([\d,]+)\s*(?:and|to|-|–)\s*₹\s?([\d,]+)", re.IGNORECASE)
+
+
+def amount_range(text):
+    """(lowest, highest) when a store takes any amount in a range ("Enter a value between ₹500 and ₹10,000",
+    "₹100 - ₹5,000"); else None."""
+    found = RANGE.search(str(text or ""))
+    if not found:
+        return None
+    low, high = int(found[1].replace(",", "")), int(found[2].replace(",", ""))
+    return (low, high) if low < high else None
+
+
 def nearest(total, amounts, limit):
     """The totals these vouchers make nearest the total, nearest first: the one below it and the one above, never
     over the limit (₹1,200 of ₹250 steps: ₹1,250, then ₹1,000)."""

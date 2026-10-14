@@ -166,4 +166,5 @@ def test_a_stores_suggestion_of_the_brands_gift_card_is_no_narrowing(tmp_path):
     w.state["history"].append({"operation": "TYPE_TEXT", "action": "input search", "text": "Zomato"})
     assert w.narrows({"label": "Zomato Gift Card"}) == set()
     assert w.narrows({"label": "Zomato E-Gift Voucher Zomato E-Gift Voucher Product"}) == set()  # live, Woohoo
+    assert w.narrows({"label": "Zomato E-Gift Card Zomato E-Gift Card Product (1 of 2)"}) == set()  # its twin's mark
     assert w.narrows({"label": "Zomato Gold Membership"}) == {"gold", "membership"}
