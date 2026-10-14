@@ -3,7 +3,9 @@
 Read `docs/superpowers/specs/2026-10-01-system-one-agent-design.md` and
 `docs/superpowers/specs/2026-10-01-phase-b-learning-design.md` before editing. Loop: Jev chooses each browser
 step inside a subgoal; GPT-4.1 mini plans the subgoals, resolves what Jev is unsure about, and writes every word; the
-gate guards every commit.
+gate guards every commit. A bill's payment (a `money.goal_for` goal; spec
+`docs/superpowers/specs/2026-10-14-finance-agent-bills-design.md`) runs on the page model instead (`actor.py`,
+gpt-6-luna): short action lists on numbered elements, each run through the gate; `money.py` decides about money.
 
 - Input is a natural-language goal. Task and site know-how lives in `skills/*.md` and `skills/sites/*.md`, never in
   code.

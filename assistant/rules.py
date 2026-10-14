@@ -212,7 +212,9 @@ def captcha_challenge(page):
                 any(CHALLENGE.search(a.get("label") or "") for a in page.get("actions") or ()))
 
 
-CAPTCHA_BOX = re.compile(r"captcha|security verification", re.IGNORECASE)  # where a captcha's text is typed
+# where a captcha's text (or a sum's answer: Tata Power-DDL's "Enter addition of two numbers") is typed
+CAPTCHA_BOX = re.compile(r"captcha|security verification|image code|characters shown|addition of two numbers|"
+                         r"sum of (?:the )?two numbers", re.IGNORECASE)
 CARD_DETAIL = re.compile(r"\b(cvv|cvc|card (number|no\.?|details?)|expir(y|ation)( date)?|upi pin)\b", re.IGNORECASE)
 PRICE = re.compile(r"[₹$€£]\s?\d(?:[\d,]*\d)?(?:\.\d+)?|\bRs\.?\s?\d(?:[\d,]*\d)?(?:\.\d+)?", re.IGNORECASE)
 
