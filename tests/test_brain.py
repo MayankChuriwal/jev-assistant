@@ -531,11 +531,23 @@ def test_compare_reads_only_the_stores_the_cards_fit_and_ranks_them(tmp_path):
     assert len(core.executed) == 3 and again["offers"] == result["offers"]  # each store read once a day
 
 
-def test_a_total_a_store_cant_make_offers_its_nearest(tmp_path):
+def test_a_total_no_store_can_make_offers_the_nearest_totals_as_options(tmp_path):
+    # the eval: with the nearest totals only inside each offer, the brain offered the stores, not the totals
     brain, core = voucher_brain(tmp_path, said=["Swiggy 1200"], cards=["Infinia"], reads={
-        "SmartBuy": {"amounts": "₹500 ₹1,000", "reward": "5X Reward Points"}})
-    offer = next(o for o in brain.voucher_compare("Swiggy", 1200)["offers"] if o["portal"] == "SmartBuy")
-    assert offer["vouchers"] is None and offer["nearest"] == ["₹1,000", "₹1,500"]
+        "SmartBuy": {"amounts": "₹250 ₹500 ₹1,000", "reward": "5X Reward Points"},
+        "Woohoo": {"amounts": "₹500 ₹1,000", "discount": "2%"}})
+    result = brain.voucher_compare("Swiggy", 1200)
+    assert result["status"] == "unmade" and result["options"] == ["₹1,250", "₹1,000", "₹1,500"]
+    assert "options" in result["next"]
+
+
+def test_a_total_one_store_cant_make_lists_its_nearest_after_the_others(tmp_path):
+    brain, core = voucher_brain(tmp_path, said=["Swiggy 1500"], cards=["Infinia"], reads={
+        "SmartBuy": {"amounts": "₹1,000", "reward": "5X Reward Points"},
+        "Woohoo": {"amounts": "₹500 ₹1,000", "discount": "2%"}})
+    offers = brain.voucher_compare("Swiggy", 1500)["offers"]
+    assert offers[0]["portal"] == "Woohoo" and offers[-1]["vouchers"] is None and offers[-1]["nearest"] == [
+        "₹1,000", "₹2,000"]
 
 
 def test_a_store_that_couldnt_be_read_is_listed_and_still_buyable(tmp_path):

@@ -469,6 +469,14 @@ class Brain:
                 self.offers[(name, card)] = {"brand": brand, "amount": amount, "split": made,
                                              "reward": facts.get("reward") or None}
         made = [o for o in offers if o["vouchers"]]
+        if offers and not made:  # the eval: with the totals only inside each offer, the stores were offered instead
+            totals = sorted({int(t[1:].replace(",", "")) for o in offers for t in o["nearest"]},
+                            key=lambda t: (abs(t - amount), t))
+            options = [f"₹{t:,}" for t in totals[:3]]
+            return {"status": "unmade", "reason": f"No store can make ₹{amount:,} from its {brand} vouchers.",
+                    "options": options, "unread": unread,
+                    "next": "Say so in one line, and offer these totals as options: " + ", ".join(options) + ". Then "
+                            "compare again with the total they pick."}
         ranked = money.rank(made) + [o for o in offers if not o["vouchers"]]
         return {"status": "done", "brand": brand, "amount": f"₹{amount:,}",
                 "offers": [self.offer_line(o) for o in ranked], "unread": unread,
