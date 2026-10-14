@@ -5,7 +5,7 @@ import pytest
 from assistant import skills
 
 KINDS = {"groceries", "food-delivery", "shopping", "rides", "tickets", "travel", "bills-recharges", "account",
-         "forms", "lookup"}
+         "forms", "lookup", "vouchers"}
 
 
 def test_frontmatter_lists_and_body():
@@ -121,3 +121,38 @@ def test_every_site_a_goal_names_is_found_in_the_goals_order():
 def test_a_voucher_portal_keeps_its_tab_but_each_purchase_starts_on_its_own_page(site):
     # dry run: a second purchase began on the cart the first one left, scrolled to its foot; its summary was empty
     assert skills.load_sites()[site]["keep"] == "tab"
+
+
+def test_every_card_note_has_a_bank_an_earn_and_a_point_value():
+    cards = skills.load_cards()
+    assert len(cards) >= 15
+    for card in cards.values():
+        assert card["bank"] in {"HDFC", "ICICI", "Axis", "SBI", "Amex", "IndusInd", "Yes Bank"}
+        assert skills.EARN.match(card["earn"]) and float(card["point"]) >= 0 and card["source"].startswith("http")
+    assert skills.card_for("hdfc infinia", cards)["name"] == "Infinia"
+    assert skills.card_for("Infinia", cards)["bank"] == "HDFC"
+    assert skills.card_for("Kotak League", cards) is None
+
+
+def test_the_portals_and_which_cards_fit_them():
+    sites = skills.load_sites()
+    portals = skills.portals(sites)
+    assert {"SmartBuy", "SBI Card", "Axis Gift EDGE", "IndusInd", "Yes Bank", "iShop", "Woohoo", "Axis Grab Deals",
+            "Amex ShopWise"} <= set(portals)
+    infinia = {"name": "Infinia", "bank": "HDFC"}
+    assert skills.fits(portals["SmartBuy"], infinia) and not skills.fits(portals["iShop"], infinia)
+    assert skills.fits(portals["Woohoo"], infinia) and not skills.fits(portals["SmartBuy"], {"name": "X", "bank": ""})
+    assert skills.site_for("https://www.gyftr.com/sbicard/swiggy", sites)["name"] == "SBI Card"
+    assert skills.site_for("https://grabdealsaxisbank.woohoo.in/x", sites)["name"] == "Axis Grab Deals"
+    assert skills.site_for("https://www.woohoo.in/x", sites)["name"] == "Woohoo"
+
+
+def test_the_vouchers_guide_is_a_kind_skill():
+    assert "Plan" in skills.load()["vouchers"]["body"]
+
+
+def test_the_smartbuy_note_holds_no_field_only_deleted_code_read():
+    sites = skills.load_sites()
+    assert not {"cart", "cards", "offers", "sign-in", "otp", "checkout", "agree", "never"} & set(
+        sites["gyftr.com/instantvouchers"])
+    assert not {"pay-form", "never"} & set(sites["pay.gyftr.com"])

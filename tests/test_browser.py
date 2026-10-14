@@ -485,43 +485,6 @@ def test_a_rows_pencil_below_the_screen_and_submit_are_scrolled_into_view(browse
     assert b.into_view("₹1000") is True  # GyFTR's amount tile: its words in parts, matched without spaces or commas
 
 
-def test_texts_reads_a_closed_dropdowns_items(browser_at):
-    # SmartBuy's savings calculator: its cards sit in a closed Bootstrap menu, so they are on no screen
-    b = browser_at("/next.html")
-    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div class=\"custom_dropdown\"><button>Infinia</button>"
-               "<ul class=\"dropdown-menu\" style=\"display:none\"><li>Infinia <span>Save ₹ 325 via RP</span></li>"
-               "<li>Regalia Gold <span>Save ₹ 125 via RP</span></li></ul></div>')")
-    assert b.texts(".custom_dropdown .dropdown-menu li") == ["Infinia Save ₹ 325 via RP", "Regalia Gold Save ₹ 125 via RP"]
-    assert b.texts(".nothing-here") == []
-
-
-def test_pick_clicks_a_closed_dropdowns_item_by_its_first_words(browser_at):
-    # SmartBuy's cart: the user's card, picked in the savings calculator's closed menu (Infinia is its default)
-    b = browser_at("/next.html")
-    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<div class=\"custom_dropdown\"><button id=\"shown\">"
-               "Infinia</button><ul class=\"dropdown-menu\" style=\"display:none\">"
-               "<li onclick=\"shown.textContent = 1\">Regalia Credit Card <span>Save ₹ 100 via RP</span></li>"
-               "<li onclick=\"shown.textContent = 2\">Regalia Gold Credit Card / Biz Power <span>Save ₹ 125</span></li>"
-               "</ul></div>')")
-    assert b.pick(".custom_dropdown .dropdown-menu li", "Regalia Gold Credit Card") is True
-    assert b.texts("#shown") == ["2"]  # never the plain Regalia above it
-    assert b.pick(".custom_dropdown .dropdown-menu li", "Amex Platinum") is False
-
-
-def test_tick_ticks_only_the_named_boxes_still_unticked_by_their_labels(browser_at):
-    # SmartBuy's cart: React boxes below the first screen, each click toggling; the WhatsApp box is never named
-    b = browser_at("/next.html")
-    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '"
-               "<input type=\"checkbox\" id=\"a\"><label for=\"a\">Read T&amp;C and important instructions <b>BUY "
-               "NOW</b></label><input type=\"checkbox\" id=\"w\"><label for=\"w\">Receive Gift Voucher on "
-               "WhatsApp</label><input type=\"checkbox\" id=\"t\" checked><label for=\"t\">I agree to the Terms "
-               "and Conditions</label>')")
-    words = ["read t&c and important instructions", "i agree to the terms and conditions"]
-    assert b.tick(words) == {"found": 2, "ticked": ["read t&c and important instructions buy now"]}
-    assert b.evaluate("[a.checked, w.checked, t.checked]") == [True, False, True]  # the ticked one stays ticked
-    assert b.tick(words) == {"found": 2, "ticked": []}
-
-
 def test_a_quantity_button_with_no_words_is_named_by_its_class_not_the_price_beside_it(browser_at):
     # live SmartBuy cart: <button class="decreaseQty"></button> was offered as "button in “Total Value : ₹ 2,000”"
     # (1 of 2), read as a pay button, and asked as the purchase's yes

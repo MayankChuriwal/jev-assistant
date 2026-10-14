@@ -197,29 +197,6 @@ BUTTON_INTO_VIEW = r"""(word => {
   button?.scrollIntoView({block: 'center'});
   return !!button;
 })"""
-# The item `selector` matches whose words start with `word`, clicked shown or not: SmartBuy's savings calculator keeps
-# its cards in a closed menu, and "Regalia Gold Credit Card / …" is never the plain "Regalia Credit Card".
-PICK = r"""((selector, word) => {
-  const norm = s => (s || '').replace(/\s+/g, '').toLowerCase();
-  const item = [...document.querySelectorAll(selector)].find(e => norm(e.textContent).startsWith(norm(word)));
-  item?.click();
-  return !!item;
-})"""
-# The page's boxes whose labels start with one of `words`, each clicked only while unticked: SmartBuy's cart keeps
-# them below its first screen, and a click on a ticked one unticks it. How many it found, and the ones it ticked.
-TICK = r"""(words => {
-  const norm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
-  let found = 0;
-  const ticked = [];
-  for (const label of document.querySelectorAll('label')) {
-    const text = norm(label.textContent);
-    const box = label.control || label.querySelector('input[type="checkbox"]');
-    if (!box || box.type !== 'checkbox' || !words.some(w => text.startsWith(w))) continue;
-    found += 1;
-    if (!box.checked) { box.click(); ticked.push(text); }
-  }
-  return {found, ticked};
-})"""
 # A captcha's picture (MyUPI's letters in an image beside its "Security Verification" box), scrolled into view: its box
 # in page coordinates, or null. One named as a captcha, else the wide picture nearest the captcha's box.
 CAPTCHA_PICTURE = r"""(() => {
@@ -976,23 +953,6 @@ class Browser:
         """Scroll the card titled `title` until its `word` control is in view (MyUPI listed AISLE below the fold, so its
         Cancel was never offered): True when that card was found."""
         return bool(self.evaluate(f"({CARD_INTO_VIEW})({json.dumps(title)}, {json.dumps(word)})"))
-
-    def pick(self, selector, word):
-        """Click the item `selector` matches whose words start with `word`, shown or not (the user's card in SmartBuy's
-        closed savings menu): True when there was one."""
-        return bool(self.evaluate(f"({PICK})({json.dumps(selector)}, {json.dumps(word)})"))
-
-    def tick(self, words):
-        """Tick the boxes whose labels start with one of `words` (lower case) while they are unticked, shown or not:
-        {"found": how many there are, "ticked": the labels ticked now}."""
-        return self.evaluate(f"({TICK})({json.dumps(words)})") or {"found": 0, "ticked": []}
-
-    def texts(self, selector):
-        """The words of every element `selector` matches, shown or not (SmartBuy's savings by card sit in a closed
-        dropdown, on no screen)."""
-        found = self.evaluate(f"[...document.querySelectorAll({json.dumps(selector)})].map(e => "
-                              "(e.innerText || e.textContent || '').replace(/\\s+/g, ' ').trim())")
-        return [text for text in found or [] if text]
 
     def into_view(self, word):
         """Scroll the page's button named `word` into view (Experian's Submit, below the first screen): True when there

@@ -5,7 +5,6 @@ every commit. The user is asked only for what they alone can give, and no model 
 import base64
 import html
 import io
-import itertools
 import json
 import re
 import sys
@@ -27,7 +26,8 @@ PRIVATE = {"browser", "answers", "ids"}  # hold secret values
 MAX_ACTIONS = 150
 MAX_MINUTES = 30
 MAX_SPEND = 0.25
-BILL_SPEND = 1.00  # a bill's page model reads every page at high effort: its own, higher model-spend cap
+BILL_SPEND = 1.00  # a bill's or a purchase's page model reads every page at high effort: its own, higher cap
+READ_SPEND = 0.30  # a voucher store's read: a few pages, nothing bought
 ACTOR_TURNS, ACTOR_IDLE, ACTOR_BAD = 25, 3, 3  # a bill's page-model turns: in all, in a row with no progress, refused
 CONFIRM_READS, CONFIRM_GAP = 15, 2.0  # reads of the page, seconds apart, after the user says they paid a QR
 SUBGOAL_STEPS = 12
@@ -39,19 +39,9 @@ COMMIT_DROPS = 3  # an order's replan with no commit (none left in the old plan 
 CAPTCHA_ROUNDS = 8  # a captcha can take several rounds of new images
 QR_TRIES = 5  # seconds a mandate's QR may take to render after its Cancel
 LIST_READS, LIST_GAP = 6, 0.7  # MyUPI draws its mandate list a card at a time, over a few seconds
-CART_WAIT = 1.5  # seconds for a cart button's answer (SmartBuy's Add to cart, from its server) to show
-CART_READS = 6  # reads, CART_WAIT apart, for a cart line's count to change after its stepper (live: over 1.5 s)
 CHOSEN = re.compile(r"(Cancel|Pause) the UPI AutoPay mandate whose payee is (.+?)(?: until .+)?$")  # the brain's words
-VOUCHER_READ = re.compile(r"^Show the (.+?) gift vouchers on (.+?): list the amounts")  # the brain's voucher read
-REWARD_LINE = re.compile(r"reward points|cashback|icash|instant discount", re.IGNORECASE)
-VOUCHER_BUY = re.compile(r"^Buy ₹([\d,]+) of .+? gift vouchers on .+?: (\d+ × ₹[\d,]+(?: \+ \d+ × ₹[\d,]+)*)")  # its
-# checkout goal: "Buy ₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000, paying with …"
 BANK_SUBMIT = re.compile(r"\s*(?:submit|confirm|verify|authenticate|pay)\s*$", re.IGNORECASE)  # an OTP page's own
-PAYABLE_AMOUNT = re.compile(r"payable amount\s*:?\s*₹\s?([\d,]+(?:\.\d+)?)", re.IGNORECASE)  # GyFTR's pay page
 ORDER_ID = re.compile(r"\border\s*(?:id|no\.?|number)\s*:?\s*([A-Z0-9][A-Z0-9-]{5,})", re.IGNORECASE)
-CART_LINE = re.compile(r"Voucher Value ([\d,]+).{0,20}?You Pay ₹ ?([\d,]+)")  # a SmartBuy cart line: value, its cost
-VOUCHER_BRAND = re.compile(r"^Buy ₹[\d,]+ of (.+?) gift vouchers on ")  # the brand the brain's checkout names
-VOUCHER_CARD = re.compile(r", paying with (.+?)\.$")  # the card the user named, on a portal that lists savings by card
 ROW_FIX = re.compile(r"Dispute type: Personal Details\. The report shows: ([^:]+): .+?\. It should be: (.+?)\.?\s*$",
                      re.DOTALL)  # the brain's dispute: the row it names, and that row's correct value
 MANDATE_CANCEL = re.compile(r"(?:cancel|revoke)\b", re.IGNORECASE)  # a card's Cancel: the UPI app does the rest
@@ -261,20 +251,6 @@ def asks(goal):
     return bool(planner.OPEN_Q.match(goal or "")) or (goal or "").rstrip().endswith("?")
 
 
-def voucher_order(goal):
-    """The vouchers the brain's checkout goal names, by value, largest first ({2000: 2, 1000: 1}), else None."""
-    wanted = VOUCHER_BUY.match(goal)
-    return {int(value.replace(",", "")): int(n) for n, value in re.findall(r"(\d+) × ₹([\d,]+)", wanted[2])} \
-        if wanted else None
-
-
-def cart_lines(text):
-    """A voucher cart's lines as (value, count), in page order: "Voucher Value 2,000 … You Pay ₹ 4,000" is two."""
-    found = [(int(value.replace(",", "")), int(paid.replace(",", "")))
-             for value, paid in CART_LINE.findall(re.sub(r"\s+", " ", text))]
-    return [(value, round(paid / value)) for value, paid in found if value]
-
-
 def plain(text):
     """Text as the user should read it: entities unescaped until none are left (some sites escape twice)."""
     while (unescaped := html.unescape(text)) != text:
@@ -332,11 +308,13 @@ class Worker:
         self.state.update(skill=skill, preauth=preauth, cap=cap, site=skills.bare(urlparse(url).netloc.lower()),
                           start=url)
         self.job = money.job_intent(goal)  # a money job (a bill): the page model acts, money.py decides about money
-        self.max_spend = BILL_SPEND if self.job else MAX_SPEND
+        self.max_spend = {"bill": BILL_SPEND, "voucher": BILL_SPEND, "voucher_read": READ_SPEND}.get(
+            (self.job or {}).get("kind"), MAX_SPEND)
         if self.job:
             self.state.update(job=dict(self.job), job_facts={}, actor_turns=0, actor_idle=0, actor_bad=0,
                               actor_last=[], actor_log=[], actor_seen=None, typed_hosts=[], payment_id=None,
-                              qr_sent=False, checked=False, offer=None, approved_pay=None)
+                              qr_sent=False, checked=False, offer=None, approved_pay=None, cart_ok=False,
+                              cart_refusals=0)
         self.habit = habit
         if habit:
             self.state["replay"] = replay.start(habit, sameness)
@@ -420,7 +398,18 @@ class Worker:
         for action in page["actions"]:
             if action.get("value") and (action.get("frame"), action.get("node")) in self.secrets.nodes:
                 action["value"] = "[secret]"  # an emptied field (a rejected code) still reads as empty
+        if self.masking():  # after the yes, a voucher's code or PIN on screen reaches no model, trace or chat
+            page["text"], page["title"] = money.mask_codes(page["text"]), money.mask_codes(page["title"])
+            for action in page["actions"]:
+                for key in ("label", "value"):
+                    if action.get(key):
+                        action[key] = money.mask_codes(str(action[key]))
         return page
+
+    def masking(self):
+        """Whether pages are masked as they are read: a voucher purchase whose yes was acted on."""
+        job, state = getattr(self, "job", None), getattr(self, "state", None) or {}
+        return bool(job and job["kind"] == "voucher" and state.get("approved_pay"))
 
     def observe(self):
         page = self.settled(self.clean(self.state["browser"].observe()))
@@ -628,17 +617,9 @@ class Worker:
         if sending:  # live: Experian's OTP was typed and never sent; the planner waited eleven times
             operation, action, key = sending
             return self.act(operation, action, page, None, key=key, paid=self.paid())
-        if self.bought(page):  # the payment confirmed: the end, in code, so no voucher's code reaches a model
-            return None
         code = self.otp_step(page)
         if code:  # the bank's one-time password for the payment the user said yes to
             return self.ask_code(page, {"targets": {"type_text_target": code}})
-        form = self.card_form_step(page)
-        if form:  # live: the planner made up a placeholder for the CVV, and the card form was never filled
-            if form[0] == "ask":
-                return self.ask_code(page, {"targets": {"type_text_target": form[1]}})
-            _, operation, action, text = form
-            return self.act(operation, action, page, None, text=text)
         chosen = self.mandate_step(page)
         if chosen:  # the demo: the planner never scrolled to AISLE's card and reached for GOOGLE PLAY's until stuck
             action, page = chosen
@@ -646,32 +627,11 @@ class Worker:
         notice = self.notice_step(page)
         if notice:  # live: Experian's “… wait for 30 days …” was read as an instruction, and waited on twenty times
             return self.act("CLICK", notice, page, None)
-        if self.card_step(page):  # live: the cart's calculator kept Infinia, and the planner asked to pay with it
-            return None
-        fewer = self.quantity_step(page)
-        if fewer:  # live: the cart held 2 × ₹2,000 from an earlier run, and Checkout was offered at ₹4,000
-            action, page = fewer
-            return self.act("CLICK", action, page, None)
-        back = self.refill_step(page)
-        if back:  # live: a value taken for in the cart wasn't, and the planner went home and pressed another offer
-            return self.run(page, "OPEN_URL", self.control(page, "OPEN_URL"), {"url": back}, back)
-        if self.agree_step(page):  # live SmartBuy cart: Checkout did nothing until its two required boxes were ticked
-            return None
-        checkout = self.checkout_step(page)
-        if checkout:  # live: with the boxes ticked the planner pressed the cart count "1" as the purchase
-            action, page = checkout
-            return self.act("CLICK", action, page, None)
-        if self.voucher_read(page):  # live: the planner noted every amount, then said CONTINUE where DONE was due
-            return None
-        buying = self.voucher_step(page)
-        if buying:  # dry run: the chosen amount left the controls offered, and the planner toggled two amounts
-            action, page = buying
-            return self.act("CLICK", action, page, None)
         fixing = self.row_step(page)
         if fixing:  # live: the planner opened other rows, cancelled the address it typed, and left the page
             operation, action, text, page = fixing
             return self.act(operation, action, page, None, text=text)
-        if self.job:  # a bill's payment: the page model chooses each step; money.py and the gate decide about money
+        if self.job:  # a money job: the page model chooses each step; money.py and the gate decide about money
             return self.job_step(page)
         if s["reason"]:
             return self.think(page)
@@ -1022,209 +982,44 @@ class Worker:
         return next((a for a in page["actions"] if words and a["kind"] == "click" and a.get("label") != last
                      and words in (a.get("label") or "").lower()), None)
 
-    def card_step(self, page):
-        """The card the brain's checkout names (“…, paying with Regalia Gold Credit Card.”) picked in its portal's
-        savings calculator (the note's `cards:` list, SmartBuy's closed menu, Infinia by default), once a page: the
-        cart's savings are that card's then, and no one asks how to pay. True when it was picked."""
-        s = self.state
-        card = VOUCHER_CARD.search(s["goal"]) if VOUCHER_BUY.match(s["goal"]) else None
-        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
-        done = s.setdefault("cards_picked", [])
-        if not card or not note.get("cards") or self.place_of(page) in done:
-            return False
-        try:  # live, the first look came before the calculator's cards: tried again each step until picked
-            picked = s["browser"].pick(note["cards"], card[1])
-        except (StalePage, RuntimeError, TimeoutError):
-            return False  # the planner goes on; the approval still shows the cart's own figures
-        if picked:
-            done.append(self.place_of(page))
-        return picked
-
-    def quantity_step(self, page):
-        """On a cart of the brain's vouchers (SmartBuy's lines: "Voucher Value 2,000 … You Pay ₹ 4,000" is two), each
-        line brought to the order's count by its own stepper, first line first: (its "Decrease quantity" or "Increase
-        quantity", page). A value the order doesn't name goes down to none (live, an earlier run's 2 × ₹2,000 sat in
-        the cart and Checkout was offered at ₹4,000). Only while the page shows one stepper a line, at most 20 presses;
-        else None. A cart whose lines are the order is marked for `checkout_step`: on screen alone a line's value shows
-        (live, it sits in a disabled box the whole page's words leave out)."""
-        s = self.state
-        wanted = voucher_order(s["goal"])
-        if not wanted or "voucher value" not in page["text"].lower().replace("\n", " "):
-            return None
-        steps = ("decrease quantity", "increase quantity")
-        last = (s["history"][-1].get("action") or "") if s["history"] else ""
-        if last.lower().startswith(steps):  # its answer comes from the site's server: read until it shows (live: a
-            for _ in range(CART_READS):  # second + before it did made ₹6,000 of ₹4,000)
-                time.sleep(CART_WAIT)
-                page = self.observe()
-                if cart_lines(page["text"]) != s.get("cart_seen"):
-                    break
-        if sum((h.get("action") or "").lower().startswith(steps) for h in s["history"]) >= 20:
-            return None
-        lines = cart_lines(page["text"])
-        s["cart_seen"] = lines
-        s["cart_ok"] = self.place_of(page) if sorted(lines) == sorted(wanted.items()) else None
-        fewer, more = ([a for a in page["actions"] if a["kind"] == "click"
-                        and (a.get("label") or "").lower().startswith(word)] for word in steps)
-        if not lines or not len(lines) == len(fewer) == len(more):
-            return None  # a line's stepper off screen, or a line with none: which is whose isn't known
-        for (value, count), down, up in zip(lines, fewer, more):
-            if count != wanted.get(value, 0):
-                return (down if count > wanted.get(value, 0) else up), page
-        return None
-
-    def brand_page(self, page):
-        """The brand's own page on this page's portal, from its note (`brand.swiggy:`), for a voucher purchase; else
-        None."""
-        brand = VOUCHER_BRAND.match(self.state["goal"])
-        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
-        return note.get(f"brand.{brand[1].strip().lower()}") if brand else None
-
-    def refill_step(self, page):
-        """On a voucher cart missing values of the order ("Cart item not found!!", or its lines read on screen with
-        every line it shows at its count): the brand's page to open again, those values to be added there anew;
-        twice at most, else None. Live: after sign-in a value was taken for in the cart and wasn't; with the old lines
-        taken out the cart was empty, and the planner went home and pressed another offer's Buy Now."""
-        s = self.state
-        wanted, url = voucher_order(s["goal"]), self.brand_page(page)
-        if not wanted or not url or s.get("refills", 0) >= 2:
-            return None
-        text = re.sub(r"\s+", " ", page["text"]).lower()
-        for _ in range(CART_READS if "cart item not found" in text else 0):  # live: shown while the cart loads
-            time.sleep(CART_WAIT)
-            page = self.observe()
-            text = re.sub(r"\s+", " ", page["text"]).lower()
-            if "cart item not found" not in text:
-                break
-        if "cart item not found" in text:
-            present = set()
-        else:
-            lines = cart_lines(page["text"])
-            if "voucher value" not in text or not lines or any(n != wanted.get(v, 0) for v, n in lines):
-                return None  # not a cart, or its lines first (`quantity_step`)
-            present = {value for value, _ in lines}
-        missing = [value for value in wanted if value not in present]
-        if not missing:
-            return None
-        s["vouchers_added"] = [value for value in s.get("vouchers_added", []) if value not in missing]
-        s["refills"] = s.get("refills", 0) + 1
-        return url
-
-    def agree_step(self, page):
-        """The boxes its site note's `agree:` names (words their labels start with, comma-separated: SmartBuy's cart
-        "Read T&C and important instructions …", "I agree to the Terms and Conditions") ticked on a purchase, each only
-        while unticked: they sit below the cart's first screen and a click on a ticked one unticks it (live, the planner
-        toggled one seven times). The final control does nothing until they are ticked, and the user's yes there covers
-        them; a box the note doesn't name (Receive Gift Voucher on WhatsApp) is never ticked. True when it ticked one;
-        with every named box ticked, the page is marked ready for its final control."""
-        s = self.state
-        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
-        words = [w.strip().lower() for w in str(note.get("agree") or "").split(",") if w.strip()]
-        if not words or not VOUCHER_BUY.match(s["goal"]) or s.get("agree_tries", 0) >= 3:
-            return False
-        try:
-            boxes = s["browser"].tick(words)
-        except (StalePage, RuntimeError, TimeoutError):
-            return False
-        if boxes["ticked"]:
-            s["agree_tries"] = s.get("agree_tries", 0) + 1  # a box that never stays ticked is the planner's
-            return True
-        if boxes["found"]:
-            s["agreed_at"] = self.place_of(page)
-        return False
-
-    def checkout_step(self, page):
-        """On the page whose named boxes are all ticked (`agree_step`), its note's `checkout:` control (SmartBuy's
-        Checkout, below the cart's first screen, which opens the payment page), scrolled into view: (control, page);
-        the gate asks the user before it only when it pays. Once only; else None."""
-        s = self.state
-        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
-        finals = [w.strip() for w in str(note.get("checkout") or "").split(",") if w.strip()]
-        if not finals or s.get("agreed_at") != self.place_of(page) or not VOUCHER_BUY.match(s["goal"]):
-            return None
-
-        def final(p):
-            return next((a for name in finals for a in p["actions"] if a["kind"] == "click"
-                         and (a.get("label") or "").strip().lower().startswith(name.lower())), None)
-
-        if any(final({"actions": [{"kind": "click", "label": h.get("action")}]}) for h in s["history"]):
-            return None
-        if s.get("cart_ok") != self.place_of(page):
-            return None  # its lines, read on screen (`quantity_step`), are the order: nothing more, nothing missing
-        total = re.search(r"total cart value\s*₹\s?([\d,]+)", self.page_words(), re.IGNORECASE)
-        if total and total[1].replace(",", "") != VOUCHER_BUY.match(s["goal"])[1].replace(",", ""):
-            return None  # and its total, anywhere on the page
-        control = final(page)
-        if not control and any(s["browser"].into_view(name) for name in finals):
-            page = self.observe()
-            control = final(page)
-        return (control, page) if control else None
-
-    def card_form_step(self, page):
-        """On a payment page whose note names its card form (`pay-form:`, the words its boxes' labels start with, in
-        order: GyFTR's pay.gyftr.com), in a voucher purchase whose goal names the card: the next step, ("ask", box) for
-        a card detail (number, expiry, CVV: through the hidden field, each time, never kept), ("act", operation,
-        control, text) otherwise, else None. Its Card method when the boxes aren't shown, the name on the card from the
-        profile, a ticked "Save card" box unticked, then its `final:` control (PROCEED), once: the gate asks the user
-        there, their one yes for the payment. A payable amount above the order's total stops the task first."""
-        s = self.state
-        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
-        words = [w.strip().lower() for w in str(note.get("pay-form") or "").split(",") if w.strip()]
-        wanted = VOUCHER_BUY.match(s["goal"])
-        if not words or not wanted or not VOUCHER_CARD.search(s["goal"]):
-            return None
-        finals = tuple(w.strip().lower() for w in str(note.get("final") or "").split(",") if w.strip())
-        pressed = [(h.get("action") or "").strip().lower() for h in s["history"]]
-        clicks = [a for a in page["actions"] if a["kind"] == "click"]
-        boxes = [next((a for a in page["actions"] if a["kind"] == "fill"
-                       and (a.get("label") or "").strip().lower().startswith(word)), None) for word in words]
-        if not any(boxes):
-            card = next((a for a in clicks if (a.get("label") or "").strip().lower() == "card"), None)
-            return ("act", "CLICK", card, None) if card and "card" not in pressed else None
-        if None in boxes:
-            return None  # a box off screen or missing: the planner's
-        for box in boxes:
-            if not box.get("value"):
-                return ("ask", box) if rules.CARD_DETAIL.search(box.get("label") or "") else \
-                    ("act", "TYPE_TEXT", box, "[profile:name]")
-        filled = max((n for n, h in enumerate(s["history"]) if h.get("operation") == "TYPE_TEXT"
-                      and (h.get("action") or "").strip().lower().startswith(tuple(words))), default=-1)
-        if finals and any(label.startswith(finals) for label in pressed[filled + 1:]):
-            return None  # pressed for this fill: the bank's page is next (live, the page emptied the form: filled anew)
-        saved = next((a for a in clicks if a.get("role") == "checkbox" and a.get("checked") == "true"
-                      and (a.get("label") or "").lower().startswith("save card")), None)
-        if saved:
-            return "act", "CLICK", saved, None  # never kept on the site either
-        total, due = int(wanted[1].replace(",", "")), PAYABLE_AMOUNT.search(page["text"])
-        if due and float(due[1].replace(",", "")) > total:
-            raise Halt("blocked", f"The payment page asks ₹{due[1]} for your ₹{total:,} of vouchers, so I stopped "
-                                  "before paying. Nothing was charged.")
-        control = next((a for a in clicks if (a.get("label") or "").strip().lower().startswith(finals)), None) \
-            if finals else None
-        return ("act", "CLICK", control, None) if control else None
-
     def approval_lines(self, page, found):
-        """A voucher purchase's approval, written in code from its goal and the page's payable total, else None: the
-        cart was checked against the goal before Checkout (`checkout_step`) and the payable total against its total
-        (`card_form_step`). Dry run: the summary model cut the vouchers' amounts the payment page doesn't show (“2 × +
-        1 ×”) and wrote "Seller not specified"."""
-        s = self.state
-        if self.job:
-            return self.bill_lines(page, found)
-        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
-        if not VOUCHER_BUY.match(s["goal"]) or not note.get("pay-form"):
-            return None  # live: another offer's Buy Now went out under the order's own lines
-        card = VOUCHER_CARD.search(s["goal"])
-        return [s["goal"].removeprefix("Buy ").split(", paying with")[0].rstrip("."),
-                *([f"Card: {card[1]}"] if card else []),
-                *([f"Payable: {gate.tight(found['total'])}"] if found["total"] else [])]
+        """A money job's approval, written in code from its intent and the facts the page showed (a bill's, or a
+        voucher purchase's); a store's read never asks to commit. Else None: the gate writes its own summary."""
+        if not self.job:
+            return None
+        if self.job["kind"] == "voucher_read":
+            raise Retry("This task only reads the store's offer: don't press anything that buys or pays.")
+        if self.job["kind"] == "voucher":
+            return self.voucher_lines(page, found)
+        return self.bill_lines(page, found)
+
+    def voucher_lines(self, page, found):
+        """A voucher purchase's approval: only once the cart was read to hold exactly the goal's vouchers (three
+        refusals stop it) and the amount to pay shows; never on a page opened by typing its address."""
+        s, intent = self.state, self.job
+        if rules.host(page["url"]) in s["typed_hosts"]:
+            raise Retry("This page was opened by typing its address, so it can't take a payment: pay only on the "
+                        "store's own pages and the pages its buttons lead to.")
+        if not s["cart_ok"]:
+            s["cart_refusals"] += 1
+            if s["cart_refusals"] >= 3:
+                raise self.job_halt("The cart never matched what you asked for, so I stopped before paying.")
+            raise Retry("Read the cart into facts.cart first, as counts of amounts: it must hold exactly "
+                        + (money.counted(intent["split"]) if intent["split"] else
+                           f"vouchers making ₹{intent['amount']:,}") + ". Put the amount to pay in facts.payable.")
+        total = found.get("total")
+        payable = total if total and money.grounded(total, page["text"]) else s["job_facts"].get("payable")
+        if money.rupees(payable) is None:
+            raise Retry("Put the amount to pay, as the page shows it, in facts.payable before pressing pay.")
+        s["offer"] = str(money.rupees(payable))  # what a yes now approves
+        return money.voucher_lines(intent, {**s["job_facts"], "payable": payable})
 
     def paid(self):
         """Whether this voucher purchase or bill pressed its payment's control with the user's yes (GyFTR's PROCEED, a
         biller's Pay): the bank's one-time password and the gateway's steps that follow are part of that payment, and
         their yes covers them."""
-        paying = VOUCHER_BUY.match(self.state["goal"]) or (self.job and self.job["kind"] in {"bill", "voucher"})
-        return bool(paying) and any(h.get("committed") and h.get("approved") == "user" for h in self.state["history"])
+        return bool(self.job and self.job["kind"] in {"bill", "voucher"}) and any(
+            h.get("committed") and h.get("approved") == "user" for h in self.state["history"])
 
     def bank_box(self, page):
         """After the payment the user said yes to (`paid`), the bank's one-time password box still empty, else None."""
@@ -1239,177 +1034,6 @@ class Worker:
         if box and not s.get("bank_code"):
             s["bank_code"], s["code_asks"] = True, 0
         return box
-
-    def bought(self, page):
-        """A voucher purchase whose payment the site confirmed (`paid`, then a commit it confirmed, with no code box
-        left to fill): the task ends with its report written in code, from the goal and the order's id (on this page,
-        else the payment page before it), never the page's words: a voucher's code or PIN never reaches a model or the
-        chat. True when it ended."""
-        s = self.state
-        if not VOUCHER_BUY.match(s["goal"]) or not s["done"] or not self.paid() or \
-                any(rules.secret_field(a) for a in page["actions"]):
-            return False  # a bill's ending is its own (job_done): its proof is the receipt's reference
-        order = next((m[1] for text in [page["text"], *reversed(s["recent"])] if (m := ORDER_ID.search(text))), None)
-        bought = "Bought " + s["goal"].removeprefix("Buy ").split(", paying with")[0].rstrip(".")
-        s["held"] = None
-        self.say(f"{bought}." + (f" Order {order}." if order else "") + " The site sends the codes by SMS and email.",
-                 kind="result")
-        s["status"], s["outcome"] = "done", "bought"
-        return True
-
-    def voucher_read(self, page):
-        """The brain's voucher read (“Show the Swiggy gift vouchers on SmartBuy: list the amounts …”) on a portal whose
-        note names its cart button: done here, from the page as it is: its amount tiles (₹ lines and controls) and the
-        lines that state a reward (points, cashback, iCash, an instant discount). True when it ended the task; False
-        when the page shows no amounts yet (a pop-up over it, still loading): the planner goes on."""
-        s = self.state
-        wanted = VOUCHER_READ.match(s["goal"])
-        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
-        if not wanted or not note.get("cart"):
-            return False
-        tile = re.compile(r"^₹\s?([\d,]+)$")
-        lines = [line.strip() for line in page["text"].splitlines() if line.strip()]
-        first = next((n for n, line in enumerate(lines) if tile.match(line)), len(lines))
-        # its tiles are controls on both portals; else the first run of ₹ lines (a calculator's "₹325" comes later)
-        found = [tile.match(a.get("label") or "")[1] for a in page["actions"] if tile.match(a.get("label") or "")] or \
-            [tile.match(line)[1] for line in itertools.takewhile(tile.match, lines[first:])]
-        amounts = sorted({int(a.replace(",", "")) for a in found})
-        if not amounts:
-            return False
-        # the whole page's words when its note says how its offers are headed (SmartBuy): its calculator and offers sit
-        # below the first screen, and on screen they come in pieces ("Reward Points", "Cashback")
-        body = self.page_words() if note.get("offers") or note.get("cards") else ""
-        rewards = self.offers(note, body) or list(dict.fromkeys(
-            line[:120] for line in lines[:first] if REWARD_LINE.search(line)
-            and not re.search(r"value|calculat|effective", line, re.IGNORECASE)))[:4]
-        # above its amounts: below them iShop suggests other brands, and SmartBuy's calculator estimates
-        report = f"{wanted[1]} gift vouchers on {wanted[2]}: " + ", ".join(f"₹{a:,}" for a in amounts) + "."
-        if rewards:
-            report += " Rewards shown: " + "; ".join(rewards) + "."
-        limit = re.search(r"monthly limit:?\s*₹\s?[\d,]+", body, re.IGNORECASE)
-        if limit:
-            report += f" {limit[0]}."
-        report += self.card_savings(note, body)
-        s["held"] = None
-        self.say(report, kind="result", evidence=rewards[0] if rewards else lines[0])
-        s["status"] = "done"
-        return True
-
-    def page_words(self):
-        """The whole page's words, on screen or not, in one line; empty when the page can't be read."""
-        try:
-            return " ".join(self.state["browser"].texts("body"))
-        except (StalePage, RuntimeError, TimeoutError):
-            return ""
-
-    @staticmethod
-    def offers(note, body):
-        """The offers a voucher page states under its note's `offers:` headings, each with its figures ("ACCELERATED
-        REWARDS Upto 5X Reward Points / 5% Cashback"); a heading's banner with no figure is no offer."""
-        heads = [h.strip() for h in str(note.get("offers") or "").split(",") if h.strip()]
-        if not heads or not body:
-            return []
-        unit = r"(?:Cashback|Reward Points|iCash|Instant Discount|Discount)\*?"
-        found = re.finditer(r"(" + "|".join(map(re.escape, heads)) + r")\s+(.{3,90}?" + unit +
-                            r"(?:\s*[/+]\s*[\d.]+\s*(?:X|%)\s*" + unit + r")*)", body)
-        return list(dict.fromkeys(f"{m[1]} {m[2]}" for m in found if re.search(r"\d\s*(?:X|%)", m[2])))[:3]
-
-    def card_savings(self, note, body):
-        """Each card's saving from the portal's own calculator (its note's `cards:` names the list, SmartBuy's closed
-        dropdown), on the amount it quotes ("Effective Price ₹2,000 ₹1,675"): live, it showed Infinia's alone, and the
-        user has another card. Empty when the note names none or the page shows none."""
-        if not note.get("cards"):
-            return ""
-        kinds = {"RP": "in reward points", "CB": "cashback", "CP": "in cash points"}
-        try:
-            texts = self.state["browser"].texts(note["cards"])
-        except (StalePage, RuntimeError, TimeoutError):
-            return ""  # the amounts still go out; the cards are asked about without their savings
-        found = [re.match(r"(.+?)\s*Save\s*₹\s*([\d,]+)\s*via\s*(RP|CB|CP)\b", text) for text in texts]
-        found = [m for m in found if m]
-        basis = re.search(r"effective price\s*₹\s?([\d,]+)", body, re.IGNORECASE)  # the amount it quotes them on
-        if not found or not basis:
-            return ""
-        return (f" Savings on ₹{basis[1]} by card (the site's estimate): "
-                + "; ".join(f"{m[1].strip()} ₹{m[2]} {kinds[m[3]]}" for m in found) + ".")
-
-    def voucher_step(self, page):
-        """The vouchers the brain's checkout names (“Buy ₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 ×
-        ₹1,000.”) put in the cart on a portal whose note names its cart buttons (`cart:`, in order: SmartBuy's "Add to
-        cart, View Cart & Buy"): (control, page) to press, else None for the planner. Each value in turn, largest
-        first: its tile until the page's Total shows it, then Add to cart, unless the page shows it in the cart already
-        (live, signed in with that amount in the cart: a quantity stepper where Add to cart was); then the last button.
-        Each is scrolled into view when off screen; a tile at most twice, Add to cart never twice for a value, and
-        nothing once the last button was pressed (the counts are the cart page's: `quantity_step`). A chosen tile leaves
-        the controls offered, so the Total is the proof. A portal with one button (iShop's Buy now) takes one
-        voucher."""
-        s = self.state
-        wanted, url = voucher_order(s["goal"]), self.brand_page(page)
-        note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
-        carts = [c.strip() for c in str(note.get("cart") or "").split(",") if c.strip()]
-        if not wanted or not carts or (len(carts) == 1 and sum(wanted.values()) != 1) or not url or \
-                [urlparse(u).path.rstrip("/") for u in (page["url"], url)].count(urlparse(url).path.rstrip("/")) < 2:
-            return None  # the brand's own page alone (live, the planner went home and pressed another offer)
-
-        def flat(text):  # "₹ 1,000" and "₹1000" alike
-            return re.sub(r"[\s,]", "", text or "").lower()
-
-        def control(p, label):
-            return next((a for a in p["actions"] if a["kind"] == "click" and flat(a.get("label")) == flat(label)), None)
-
-        def chosen(p, amount):
-            return re.search(r"total(?:value)?:?" + re.escape(amount) + r"(?!\d)", flat(p["text"]))
-
-        def stepped(p):  # a value in the cart shows its quantity stepper where Add to cart was
-            return any((a.get("label") or "").lower().startswith(("decrease quantity", "increase quantity"))
-                       for a in p["actions"])
-
-        pressed = [h.get("action") for h in s["history"]]
-        if pressed and flat(pressed[-1]) == flat(carts[-1]):
-            return None  # its last button just pressed: the cart is its answer
-        added = s.setdefault("vouchers_added", [])
-        for value in (v for v in wanted if v not in added):
-            amount = f"₹{value}"
-            presses = [n for n, label in enumerate(pressed) if flat(label) == amount]
-            if not chosen(page, amount):
-                tile = control(page, amount)
-                if tile and len(presses) < 2:
-                    return tile, page
-                # off screen: the tile, else (pressed already) its Total, beside the first cart button the page has
-                # (live, with that amount in the cart there was no Add to cart, only View Cart & Buy)
-                if not (any(s["browser"].into_view(c) for c in carts) if presses else s["browser"].into_view(amount)):
-                    return None
-                page = self.observe()
-                if not chosen(page, amount):
-                    tile = control(page, amount)
-                    return (tile, page) if tile and len(presses) < 2 else None
-            if len(carts) > 1:  # its Add to cart, unless this value is in the cart already
-                add, since = carts[0], pressed[presses[-1] + 1:] if presses else pressed
-                button = control(page, add)
-                if not button and s["browser"].into_view(add):
-                    page = self.observe()
-                    button = control(page, add)
-                if button and since and flat(since[-1]) == flat(add):  # its answer comes from the site's server: a
-                    time.sleep(CART_WAIT)  # second press before it shows would add two
-                    page = self.observe()
-                    if control(page, add):
-                        return None  # pressed, and still offered once its answer had time to come: the planner's
-                elif button:
-                    return None if any(flat(label) == flat(add) for label in since) else (button, page)
-                elif not stepped(page):  # neither its button nor its stepper (live, just after sign-in): read once
-                    time.sleep(CART_WAIT)  # more, then choose it again
-                    page = self.observe()
-                    if control(page, add) and not any(flat(label) == flat(add) for label in since):
-                        return control(page, add), page
-                    if not stepped(page):
-                        tile = control(page, amount)
-                        return (tile, page) if tile and len(presses) < 2 else None
-            added.append(value)
-        button = control(page, carts[-1])
-        if not button and s["browser"].into_view(carts[-1]):
-            page = self.observe()
-            button = control(page, carts[-1])
-        return (button, page) if button else None
 
     def row_step(self, page):
         """A personal detail the brain's dispute names (“The report shows: Address 1: …. It should be: …”) on a site
@@ -2197,22 +1821,6 @@ class Worker:
                     label.lower().startswith("faq") and QUESTION.match(goal)):
                 raise Retry(f"“{label}” only opens the site's policy or help text, which isn't needed for this task: "
                             "go on with the task itself.")  # MyUPI: its Terms, Privacy and FAQs opened again and again
-            buying = voucher_order(goal)
-            if buying and max(buying.values()) == 1 and label.lower().startswith("increase quantity"):
-                raise Retry("Each voucher in the goal is one: never raise a quantity. Go on with the task itself.")
-            note = (skills.site_for(page["url"], self.library["sites"]) if page.get("url") else None) or {}
-            never = [w.strip().lower() for w in str(note.get("never") or "").split(",") if w.strip()]
-            form = [w.strip().lower() for w in str(note.get("pay-form") or "").split(",") if w.strip()]
-            finals = tuple(w.strip().lower() for w in str(note.get("final") or "").split(",") if w.strip())
-            if form and finals and label.strip().lower().startswith(finals) and any(
-                    a["kind"] == "fill" and not a.get("value") and (a.get("label") or "").strip().lower().startswith(
-                        tuple(form)) for a in page["actions"]):  # live: PROCEED on the form the page had emptied
-                raise Retry(f"“{label}” pays: the card form is filled first, by the system (the card's details come "
-                            "from the user through the hidden field). Go on with the task itself.")
-            if any(label.strip().lower().startswith(w) for w in never) and not (  # unticking one is no step on
-                    action.get("role") == "checkbox" and action.get("checked") == "true"):  # live: Redeem Now
-                raise Retry(f"“{label}” is never part of a task on this site (its note says so): go on with the task "
-                            "itself.")
             if action.get("role") == "checkbox" and action.get("checked") == "true" and \
                     AGREE.search(action.get("label") or ""):  # MyUPI: ticked and unticked five times over
                 raise Retry(f"“{action['label']}” is already ticked: a second click unticks it. Go on to the next "
@@ -2329,17 +1937,24 @@ class Worker:
         return self.job_turn(page)
 
     def job_turn(self, page):
-        """One turn of the page model: its facts kept when the page shows them, the checks once the bill is read, and
-        its ending or its actions."""
+        """One turn of the page model: its facts kept when the page shows them, the job's checks (a bill's once it is
+        read, a purchase's before anything), and its ending or its actions."""
         s = self.state
         s["actor_turns"] += 1
         if s["actor_turns"] > ACTOR_TURNS:
             raise self.job_halt(f"I took {ACTOR_TURNS} turns on {rules.host(page['url'])} without finishing, so I "
                                  "stopped.")
+        if self.job["kind"] == "voucher" and not s["checked"]:
+            s["checked"] = True
+            self.voucher_checks()
+        look = s.pop("actor_look", False)
+        if look and self.masking():  # a picture can't be masked: a voucher's code would reach the model
+            look = False
+            s["feedback"].append("No screenshots after paying: a voucher's code may be on screen. Read the page's "
+                                 "text.")
         notes = [n for n in s["notes"][-3:] if "only a step" not in n]  # the gate's word for its planner, not this
         problems = list(dict.fromkeys(s["feedback"] + notes))
         s["feedback"] = []
-        look = s.pop("actor_look", False)
         image = s["browser"].screenshot(masked=self.secrets.nodes, hide=self.hidden_details()) if look else None
         body = actor.payload(s["goal"], self.job_guide(page), page, s["job_facts"], s["actor_last"], problems,
                              [f"{c['from']}: {c['text']}" for c in s["chat"][-12:]])
@@ -2349,7 +1964,8 @@ class Worker:
                                              "actions": answer.get("actions"), "facts": answer.get("facts"),
                                              "say": answer.get("say"), "ms": meta["latency_ms"]}])[-40:]
         self.take_facts(answer.get("facts") or {}, page)
-        self.bill_checks()
+        if self.job["kind"] == "bill":
+            self.bill_checks()
         seen = (page.get("fingerprint"), json.dumps(s["job_facts"], sort_keys=True), self.replies())  # its own waits
         # are no progress: a page that never changes stops it after ACTOR_IDLE turns
         s["actor_idle"] = s["actor_idle"] + 1 if seen == s["actor_seen"] else 0
@@ -2399,6 +2015,11 @@ class Worker:
                 continue
             before, replies, label = len(s["history"]), self.replies(), action.get("label") or operation.title()
             text = (extra.get("text") or "").strip()
+            if self.job["kind"] == "voucher_read" and operation == "TYPE_TEXT" and (
+                    text in {"[ask]", "[captcha]"} or PLACEHOLDER.search(text)):  # a read asks the user nothing
+                s["outcome"] = "unread"
+                need = "a captcha solved" if text == "[captcha]" else "a sign-in"
+                raise Halt("blocked", f"{self.job['portal']} needs {need} to show its prices, so I didn't read it.")
             if operation == "TYPE_TEXT" and text == "[captcha]":
                 if action.get("value") and s["captcha_text"] and action["value"] == s["captcha_text"][0]:
                     results.append(f"“{label}” already holds the user's captcha answer")  # live BESCOM: asked twice
@@ -2467,15 +2088,34 @@ class Worker:
         s = self.state
         texts = [page["text"], " ".join(f"{a.get('label') or ''} {a.get('value') or ''}" for a in page["actions"]),
                  *s["recent"][-4:]]  # BESCOM shows its balance and due date in boxes, not in the text
+        shown = set().union(*(money.amounts(text) for text in texts))
         for name in money.FACTS[self.job["kind"]]:
             value = str(facts.get(name) or "").strip()
             if not value or value == s["job_facts"].get(name):
                 continue
-            if any(money.grounded(value, text) for text in texts):
+            listed = [a for a in money.amounts(value) if a >= 10]  # a list of amounts, or a cart's: each on the page
+            if (name in {"amounts", "cart"} and listed and set(listed) <= shown) or \
+                    any(money.grounded(value, text) for text in texts):
                 s["job_facts"][name] = value
+                if name == "cart" and self.job["kind"] == "voucher":
+                    self.cart_check(value)
             else:
                 s["feedback"].append(f"The fact {name} “{value}” isn't on the page, so it wasn't kept: copy it as "
                                      "the page shows it.")
+
+    def cart_check(self, cart):
+        """Whether the cart the page shows holds exactly the purchase's vouchers (or, with none named, vouchers making
+        its total); a mismatch is said back to the model, which fixes the cart before any yes."""
+        s, intent = self.state, self.job
+        made = money.cart_split(cart)
+        if intent["split"]:
+            s["cart_ok"] = made == intent["split"]
+        else:
+            s["cart_ok"] = bool(made) and sum(size * n for size, n in made.items()) == intent["amount"]
+        if not s["cart_ok"]:
+            wanted = money.counted(intent["split"]) if intent["split"] else f"vouchers making ₹{intent['amount']:,}"
+            s["feedback"].append(f"The cart holds {cart}; the goal is {wanted}: fix the cart (remove or lower what the "
+                                 "goal doesn't name), then read it again into facts.cart as counts of amounts.")
 
     def bill_checks(self):
         """Once the bill's amount is read: nothing due ends the task; a name on the bill that isn't the user's, and a
@@ -2513,6 +2153,33 @@ class Worker:
         if not self.bill_yes(question, "Pay again"):
             s["outcome"] = "already_paid"
             raise Halt("done", f"Not paid again: your {biller} bill stays as it is.")
+
+    def voucher_checks(self):
+        """Before a purchase: the same vouchers bought on this store in the last day, or a purchase never settled
+        (started or unclear), is asked about first; a record that can't be read is asked about too."""
+        s, intent = self.state, self.job
+        brand, portal = intent["brand"], intent["portal"]
+        try:
+            earlier = money.paid_before(self.memory.payments(portal, money.voucher_key(brand)),
+                                        datetime.now(timezone.utc), money.VOUCHER_WINDOW)
+        except Exception:  # memory unreachable: no record to check, so the user is asked
+            earlier = {"status": "unknown"}
+        if earlier is None:
+            return
+        if earlier["status"] == "paid":
+            question = (f"You bought {money.shown(earlier['amount'])} of {brand} vouchers on {portal} at "
+                        f"{earlier['created_at']:%H:%M %d %b}" + (f" (order {earlier['reference']})"
+                                                                   if earlier.get("reference") else "")
+                        + ". Buy again?")
+        elif earlier["status"] == "unknown":
+            question = f"I can't check my record of your voucher purchases just now. Buy {brand} vouchers anyway?"
+        else:
+            question = (f"A {money.shown(earlier['amount'])} {brand} purchase on {portal} on "
+                        f"{earlier['created_at']:%d %b} was never confirmed, so it may have gone through. Buy again "
+                        "anyway?")
+        if not self.bill_yes(question, "Buy again"):
+            s["outcome"] = "bought_before"
+            raise Halt("done", f"Not bought again: no {brand} vouchers were bought.")
 
     def bill_yes(self, question, yes):
         reply = self.ask({"kind": "choice", "text": question,
@@ -2568,9 +2235,11 @@ class Worker:
         s["approved_pay"] = s["offer"] or s["approved_pay"]
         if s["payment_id"] is not None or not s["approved_pay"]:
             return
+        job = self.job
+        row = (job["portal"], money.voucher_key(job["brand"]), s["approved_pay"], job["card"]) \
+            if job["kind"] == "voucher" else (job["biller"], job["account"], s["approved_pay"], job["method"] or "")
         try:
-            s["payment_id"] = self.memory.payment_started(self.job["biller"], self.job["account"],
-                                                          s["approved_pay"], self.job["method"] or "")
+            s["payment_id"] = self.memory.payment_started(*row)
         except Exception as error:  # the payment still needs its record: the trace keeps why it has none
             s["errors"].append({"step": len(s["history"]), "error": f"payment record: {error}"})
 
@@ -2585,8 +2254,8 @@ class Worker:
             s["errors"].append({"step": len(s["history"]), "error": f"payment record: {error}"})
 
     def settle_payment(self):
-        """A bill's task stopped with its payment's record still "started": failed when nothing was charged (a No,
-        the QR not paid, nothing due), else unclear (stopped after the user's yes was acted on: it may have gone
+        """A money job stopped with its payment's record still "started": failed when nothing was charged (a No, the
+        QR not paid, nothing due), else unclear (stopped after the user's yes was acted on: it may have gone
         through)."""
         s = self.state
         if not self.job or s["payment_id"] is None or s.get("payment_status"):
@@ -2615,7 +2284,8 @@ class Worker:
         """Whether the payment the user said yes to now shows a UPI QR on screen to hand them (read by the gate's
         watch too)."""
         s = self.state
-        return bool(self.job) and self.paid() and not s["qr_sent"] and self.payment_qr()[1] is not None
+        return bool(self.job) and self.job["kind"] == "bill" and self.paid() and not s["qr_sent"] and \
+            self.payment_qr()[1] is not None
 
     def qr_hand_off(self, page):
         """The QR goes to the user only when it pays the approved amount to a named UPI address: its picture and
@@ -2655,9 +2325,47 @@ class Worker:
         return None
 
     def job_done(self, say):
-        """The page model says the task is done. Paid only when the user's yes was acted on and the proof is there:
-        the reference on the page, or their word on the QR. The report is written in code. Done without a payment is
-        no ending."""
+        """The page model says the task is done: a read ends once its amounts are read; a purchase or a bill only once
+        the user's yes was acted on and the proof is there. The report is written in code."""
+        if self.job["kind"] == "voucher_read":
+            return self.read_done()
+        if self.job["kind"] == "voucher":
+            return self.voucher_done(say)
+        return self.bill_done(say)
+
+    def read_done(self):
+        s = self.state
+        if not s["job_facts"].get("amounts"):
+            s["feedback"].append("DONE refused: put every amount the brand's page offers in facts.amounts first, or "
+                                 "stop saying why there are none.")
+            return None
+        s["status"], s["outcome"] = "done", "read"
+        self.say(f"Read {self.job['portal']}.", kind="result")
+        return None
+
+    def voucher_done(self, say):
+        """Bought only when the user's yes was acted on and the order's number is on the page now; the report names
+        the order, never a code."""
+        s, intent = self.state, self.job
+        order = s["job_facts"].get("order_id")
+        if not (order and money.grounded(order, s["page"]["text"])):
+            found = ORDER_ID.search(s["page"]["text"])
+            order = found[1] if found else None
+        if self.paid() and order:
+            self.end_payment("paid", order)
+            s["status"], s["outcome"] = "done", "bought"
+            made = money.counted(intent["split"]) if intent["split"] else f"vouchers making ₹{intent['amount']:,}"
+            self.say(f"Bought ₹{intent['amount']:,} of {intent['brand']} vouchers on {intent['portal']} ({made}). "
+                     f"Order {order}. The codes come by SMS and email.", kind="result")
+            return None
+        if self.paid():
+            raise self.job_halt(say or "The store didn't show the order.")
+        s["feedback"].append("DONE refused: nothing has been bought yet. Finish buying, or stop saying why.")
+        return None
+
+    def bill_done(self, say):
+        """A bill is paid only when the user's yes was acted on and the proof is there: the reference on the page, or
+        their word on the QR. Done without a payment is no ending."""
         s, intent = self.state, self.job
         reference = s["job_facts"].get("reference")
         shown = bool(reference) and money.grounded(reference, s["page"]["text"])  # the receipt on screen now
@@ -2678,14 +2386,21 @@ class Worker:
         return None
 
     def job_halt(self, why):
-        """The stop for a bill: after the user's yes the payment may have gone through, so it is never repeated."""
-        s = self.state
+        """The stop for a money job: after the user's yes the payment may have gone through, so it is never
+        repeated; a read that stops is unread, with why."""
+        s, job = self.state, self.job
+        if job["kind"] == "voucher_read":
+            s["outcome"] = "unread"
+            return Halt("blocked", why)
         if self.paid():
             self.end_payment("unclear")
             s["outcome"] = "unclear"
-            return Halt("blocked", f"{why} Your payment to {self.job['biller']} may already have gone through: don't "
+            if job["kind"] == "voucher":
+                return Halt("blocked", f"{why} Your {job['brand']} vouchers may already be bought: check your SMS and "
+                                       "email before buying again.")
+            return Halt("blocked", f"{why} Your payment to {job['biller']} may already have gone through: don't "
                                    "pay again until you've checked your bank's SMS or the biller's site.")
-        return Halt("blocked", f"{why} Nothing was paid.")
+        return Halt("blocked", f"{why} Nothing was {'bought' if job['kind'] == 'voucher' else 'paid'}.")
 
     def inputs(self, operation, action, page, sub, key=None, text=None):
         """(browser inputs, what the history shows) for one operation."""
@@ -3263,7 +2978,7 @@ class Worker:
             "errors": s["errors"], "refusals": s["refusals_log"][-REFUSALS_KEPT:], "stuck_why": s["stuck_why"],
             "standing_error": s.get("standing_error"), "outcome": s.get("outcome"),
             **({"job": {k: s.get(k) for k in ("job", "job_facts", "actor_log", "actor_page", "payment_id",
-                                               "approved_pay", "qr_sent", "typed_hosts", "actor_turns")}}
+                                               "approved_pay", "qr_sent", "typed_hosts", "actor_turns", "cart_ok")}}
                if self.job else {}),
         })
 

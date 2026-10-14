@@ -7,8 +7,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 FOLDER = Path(__file__).resolve().parents[1] / "skills"
-LISTS = {"inputs", "sites", "uses", "summary", "report", "aliases"}
+LISTS = {"inputs", "sites", "uses", "summary", "report", "aliases", "banks"}
 SITUATIONS = {"sign-in", "payment", "location"}
+EARN = re.compile(r"^\s*\d+(?:\.\d+)?\s+per\s+\d+\s*$")  # a card note's base earn: "5 per 150"
 
 
 def parse(text):
@@ -54,6 +55,34 @@ def load_sites(folder=FOLDER / "sites"):
             raise ValueError(f"{path.name}: a site note needs a host: line.")
         found[meta["host"]] = {"aliases": [], **meta, "body": body}
     return found
+
+
+def load_cards(folder=FOLDER / "cards"):
+    """{name: card note} for every card note: its name, aliases, bank, base earn ("5 per 150"), rupees a point, and
+    where those come from. Words the user can edit; the money math reads them (money.value)."""
+    return {meta["name"]: {"aliases": [], **meta} for meta, _ in map(read, sorted(Path(folder).glob("*.md")))}
+
+
+def card_for(said, cards):
+    """The card note the user's words name (its name, an alias, or its bank and name), else None."""
+    words = " ".join(re.findall(r"[a-z0-9]+", str(said or "").lower()))
+    for card in cards.values():
+        names = [card["name"], *card["aliases"], f"{card['bank']} {card['name']}"]
+        if any(words == " ".join(re.findall(r"[a-z0-9]+", name.lower())) for name in names):
+            return card
+    return None
+
+
+def portals(sites):
+    """{name: note} for every voucher store: a site note that names the banks whose cards it rewards (`banks:`)."""
+    return {note["name"]: note for note in sites.values() if note.get("banks")}
+
+
+def fits(portal, card):
+    """Whether this store rewards this card: it takes any card, or names the card's bank."""
+    banks = [b.lower() for b in portal.get("banks", [])]
+    bank = str((card or {}).get("bank") or "").lower()
+    return "any" in banks or (bool(bank) and bank in banks)
 
 
 def learned(sites, lines):
