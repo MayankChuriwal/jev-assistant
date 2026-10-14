@@ -126,9 +126,9 @@ TOOLS = [
          amount={"type": "integer", "description": "The total voucher_savings checked, in rupees"}),
     tool("pay_bill", "Pay one of the user's bills on the biller's own website, in a real browser. It reads the bill, "
                      "checks the name on it and that something is due, asks yes or no once with the amount, and the "
-                     "user pays by UPI (a QR, or a tap that opens their UPI app) or by card (its details and the bank's "
-                     "one-time password in a hidden field). It asks for the account number itself, hidden. Billers "
-                     "whose website it knows: " + ", ".join(BILLERS) + ".",
+                     "user pays by UPI (a QR, or a tap that opens their UPI app) or by card (its details and the "
+                     "bank's one-time password in a hidden field). It asks for the account number itself, hidden. "
+                     "Billers whose website it knows: " + ", ".join(BILLERS) + ".",
          biller=text("The biller as the user names it (“BESCOM”, “Adani Electricity”)"),
          amount={"type": ["integer", "null"], "description": "Rupees, only when the user named an amount to pay; "
                                                             "null pays the amount due"},

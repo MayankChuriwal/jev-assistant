@@ -749,7 +749,8 @@ def test_a_bill_is_paid_on_the_billers_own_site_with_an_exact_goal(tmp_path):
                   ("reply", {"text": "Paid.", "options": []}))
     brain = make(core, model, tmp_path)
     brain.turn("pay my bescom bill by upi")
-    assert core.executed == [{"goal": "Pay the BESCOM bill for account [profile:bescom_account]: the amount due, by UPI.",
+    goal = "Pay the BESCOM bill for account [profile:bescom_account]: the amount due, by UPI."
+    assert core.executed == [{"goal": goal,
                               "url": "https://bescom.co.in/bescom/main/quick-payment", "skill": "bills-recharges",
                               "progress": "Getting your BESCOM bill…"}]
     out = results(brain, "pay_bill")[0]
@@ -769,7 +770,8 @@ def test_an_unknown_billers_site_is_asked_for_never_searched(tmp_path):
 def test_a_confirmed_site_for_an_unlisted_biller_is_used_as_given(tmp_path):
     core = FakeCore(done("", outcome="nothing_due"))
     model = Model(("pay_bill", {"biller": "Torrent Power", "amount": 500, "method": None,
-                                "site": "connect.torrentpower.com"}), ("reply", {"text": "Nothing due.", "options": []}))
+                                "site": "connect.torrentpower.com"}),
+                  ("reply", {"text": "Nothing due.", "options": []}))
     make(core, model, tmp_path).turn("yes that's their site")
     assert core.executed[0]["url"] == "https://connect.torrentpower.com"
     assert core.executed[0]["goal"] == ("Pay the Torrent Power bill for account [profile:torrent_power_account]: "

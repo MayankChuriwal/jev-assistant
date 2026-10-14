@@ -28,7 +28,8 @@ FACT_KINDS = ("address", "preference", "default_app", "fact")
 LABELS = {"name": "full name", "phone": "phone number", "email": "email address", "upi_id": "UPI ID",
           "experian_ern": "Experian Reference Number (ERN)", "experian_uti": "Experian Unique Transaction ID (UTI)",
           "bank_account_last4": "last 4 digits of your bank account", "icici_user_id": "ICICI net banking User ID",
-          "bescom_account": "BESCOM account number", "adani_electricity_account": "Adani Electricity account (CA) number",
+          "bescom_account": "BESCOM account number",
+          "adani_electricity_account": "Adani Electricity account (CA) number",
           "tata_power_ddl_account": "Tata Power-DDL CA number", "bses_rajdhani_account": "BSES Rajdhani account number",
           "msedcl_account": "MSEDCL consumer number"}
 RECALL_FACTS, RECALL_CHARS, CLOSE = 12, 1500, 0.2
