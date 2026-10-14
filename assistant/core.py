@@ -585,6 +585,8 @@ class Core:
         with self.lock:  # the chat, a task's split, and the bench thread all add tasks while others read them
             task = Task(f"t{next(self.task_ids)}", goal, single=single or script is not None)  # bench never splits
             task.script = script
+            if script and script.get("url"):  # a bench task that names its start page (a bill on its biller's site)
+                task.url, task.skill = script["url"], script.get("skill")
             self.tasks[task.id] = task
             threading.Thread(target=self.run, args=(task,), name=f"jev-{task.id}", daemon=True).start()
         return task

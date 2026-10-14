@@ -1364,3 +1364,12 @@ def test_a_pincode_or_a_number_in_words_still_goes_through(world):
     text(world, "560001")
     text(world, "my order 402-1234567-1234567 hasn't arrived")
     assert world.classified == ["560001", "my order 402-1234567-1234567 hasn't arrived"]
+
+
+def test_a_bench_task_that_names_its_start_page_opens_there_with_its_skill(world):
+    # an unseen bill on its biller's own site: no intake picks the site, no note may name it
+    world.scripts["Pay the BWSSB bill"] = []
+    task = world.core.new_task("Pay the BWSSB bill", script={"url": "https://bwssb.test/quickpay", "skill":
+                                                                 "bills-recharges", "answers": []})
+    assert until(lambda: "Pay the BWSSB bill" in world.made)
+    assert task.url == "https://bwssb.test/quickpay" and task.skill == "bills-recharges"

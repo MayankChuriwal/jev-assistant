@@ -360,3 +360,62 @@ category = "lookup"
 goal = "How many Indian rupees is 100 US dollars today?"
 end = "result"
 rule = "The report gives today's rupee amount for 100 US dollars."
+
+# ---- the user's own bills on their billers' own sites, paid by the bill page model (a money.goal_for goal); each
+# names its start page, as pay_bill would after the user confirmed the site. No note for any of them. The account
+# number, codes and captchas go to the user's web chat; every run stops at the approval card (nothing is paid).
+
+[[task]]
+id = "bill-bwssb"
+category = "bills"
+goal = "Pay the BWSSB bill for account [profile:bwssb_account]: the amount due."
+url = "https://bwsajala.karnataka.gov.in/bwssb_onlinepg/quickpay.aspx"
+skill = "bills-recharges"
+end = "gate"
+require = ["BWSSB", "₹"]
+rule = "The approval card pays a BWSSB water bill, with the amount due that BWSSB's own page showed."
+answers = [['\b(captcha|code|otp|rr|account|consumer|number|yours|name)\b', "@user"]]
+
+[[task]]
+id = "bill-dishtv"
+category = "bills"
+goal = "Pay the Dish TV bill for account [profile:dish_tv_account]: exactly ₹300."
+url = "https://www.dishtv.in/dth-recharge.html"
+skill = "bills-recharges"
+end = "gate"
+require = ["Dish TV", "300"]
+rule = "The approval card pays ₹300 to Dish TV for the user's subscriber account, on Dish TV's own site."
+answers = [['\b(captcha|code|otp|subscriber|registered|vc|account|customer|number|yours|name)\b', "@user"]]
+
+[[task]]
+id = "bill-act"
+category = "bills"
+goal = "Pay the ACT Fibernet bill for account [profile:act_fibernet_account]: the amount due."
+url = "https://selfcare.actcorp.in/payments/external-bills"
+skill = "bills-recharges"
+end = "gate"
+require = ["ACT", "₹"]
+rule = "The approval card pays an ACT Fibernet broadband bill, with the amount due ACT's own page showed."
+answers = [['\b(captcha|code|otp|user ?id|account|customer|number|yours|name)\b', "@user"]]
+
+[[task]]
+id = "bill-bharatgas"
+category = "bills"
+goal = "Pay the Bharat Gas bill for account [profile:bharat_gas_account]: the amount due."
+url = "https://my.ebharatgas.com/"
+skill = "bills-recharges"
+end = "gate"
+require = ["Bharat Gas", "₹"]
+rule = "The approval card pays for the user's Bharat Gas booking or bill, with the amount Bharat Gas's own page showed."
+answers = [['\b(captcha|code|otp|lpg|consumer|distributor|account|number|yours|name)\b', "@user"]]
+
+[[task]]
+id = "bill-fastag"
+category = "bills"
+goal = "Pay the FASTag bill for account [profile:fastag_account]: exactly ₹500."
+url = "https://www.airtel.in/fastag/recharge"  # the user's own FASTag issuer's recharge page goes here
+skill = "bills-recharges"
+end = "gate"
+require = ["FASTag", "500"]
+rule = "The approval card recharges the user's FASTag with ₹500 on its issuer's own site."
+answers = [['\b(captcha|code|otp|vehicle|tag|wallet|account|number|yours|name)\b', "@user"]]
