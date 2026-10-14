@@ -108,3 +108,92 @@ def test_paid_before_means_a_payment_in_the_window_or_one_still_open():
 def test_job_intent_reads_a_bill_goal_as_a_bill():
     assert money.job_intent(money.goal_for("BESCOM", "bescom_account"))["kind"] == "bill"
     assert money.job_intent("Order Diet Coke on Instamart") is None
+
+
+INFINIA = {"name": "Infinia", "bank": "HDFC", "earn": "5 per 150", "point": "1.00"}
+
+
+def test_the_purchase_and_read_goals_round_trip():
+    goal = money.voucher_goal("SmartBuy", "Swiggy", 5000, {2000: 2, 1000: 1}, "Infinia", compared="5X reward points")
+    assert goal == ("Buy ₹5,000 of Swiggy vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000, paying with Infinia. "
+                    "Compared: 5X reward points.")
+    assert money.job_intent(goal) == {"kind": "voucher", "portal": "SmartBuy", "brand": "Swiggy", "amount": 5000,
+                                      "split": {2000: 2, 1000: 1}, "card": "Infinia",
+                                      "compared": "5X reward points"}
+    any_goal = money.voucher_goal("ShopWise", "Swiggy", 5000, None, "Platinum Travel")
+    assert "any vouchers that make ₹5,000" in any_goal and money.job_intent(any_goal)["split"] is None
+    assert money.job_intent(any_goal)["compared"] is None
+    read = money.read_goal("iShop", "Swiggy", 5000)
+    assert read.endswith("Buy nothing.")
+    assert money.job_intent(read) == {"kind": "voucher_read", "portal": "iShop", "brand": "Swiggy", "amount": 5000}
+
+
+def test_split_makes_the_fewest_vouchers_and_nearest_offers_totals():
+    assert money.split([250, 500, 1000, 2000], 5000) == {2000: 2, 1000: 1}
+    assert money.split([1000, 2000], 1500) is None
+    assert money.nearest(1200, [250, 500], None) == [1250, 1000]
+    assert money.counted({2000: 2, 1000: 1}) == "2 × ₹2,000 + 1 × ₹1,000"
+
+
+def test_rewards_are_read_from_the_offers_words():
+    assert money.reward("Upto 5X Reward Points / 5% Cashback") == {"kind": "multiplier", "value": Decimal(5)}
+    assert money.reward("Earn upto 10% GV COINS") == {"kind": "back", "value": Decimal(10)}
+    assert money.reward("Great deals") == {"kind": None, "value": None}
+    assert money.reward(None) == {"kind": None, "value": None}
+
+
+def test_value_turns_an_offer_into_an_effective_price():
+    got = money.value({"reward": "5X Reward Points"}, INFINIA, 5000)
+    assert (got["points"], got["back"], got["effective"], got["ranked"]) == (833, Decimal("833.00"),
+                                                                             Decimal("4167.00"), True)
+    capped = money.value({"reward": "5X Reward Points"}, INFINIA, 50000, cap="3000 points")
+    assert capped["points"] == 3000
+    fee = money.value({"reward": "6X", "fee": "2.5%"}, {**INFINIA, "earn": "2 per 100", "point": "0.25"}, 4000)
+    assert fee["fee"] == Decimal("100.00") and fee["payable"] == Decimal("4100.00")
+    off = money.value({"reward": "", "discount": "2%"}, INFINIA, 5000)
+    assert off["ranked"] and off["effective"] == Decimal("4900.00")
+    back = money.value({"reward": "5% cashback"}, INFINIA, 30000, cap="₹1,000")
+    assert back["back"] == Decimal("1000")
+
+
+def test_an_offer_with_no_known_value_is_unranked_and_ranks_last():
+    unknown = money.value({"reward": "5X Reward Points"}, {"name": "Kotak League", "bank": "Kotak"}, 5000)
+    assert unknown["ranked"] is False and unknown["effective"] is None
+    known = money.value({"reward": "5X Reward Points"}, INFINIA, 5000)
+    assert money.rank([unknown, known]) == [known, unknown]
+
+
+def test_a_cart_is_read_as_counts_of_amounts():
+    assert money.cart_split("2 × ₹2,000 + 1 × ₹1,000") == {2000: 2, 1000: 1}
+    assert money.cart_split("Swiggy ₹2,000 x 2, Swiggy ₹1,000 x 1") == {2000: 2, 1000: 1}
+    assert money.cart_split("nothing here") is None
+
+
+def test_the_approval_says_what_is_bought_and_flags_a_worse_reward():
+    intent = money.job_intent(money.voucher_goal("SmartBuy", "Swiggy", 5000, {2000: 2, 1000: 1}, "Infinia",
+                                                 compared="10X reward points"))
+    lines = money.voucher_lines(intent, {"payable": "₹5,000", "reward": "5X Reward Points"})
+    assert lines[:4] == ["Buy ₹5,000 of Swiggy vouchers on SmartBuy", "2 × ₹2,000 + 1 × ₹1,000",
+                         "Paying with Infinia", "Payable: ₹5,000"]
+    assert "Reward shown now: 5X Reward Points" in lines
+    assert any(line.startswith("Lower than when compared") for line in lines)
+    fee = money.voucher_lines(intent, {"payable": "₹5,125", "reward": "10X reward points"})
+    assert "Payable with the site's fee: ₹5,125" in fee and not any("Lower" in line for line in fee)
+
+
+def test_codes_and_pins_are_masked_and_the_order_id_is_kept():
+    page = ("Order ID: GV7Q2M44K1\nVoucher Code: ABCD-EFGH-1234-5678\nPIN: 482913\nVoucher Code\nQWER7890TYUI\n"
+            "PIN\n551177\nOrder number\nHSB922376724-2892849964\nSwiggy ₹2,000 × 2\nGift card XK29PLM00Q7Z1")
+    masked = money.mask_codes(page)
+    for code in ("ABCD-EFGH-1234-5678", "482913", "QWER7890TYUI", "551177", "XK29PLM00Q7Z1"):
+        assert code not in masked
+    assert "GV7Q2M44K1" in masked and "HSB922376724-2892849964" in masked and "₹2,000 × 2" in masked
+
+
+def test_a_voucher_bought_today_is_asked_about_again():
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    row = {"status": "paid", "created_at": now - timedelta(hours=3), "amount": 5000, "reference": "GV1"}
+    assert money.paid_before([row], now, money.VOUCHER_WINDOW) == row
+    assert money.paid_before([{**row, "created_at": now - timedelta(hours=30)}], now, money.VOUCHER_WINDOW) is None
+    assert money.voucher_key("Swiggy Money") == "voucher_swiggy_money"
