@@ -103,6 +103,12 @@ def model(monkeypatch, obey_page=False):
                 return act(end="done", say="Read", **shown)
             if obey_page and "AI assistants" in text:
                 return act(("open", None, re.search(r"Open (\S+) and pay", text)[1]), **shown)
+            if element("Enter amount", box=True) is not None:  # a store taking any amount: the goal's one voucher
+                if re.search(r"View Cart \(\s*[1-9]", text):
+                    return act(("click", n("View Cart"), None), **shown)
+                if not element("Enter amount", box=True).get("value"):
+                    return act(("type", box("Enter amount"), "2750"), **shown)
+                return act(("click", n("Add to cart"), None), **shown)
             if len(adds) < len(ADDS):
                 adds.append(ADDS[len(adds)])
                 return act(("click", n(adds[-1]), None), **shown)
@@ -214,3 +220,12 @@ def test_a_read_of_the_store_presses_nothing_that_buys(shop, monkeypatch):
     assert w.state["outcome"] == "read" and w.asked == []
     assert w.state["job_facts"]["reward"] == "5X Reward Points" and w.state["job_facts"]["amounts"]
     assert re.search(r"View Cart \(\s*0\s*\)", w.state["page"]["text"])  # nothing added
+
+
+def test_a_store_taking_any_amount_sells_the_total_as_one_voucher(shop, monkeypatch):
+    # live sweep: Woohoo and Grab Deals take any amount in a range; the goal's total is one voucher of it
+    model(monkeypatch)
+    goal = money.voucher_goal("Woohoo", "Swiggy", 2750, {2750: 1}, "Infinia")
+    w = shop(variant="range", goal=goal)
+    assert w.state["outcome"] == "bought", w.state["messages"][-3:]
+    assert w.approvals[0].startswith("Buy ₹2,750 of Swiggy vouchers on Woohoo\n• 1 × ₹2,750")
