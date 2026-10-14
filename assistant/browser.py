@@ -1050,8 +1050,10 @@ class Browser:
             return
         self._mouse(*self._point(action))
         self._select_all()
-        if rules.CARD_DETAIL.search(action.get("label") or ""):  # live, pay.gyftr.com: a number typed in one go was
-            for char in text:  # refused, "Please manually enter your card number for security reasons."
+        # live, pay.gyftr.com: a card number typed in one go was refused, "Please manually enter your card number for
+        # security reasons."; HDFC's OTP page turned down a code typed in one go three times
+        if rules.CARD_DETAIL.search(action.get("label") or "") or rules.secret_field(action):
+            for char in text:
                 self._key(char)
             return
         self.input("Input.insertText", text=text)

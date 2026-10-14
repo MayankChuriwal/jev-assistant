@@ -812,6 +812,20 @@ def test_a_card_detail_is_typed_key_by_key(browser_at):
     assert b.evaluate("keys") >= 16 and b.evaluate("pasted") is False
 
 
+def test_a_one_time_code_is_typed_key_by_key(browser_at):
+    # live, HDFC's OTP page (Cardinal step-up): a code typed in one go was turned down three times and the payment
+    # failed; pages like pay.gyftr.com's read only what is typed key by key
+    b = browser_at("/guards.html")
+    b.evaluate("document.body.insertAdjacentHTML('afterbegin', '<label for=otp>Enter OTP Here</label>"
+               "<input id=otp type=password maxlength=6>'); window.keys = ''; window.pasted = false;"
+               "otp.addEventListener('keydown', e => keys += e.key);"
+               "otp.addEventListener('input', e => { if ((e.data || '').length > 1) pasted = true; });")
+    page = b.observe()
+    b.act("TYPE_TEXT", find(page, "Enter OTP Here", "fill"), page, text="482913")
+    assert b.evaluate("otp.value") == "482913" and b.evaluate("keys").endswith("482913")  # after select-all's "a"
+    assert b.evaluate("pasted") is False
+
+
 def test_a_banks_countdown_never_makes_its_submit_stale(browser_at):
     # live, HDFC's OTP page: "This page automatically time out after 2:11 seconds" ticked, and every yes to its SUBMIT
     # was read as a page that had changed
