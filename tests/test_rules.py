@@ -253,6 +253,20 @@ def test_a_code_in_a_tel_box_is_still_held_to_digits_and_its_length(value, probl
     assert problem in rules.format_error(rules.clean(value, OTP_TEL), OTP_TEL)
 
 
+# Live, pay.gyftr.com: "Expiry *" takes numbers only; the user's "MM/YY" was refused and asked for again.
+
+@pytest.mark.parametrize("constraints", [{"inputmode": "numeric"}, {"type": "tel"}, {"maxlength": 4}])
+@pytest.mark.parametrize("value", ["08/29", " 08 / 29 ", "0829", "08/2029", "08-29"])
+def test_a_card_expiry_goes_into_a_digits_only_box_as_mmyy(value, constraints):
+    expiry = {"kind": "fill", "label": "Expiry *", "constraints": constraints}
+    assert rules.clean(value, expiry) == "0829"
+    assert rules.format_error(rules.clean(value, expiry), expiry) is None
+
+
+def test_a_card_expiry_keeps_its_slash_where_the_box_takes_one():
+    assert rules.clean("08/29", {"kind": "fill", "label": "Expiry (MM/YY)", "constraints": {"maxlength": 5}}) == "08/29"
+
+
 def test_a_cvv_in_a_tel_box_is_a_code_and_a_phone_box_is_still_a_phone():
     cvv = {"kind": "fill", "label": "CVV", "constraints": {"type": "tel", "maxlength": 3}}
     assert rules.format_error("123", cvv) is None

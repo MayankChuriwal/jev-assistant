@@ -30,9 +30,13 @@ MAX_MINUTES = 30
 MAX_SPEND = 0.25
 BILL_SPEND = 1.00  # a bill's or a purchase's page model reads every page at high effort: its own, higher cap
 READ_SPEND = 0.30  # a voucher store's read: a few pages, nothing bought
-ACTOR_TURNS, ACTOR_IDLE, ACTOR_BAD = 25, 3, 3  # a bill's page-model turns: in all, in a row with no progress, refused
+ACTOR_TURNS, ACTOR_IDLE, ACTOR_BAD = 40, 3, 3  # a job's page-model turns: in all, in a row with no progress, refused
+# (live, SmartBuy: signing in took 10 turns and a three-voucher cart ran out of 25)
+PAID_TURNS = 10  # turns after the user's yes, counted from it: its outcome is always read
 DECLINED = re.compile(r"\b(?:declined|payment (?:has )?failed|transaction (?:has )?failed|payment (?:was )?"
                       r"unsuccessful|transaction (?:was )?unsuccessful)\b", re.IGNORECASE)  # a card the bank refused
+TURNED_DOWN = re.compile(r"\b(?:invalid|incorrect|wrong|mismatch|expired|attempts? (?:left|remaining))\b",
+                         re.IGNORECASE)  # a bank's line on a code it didn't take
 READ_NEVER = re.compile(r"\s*(?:add to cart|add\b|buy\b|checkout|check out|proceed to pay|pay\b)",
                         re.IGNORECASE)  # what a read never presses: a control that starts so ("MakeMyTrip e-Pay" is
 # a product)
@@ -871,7 +875,12 @@ class Worker:
                                   "so I stopped rather than send you more. Please sign in once in the agent's "
                                   "Chrome window, then ask me again.")
         site, label = self.site_name(page), field["label"].rstrip(" *")
-        question = (f"{site} is asking for your card's {label.rstrip('.')}. Type it here; it stays hidden." if card else
+        form = " as MM/YY" if rules.EXPIRY.search(label) else ""  # typed as its box takes it (rules.clean)
+        why = next((line.strip() for line in page["text"].splitlines() if TURNED_DOWN.search(line)), "")[:120]
+        question = (f"{site} is asking for your card's {label.rstrip('.')}. Type it here{form}; it stays hidden."
+                    if card else  # live, HDFC: the box came back empty after each SUBMIT, asked the same way
+                    "Your bank didn't take that one-time password" + (f" (it says “{why}”)" if why else "")
+                    + ". Type the newest one it sent; it stays hidden." if s.get("bank_code") and s["code_asks"] else
                     f"{site} is asking for the one-time password your bank sent for this payment. Type it here; it "
                     "stays hidden." if s.get("bank_code") else
                     f"{site} is asking for a code or password. Type it here; it stays hidden.")
@@ -1981,7 +1990,12 @@ class Worker:
             if s["job_facts"].get("amounts"):
                 return self.read_done()
             raise self.job_halt(f"I couldn't find the amounts on {rules.host(page['url'])} in {READ_TURNS} turns.")
-        if s["actor_turns"] > ACTOR_TURNS:
+        if self.paid():  # live, SmartBuy: the yes came at turn 25, and the cap cut off reading what followed
+            s.setdefault("paid_turn", s["actor_turns"] - 1)
+            if s["actor_turns"] - s["paid_turn"] > PAID_TURNS:
+                raise self.job_halt(f"I took {PAID_TURNS} turns after paying without seeing how it ended, so I "
+                                     "stopped.")
+        elif s["actor_turns"] > ACTOR_TURNS:
             raise self.job_halt(f"I took {ACTOR_TURNS} turns on {rules.host(page['url'])} without finishing, so I "
                                  "stopped.")
         if self.job["kind"] == "voucher" and not s["checked"]:

@@ -3948,6 +3948,19 @@ def test_after_the_payments_yes_the_banks_code_is_asked_hidden(tmp_path, monkeyp
     assert w.browser.act.call_args.args[1]["label"] == "Enter OTP"
 
 
+def test_a_banks_code_asked_again_says_the_last_one_was_turned_down(tmp_path, monkeypatch, no_wait):
+    # live, HDFC: the box came back empty after each SUBMIT and the same question was asked three times
+    page = bank_page()
+    page["text"] += "\nIncorrect OTP. You have 2 attempts left."
+    w = worker_with(tmp_path, page=page, goal=FIVE, replies=[{"text": "654321"}])
+    w.state["history"].append(dict(PAID))
+    w.state.update(bank_code=True, code_asks=1)  # one code typed and sent already
+    no_planner(monkeypatch)
+    w.command("tick")
+    assert w.asked[0]["text"].startswith("Your bank didn't take that one-time password (it says “Incorrect OTP. "
+                                         "You have 2 attempts left.”). Type the newest one it sent")
+
+
 def test_the_banks_code_is_sent_under_the_payments_yes(tmp_path, monkeypatch, no_wait):
     w = worker_with(tmp_path, page=bank_page("[secret]"), goal=FIVE)
     w.state["history"] += [dict(PAID), {"operation": "TYPE_TEXT", "action": "Enter OTP", "text": "[secret:answer2]"}]

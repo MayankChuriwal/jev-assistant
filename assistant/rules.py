@@ -219,6 +219,7 @@ CAPTCHA_BOX = re.compile(r"captcha|security verification|image code|characters s
 CARD_DETAIL = re.compile(r"\b(cvv|cvc|card (number|no\.?|details?)|expir(y|ation)( date)?|upi pin|"
                          r"card'?s? last (?:4|four) digits|last (?:4|four) digits of (?:your |the )?card)\b",
                          re.IGNORECASE)  # Axis Grab Deals signs in with the card's last four digits
+EXPIRY = re.compile(r"\bexpir(y|ation)\b", re.IGNORECASE)
 PRICE = re.compile(r"[₹$€£]\s?\d(?:[\d,]*\d)?(?:\.\d+)?|\bRs\.?\s?\d(?:[\d,]*\d)?(?:\.\d+)?", re.IGNORECASE)
 
 
@@ -272,6 +273,11 @@ def tel_code(action):
 def clean(value, action):
     """The answer as it should be typed: trimmed, and without spaces or dashes in codes and number fields."""
     value = str(value).strip()
+    limits = action.get("constraints") or {}
+    if EXPIRY.search(action.get("label") or "") and (numeric(action) or limits.get("type") == "tel"
+                                                      or 0 < (limits.get("maxlength") or 0) <= 4):
+        digits = re.sub(r"\D", "", value)  # live, pay.gyftr.com: its numbers-only box refused "MM/YY"
+        return digits[:2] + digits[-2:] if len(digits) == 6 else digits  # MM/YYYY as MMYY
     return re.sub(r"[\s-]", "", value) if action.get("group") or numeric(action) or tel_code(action) else value
 
 

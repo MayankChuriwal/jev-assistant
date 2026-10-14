@@ -116,6 +116,26 @@ def test_the_order_is_the_proof_and_codes_reach_no_model(tmp_path, monkeypatch):
     assert not any(code in sent for code in CODES)
 
 
+def test_the_turn_limit_never_cuts_off_reading_the_order_after_the_yes(tmp_path, monkeypatch):
+    # live, SmartBuy: the yes was acted on at the page model's 25th turn and its next turn was cut off as "I took 25
+    # turns", so a bought order would have been reported as unclear
+    w = worker_with(tmp_path, page=page(ORDER), goal=GOAL)
+    w.state["actor_turns"] = module.ACTOR_TURNS
+    paid(w)
+    script(monkeypatch, answer(end="done", say="Order placed", order_id="GV7Q2M44K1"))
+    w.command("tick")
+    assert w.state["outcome"] == "bought"
+
+
+def test_turns_after_the_yes_have_their_own_limit(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=page("Payment pending"), goal=GOAL)
+    paid(w)
+    w.state.update(actor_turns=module.PAID_TURNS + 3, paid_turn=3)
+    script(monkeypatch, answer([("wait", None, None)]))
+    w.command("tick")
+    assert w.state["outcome"] == "unclear" and "check your SMS and email" in w.told[-1]["text"]
+
+
 def test_no_screenshot_reaches_the_model_after_the_yes(tmp_path, monkeypatch):
     w = worker_with(tmp_path, page=page(ORDER), goal=GOAL)
     paid(w)
@@ -172,6 +192,18 @@ def test_a_stores_suggestion_of_the_brands_gift_card_is_no_narrowing(tmp_path):
     # the page model picks the brand's own voucher (its guide), so no suggestion counts as narrowing
     assert w.narrows({"label": "Amazon Shopping Voucher (0.60% OFF) Amazon Shopping Voucher (0.60% OFF) 0.6% OFF"}) \
         == set()
+
+
+def test_the_cards_expiry_is_asked_as_mm_yy_and_typed_as_its_box_takes_it(tmp_path, monkeypatch):
+    # live, pay.gyftr.com: "Expiry *" takes numbers only; the user's "MM/YY" was refused, then asked for again
+    expiry = {"id": "x", "kind": "fill", "label": "Expiry *", "role": "textbox", "value": "", "node": 3,
+              "constraints": {"inputmode": "numeric", "maxlength": 5}}
+    w = worker_with(tmp_path, page=page("Card\nExpiry *", extra=[expiry]), goal=GOAL, replies=[{"text": "08/29"}])
+    w.state.update(cart_ok=True, checked=True)
+    script(monkeypatch, answer([("type", "1", "[ask]")]))
+    w.command("tick")
+    assert len(w.asked) == 1 and "as MM/YY" in w.asked[0]["text"]
+    assert w.browser.act.call_args.kwargs["text"] == "0829"
 
 
 def test_a_yes_acted_on_by_a_key_starts_the_payment_and_the_masking(tmp_path, monkeypatch):
