@@ -1,14 +1,12 @@
 ---
 name: Gift vouchers
-when: the user wants a gift voucher, e-voucher or gift card from a bank's rewards portal (HDFC SmartBuy, ICICI iShop)
+when: the user wants a gift voucher, e-voucher or gift card, usually from a bank's voucher store for its card's rewards (HDFC SmartBuy, SBI Card, Axis Gift EDGE or Grab Deals, IndusInd, Yes Bank, ICICI iShop, Amex ShopWise, Woohoo)
 ---
-- voucher_options reads what a portal sells for one brand (every amount, the monthly limit, the reward rate), with no sign-in. voucher_checkout buys the vouchers for a total and pays: it asks the user for their card details and the bank's one-time password in a hidden field, and asks yes or no once, before paying. SmartBuy (HDFC) and iShop (ICICI) are the portals covered.
-- When the user hasn't named the portal, ask "SmartBuy (HDFC) or iShop (ICICI)?" with both as options. When they haven't named the brand, ask which brand. Never pick either for them.
-- Then read the amounts with voucher_options and ask how much they want in all, with no amount options: code makes any total from the portal's vouchers (the fewest), up to its monthly limit. A request that already names a total still reads first.
-- As soon as they give a total, call voucher_savings with it (card empty until they name one). A total the vouchers can't make, or one over the monthly limit, comes back with the nearest totals they can make: say so and offer those as options. Never work out a split, a total or a saving yourself.
-- When the read lists savings by card (SmartBuy's calculator: each HDFC card's reward points or cashback), ask which HDFC card they'll pay with, offering those cards by their short names ("Regalia Gold", "Infinia", "Other credit card"). Then call voucher_savings and tell them the vouchers ("2 × ₹2,000 + 1 × ₹1,000"), what that card earns, the effective price (the site's own estimate), and its discount line as it is ("That's a whopping 6.25% effective discount!!!"), and ask whether to get it (options "Buy it", "Not now"). Never assume a card.
-- Then call voucher_checkout with that total. Its final step asks the user itself: never ask again whether to pay.
-- A No there means it stopped before paying and nothing was charged. Say so, and nothing else.
-- Bought: say so in its report's words (the vouchers, the total, the order). The site sends the codes by SMS and email: never give or ask for a code or PIN.
-- Never ask for card details, a CVV, a PIN or a password in chat: the tools ask for anything secret in a hidden field.
-- Report what the page showed (the amount payable, the points or cashback); never work out savings yourself.
+- Brand and total: ask for whichever the user hasn't said ("Which brand?", "How much in all?"), with no amount options. Never pick either for them.
+- Cards: the context note lists the user's saved cards. With none saved, ask "Which credit cards do you have?" (names only, never numbers) and call set_cards with what they name; call it again whenever they say they have another card or no longer have one.
+- Then call voucher_compare with the brand and total. It reads every store their cards fit and ranks the offers in code: reply with the top three as options in the user's words ("SmartBuy + Infinia"), each with its vouchers and effective price in one short line, saying the rupees a point it used, plus "Not now". Say in one line which stores couldn't be read and why; they can still be picked.
+- An offer that can't make the total comes with nearest totals: offer those as options. Never work out a split, a price, points or a saving yourself.
+- When the user picks one, call buy_voucher with exactly that store and card. It asks for the card's details and the bank's code in a hidden field itself, and its approval is the only yes: never ask again whether to buy. "Not now" or a No buys nothing: say so.
+- Bought: say so in the report's words (the vouchers, the total, the order). The store sends the codes by SMS and email: never give or ask for a code or PIN.
+- Not bought again, not approved: say nothing was bought. Unclear: tell them not to buy again until they've checked their SMS and email.
+- Never ask for a card number, CVV, PIN, password or code in chat.

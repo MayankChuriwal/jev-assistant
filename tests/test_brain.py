@@ -10,7 +10,7 @@ import pytest
 from helpers import until
 
 from assistant import brain as brains
-from assistant import rules
+from assistant import money, rules
 from assistant import skills
 
 MYUPI = "https://www.upihelp.npci.org.in/"
@@ -30,7 +30,16 @@ def done(report="", cards=(), outcome=None, status="done"):
 
 class Memory:
     def __init__(self):
-        self.forgotten = []
+        self.forgotten, self.saved = [], []
+
+    def remember(self, kind, text, *, label="", supersede=False, **_):
+        if supersede:
+            self.saved = [f for f in self.saved if (f["kind"], f["label"]) != (kind, label)]
+        self.saved.insert(0, {"kind": kind, "label": label, "text": text})
+        return len(self.saved)
+
+    def facts(self, kind=None):
+        return [f for f in self.saved if kind is None or f["kind"] == kind]
 
     def forget(self, ref, actor="user"):
         self.forgotten.append(ref)
@@ -111,7 +120,7 @@ def test_the_brain_offers_its_tools_and_reads_its_playbooks(tmp_path):
     model = Model(("reply", {"text": "Hi!", "options": []}))
     make(FakeCore(), model, tmp_path).turn("hi")
     assert model.seen[0]["tools"] == ["upi_mandates", "upi_cancel", "upi_pause", "upi_task", "bureau_details",
-                                      "bureau_dispute", "voucher_options", "voucher_savings", "voucher_checkout",
+                                      "bureau_dispute", "set_cards", "voucher_compare", "buy_voucher",
                                       "pay_bill", "browse", "memory", "reply"]
     assert "UPI AutoPay mandates" in model.seen[0]["instructions"]
     assert "Bills (paying an electricity bill" in model.seen[0]["instructions"]
@@ -455,290 +464,128 @@ def test_the_report_is_read_only_for_a_kind_the_user_named(tmp_path):
     assert core.executed == [] and out["status"] == "rejected" and "which kind" in out["next"]
 
 
-# ---- gift vouchers on a bank's rewards portal: the amounts are read first, then the checkout goes up to the yes
+# ---- gift vouchers: the user's cards asked once, the stores they fit read and ranked in code, the pick bought
 
-SWIGGY = done("Swiggy Money Voucher on SmartBuy: ₹250, ₹500, ₹1,000, ₹2,000. Up to 5X reward points or 5% "
-              "cashback. Monthly limit ₹10,000.")
+class VoucherCore(FakeCore):
+    """A Core whose stores' reads are scripted by store name: a dict is what the page showed, a string why it
+    couldn't be read; a purchase ends at the user's No."""
 
+    def __init__(self, reads=None, portals_any=True):
+        super().__init__()
+        self.reads = reads or {}
+        if not portals_any:
+            self.library["sites"] = {h: n for h, n in self.library["sites"].items() if n.get("banks") != ["any"]}
 
-def test_a_brands_vouchers_are_read_on_the_portal_the_user_named(tmp_path):
-    core = FakeCore(SWIGGY)
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("reply", {"text": "Which amount?", "options": ["₹250", "₹500", "₹1,000", "₹2,000"]}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me a Swiggy voucher from SmartBuy")
-    assert core.executed == [{  # no word of buying: the read is a lookup, never an order (live, it was refused)
-        "goal": "Show the Swiggy gift vouchers on SmartBuy: list the amounts its page offers and the reward rate it "
-                "states, reading the page as it is. Press nothing.",
-        "url": "https://www.gyftr.com/instantvouchers/swiggy-gv-gift-vouchers", "skill": "lookup",  # its page, no search
-        "progress": "Reading Swiggy vouchers on SmartBuy…"}]
-    assert rules.lookup_goal(core.executed[0]["goal"], "lookup")
-    assert results(brain, "voucher_options")[0]["report"].startswith("Swiggy Money Voucher on SmartBuy")
-
-
-@pytest.mark.parametrize("said, missing", [("Buy me a Swiggy voucher", "portal"), ("Buy me a voucher on SmartBuy",
-                                                                                     "brand")])
-def test_a_portal_or_brand_the_user_never_named_is_asked_for_not_guessed(tmp_path, said, missing):
-    core = FakeCore()
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("reply", {"text": "Which one?", "options": []}))
-    brain = make(core, model, tmp_path)
-    brain.turn(said)
-    out = results(brain, "voucher_options")[0]
-    assert core.executed == [] and out["status"] == "rejected" and f"which {missing}" in out["next"].lower()
+    def execute(self, goal, url=None, skill=None, progress=None):
+        self.executed.append({"goal": goal, "url": url, "skill": skill, "progress": progress})
+        intent = money.job_intent(goal)
+        if intent and intent["kind"] == "voucher_read":
+            got = self.reads.get(intent["portal"], "The store didn't load.")
+            if isinstance(got, dict):
+                return {**done(f"Read {intent['portal']}.", outcome="read"), "facts": got}
+            return {**done(got, outcome="unread", status="blocked"), "facts": {}}
+        return {**done("You chose not to pay. Nothing was charged.", outcome="not_approved"), "facts": {}}
 
 
-def test_a_brands_vouchers_read_once_are_not_read_again(tmp_path):
-    core = FakeCore(SWIGGY)
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("reply", {"text": "Which amount?", "options": ["₹250", "₹500"]}),
-                  ("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("reply", {"text": "Which amount?", "options": ["₹250", "₹500"]}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me a Swiggy voucher from SmartBuy")
-    brain.turn("What were the amounts again?")
-    again = results(brain, "voucher_options")[1]
-    assert len(core.executed) == 1 and again["status"] == "already_read" and again["report"] == SWIGGY["report"]
+def voucher_brain(tmp_path, said=(), cards=(), reads=None, portals_any=True):
+    core = VoucherCore(reads, portals_any)
+    brain = make(core, Model(), tmp_path)
+    brain.items += [{"role": "user", "content": text} for text in said]
+    if cards:
+        brain.set_cards(list(cards))
+    return brain, core
 
 
-def test_a_checkout_needs_the_read_and_an_amount_it_showed(tmp_path):
-    core = FakeCore(SWIGGY, done("Ready to pay ₹500.", outcome="not_approved"))
-    model = Model(("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500}),
-                  ("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("reply", {"text": "Which amount?", "options": ["₹250", "₹500"]}),
-                  ("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 300}),
-                  ("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500}),
-                  ("reply", {"text": "Stopped before paying. Nothing was charged.", "options": []}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me a Swiggy voucher from SmartBuy")
-    brain.turn("₹500")
-    first, odd, bought = results(brain, "voucher_checkout")
-    assert first["status"] == "rejected" and "voucher_options" in first["next"]
-    assert odd["status"] == "rejected" and "₹500" in odd["next"]  # the amounts it sells, offered instead
-    assert core.executed[-1] == {"goal": "Buy ₹500 of Swiggy gift vouchers on SmartBuy: 1 × ₹500.",
-                                 "url": "https://www.gyftr.com/instantvouchers/swiggy-gv-gift-vouchers",
-                                 "skill": "shopping",
-                                 "progress": "Getting your ₹500 of Swiggy vouchers ready on SmartBuy…"}
-    assert bought["status"] == "not_approved" and "nothing was charged" in bought["next"].lower()
-    assert "call no other tool" in bought["next"].lower()
+def read_portals(core):
+    return sorted(money.job_intent(e["goal"])["portal"] for e in core.executed
+                  if money.job_intent(e["goal"])["kind"] == "voucher_read")
 
 
-# ---- the user's card: SmartBuy's savings differ by HDFC card, and its calculator assumed Infinia (live, the user has
-# another card): the read lists every card's saving on ₹2,000, the user picks theirs, and code scales it to the amount
-
-CARDS_READ = done("Swiggy gift vouchers on SmartBuy: ₹250, ₹500, ₹1,000, ₹2,000. Rewards shown: ACCELERATED REWARDS "
-                  "Upto 5X Reward Points / 5% Cashback. Monthly Limit: ₹10,000. Savings on ₹2,000 by card (the site's "
-                  "estimate): Infinia Credit Card ₹325 in reward points; Regalia Gold Credit Card / Biz Power Credit "
-                  "Card ₹125 in reward points; Regalia Credit Card ₹100 in reward points; Other Credit Cards* ₹100 "
-                  "cashback; Other Debit Cards* ₹100 cashback.")
+def test_cards_are_asked_before_comparing(tmp_path):
+    brain, core = voucher_brain(tmp_path, said=["Get me 5000 of Swiggy vouchers"])
+    result = brain.voucher_compare("Swiggy", 5000)
+    assert result["status"] == "rejected" and "set_cards" in result["next"] and core.executed == []
 
 
-def test_the_users_card_gets_its_own_saving_and_effective_price_in_code(tmp_path):
-    core = FakeCore(CARDS_READ)
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("reply", {"text": "Which amount?", "options": ["₹500", "₹2,000"]}),
-                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia Gold"}),
-                  ("reply", {"text": "Get it?", "options": ["Buy it", "Not now"]}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me a Swiggy voucher from SmartBuy")
-    brain.turn("₹500 with my Regalia Gold")
-    out = results(brain, "voucher_savings")[0]
-    assert out["card"] == "Regalia Gold Credit Card / Biz Power Credit Card" and out["earns"] == "₹31 in reward points"
-    assert out["effective_price"] == "₹469" and len(core.executed) == 1  # code, no second read
+def test_set_cards_saves_names_only_and_flags_unknown_cards(tmp_path):
+    brain, core = voucher_brain(tmp_path, said=["I have HDFC Infinia, an ICICI Sapphiro and a Kotak League"])
+    result = brain.set_cards(["HDFC Infinia", "ICICI Sapphiro", "Kotak League"])
+    assert result["cards"] == ["Infinia", "Sapphiro", "Kotak League"] and result["unranked"] == ["Kotak League"]
+    assert core.memory.facts("preference")[0]["text"] == "Infinia; Sapphiro; Kotak League"
+    assert "Your cards: Infinia (HDFC), Sapphiro (ICICI), Kotak League." in brain.snapshot()["content"]
 
 
-def test_with_cards_on_the_read_a_checkout_waits_for_the_users_card(tmp_path):
-    core = FakeCore(CARDS_READ)
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500}),
-                  ("reply", {"text": "Which card?", "options": ["Regalia Gold", "Infinia"]}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy")
-    out = results(brain, "voucher_checkout")[0]
-    assert out["status"] == "rejected" and "which hdfc card" in out["next"].lower() and len(core.executed) == 1
+def test_compare_reads_only_the_stores_the_cards_fit_and_ranks_them(tmp_path):
+    reads = {"SmartBuy": {"amounts": "₹500 ₹1,000 ₹2,000", "reward": "5X Reward Points"},
+             "iShop": {"amounts": "₹1,000 ₹2,000", "reward": "6X Reward Points", "fee": "2.5%"},
+             "Woohoo": {"amounts": "₹500 ₹1,000", "reward": "", "discount": "2%"}}
+    brain, core = voucher_brain(tmp_path, said=["Get me 5000 of Swiggy vouchers"], cards=["Infinia", "Sapphiro"],
+                                reads=reads)
+    result = brain.voucher_compare("Swiggy", 5000)
+    assert read_portals(core) == ["SmartBuy", "Woohoo", "iShop"]
+    best = result["offers"][0]
+    assert (best["portal"], best["card"], best["vouchers"], best["effective"]) == (
+        "SmartBuy", "Infinia", "2 × ₹2,000 + 1 × ₹1,000", "₹4,167")
+    assert [o["portal"] for o in result["offers"]][-1] == "iShop"  # its fee makes it dearest
+    again = brain.voucher_compare("Swiggy", 5000)
+    assert len(core.executed) == 3 and again["offers"] == result["offers"]  # each store read once a day
 
 
-def test_a_card_the_read_doesnt_list_is_offered_the_ones_it_does(tmp_path):
-    core = FakeCore(CARDS_READ)
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Amex Platinum"}),
-                  ("reply", {"text": "Which card?", "options": []}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy with my Amex Platinum")
-    out = results(brain, "voucher_savings")[0]
-    assert out["status"] == "rejected" and "Amex Platinum" in out["reason"] and "Regalia Gold" in out["next"]
+def test_a_total_a_store_cant_make_offers_its_nearest(tmp_path):
+    brain, core = voucher_brain(tmp_path, said=["Swiggy 1200"], cards=["Infinia"], reads={
+        "SmartBuy": {"amounts": "₹500 ₹1,000", "reward": "5X Reward Points"}})
+    offer = next(o for o in brain.voucher_compare("Swiggy", 1200)["offers"] if o["portal"] == "SmartBuy")
+    assert offer["vouchers"] is None and offer["nearest"] == ["₹1,000", "₹1,500"]
 
 
-def test_the_portal_named_messages_ago_still_counts_after_tool_calls(tmp_path):
-    # eval: "from SmartBuy" in the first message fell out of the last 12 conversation items (tool calls fill them),
-    # so the card's savings were refused and the portal asked again
-    core = FakeCore(CARDS_READ)
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("reply", {"text": "Which amount?", "options": ["₹500"]}),
-                  ("reply", {"text": "Which card?", "options": ["Regalia Gold"]}),
-                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia Gold"}),
-                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia"}),
-                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Infinia"}),
-                  ("reply", {"text": "Get it?", "options": ["Buy it"]}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me a Swiggy voucher from SmartBuy")
-    brain.turn("₹500")
-    for n in range(8):  # a longer conversation's tool calls in between
-        brain.items += [{"type": "function_call", "call_id": f"pad{n}", "name": "memory", "arguments": "{}"},
-                        {"type": "function_call_output", "call_id": f"pad{n}", "output": "{}"}]
-    brain.turn("Regalia Gold")
-    assert results(brain, "voucher_savings")[0]["status"] == "done"
+def test_a_store_that_couldnt_be_read_is_listed_and_still_buyable(tmp_path):
+    brain, core = voucher_brain(tmp_path, said=["Swiggy 5000", "ShopWise with Platinum Travel"],
+                                cards=["Platinum Travel"],
+                                reads={"Amex ShopWise": "Amex ShopWise needs a sign-in to show its prices."})
+    result = brain.voucher_compare("Swiggy", 5000)
+    assert result["offers"] == [] and result["unread"][0] == {
+        "portal": "Amex ShopWise", "why": "Amex ShopWise needs a sign-in to show its prices."}
+    brain.buy_voucher("Amex ShopWise", "Swiggy", 5000, "Platinum Travel")
+    assert core.executed[-1]["goal"] == ("Buy ₹5,000 of Swiggy vouchers on Amex ShopWise: any vouchers that make "
+                                         "₹5,000, paying with Platinum Travel.")
 
 
-def test_the_users_card_goes_into_the_checkout_goal(tmp_path):
-    # live: the worker never knew the card, so the cart's calculator kept Infinia and the planner asked how to pay
-    core = FakeCore(CARDS_READ, done("Ready to pay ₹500.", outcome="not_approved"))
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia Gold"}),
-                  ("reply", {"text": "Get it?", "options": ["Buy it", "Not now"]}),
-                  ("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500}),
-                  ("reply", {"text": "Stopped before paying. Nothing was charged.", "options": []}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy with my Regalia Gold")
-    brain.turn("Buy it")
-    assert core.executed[-1]["goal"] == ("Buy ₹500 of Swiggy gift vouchers on SmartBuy: 1 × ₹500, paying with "
-                                         "Regalia Gold Credit Card.")
+def test_no_store_fits_the_cards_says_so(tmp_path):
+    brain, core = voucher_brain(tmp_path, said=["Swiggy 5000"], cards=["Kotak League"], portals_any=False)
+    result = brain.voucher_compare("Swiggy", 5000)
+    assert result["status"] == "rejected" and "no voucher store" in result["reason"].lower()
+    assert core.executed == []
 
 
-def test_a_card_the_user_never_named_gets_no_savings(tmp_path):
-    # live: the user answered "₹2,000" and the brain picked "Other credit card" itself, savings and effective price too
-    core = FakeCore(CARDS_READ)
-    model = Model(("reply", {"text": "Which portal?", "options": ["SmartBuy (HDFC)", "iShop (ICICI)"]}),
-                  ("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("reply", {"text": "Which amount?", "options": ["₹500", "₹2,000"]}),
-                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 2000,
-                                       "card": "Other credit card"}),
-                  ("reply", {"text": "Which card?", "options": ["Regalia Gold", "Other credit card"]}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me a Swiggy voucher")
-    brain.turn("SmartBuy (HDFC)")
-    brain.turn("₹2,000")
-    out = results(brain, "voucher_savings")[0]
-    assert out["status"] == "rejected" and "which hdfc card" in out["next"].lower() and "Regalia Gold" in out["next"]
+def test_buying_needs_a_compared_offer_and_no_fresh_no(tmp_path):
+    brain, core = voucher_brain(tmp_path, said=["Swiggy 5000"], cards=["Infinia"], reads={
+        "SmartBuy": {"amounts": "₹1,000 ₹2,000", "reward": "5X Reward Points"}})
+    assert brain.buy_voucher("SmartBuy", "Swiggy", 5000, "Infinia")["status"] == "rejected"  # not compared yet
+    brain.voucher_compare("Swiggy", 5000)
+    brain.items.append({"role": "user", "content": "Not now"})
+    assert brain.buy_voucher("SmartBuy", "Swiggy", 5000, "Infinia")["status"] == "rejected"
+    brain.items.append({"role": "user", "content": "SmartBuy + Infinia"})
+    out = brain.buy_voucher("SmartBuy", "Swiggy", 5000, "Infinia")
+    assert core.executed[-1]["goal"] == ("Buy ₹5,000 of Swiggy vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000, "
+                                         "paying with Infinia. Compared: 5X Reward Points.")
+    assert core.executed[-1]["skill"] == "vouchers" and out["status"] == "not_approved"
 
 
-def test_a_card_named_for_an_earlier_voucher_is_asked_again(tmp_path):
-    # a retake: the card the user named last time is theirs to name again, not the brain's to reuse
-    core = FakeCore(CARDS_READ)
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("reply", {"text": "Which amount?", "options": ["₹500"]}),
-                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia Gold"}),
-                  ("reply", {"text": "Get it?", "options": ["Buy it", "Not now"]}),
-                  ("reply", {"text": "Not bought.", "options": []}),
-                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia Gold"}),
-                  ("reply", {"text": "Which card?", "options": ["Regalia Gold"]}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy")
-    brain.turn("Regalia Gold")
-    brain.turn("Not now")
-    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy")
-    first, again = results(brain, "voucher_savings")
-    assert first["status"] == "done" and again["status"] == "rejected"
+def test_a_brand_the_user_never_named_is_asked_for(tmp_path):
+    brain, core = voucher_brain(tmp_path, said=["Get me some vouchers"], cards=["Infinia"])
+    result = brain.voucher_compare("Swiggy", 5000)
+    assert result["status"] == "rejected" and core.executed == []
 
 
-@pytest.mark.parametrize("said", ["Not now", "no", "later", "nahi"])
-def test_a_checkout_after_a_decline_is_refused(tmp_path, said):
-    # dry run: "Not now" to "Get it?" started the checkout in one of two runs with the real model
-    core = FakeCore(CARDS_READ)
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500, "card": "Regalia Gold"}),
-                  ("reply", {"text": "Get it?", "options": ["Buy it", "Not now"]}),
-                  ("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 500}),
-                  ("reply", {"text": "OK, not bought.", "options": []}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me a ₹500 Swiggy voucher from SmartBuy with my Regalia Gold")
-    brain.turn(said)
-    out = results(brain, "voucher_checkout")[0]
-    assert out["status"] == "rejected" and "nothing" in out["next"].lower() and len(core.executed) == 1
-
-
-# ---- the user names a total: code makes it from the portal's vouchers, never past its monthly limit, and says what the
-# card saves on it the way the site's own calculator does ("That's a whopping 6.25% effective discount!!!")
-
-def savings(tmp_path, amount, card="Regalia Gold"):
-    """voucher_savings' answer for a total, after the read."""
-    core = FakeCore(CARDS_READ)
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": amount, "card": card}),
-                  ("reply", {"text": "Get it?", "options": []}))
-    brain = make(core, model, tmp_path)
-    brain.turn(f"Buy me ₹{amount:,} of Swiggy vouchers from SmartBuy with my Regalia Gold")
-    return results(brain, "voucher_savings")[0]
-
-
-def test_a_total_is_made_of_the_fewest_vouchers_and_its_discount_is_the_sites(tmp_path):
-    out = savings(tmp_path, 5000)
-    assert out["status"] == "done" and out["vouchers"] == "2 × ₹2,000 + 1 × ₹1,000"
-    assert out["earns"] == "₹312 in reward points" and out["effective_price"] == "₹4,688"  # never more than the site's
-    assert out["discount"] == "That's a whopping 6.25% effective discount!!!"  # its card's rate: ₹125 on ₹2,000
-    assert "discount" in out["next"]
-
-
-def test_the_monthly_limit_is_a_cap_never_a_voucher(tmp_path):
-    out = savings(tmp_path, 10000)  # the read says "Monthly Limit: ₹10,000": no ₹10,000 voucher is sold
-    assert out["vouchers"] == "5 × ₹2,000"
-
-
-@pytest.mark.parametrize("amount, offered", [(1200, ["₹1,250", "₹1,000"]), (300, ["₹250", "₹500"]), (100, ["₹250"]),
-                                             (15000, ["₹10,000"]), (9900, ["₹10,000", "₹9,750"])])
-def test_a_total_the_vouchers_cant_make_is_refused_with_the_nearest_they_can(tmp_path, amount, offered):
-    out = savings(tmp_path, amount, card="")  # the total is checked before any card is asked
-    assert out["status"] == "rejected" and f"₹{amount:,}" in out["reason"] and out["options"] == offered
-    assert all(total in out["next"] for total in offered)
-
-
-def test_a_total_over_the_monthly_limit_says_so(tmp_path):
-    out = savings(tmp_path, 12000)
-    assert "monthly limit of ₹10,000" in out["reason"]
-
-
-def test_a_checkout_buys_the_total_as_its_vouchers(tmp_path):
-    core = FakeCore(CARDS_READ, done("Ready to pay ₹5,000.", outcome="not_approved"))
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 5000,
-                                       "card": "Regalia Gold"}),
-                  ("reply", {"text": "Get it?", "options": ["Buy it", "Not now"]}),
-                  ("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 5000}),
-                  ("reply", {"text": "Stopped before paying.", "options": []}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me ₹5,000 of Swiggy vouchers from SmartBuy with my Regalia Gold")
-    brain.turn("Buy it")
-    assert core.executed[-1]["goal"] == ("Buy ₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000, "
-                                         "paying with Regalia Gold Credit Card.")
-
-
-def test_a_read_asks_for_a_total_not_an_amount_from_options(tmp_path):
-    core = FakeCore(CARDS_READ)
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("reply", {"text": "How much?", "options": []}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me a Swiggy voucher from SmartBuy")
-    out = results(brain, "voucher_options")[0]
-    assert "how much" in out["next"].lower() and "no amount options" in out["next"].lower()
-    assert "₹10,000" in out["next"]  # the monthly limit, in the question
-
-
-def test_a_bought_checkout_says_so_with_its_order_and_never_a_code(tmp_path):
-    bought = done("Bought ₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000. Order "
-                  "HSB326844797-1791901466. The site sends the codes by SMS and email.", outcome="bought")
-    core = FakeCore(CARDS_READ, bought)
-    model = Model(("voucher_options", {"portal": "SmartBuy", "brand": "Swiggy"}),
-                  ("voucher_savings", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 5000,
-                                       "card": "Regalia Gold"}),
-                  ("reply", {"text": "Get it?", "options": ["Buy it", "Not now"]}),
-                  ("voucher_checkout", {"portal": "SmartBuy", "brand": "Swiggy", "amount": 5000}),
-                  ("reply", {"text": "Bought.", "options": []}))
-    brain = make(core, model, tmp_path)
-    brain.turn("Buy me ₹5,000 of Swiggy vouchers from SmartBuy with my Regalia Gold")
-    brain.turn("Buy it")
-    out = results(brain, "voucher_checkout")[0]
-    assert out["status"] == "bought" and out["report"] == bought["report"]
-    assert "never" in out["next"].lower() and "code" in out["next"].lower()
+def test_a_bought_purchase_says_so_and_never_a_code(tmp_path):
+    brain, core = voucher_brain(tmp_path, said=["Swiggy 5000", "SmartBuy + Infinia"], cards=["Infinia"], reads={
+        "SmartBuy": {"amounts": "₹1,000 ₹2,000", "reward": "5X Reward Points"}})
+    brain.voucher_compare("Swiggy", 5000)
+    core.execute = lambda goal, **kw: {**done("Bought ₹5,000 of Swiggy vouchers on SmartBuy (2 × ₹2,000 + 1 × "
+                                              "₹1,000). Order GV7Q2M44K1. The codes come by SMS and email.",
+                                              outcome="bought"), "facts": {}}
+    out = brain.buy_voucher("SmartBuy", "Swiggy", 5000, "Infinia")
+    assert out["status"] == "bought" and "GV7Q2M44K1" in out["report"] and "code" in out["next"].lower()
 
 
 # ---- bills: pay_bill names the bill; the worker's money rules do the rest

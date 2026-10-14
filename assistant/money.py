@@ -40,7 +40,7 @@ def bill_intent(goal):
 
 SPLIT = r"\d+ × ₹[\d,]+(?: \+ \d+ × ₹[\d,]+)*"
 VOUCHER_GOAL = re.compile(rf"^Buy ₹([\d,]+) of (.+?) vouchers on (.+?): ({SPLIT}|any vouchers that make ₹[\d,]+), "
-                          r"paying with (.+?)\.(?: Compared: (.+?)\.)?$")
+                          r"paying with (.+?)\.(?: Compared: (.+)\.)?$")
 READ_GOAL = re.compile(r"^Read the (.+?) vouchers on (.+?) for ₹([\d,]+): every amount, the reward, any discount or "
                        r"fee, and the monthly limit\. Buy nothing\.$")
 MULTIPLIER = re.compile(r"(\d+(?:\.\d+)?)\s*[x×](?![a-z])", re.IGNORECASE)  # "5X Reward Points"
@@ -75,7 +75,7 @@ def voucher_goal(portal, brand, amount, made, card, compared=None):
     for a store whose amounts couldn't be read), the card, and the reward the comparison showed."""
     vouchers = counted(made) if made else f"any vouchers that make ₹{amount:,}"
     return (f"Buy ₹{amount:,} of {brand} vouchers on {portal}: {vouchers}, paying with {card}."
-            + (f" Compared: {compared.rstrip('.')}." if compared else ""))
+            + (f" Compared: {' '.join(re.sub(r'[.](?!\d)', ' ', compared).split())}." if compared else ""))
 
 
 def read_goal(portal, brand, amount):

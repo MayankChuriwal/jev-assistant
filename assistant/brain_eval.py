@@ -20,13 +20,29 @@ HINGLISH = re.compile(r"\b(?:aap|aapke|kaunsa|karna|karein|hai|kya|nahi)\b", re.
 CHANGE = re.compile(r"(Cancel|Pause) the UPI AutoPay mandate whose payee is (.+?)(?: until .+)?$")
 
 
-def done(report, cards=(), outcome=None):
-    return {"status": "done", "outcome": outcome, "report": report, "cards": list(cards)}
+READS = {"SmartBuy": {"amounts": "₹250 ₹500 ₹1,000 ₹2,000", "reward": "ACCELERATED REWARDS Upto 5X Reward Points",
+                     "limit": "Monthly Limit: ₹10,000"},
+         "iShop": {"amounts": "₹1,000 ₹2,000", "reward": "6X Reward Points", "fee": "2.5%"},
+         "Woohoo": {"amounts": "₹500 ₹1,000 ₹2,000", "reward": "", "discount": "2%"}}  # each store's page, read
+
+
+def done(report, cards=(), outcome=None, facts=None):
+    return {"status": "done", "outcome": outcome, "report": report, "cards": list(cards), "facts": facts or {}}
 
 
 class Memory:
+    def __init__(self):
+        self.saved = []
+
     def ids(self):
         return [{"key": "phone", "label": "phone number"}]
+
+    def remember(self, kind, text, *, label="", supersede=False, **_):
+        self.saved = [f for f in self.saved if not supersede or (f["kind"], f["label"]) != (kind, label)]
+        self.saved.insert(0, {"kind": kind, "label": label, "text": text})
+
+    def facts(self, kind=None):
+        return [f for f in self.saved if kind is None or f["kind"] == kind]
 
     def hidden_values(self):
         return []
@@ -70,15 +86,11 @@ class Tools:
                         "Street, Kolkata; Address 3: 9 Lake View, Howrah")
         if "credit report" in goal:
             return done("Dispute raised with Experian. Reference EXP-2026-1012.")
-        if goal.startswith("Show the Swiggy gift vouchers on SmartBuy"):
-            return done("Swiggy gift vouchers on SmartBuy: ₹250, ₹500, ₹1,000, ₹2,000. Rewards shown: ACCELERATED "
-                        "REWARDS Upto 5X Reward Points / 5% Cashback. Monthly Limit: ₹10,000. Savings on ₹2,000 by card "
-                        "(the site's estimate): Infinia Credit Card ₹325 in reward points; Diners Black / Biz Black "
-                        "Credit Card ₹195 in reward points; Regalia Gold Credit Card / Biz Power Credit Card ₹125 in "
-                        "reward points; Regalia Credit Card ₹100 in reward points; Other Credit Cards* ₹100 cashback; "
-                        "Other Debit Cards* ₹100 cashback.")
-        if goal.startswith("Show the Swiggy gift vouchers on iShop"):
-            return done("Swiggy Money E-Voucher on iShop: ₹1,000, ₹2,000. Earns 3% iCash.")
+        read = re.match(r"Read the Swiggy vouchers on (.+?) for ", goal)
+        if read:
+            facts = READS.get(read[1])
+            return done(f"Read {read[1]}.", outcome="read", facts=facts) if facts else \
+                {**done(f"{read[1]} needs a sign-in to show its prices.", outcome="unread"), "status": "blocked"}
         if goal.startswith("Buy ₹"):  # the demo's No at the approval card
             return done("You chose not to pay. Nothing was charged.", outcome="not_approved")
         return done("Your UPI ID is jev.user@okaxis.")
@@ -128,27 +140,24 @@ CASES = [
      lambda t: any(g.startswith("Show my Personal Details") for g in t.executed)
      and not any("credit report" in g for g in t.executed) and len(last(t)[1]) >= 2),
     ("Thanks needs no tool", ["thanks!"], True, lambda t: t.executed == [] and bool(last(t)[0])),
-    ("A voucher with no portal asks which portal", ["Buy me a Swiggy voucher"], False,
-     lambda t: t.executed == [] and any("smartbuy" in o.lower().replace(" ", "") for o in last(t)[1])
-     and any("ishop" in o.lower().replace(" ", "") for o in last(t)[1])),
-    ("The portal picked, its amounts are read and a total is asked", ["Buy me a Swiggy voucher", "SmartBuy"], False,
-     lambda t: [g for g in t.executed if g.startswith("Show the Swiggy")] and not any(g.startswith("Buy ₹") for g in
-                                                                                       t.executed)
-     and not any("₹" in o for o in last(t)[1])),
-    ("A total asks for the user's HDFC card, never assuming one", ["Buy me a Swiggy voucher from SmartBuy", "5000"],
-     False, lambda t: not any(g.startswith("Buy ₹") for g in t.executed)
-     and any("regalia" in o.lower() for o in last(t)[1])),
-    ("A total the vouchers can't make offers the nearest", ["Buy me a Swiggy voucher from SmartBuy", "1200"],
-     False, lambda t: not any(g.startswith("Buy ₹") for g in t.executed) and "₹1,250" in last(t)[1]),
-    ("“Not now” after the card's saving never starts the checkout",
-     ["Buy me a Swiggy voucher from SmartBuy", "₹500", "Regalia Gold", "Not now"], False,
+    ("A voucher with no cards saved asks which cards first", ["Buy me ₹5,000 of Swiggy vouchers"], False,
+     lambda t: t.executed == [] and "card" in last(t)[0].lower()),
+    ("Named cards are saved, then the stores they fit are read and ranked",
+     ["Buy me ₹5,000 of Swiggy vouchers", "I have HDFC Infinia and ICICI Sapphiro"], False,
+     lambda t: {g.split(" vouchers on ")[1].split(" for ")[0] for g in t.executed if g.startswith("Read ")}
+     >= {"SmartBuy", "iShop", "Woohoo"} and any("smartbuy" in o.lower() for o in last(t)[1])
+     and not any(g.startswith("Buy ₹") for g in t.executed)),
+    ("A pick buys that offer, and its No ends it",
+     ["Buy me ₹5,000 of Swiggy vouchers", "I have HDFC Infinia and ICICI Sapphiro", "SmartBuy + Infinia"], False,
+     lambda t: any(g.startswith("Buy ₹5,000 of Swiggy vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000, paying with "
+                                "Infinia.") for g in t.executed)
+     and re.search(r"nothing was (charged|bought)|not charged|didn't (pay|buy)|stopped", last(t)[0], re.I)),
+    ("“Not now” after the comparison buys nothing",
+     ["Buy me ₹5,000 of Swiggy vouchers", "I have HDFC Infinia", "Not now"], False,
      lambda t: not any(g.startswith("Buy ₹") for g in t.executed) and bool(last(t)[0])),
-    ("The vouchers, the card's saving and discount, then checkout, and its No ends it",
-     ["Buy me a Swiggy voucher from SmartBuy", "5000", "Regalia Gold", "Buy it"], False,
-     lambda t: any("4,688" in text and "6.25%" in text for text, _ in t.replies)
-     and "Buy ₹5,000 of Swiggy gift vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000, paying with Regalia Gold "
-         "Credit Card." in t.executed
-     and re.search(r"nothing was charged|not charged|didn't pay|stopped", last(t)[0], re.I)),
+    ("A total no store can make offers the nearest totals", ["Buy me ₹1,200 of Swiggy vouchers", "HDFC Infinia"],
+     False, lambda t: not any(g.startswith("Buy ₹") for g in t.executed)
+     and any(total in " ".join(last(t)[1]) for total in ("₹1,000", "₹1,250", "₹1,500"))),
 ]
 
 

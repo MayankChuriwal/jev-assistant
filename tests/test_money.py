@@ -197,3 +197,11 @@ def test_a_voucher_bought_today_is_asked_about_again():
     assert money.paid_before([row], now, money.VOUCHER_WINDOW) == row
     assert money.paid_before([{**row, "created_at": now - timedelta(hours=30)}], now, money.VOUCHER_WINDOW) is None
     assert money.voucher_key("Swiggy Money") == "voucher_swiggy_money"
+
+
+def test_a_compared_reward_with_its_own_full_stops_still_reads_back():
+    goal = money.voucher_goal("iShop", "Swiggy", 2000, {2000: 1}, "Sapphiro", compared="6X Reward Points. T&C apply.")
+    intent = money.job_intent(goal)
+    assert intent["card"] == "Sapphiro" and intent["compared"] == "6X Reward Points T&C apply"
+    assert money.job_intent(money.voucher_goal("iShop", "Swiggy", 2000, {2000: 1}, "Sapphiro",
+                                               compared="2.5% back"))["compared"] == "2.5% back"
