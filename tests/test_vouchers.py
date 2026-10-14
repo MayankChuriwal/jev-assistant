@@ -334,7 +334,7 @@ def test_a_read_presses_a_product_whose_name_says_pay(tmp_path, monkeypatch):
 
 
 def test_a_brands_own_product_is_no_pay_control_but_a_pay_button_is():
-    # live sweep: "MakeMyTrip e-Pay" and "Amazon Pay Gift Card" were taken for pay buttons; they are the brand's vouchers
+    # live sweep: "MakeMyTrip e-Pay" and "Amazon Pay Gift Card" were taken for pay buttons; they're the brand's own
     from assistant import gate
     store = "https://www.gyftr.com/instantvouchers"
     for brand, label, commits in (("MakeMyTrip", "MakeMyTrip e-Pay", False), ("Amazon", "Amazon Pay Gift Card", False),
