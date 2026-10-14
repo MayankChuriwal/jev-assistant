@@ -115,7 +115,10 @@ def split(amounts, total):
 
 
 RUPEES = re.compile(r"(?:₹|\brs\.?|\binr)\s*([\d,]+)", re.IGNORECASE)  # an amount marked as rupees, any way
-RANGE = re.compile(r"(?:₹|\brs\.?|\binr)\s*[\d,]+\s*(?:and|to|-|–)\s*(?:₹|\brs\.?|\binr)\s*[\d,]+", re.IGNORECASE)
+R = r"(?:₹|\brs\.?|\binr)\s*([\d,]+)(?:\.\d+)?"  # one rupee amount, captured
+RANGES = (re.compile(rf"\bmin(?:imum)?\b\W*{R}.*?\bmax(?:imum)?\b\W*{R}", re.IGNORECASE),  # "Min: ₹100, Max: …"
+          re.compile(rf"\bbetween\s+{R}\s+and\s+{R}", re.IGNORECASE),  # "between ₹500 and ₹10,000"
+          re.compile(rf"(?<![-–]\s){R}\s*(?:to|-|–)\s*{R}(?!\s*[-–])", re.IGNORECASE))  # "₹100 to ₹2,000", not a list
 
 
 def amount_list(text):
@@ -134,11 +137,15 @@ def limit_of(text):
 
 def amount_range(text):
     """(lowest, highest) when a store takes any amount in a range ("Enter a value between ₹500 and ₹10,000",
-    "₹100 - ₹5,000"); else None. A list of amounts ("₹250 - ₹500 - ₹1,000") is no range."""
-    listed = amount_list(text)
-    if not RANGE.search(str(text or "")) or len(RUPEES.findall(str(text or ""))) != 2 or len(listed) != 2:
-        return None
-    return tuple(listed)
+    "Min: ₹100.00, Max: ₹10,000.00", "₹100 to ₹2,000"), whatever else the page lists; else None. A list of amounts
+    ("₹250 - ₹500 - ₹1,000") is no range."""
+    for pattern in RANGES:
+        found = pattern.search(str(text or ""))
+        if found:
+            low, high = int(found[1].replace(",", "")), int(found[2].replace(",", ""))
+            if low < high:
+                return low, high
+    return None
 
 
 def nearest(total, amounts, limit):

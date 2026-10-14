@@ -276,3 +276,16 @@ def test_amounts_limits_and_ranges_read_in_any_rupee_form():
     assert money.limit_of("Up to 2 vouchers of ₹10,000 a month") == 10000 and money.limit_of("No limit") is None
     assert money.amount_range("₹250 - ₹500 - ₹1,000 - ₹2,000") is None
     assert money.amount_range("Enter a value between Rs. 500 and Rs. 10,000") == (500, 10000)
+
+
+@pytest.mark.parametrize("text, span", [
+    ("Min: ₹100.00, Max: ₹10,000.00", (100, 10000)),
+    ("Enter a value between ₹5 and ₹10,000; ₹5,000 shown", (5, 10000)),
+    ("₹ 100 to ₹ 2,000 (custom denominations)", (100, 2000)),
+    ("₹10, ₹50, ₹500; Enter a value between ₹50 and ₹10,000", (50, 10000)),
+    ("₹250 - ₹500 - ₹1,000 - ₹2,000", None),
+    ("₹500, ₹1,000, ₹2,000", None),
+])
+def test_ranges_are_read_in_the_forms_stores_write_them(text, span):
+    # live sweep: "Min: ₹100.00, Max: ₹10,000.00" (Grab Deals) and a range beside a shown amount (Woohoo) were lists
+    assert money.amount_range(text) == span

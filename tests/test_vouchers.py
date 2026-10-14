@@ -167,7 +167,10 @@ def test_a_stores_suggestion_of_the_brands_gift_card_is_no_narrowing(tmp_path):
     assert w.narrows({"label": "Zomato Gift Card"}) == set()
     assert w.narrows({"label": "Zomato E-Gift Voucher Zomato E-Gift Voucher Product"}) == set()  # live, Woohoo
     assert w.narrows({"label": "Zomato E-Gift Card Zomato E-Gift Card Product (1 of 2)"}) == set()  # its twin's mark
-    assert w.narrows({"label": "Zomato Gold Membership"}) == {"gold", "membership"}
+    # live sweep, Grab Deals: "Amazon Shopping Voucher (0.60% OFF) … 0.6% OFF" was refused too; on a voucher store
+    # the page model picks the brand's own voucher (its guide), so no suggestion counts as narrowing
+    assert w.narrows({"label": "Amazon Shopping Voucher (0.60% OFF) Amazon Shopping Voucher (0.60% OFF) 0.6% OFF"}) \
+        == set()
 
 
 def test_a_yes_acted_on_by_a_key_starts_the_payment_and_the_masking(tmp_path, monkeypatch):

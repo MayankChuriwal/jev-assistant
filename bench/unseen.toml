@@ -428,4 +428,4 @@ url = "https://www.gyftr.com/"
 skill = "vouchers"
 end = "result"
 require = ["₹"]
-rule = "The report names the Swiggy vouchers' amounts on GyFTR's own store (www.gyftr.com), and any reward or discount it states; nothing was added to a cart or bought."
+rule = "The report lists the amounts (denominations) GyFTR's own store (www.gyftr.com) sells Swiggy vouchers in, whatever they are (they need not add up to ₹2,000), and any reward or discount the page states; nothing was added to a cart or bought."

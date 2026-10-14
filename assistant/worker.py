@@ -31,9 +31,6 @@ MAX_SPEND = 0.25
 BILL_SPEND = 1.00  # a bill's or a purchase's page model reads every page at high effort: its own, higher cap
 READ_SPEND = 0.30  # a voucher store's read: a few pages, nothing bought
 ACTOR_TURNS, ACTOR_IDLE, ACTOR_BAD = 25, 3, 3  # a bill's page-model turns: in all, in a row with no progress, refused
-# words a store's suggestion of a brand's own voucher adds ("Zomato Gift Card", "Swiggy E-Gift Voucher Product")
-VOUCHER_WORDS = {"gift", "card", "cards", "voucher", "vouchers", "e", "egift", "evoucher", "gv", "money", "instant",
-                 "new", "product", "products"}
 DECLINED = re.compile(r"\b(?:declined|payment (?:has )?failed|transaction (?:has )?failed|payment (?:was )?"
                       r"unsuccessful|transaction (?:was )?unsuccessful)\b", re.IGNORECASE)  # a card the bank refused
 READ_NEVER = re.compile(r"\b(?:add to cart|add|buy|buy now|checkout|check out|proceed to pay|pay)\b",
@@ -1526,9 +1523,9 @@ class Worker:
         label = executor.words(re.sub(r"\s*\(\d+ of \d+\)\s*$", "", action.get("label") or ""))  # a twin's mark
         if not typed & label:
             return set()  # not a suggestion of what was typed: a search button, another control
+        if self.job and self.job["kind"] in {"voucher", "voucher_read"}:  # a voucher store's suggestions ("Zomato
+            return set()  # Gift Card", "Amazon Shopping Voucher (0.60% OFF)") are the brand's: its guide picks one
         said = typed | executor.words(s["goal"]) | executor.words(" ".join(self.user_words()))
-        if self.job and self.job["kind"] in {"voucher", "voucher_read"}:  # live, SmartBuy: "Zomato Gift Card" is the
-            said |= VOUCHER_WORDS  # brand's voucher, not another product
         return label - said - FILLER
 
     @staticmethod
