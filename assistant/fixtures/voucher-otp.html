@@ -1,0 +1,13 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Bank Authentication</title></head>
+<body><h3>Authenticate the transaction</h3><p>Merchant: GIFT VOUCHER STORE · Amount ₹ 5,000.00</p>
+<p>We sent a One Time Password to your registered mobile.</p>
+<input id="otp" placeholder="Enter OTP Here" aria-label="Enter OTP Here" autocomplete="one-time-code" maxlength="6">
+<a href="#" id="go">SUBMIT</a> <a href="#" id="cancel">Cancel</a><p id="msg"></p>
+<script>
+const q = new URLSearchParams(location.search);
+otp.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
+go.onclick = e => { e.preventDefault();
+  if (otp.value === '123456') location.href = 'http://127.0.0.1:' + location.port + '/voucher-order.html?saved=' +
+    q.get('saved');
+  else { otp.value = ''; msg.textContent = 'Invalid OTP.'; } };
+</script></body></html>

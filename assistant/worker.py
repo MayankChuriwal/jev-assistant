@@ -1689,7 +1689,10 @@ class Worker:
         return len(methods) >= 2 or bool(HOW_TO_PAY.search(text) and not rules.CARD_DETAIL.search(text))
 
     def method_chosen(self):
-        """Whether the chat holds the user's answer to a question about how to pay (never an approval's yes)."""
+        """Whether the user said how to pay: a voucher purchase names its card in its goal, else the chat holds their
+        answer to a question about how to pay (never an approval's yes)."""
+        if getattr(self, "job", None) and self.job["kind"] == "voucher":
+            return True
         chat = self.state["chat"]
         return any(q["from"] == "agent" and r["from"] == "user" and not q.get("approval")
                    and self.method_question(q["text"]) for q, r in zip(chat, chat[1:]))

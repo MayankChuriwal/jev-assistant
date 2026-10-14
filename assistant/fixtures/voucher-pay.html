@@ -1,0 +1,26 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>PG Container - Multi Gateway Payment</title></head>
+<body><h3>Bill Details</h3><p>Bill Value ₹ <span id="bill"></span></p><p>Order Id : GV7Q2M44K1</p><p id="fee"></p>
+<p>Payable Amount: ₹ <span id="pay"></span></p>
+<p>Payment Method</p><button id="tcard">Card</button> <button id="wallet">Wallet</button>
+<div id="card" hidden><label for="no">Valid Card Number</label> <input id="no" inputmode="numeric" maxlength="19">
+<label for="holder">Name On Card</label> <input id="holder">
+<label for="exp">Expiry (MM/YY)</label> <input id="exp" maxlength="5">
+<label for="cvv">CVV No.</label> <input id="cvv" type="password" maxlength="3">
+<p><label><input type="checkbox" id="save" checked> Save card securely for your future transactions</label></p>
+<button id="paycard"></button></div><p id="msg"></p>
+<script>
+const q = new URLSearchParams(location.search), variant = q.get('variant') || '';
+const amount = Number(q.get('amount') || 5000), extra = variant === 'fee' ? 125 : 0;
+const money = v => Number(v).toLocaleString('en-IN');
+bill.textContent = money(amount);
+pay.textContent = money(amount + extra);
+if (extra) fee.textContent = 'Convenience fee ₹ ' + money(extra);
+paycard.textContent = 'Pay ₹ ' + money(amount + extra);
+tcard.onclick = () => { card.hidden = false; };
+wallet.onclick = () => { msg.textContent = 'Wallet balance: ₹ 0'; };
+paycard.onclick = () => {
+  if (no.value.replace(/\s/g, '').length < 15 || !/^\d\d\/\d\d$/.test(exp.value) || cvv.value.length !== 3 || !holder.value) {
+    msg.textContent = 'Please enter valid card details.'; return; }
+  location.href = 'voucher-otp.html?saved=' + save.checked;
+};
+</script></body></html>
