@@ -392,7 +392,8 @@ def test_a_card_form_planned_in_one_turn_is_filled_in_one_turn(tmp_path, monkeyp
     seen = script(monkeypatch, answer([("type", "1", "[ask]"), ("type", "2", "[ask]"), ("type", "3", "[ask]")]))
     w.command("tick")
     assert len(seen) == 1 and len(w.asked) == 3
-    assert [c.args[1]["label"] for c in w.browser.act.call_args_list] == ["Valid Card Number *", "Expiry *", "CVV No. *"]
+    assert [c.args[1]["label"] for c in w.browser.act.call_args_list] == [
+        "Valid Card Number *", "Expiry *", "CVV No. *"]
 
 
 def test_a_read_never_adds_to_a_cart(tmp_path, monkeypatch):
