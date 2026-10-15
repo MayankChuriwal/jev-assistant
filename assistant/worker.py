@@ -2104,6 +2104,8 @@ class Worker:
                     results.append(f"“{label}” already holds the user's hidden answer")
                     continue
                 self.ask_code(page, {"targets": {"type_text_target": action}})
+                replies = self.replies()  # the hidden answer was for this box: the rest of the list goes on (live,
+                # pay.gyftr.com: a card form planned in one turn took five)
             elif operation == "OPEN_URL":
                 host = rules.host(extra["url"])
                 if skills.bare(host.lower()) != s["site"] and host not in s["typed_hosts"]:
