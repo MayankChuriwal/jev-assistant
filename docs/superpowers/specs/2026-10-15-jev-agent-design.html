@@ -1,0 +1,1359 @@
+<title>Jev Agent Design</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: an engineering spec read top to bottom: a sticky contents rail beside one reading column; diagrams run the full column width */
+:root {
+  --bg: #F3F6F5;
+  --surface: #FFFFFF;
+  --ink: #132320;
+  --muted: #566963;
+  --line: #D3DDDA;
+  --line-strong: #9AAEA8;
+  --accent: #0A7470;
+  --accent-soft: #DDEFEC;
+  --ask: #8F5400;
+  --ask-soft: #FBEEDB;
+  --never: #A8261D;
+  --never-soft: #F7E2DF;
+  --font-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0C1311; --surface: #131D1A; --ink: #E1EAE7; --muted: #93A69F; --line: #25332F; --line-strong: #4F645E;
+    --accent: #4CBDB6; --accent-soft: #11302C; --ask: #EDB25A; --ask-soft: #30230E; --never: #EE8B80; --never-soft: #3A1815;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0C1311; --surface: #131D1A; --ink: #E1EAE7; --muted: #93A69F; --line: #25332F; --line-strong: #4F645E;
+  --accent: #4CBDB6; --accent-soft: #11302C; --ask: #EDB25A; --ask-soft: #30230E; --never: #EE8B80; --never-soft: #3A1815;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+code { background: var(--accent-soft); padding: 0.08em 0.36em; border-radius: 4px; }
+
+.page {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding-block: 40px 72px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+/* Header */
+.masthead { display: grid; gap: 18px; padding-bottom: 28px; border-bottom: 1px solid var(--line); margin-bottom: 36px; }
+.eyebrow { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(36px, 6vw, 60px);
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+  margin: 0;
+  text-wrap: balance;
+}
+.lede { font-size: 19px; line-height: 1.55; max-width: 64ch; margin: 0; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); }
+.meta span { display: inline-flex; gap: 6px; align-items: baseline; }
+.meta b { color: var(--ink); font-weight: 600; }
+
+/* Two-column layout */
+.layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px; }
+@media (min-width: 1040px) { .layout { grid-template-columns: 210px minmax(0, 1fr); gap: 56px; } }
+.toc { font-size: 14px; }
+@media (min-width: 1040px) { .toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; max-height: calc(100vh - 48px); overflow: auto; } }
+.toc details { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 10px 14px; }
+@media (min-width: 1040px) { .toc details { border: 0; background: transparent; padding: 0; } }
+.toc summary { cursor: pointer; font-weight: 600; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.toc ol { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 2px; counter-reset: toc; }
+.toc li { counter-increment: toc; }
+.toc a { display: grid; grid-template-columns: 26px 1fr; text-decoration: none; color: var(--ink); padding: 4px 6px; border-radius: 6px; }
+.toc a::before { content: counter(toc); color: var(--muted); font-family: var(--font-mono); font-size: 12px; padding-top: 2px; }
+.toc a:hover { background: var(--accent-soft); }
+
+/* Sections */
+main { min-width: 0; }
+section { padding-block: 8px 40px; border-bottom: 1px solid var(--line); margin-bottom: 40px; scroll-margin-top: 20px; }
+section:last-of-type { border-bottom: 0; }
+h2 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(26px, 3.4vw, 34px);
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+  margin: 0 0 14px;
+  text-wrap: balance;
+  display: flex; gap: 14px; align-items: baseline;
+}
+h2 .num { font-family: var(--font-mono); font-size: 14px; color: var(--muted); font-weight: 500; letter-spacing: 0; }
+h3 { font-size: 17px; font-weight: 600; margin: 28px 0 8px; text-wrap: balance; }
+p, ul, ol { max-width: 70ch; }
+p { margin: 0 0 14px; }
+ul, ol { padding-left: 1.25em; margin: 0 0 14px; }
+li { margin: 4px 0; }
+.small { font-size: 14px; color: var(--muted); }
+
+/* Pills */
+.pill { display: inline-block; font-size: 12px; font-weight: 600; line-height: 1; padding: 5px 9px; border-radius: 999px; white-space: nowrap; vertical-align: 0.1em; }
+.pill-accent { background: var(--accent-soft); color: var(--accent); }
+.pill-ask { background: var(--ask-soft); color: var(--ask); }
+.pill-never { background: var(--never-soft); color: var(--never); }
+.pill-muted { background: var(--line); color: var(--ink); }
+
+/* Ask list */
+.asklist { list-style: none; padding: 0; margin: 18px 0; display: grid; gap: 10px; max-width: none; }
+.asklist li { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; align-items: start; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); margin: 0; }
+.asklist .k { font-family: var(--font-mono); font-size: 13px; color: var(--ask); background: var(--ask-soft); border-radius: 6px; text-align: center; padding: 3px 0; }
+.asklist b { display: block; }
+.asklist span { color: var(--muted); font-size: 14px; }
+
+.split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin: 16px 0; }
+@media (min-width: 760px) { .split { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.panel { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 16px 18px; min-width: 0; }
+.panel h4 { margin: 0 0 8px; font-size: 14px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.panel ul { margin: 0; }
+.panel.never { border-color: var(--never); }
+.panel.never h4 { color: var(--never); }
+.panel.handles h4 { color: var(--accent); }
+
+/* Tables */
+.tw { overflow-x: auto; margin: 16px 0 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.5; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; background: var(--bg); }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 600; white-space: nowrap; }
+td.wrap { white-space: normal; }
+.num-col { font-variant-numeric: tabular-nums; }
+
+/* Figures and diagrams */
+figure { margin: 22px 0 26px; }
+.fig { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); padding: 18px; }
+.fig svg { display: block; width: 100%; height: auto; }
+.fig.w780 svg { min-width: 640px; max-width: 820px; margin: 0 auto; }
+.fig.w960 svg { min-width: 760px; }
+.fig.w1000 svg { min-width: 820px; }
+figcaption { font-size: 14px; color: var(--muted); margin-top: 10px; max-width: 75ch; }
+figcaption b { color: var(--ink); }
+
+.dg { color: var(--ink); font-family: var(--font-body); }
+.dg .box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.25; }
+.dg .box-accent { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+.dg .box-ask { fill: var(--ask-soft); stroke: var(--ask); stroke-width: 1.4; }
+.dg .box-never { fill: var(--never-soft); stroke: var(--never); stroke-width: 1.4; }
+.dg .box-gated { fill: var(--surface); stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 6 4; }
+.dg .zone { fill: none; stroke: var(--line-strong); stroke-width: 1.2; stroke-dasharray: 3 5; }
+.dg .zone-fill { fill: var(--bg); stroke: var(--line-strong); stroke-width: 1.2; }
+.dg .t { font-size: 13px; font-weight: 600; fill: var(--ink); }
+.dg .s { font-size: 11px; fill: var(--muted); }
+.dg .lbl { font-size: 11px; fill: var(--muted); }
+.dg .lbl-ask { font-size: 11px; fill: var(--ask); font-weight: 600; }
+.dg .lbl-acc { font-size: 11px; fill: var(--accent); font-weight: 600; }
+.dg .zone-t { font-size: 11px; fill: var(--muted); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+.dg .edge { stroke: var(--ink); stroke-width: 1.3; fill: none; }
+.dg .edge-acc { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+.dg .edge-ask { stroke: var(--ask); stroke-width: 1.5; fill: none; }
+.dg .dash { stroke-dasharray: 5 4; }
+.dg .life { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 3 4; }
+.dg .mk { fill: var(--ink); }
+.dg .mk-acc { fill: var(--accent); }
+.dg .mk-ask { fill: var(--ask); }
+.dg .dot { fill: var(--surface); stroke: var(--accent); stroke-width: 2; }
+.dg .dot-gated { fill: var(--surface); stroke: var(--muted); stroke-width: 2; stroke-dasharray: 4 3; }
+.dg .dot-n { font-family: var(--font-mono); font-size: 12px; font-weight: 500; fill: var(--ink); }
+
+/* Example screens */
+.mocks { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin: 18px 0 22px; }
+@media (min-width: 820px) { .mocks { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.mock { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); padding: 16px; min-width: 0; }
+.mock-label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); font-weight: 600; margin-bottom: 10px; display: flex; justify-content: space-between; gap: 8px; }
+.bubble { background: var(--surface); border: 1px solid var(--line); border-radius: 4px 14px 14px 14px; padding: 12px 14px; font-size: 14px; line-height: 1.5; }
+.bubble .head { font-weight: 600; margin-bottom: 6px; }
+.bubble ul { list-style: none; padding: 0; margin: 0 0 10px; }
+.bubble li { margin: 2px 0; padding-left: 14px; position: relative; }
+.bubble li::before { content: ""; position: absolute; left: 2px; top: 0.7em; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.btn { font: inherit; font-size: 13px; padding: 6px 11px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); font-weight: 600; }
+.secret { display: flex; align-items: center; gap: 10px; margin: 10px 0 6px; }
+.secret .field { flex: 1; min-width: 0; font-family: var(--font-mono); letter-spacing: 0.3em; border: 1px solid var(--ask); background: var(--ask-soft); color: var(--ask); border-radius: 8px; padding: 8px 10px; }
+.secret .timer { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 13px; color: var(--ask); }
+.check { font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.check i { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid var(--accent); background: var(--accent); display: inline-block; }
+
+.vaultmock { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); padding: 6px 18px; margin: 18px 0; }
+.vaultmock .row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+@media (min-width: 640px) { .vaultmock .row { grid-template-columns: 150px minmax(0, 1fr); gap: 16px; } }
+.vaultmock .row:last-child { border-bottom: 0; }
+.vaultmock h5 { margin: 0; font-family: var(--font-display); font-size: 18px; font-weight: 700; }
+.vaultmock .items { display: grid; gap: 6px; font-size: 14px; }
+.vaultmock .item { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
+.vaultmock .item span:last-child { color: var(--muted); font-family: var(--font-mono); font-size: 12.5px; }
+
+.callout { border-left: 3px solid var(--never); background: var(--never-soft); padding: 12px 16px; border-radius: 0 10px 10px 0; margin: 16px 0; max-width: 75ch; font-size: 15px; }
+.callout b { color: var(--never); }
+.note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 10px 10px 0; margin: 16px 0; max-width: 75ch; font-size: 15px; }
+
+ol.cascade { list-style: none; padding: 0; margin: 14px 0; display: grid; gap: 6px; counter-reset: c; max-width: 60ch; }
+ol.cascade li { counter-increment: c; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; align-items: baseline; margin: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 14px; }
+ol.cascade li::before { content: counter(c); font-family: var(--font-mono); color: var(--accent); font-weight: 500; }
+ol.cascade li.miss::before { content: "×"; color: var(--ask); }
+
+footer.end { margin-top: 24px; font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 8px 20px; }
+
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="page">
+  <header class="masthead">
+    <div class="eyebrow">Design spec · v3 · 16 Oct 2026 · for review</div>
+    <h1>Jev Agent</h1>
+    <p class="lede">Jev does a person's finance tasks end to end on real Indian websites: vouchers, bills, bureau disputes, UPI mandates and card applications. It works in the background and comes back only for what a person must give. Underneath is our own browser agent, written from scratch on browser-use's architecture, with Jev's money guardrails, a per-user vault and a production plan on AWS ECS.</p>
+    <div class="meta">
+      <span>Source <b class="mono">docs/superpowers/specs/2026-10-15-jev-agent-design.md</b></span>
+      <span>Branch <b class="mono">mini-jev-agent</b></span>
+      <span>Status <b>awaiting review before the stage 1 plan</b></span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="toc" aria-label="Contents">
+      <details open id="toc-details">
+        <summary>Contents</summary>
+        <ol>
+          <li><a href="#promise">The promise</a></li>
+          <li><a href="#decisions">Decisions</a></li>
+          <li><a href="#architecture">Architecture</a></li>
+          <li><a href="#step">One step of the agent</a></li>
+          <li><a href="#execute">Every action: execute()</a></li>
+          <li><a href="#browser">Browser and page reader</a></li>
+          <li><a href="#asks">Asking the user</a></li>
+          <li><a href="#consent">Consent and money</a></li>
+          <li><a href="#vault">The vault</a></li>
+          <li><a href="#runtime">Background tasks</a></li>
+          <li><a href="#recovery">Recovery</a></li>
+          <li><a href="#flows">A purchase end to end</a></li>
+          <li><a href="#routes">Routes</a></li>
+          <li><a href="#deploy">Deployment on ECS</a></li>
+          <li><a href="#api">rivo-companion API</a></li>
+          <li><a href="#stages">Stages</a></li>
+          <li><a href="#testing">Testing</a></li>
+          <li><a href="#reference">browser-use reference</a></li>
+        </ol>
+      </details>
+    </nav>
+
+    <main>
+      <!-- 1 -->
+      <section id="promise">
+        <h2><span class="num">01</span>The promise</h2>
+        <p>The user asks for a task. Jev does it from start to finish in the background, and it asks the user only for the five things below. Everything else is Jev's job.</p>
+        <ul class="asklist">
+          <li><span class="k">1</span><div><b>Secrets not in the vault</b><span>OTPs, CVVs, net-banking and wallet logins every time. Site passwords, and card number and expiry once the card vault is on, only until they're saved. A UPI PIN is never typed by Jev at all.</span></div></li>
+          <li><span class="k">2</span><div><b>Captchas</b><span>Shown as a picture sized for a phone. Jev never solves one or pays a service to.</span></div></li>
+          <li><span class="k">3</span><div><b>Consent</b><span>Every payment, and every submission that can't be undone or speaks for the user.</span></div></li>
+          <li><span class="k">4</span><div><b>A missing personal detail</b><span>Asked once, then saved in the user's vault.</span></div></li>
+          <li><span class="k">5</span><div><b>A clarification</b><span>Only when the request matches several saved targets, or none (two electricity accounts).</span></div></li>
+        </ul>
+        <div class="split">
+          <div class="panel handles">
+            <h4>Jev decides and does by itself</h4>
+            <ul>
+              <li>Which store, card or way to pay saves the most</li>
+              <li>Every page, form, banner and pop-up</li>
+              <li>Every retry, a fresh browser or IP, and switching to the next-best option before the payment</li>
+              <li>Learning the path that worked, and reusing it</li>
+            </ul>
+          </div>
+          <div class="panel never">
+            <h4>Never kept anywhere</h4>
+            <ul>
+              <li>OTPs, CVVs and UPI PINs</li>
+              <li>Net-banking and wallet logins</li>
+              <li>Aadhaar numbers</li>
+              <li>Any secret in a model payload, log or trace. Models see placeholders only.</li>
+            </ul>
+          </div>
+        </div>
+        <h3>Targets</h3>
+        <div class="tw"><table>
+          <thead><tr><th>What</th><th>Target</th></tr></thead>
+          <tbody>
+            <tr><td>Tasks finished</td><td class="wrap">≥ 95 % of started tasks end done. The user's no, a declined card and abandoned tasks don't count against this.</td></tr>
+            <tr><td>Asks</td><td class="wrap">Only from the ask list. Every ask is counted by kind in the trace, and tests fail on any other.</td></tr>
+            <tr><td>Purchase with a learned route</td><td class="wrap num-col">≤ 60 s agent time (excluding waiting on the user), ≤ $0.02 model spend</td></tr>
+            <tr><td>First run on an unseen store</td><td class="wrap num-col">≤ 3 min agent time</td></tr>
+            <tr><td>Compare every store for a brand</td><td class="wrap num-col">≤ 60 s, with stores read in parallel</td></tr>
+            <tr><td>Unseen-site bench, read-only</td><td class="wrap num-col">≥ 90 % success</td></tr>
+            <tr><td>Concurrency at launch</td><td class="wrap num-col">20 tasks at once, queued beyond that</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <!-- 2 -->
+      <section id="decisions">
+        <h2><span class="num">02</span>Decisions</h2>
+        <p>Settled in the interviews of 15–16 Oct. Each one names what we chose; the reasons are in the sections below.</p>
+        <div class="tw"><table>
+          <thead><tr><th>Area</th><th>Decision</th></tr></thead>
+          <tbody>
+            <tr><td>Build</td><td class="wrap">In-house and from scratch, on browser-use's architecture. Not one line of browser-use code or prompt text is copied, and nothing comes from workflow-use (AGPL). No third-party agent SDKs, no browser extensions.</td></tr>
+            <tr><td>Scope</td><td class="wrap">One agent for every task. Vouchers and bills move over first; the old loops are deleted last.</td></tr>
+            <tr><td>Choosing</td><td class="wrap">Jev picks the best saving by itself. The consent names the choice and offers "use another option".</td></tr>
+            <tr><td>Consent</td><td class="wrap">Every payment; every irreversible submission (dispute, card application, mandate cancel); every consent given on the user's behalf (a bureau pull).</td></tr>
+            <tr><td>Sessions</td><td class="wrap">Throwaway. Each task gets its own browser context, deleted at the end. Sign-in OTPs are asked every time.</td></tr>
+            <tr><td>Vault</td><td class="wrap">Per user, encrypted, Instinct-style: Logins (never banks), Cards (label and last 4), Personal info, and an Activity log of every use. Values are masked when shown, never revealed.</td></tr>
+            <tr><td>Card vault</td><td class="wrap">Built now as an isolated service. It stays switched off in production until there's a legal opinion on RBI's card-on-file rules and PCI DSS controls are in place. CVVs are never stored.</td></tr>
+            <tr><td>Vault use</td><td class="wrap">Scoped and logged. A login works only on its own site; a card only inside a payment the user said yes to; PAN and date of birth only on bureau, bank and issuer hosts.</td></tr>
+            <tr><td>Sign-ups</td><td class="wrap">Jev never creates accounts. A sign-up form ends the task, and the user is told.</td></tr>
+            <tr><td>Card on file</td><td class="wrap">Opt-in per store, inside the consent ("Yes, and save card with SmartBuy"). The token lives with the store or bank.</td></tr>
+            <tr><td>Before the yes</td><td class="wrap">Retry, then a fresh context and IP, then the next-best option. The switch is named in the consent.</td></tr>
+            <tr><td>After the yes</td><td class="wrap">Never retried. Jev tells the user and offers the next option, which needs a fresh yes.</td></tr>
+            <tr><td>Reach</td><td class="wrap">In-app chat only. An unanswered OTP gets one resend, then the task pauses with nothing paid.</td></tr>
+            <tr><td>Proactive</td><td class="wrap">Bill-due watches and scheduled tasks, each run with a fresh consent. No deal alerts.</td></tr>
+            <tr><td>Site changes</td><td class="wrap">No nightly checks. A failed task drops its route and drafts a site-note fix for our review.</td></tr>
+            <tr><td>Banners</td><td class="wrap">Our own handler rejects optional cookies before the model reads the page.</td></tr>
+            <tr><td>Browsers</td><td class="wrap">Our own Chrome pool in Mumbai, one context per task, an Indian residential proxy per context. Our own CDP client.</td></tr>
+            <tr><td>Models</td><td class="wrap">gpt-6-luna at high reasoning for each step. gpt-6-astra for up to 3 steps when stuck. Routes skip the model where they can.</td></tr>
+            <tr><td>Screenshots</td><td class="wrap">On request, or when an action's effects can't confirm it. Masked. Never on card, OTP or password pages, never after the yes.</td></tr>
+            <tr><td>Dialogs</td><td class="wrap">Never auto-accepted. A dialog that commits goes to consent.</td></tr>
+            <tr><td>evaluate</td><td class="wrap">Read-only and fenced: refused on secret pages, payment hosts, checkouts and after the yes.</td></tr>
+            <tr><td>Net banking</td><td class="wrap">Supported. ID, password and OTP go through the hidden field every time, typed only on the bank's own host, never kept.</td></tr>
+            <tr><td>Identity</td><td class="wrap">No sign-in in Jev for now. It merges into rivo-companion later, which will own users. Jev exposes an internal API keyed by user id.</td></tr>
+            <tr><td>Deployment</td><td class="wrap">Planned now, deployed later: ECS Fargate in ap-south-1, Postgres as the only queue and state, KMS for the vault, Terraform and GitHub Actions.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <!-- 3 -->
+      <section id="architecture">
+        <h2><span class="num">03</span>Architecture</h2>
+        <p>Jev is a stack of small layers, each with one job. Work flows down from the chat to the Chrome pool. Page state, effects and questions flow back up. Shared services sit to the side.</p>
+        <figure>
+          <div class="fig w780">
+            <svg class="dg" viewBox="0 0 780 610" role="img" aria-label="Jev's layers from chat down to the Chrome pool. Money moves only through execute(), and only the worker can decrypt the vault.">
+              <defs>
+                <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk"/></marker>
+                <marker id="a1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk-acc"/></marker>
+              </defs>
+              <rect class="box" x="16" y="16" width="480" height="48" rx="8"/>
+              <text class="t" x="256" y="45" text-anchor="middle">In-app chat · rivo-companion (later)</text>
+
+              <rect class="box" x="16" y="96" width="228" height="56" rx="8"/>
+              <text class="t" x="130" y="119" text-anchor="middle">api/</text>
+              <text class="s" x="130" y="138" text-anchor="middle">internal API · asks · vault pages</text>
+              <rect class="box" x="268" y="96" width="228" height="56" rx="8"/>
+              <text class="t" x="382" y="119" text-anchor="middle">brain</text>
+              <text class="s" x="382" y="138" text-anchor="middle">conversation · compare · picks best</text>
+              <line class="edge" x1="246" y1="124" x2="266" y2="124" marker-start="url(#a1)" marker-end="url(#a1)"/>
+
+              <rect class="box" x="16" y="184" width="480" height="56" rx="8"/>
+              <text class="t" x="256" y="207" text-anchor="middle">runtime/</text>
+              <text class="s" x="256" y="226" text-anchor="middle">durable tasks · queue · asks · consent · schedules · watches · recovery</text>
+
+              <rect class="box" x="16" y="272" width="480" height="56" rx="8"/>
+              <text class="t" x="256" y="295" text-anchor="middle">agent/</text>
+              <text class="s" x="256" y="314" text-anchor="middle">loop · effects · memory · routes · judge</text>
+
+              <rect class="box-accent" x="16" y="360" width="480" height="56" rx="8"/>
+              <text class="t" x="256" y="383" text-anchor="middle">tools/ · execute() · the money layer decides here</text>
+              <text class="s" x="256" y="402" text-anchor="middle">security → consent → secrets &amp; vault → handler → mask</text>
+
+              <rect class="box" x="16" y="448" width="228" height="56" rx="8"/>
+              <text class="t" x="130" y="471" text-anchor="middle">browser/</text>
+              <text class="s" x="130" y="490" text-anchor="middle">per-task context · settle · watchdogs</text>
+              <rect class="box" x="268" y="448" width="228" height="56" rx="8"/>
+              <text class="t" x="382" y="471" text-anchor="middle">dom/</text>
+              <text class="s" x="382" y="490" text-anchor="middle">DOM + AX tree · occlusion · masking</text>
+
+              <rect class="box" x="16" y="536" width="480" height="56" rx="8"/>
+              <text class="t" x="256" y="559" text-anchor="middle">cdp/ → Chrome pool</text>
+              <text class="s" x="256" y="578" text-anchor="middle">our CDP client · one context per task · Indian proxies</text>
+
+              <line class="edge" x1="130" y1="64" x2="130" y2="94" marker-end="url(#a1)"/>
+              <text class="lbl" x="138" y="84">messages</text>
+              <line class="edge" x1="382" y1="152" x2="382" y2="182" marker-end="url(#a1)"/>
+              <text class="lbl" x="390" y="172">task</text>
+              <line class="edge" x1="130" y1="184" x2="130" y2="154" marker-end="url(#a1)"/>
+              <text class="lbl" x="138" y="172">asks · progress</text>
+              <line class="edge" x1="382" y1="240" x2="382" y2="270" marker-end="url(#a1)"/>
+              <text class="lbl" x="390" y="260">run</text>
+              <line class="edge" x1="382" y1="328" x2="382" y2="358" marker-end="url(#a1)"/>
+              <text class="lbl" x="390" y="348">≤ 5 actions</text>
+              <line class="edge" x1="130" y1="360" x2="130" y2="330" marker-end="url(#a1)"/>
+              <text class="lbl" x="138" y="348">effects</text>
+              <line class="edge" x1="130" y1="416" x2="130" y2="446" marker-end="url(#a1)"/>
+              <text class="lbl" x="138" y="436">commands</text>
+              <line class="edge" x1="382" y1="448" x2="382" y2="418" marker-end="url(#a1)"/>
+              <text class="lbl" x="390" y="436">page state</text>
+              <line class="edge" x1="130" y1="504" x2="130" y2="534" marker-end="url(#a1)"/>
+              <text class="lbl" x="138" y="524">CDP</text>
+              <line class="edge" x1="382" y1="536" x2="382" y2="506" marker-end="url(#a1)"/>
+              <text class="lbl" x="390" y="524">events</text>
+
+              <rect class="box" x="586" y="184" width="178" height="56" rx="8"/>
+              <text class="t" x="675" y="207" text-anchor="middle">Postgres (RDS)</text>
+              <text class="s" x="675" y="226" text-anchor="middle">tasks · answers · audit</text>
+              <line class="edge" x1="498" y1="212" x2="584" y2="212" marker-start="url(#a1)" marker-end="url(#a1)"/>
+              <text class="lbl" x="541" y="205" text-anchor="middle">SQL · NOTIFY</text>
+
+              <rect class="box" x="586" y="272" width="178" height="56" rx="8"/>
+              <text class="t" x="675" y="295" text-anchor="middle">Models</text>
+              <text class="s" x="675" y="314" text-anchor="middle">luna · astra when stuck</text>
+              <line class="edge" x1="496" y1="300" x2="584" y2="300" marker-end="url(#a1)"/>
+              <text class="lbl" x="541" y="293" text-anchor="middle">1 call / step</text>
+
+              <rect class="box-accent" x="586" y="360" width="178" height="56" rx="8"/>
+              <text class="t" x="675" y="383" text-anchor="middle">Vault + KMS</text>
+              <text class="s" x="675" y="402" text-anchor="middle">per-user keys · logged</text>
+              <line class="edge-acc" x1="496" y1="388" x2="584" y2="388" marker-end="url(#a1a)"/>
+              <text class="lbl-acc" x="541" y="381" text-anchor="middle">use(item)</text>
+
+              <rect class="box-gated" x="586" y="448" width="178" height="56" rx="8"/>
+              <text class="t" x="675" y="471" text-anchor="middle">Card vault</text>
+              <text class="s" x="675" y="490" text-anchor="middle">isolated · flag off</text>
+              <path class="edge dash" d="M496,404 H530 V476 H584" marker-end="url(#a1)"/>
+              <text class="lbl" x="536" y="442">card(consent)</text>
+
+              <rect class="box" x="586" y="536" width="178" height="56" rx="8"/>
+              <text class="t" x="675" y="559" text-anchor="middle">Websites</text>
+              <text class="s" x="675" y="578" text-anchor="middle">stores · billers · banks</text>
+              <line class="edge" x1="496" y1="564" x2="584" y2="564" marker-end="url(#a1)"/>
+              <text class="lbl" x="541" y="557" text-anchor="middle">via proxy</text>
+            </svg>
+          </div>
+          <figcaption><b>Jev's layers.</b> Money moves only through <code>execute()</code>, where the money layer (gate.py, money.py, payment records) decides. Only the worker can decrypt vault items. Postgres is the only queue and state.</figcaption>
+        </figure>
+        <div class="tw"><table>
+          <thead><tr><th>Layer</th><th>Does</th></tr></thead>
+          <tbody>
+            <tr><td>cdp/</td><td class="wrap">One websocket per Chrome, commands with ids and timeouts, events routed by session, flattened sessions for cross-origin frames, 3 reconnects. No daemon, no control tab.</td></tr>
+            <tr><td>browser/</td><td class="wrap">One session per task: its browser context (with proxy), its tabs, downloads and permissions, an event bus, and the watchdogs.</td></tr>
+            <tr><td>dom/</td><td class="wrap">Reads the page the way browser-use does: snapshot, DOM and accessibility trees for every frame, covered elements dropped, stable element numbers, Jev's masking.</td></tr>
+            <tr><td>tools/</td><td class="wrap">The action registry and its mechanics. Every action passes <code>execute()</code>.</td></tr>
+            <tr><td>agent/</td><td class="wrap">The step loop: routes, model call, actions, effects, loop detector, compaction, judge.</td></tr>
+            <tr><td>runtime/</td><td class="wrap">Durable tasks, asks with expiry, consent, pause and continue, recovery, schedules and bill-due watches.</td></tr>
+            <tr><td>vault/</td><td class="wrap">Per-user encrypted items, scoped use, activity, and the gated card vault.</td></tr>
+            <tr><td>api/ and brain</td><td class="wrap">The conversation, comparing options and picking the best, and the internal API rivo-companion will call.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <!-- 4 -->
+      <section id="step">
+        <h2><span class="num">04</span>One step of the agent</h2>
+        <p>Each step follows browser-use's loop, with three changes. A learned route can take the step with no model call. What changed on the page, not a screenshot, is the ground truth for each action. A judge must agree before Jev reports success.</p>
+        <figure>
+          <div class="fig w780">
+            <svg class="dg" viewBox="0 0 760 500" role="img" aria-label="The agent's step loop: prepare context, try a learned route, otherwise one model call, run up to five actions through execute(), record effects and facts, then repeat. Done goes to proof and a judge; stuck goes to recovery.">
+              <defs>
+                <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk"/></marker>
+                <marker id="a2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk-acc"/></marker>
+              </defs>
+              <rect class="box" x="200" y="20" width="300" height="60" rx="8"/>
+              <text class="t" x="350" y="45" text-anchor="middle">Prepare context</text>
+              <text class="s" x="350" y="64" text-anchor="middle">fresh page · last effects · nudges</text>
+              <rect class="box" x="200" y="110" width="300" height="60" rx="8"/>
+              <text class="t" x="350" y="135" text-anchor="middle">Does the route know this step?</text>
+              <text class="s" x="350" y="154" text-anchor="middle">5 lookups · exactly one match</text>
+              <rect class="box" x="200" y="200" width="300" height="60" rx="8"/>
+              <text class="t" x="350" y="225" text-anchor="middle">One model call</text>
+              <text class="s" x="350" y="244" text-anchor="middle">memory · goals · plan · facts · ≤ 5 actions</text>
+              <rect class="box-accent" x="200" y="290" width="300" height="60" rx="8"/>
+              <text class="t" x="350" y="315" text-anchor="middle">Run them through execute()</text>
+              <text class="s" x="350" y="334" text-anchor="middle">list ends on page change, ask or consent</text>
+              <rect class="box" x="200" y="380" width="300" height="60" rx="8"/>
+              <text class="t" x="350" y="405" text-anchor="middle">Effects and facts</text>
+              <text class="s" x="350" y="424" text-anchor="middle">page diff as ground truth · loop check</text>
+
+              <rect class="box-accent" x="560" y="110" width="184" height="60" rx="8"/>
+              <text class="t" x="652" y="135" text-anchor="middle">Run the route step</text>
+              <text class="s" x="652" y="154" text-anchor="middle">no model call</text>
+              <rect class="box" x="560" y="200" width="184" height="60" rx="8"/>
+              <text class="t" x="652" y="225" text-anchor="middle">done → proof + judge</text>
+              <text class="s" x="652" y="244" text-anchor="middle">agree, or one more round</text>
+              <rect class="box-ask" x="560" y="380" width="184" height="60" rx="8"/>
+              <text class="t" x="652" y="405" text-anchor="middle">Recovery</text>
+              <text class="s" x="652" y="424" text-anchor="middle">astra · restart · next best</text>
+
+              <line class="edge" x1="350" y1="80" x2="350" y2="108" marker-end="url(#a2)"/>
+              <line class="edge" x1="350" y1="170" x2="350" y2="198" marker-end="url(#a2)"/>
+              <text class="lbl" x="358" y="190">no</text>
+              <line class="edge" x1="350" y1="260" x2="350" y2="288" marker-end="url(#a2)"/>
+              <line class="edge" x1="350" y1="350" x2="350" y2="378" marker-end="url(#a2)"/>
+              <line class="edge-acc" x1="500" y1="140" x2="558" y2="140" marker-end="url(#a2a)"/>
+              <text class="lbl-acc" x="529" y="133" text-anchor="middle">yes</text>
+              <path class="edge-acc" d="M560,158 H530 V320 H502" marker-end="url(#a2a)"/>
+              <text class="lbl-acc" x="538" y="284">1 action</text>
+              <line class="edge" x1="500" y1="230" x2="558" y2="230" marker-end="url(#a2)"/>
+              <text class="lbl" x="515" y="223" text-anchor="middle">done</text>
+              <line class="edge" x1="500" y1="410" x2="558" y2="410" marker-end="url(#a2)"/>
+              <text class="lbl" x="529" y="403" text-anchor="middle">stuck</text>
+              <path class="edge" d="M350,440 V474 H28 V50 H198" marker-end="url(#a2)"/>
+              <text class="lbl" x="36" y="262">next step</text>
+            </svg>
+          </div>
+          <figcaption><b>The step loop.</b> A route step and a model's actions both run through <code>execute()</code>. A stall, five failures or the loop detector's third warning hand over to recovery rather than to a forced "done".</figcaption>
+        </figure>
+        <div class="tw"><table>
+          <thead><tr><th>Part</th><th>How it works</th></tr></thead>
+          <tbody>
+            <tr><td>Model output</td><td class="wrap"><code>{evaluation_previous_goal, memory, next_goal, plan_update, current_plan_item, facts, actions[≤5]}</code>. Facts follow the job's schema and are grounded on the page.</td></tr>
+            <tr><td>Action list ends</td><td class="wrap">At a navigation, search, back or tab switch; at any change of URL, focused tab or the set of controls; at an error, an ask or a consent.</td></tr>
+            <tr><td>Effects</td><td class="wrap">Each action returns what it changed: controls new or gone, URL, values, dialogs, tabs, downloads. A screenshot is added only when these can't confirm the action.</td></tr>
+            <tr><td>Prompt guidance</td><td class="wrap">In our own words:
+              <ul>
+                <li>clear banners first;</li>
+                <li>for autocomplete, type, then pick the suggestion;</li>
+                <li>redo actions a page change cut short;</li>
+                <li>filters before browsing;</li>
+                <li>a 403 goes to recovery;</li>
+                <li>note what was tried;</li>
+                <li>before done, check every requirement against the page.</li>
+              </ul></td></tr>
+            <tr><td>Limits</td><td class="wrap num-col">
+              <ul>
+                <li>40 steps, plus 10 after the yes.</li>
+                <li>180 s a step. Per action: click 15 s, type 60 s, navigate 30 s, select 8 s.</li>
+                <li>5 model retries with backoff. An empty answer is retried once.</li>
+              </ul></td></tr>
+            <tr><td>Loop detector</td><td class="wrap">Actions hashed over a window of 20, pages fingerprinted. Warnings at 5, 8 and 12 repeats, and after 5 unchanged steps. The third warning goes to recovery.</td></tr>
+            <tr><td>Memory</td><td class="wrap">One rebuilt state message each step. History over 40,000 characters is summarised to 6,000 or fewer, keeping the last 6 steps, with secrets filtered out.</td></tr>
+            <tr><td>done and judge</td><td class="wrap">
+              <ul>
+                <li><code>done</code> returns the job's schema with an explicit status, never a default.</li>
+                <li>Proof comes first: an order id or a reference on a page after the yes.</li>
+                <li>Then a strict judge on the text history must agree. If it doesn't, one more round. If it still doesn't, the result is "unclear".</li>
+              </ul></td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <!-- 5 -->
+      <section id="execute">
+        <h2><span class="num">05</span>Every action: execute()</h2>
+        <p>Whether the model chose an action or a route replays it, the action takes the same five steps in order. Only two of them can reach the user mid-action.</p>
+        <figure>
+          <div class="fig w960">
+            <svg class="dg" viewBox="0 0 960 290" role="img" aria-label="execute() runs security, consent, secrets and vault, the handler, then masking. Consent and missing secrets are the only steps that ask the user.">
+              <defs>
+                <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk"/></marker>
+                <marker id="a3k" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk-ask"/></marker>
+              </defs>
+              <rect class="box" x="16" y="40" width="160" height="72" rx="8"/>
+              <text class="t" x="96" y="64" text-anchor="middle">1 · Security</text>
+              <text class="s" x="96" y="83" text-anchor="middle">strict host parse</text>
+              <text class="s" x="96" y="99" text-anchor="middle">typed-address page: no pay</text>
+              <rect class="box-accent" x="206" y="40" width="160" height="72" rx="8"/>
+              <text class="t" x="286" y="64" text-anchor="middle">2 · Consent gate</text>
+              <text class="s" x="286" y="83" text-anchor="middle">commits? summary in code</text>
+              <text class="s" x="286" y="99" text-anchor="middle">bound to a hash</text>
+              <rect class="box-accent" x="396" y="40" width="160" height="72" rx="8"/>
+              <text class="t" x="476" y="64" text-anchor="middle">3 · Secrets &amp; vault</text>
+              <text class="s" x="476" y="83" text-anchor="middle">placeholder → value</text>
+              <text class="s" x="476" y="99" text-anchor="middle">worker memory only</text>
+              <rect class="box" x="586" y="40" width="160" height="72" rx="8"/>
+              <text class="t" x="666" y="64" text-anchor="middle">4 · Handler</text>
+              <text class="s" x="666" y="83" text-anchor="middle">click · type · select</text>
+              <text class="s" x="666" y="99" text-anchor="middle">then settle</text>
+              <rect class="box" x="776" y="40" width="160" height="72" rx="8"/>
+              <text class="t" x="856" y="64" text-anchor="middle">5 · Mask</text>
+              <text class="s" x="856" y="83" text-anchor="middle">secrets → placeholders</text>
+              <text class="s" x="856" y="99" text-anchor="middle">codes after the yes</text>
+              <line class="edge" x1="176" y1="76" x2="204" y2="76" marker-end="url(#a3)"/>
+              <line class="edge" x1="366" y1="76" x2="394" y2="76" marker-end="url(#a3)"/>
+              <line class="edge" x1="556" y1="76" x2="584" y2="76" marker-end="url(#a3)"/>
+              <line class="edge" x1="746" y1="76" x2="774" y2="76" marker-end="url(#a3)"/>
+
+              <rect class="box-never" x="16" y="190" width="160" height="60" rx="8"/>
+              <text class="t" x="96" y="215" text-anchor="middle">Refused</text>
+              <text class="s" x="96" y="234" text-anchor="middle">told to the model</text>
+              <line class="edge dash" x1="96" y1="112" x2="96" y2="188" marker-end="url(#a3)"/>
+              <text class="lbl" x="104" y="154">blocked</text>
+
+              <rect class="box-ask" x="206" y="190" width="160" height="60" rx="8"/>
+              <text class="t" x="286" y="215" text-anchor="middle">Ask: consent</text>
+              <text class="s" x="286" y="234" text-anchor="middle">Yes · save card · other · No</text>
+              <line class="edge-ask dash" x1="286" y1="112" x2="286" y2="188" marker-end="url(#a3k)"/>
+              <text class="lbl-ask" x="294" y="154">if it commits</text>
+
+              <rect class="box-ask" x="396" y="190" width="160" height="60" rx="8"/>
+              <text class="t" x="476" y="215" text-anchor="middle">Ask: secret</text>
+              <text class="s" x="476" y="234" text-anchor="middle">hidden field · expires</text>
+              <line class="edge-ask dash" x1="476" y1="112" x2="476" y2="188" marker-end="url(#a3k)"/>
+              <text class="lbl-ask" x="484" y="154">if not in vault</text>
+
+              <rect class="box" x="586" y="190" width="160" height="60" rx="8"/>
+              <text class="t" x="666" y="215" text-anchor="middle">Vault activity</text>
+              <text class="s" x="666" y="234" text-anchor="middle">item · task · host · time</text>
+              <path class="edge dash" d="M548,112 V170 H640 V188" marker-end="url(#a3)"/>
+              <text class="lbl" x="648" y="182">vault.use logged</text>
+            </svg>
+          </div>
+          <figcaption><b>One pipeline for every action.</b> The consent gate and the secrets step are the only places a question reaches the user mid-action. Whatever the result, it is masked before the model or a trace sees it.</figcaption>
+        </figure>
+        <h3>Action mechanics, browser-use's with our fixes</h3>
+        <div class="tw"><table>
+          <thead><tr><th>Action</th><th>Mechanics</th></tr></thead>
+          <tbody>
+            <tr><td>click</td><td class="wrap">
+              <ul>
+                <li>Scroll into view, then hit-test at the point. The target, an ancestor, a descendant or its label all pass.</li>
+                <li>Mouse move, press and release with short human delays. A checkbox is checked to have toggled.</li>
+                <li>A covered control gets a script click, <b>except a pay or submit button</b>: the model is told what covers it.</li>
+                <li>A new tab is switched to and announced. A download is tracked by its events.</li>
+              </ul></td></tr>
+            <tr><td>input</td><td class="wrap">
+              <ul>
+                <li>Focus, then clear through the native setter.</li>
+                <li>Key events per character. Date and datepicker fields are set through their setter.</li>
+                <li>The value is read back (secrets only checked as non-empty), and a reformatted value is reported.</li>
+                <li>Autocomplete gets a hint to wait for its suggestions.</li>
+              </ul></td></tr>
+            <tr><td>dropdowns</td><td class="wrap">Native select, menus, and ARIA listboxes, including options that live elsewhere through aria-controls (browser-use can't). Exact match; on a miss, the options are listed.</td></tr>
+            <tr><td>extract</td><td class="wrap">Our own DOM-to-markdown on a fresh read, in 100,000-character chunks with table headers carried over. The output is masked.</td></tr>
+            <tr><td>search_page, find_elements</td><td class="wrap">Free and instant, and they also search inside frames.</td></tr>
+            <tr><td>evaluate</td><td class="wrap">Read-only, in an isolated world. Refused on secret pages, payment hosts, checkouts and after the yes. A script that changes the page stops a money job.</td></tr>
+            <tr><td>ask_user, done</td><td class="wrap">See §07 and §04.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <!-- 6 -->
+      <section id="browser">
+        <h2><span class="num">06</span>Browser and page reader</h2>
+        <p>Most wasted turns come from reading a page before it's ready. In the 17:52 SmartBuy run, 8 of 26 model turns only waited, looked or scrolled. browser-use sleeps 0.3 s while requests are in flight. Jev waits until the page is actually quiet.</p>
+        <div class="tw"><table>
+          <thead><tr><th>Settle step</th><th>Rule</th></tr></thead>
+          <tbody>
+            <tr><td>After navigating</td><td class="wrap num-col">That navigation's load event, up to 8 s. A timeout is told to the model.</td></tr>
+            <tr><td>Network quiet</td><td class="wrap num-col">No request in flight for 500 ms. Ads, analytics, media, sockets, long-polls and anything older than 10 s don't count.</td></tr>
+            <tr><td>DOM quiet</td><td class="wrap num-col">No mutations for 300 ms, capped at 3 s.</td></tr>
+            <tr><td>Suggestions</td><td class="wrap">An autocomplete box waits until its options show.</td></tr>
+            <tr><td>Empty page</td><td class="wrap num-col">Wait 3 s, read again, reload once, then tell the model.</td></tr>
+          </tbody>
+        </table></div>
+        <h3>Watchdogs</h3>
+        <div class="tw"><table>
+          <thead><tr><th>Watchdog</th><th>Does</th></tr></thead>
+          <tbody>
+            <tr><td>banners</td><td class="wrap">Our own handler. Rejects optional cookies on OneTrust, Cookiebot, Didomi, Quantcast, TrustArc and in-house banners before the model reads the page.</td></tr>
+            <tr><td>dialogs</td><td class="wrap">Reads every dialog and never auto-accepts. An alert is noted. A confirm or prompt waits for the model. A confirm that commits goes to consent.</td></tr>
+            <tr><td>downloads</td><td class="wrap">Event-driven, with no fixed sleep after every click. Bills and receipts are attached to the task.</td></tr>
+            <tr><td>security</td><td class="wrap">Allowed hosts checked before navigation, on redirects and new tabs, with URLs parsed strictly (the CVE-2025-47241 lesson).</td></tr>
+            <tr><td>crash</td><td class="wrap">Reopens a crashed tab once, then hands over to recovery. browser-use ships this disabled.</td></tr>
+            <tr><td>popups, permissions, screenshot</td><td class="wrap">New tabs adopted. Notifications, camera and microphone denied. Captures masked.</td></tr>
+          </tbody>
+        </table></div>
+        <h3>Page reader</h3>
+        <ul>
+          <li><b>Capture:</b> DOMSnapshot with paint order, plus the DOM and accessibility trees, for every frame. That includes cross-origin frames (depth ≤ 5, ≤ 100 frames) and open or closed shadow roots.</li>
+          <li><b>Filtering:</b> elements fully covered by opaque ones above are dropped. Interactivity is decided by tag, role, listeners, tabindex and cursor.</li>
+          <li><b>For the model:</b> one line per element, <code>*[backendNodeId]&lt;role name=… value=… /&gt;</code>, with <code>*</code> on new elements and "N pages above, M below", capped at 40,000 characters.</li>
+          <li><b>Masking:</b> secret fields show <code>[secret]</code>, vault values show placeholders, and after the yes codes are masked except amounts and the order id.</li>
+        </ul>
+      </section>
+
+      <!-- 7 -->
+      <section id="asks">
+        <h2><span class="num">07</span>Asking the user</h2>
+        <p><code>ask_user(kind, why, field?, host?)</code> has six kinds, and nothing else can reach the user. Every ask has an expiry, after which the task pauses with nothing paid.</p>
+        <div class="tw"><table>
+          <thead><tr><th>Kind</th><th>When</th><th>Expires</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pill pill-ask">secret</span></td><td class="wrap">
+              <ul>
+                <li>OTP, CVV, net-banking or wallet login.</li>
+                <li>A site password not in the vault, with "Save to vault" ticked by default.</li>
+                <li>Card number and expiry, until the card vault is on.</li>
+              </ul></td><td class="wrap">OTP: the site's limit (about 3 min), then Resend is pressed once. Others: 10 min.</td></tr>
+            <tr><td><span class="pill pill-ask">captcha</span></td><td class="wrap">A captcha on the page, shown as its picture.</td><td class="wrap">Image refreshed once</td></tr>
+            <tr><td><span class="pill pill-ask">consent</span></td><td class="wrap">Any commit (§08). Options: Yes · Yes, and save card · Use another option · No.</td><td class="wrap">10 min</td></tr>
+            <tr><td><span class="pill pill-ask">qr</span></td><td class="wrap">A UPI QR after the yes, checked against the consent's amount and payee, with app links.</td><td class="wrap">The QR's own</td></tr>
+            <tr><td><span class="pill pill-ask">detail</span></td><td class="wrap">A personal detail not in the vault. The answer is saved to Personal info.</td><td class="wrap">30 min</td></tr>
+            <tr><td><span class="pill pill-ask">clarify</span></td><td class="wrap">The request matches several saved targets, or none.</td><td class="wrap">30 min</td></tr>
+          </tbody>
+        </table></div>
+        <div class="mocks">
+          <div class="mock">
+            <div class="mock-label"><span>Consent, in the chat</span><span>Example</span></div>
+            <div class="bubble">
+              <div class="head">Buy ₹250 of Swiggy vouchers on SmartBuy</div>
+              <ul>
+                <li>1 × ₹250, paying with Regalia Gold (HDFC)</li>
+                <li>Payable ₹250 · about ₹15.50 back in points</li>
+                <li>Best saving. Next: Woohoo with UPI, ₹242.50</li>
+                <li>Ticks SmartBuy's checkout terms</li>
+              </ul>
+              <div class="btns">
+                <button class="btn primary" type="button" id="mock-yes">Yes</button>
+                <button class="btn" type="button" id="mock-yes-save">Yes, and save card with SmartBuy</button>
+                <button class="btn" type="button" id="mock-other">Use another option</button>
+                <button class="btn" type="button" id="mock-no">No</button>
+              </div>
+            </div>
+          </div>
+          <div class="mock">
+            <div class="mock-label"><span>Secret ask, in the chat</span><span>Example</span></div>
+            <div class="bubble">
+              <div class="head">Your bank sent an OTP for ₹250 Swiggy on SmartBuy</div>
+              <div class="secret"><div class="field" aria-label="Hidden field">••••••</div><span class="timer">2:41</span></div>
+              <div class="small">Goes straight to the browser, never to a model, never stored. If it runs out, Jev presses Resend once and asks again.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 8 -->
+      <section id="consent">
+        <h2><span class="num">08</span>Consent and money</h2>
+        <p>The consent gate sits inside <code>execute()</code>, so no model output can get around it. The summary is written in code from the job and the page, never by a model.</p>
+        <div class="tw"><table>
+          <thead><tr><th>Class</th><th>Covers</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pill pill-accent">pay</span></td><td class="wrap">Payments, including the per-store card-on-file option</td></tr>
+            <tr><td><span class="pill pill-accent">submit</span></td><td class="wrap">A bureau dispute, a card application</td></tr>
+            <tr><td><span class="pill pill-accent">cancel</span></td><td class="wrap">Cancelling a UPI mandate</td></tr>
+            <tr><td><span class="pill pill-accent">accept</span></td><td class="wrap">Consents or terms on the user's behalf beyond a store's own checkout terms, such as a bureau pull</td></tr>
+          </tbody>
+        </table></div>
+        <ul>
+          <li><b>Checks run before the question:</b>
+            <ul>
+              <li>the cart is exactly the order;</li>
+              <li>the payable is no more than the amount plus any fee shown;</li>
+              <li>no unsettled purchase or bill in the last 24 hours;</li>
+              <li>the page wasn't reached by typing its address.</li>
+            </ul></li>
+          <li><b>Binding:</b> the yes is bound to a hash of class, payee, amount, items and method, and any change asks again. The bank's OTP and the gateway steps ride on that yes.</li>
+          <li><b>No standing approvals:</b> money jobs never use standing or pre-approval.</li>
+          <li><b>Audit:</b> every consent is recorded with user, time, summary hash and answer. No values.</li>
+          <li><b>Screenshots</b> are masked and refused on card, OTP and password pages and after the yes. <b>evaluate</b> is fenced the same way.</li>
+        </ul>
+      </section>
+
+      <!-- 9 -->
+      <section id="vault">
+        <h2><span class="num">09</span>The vault</h2>
+        <p>Each user gets a vault like Instinct's. Jev reuses what's in it without asking, but each item works only where it belongs, and every use shows up in Activity.</p>
+        <div class="vaultmock" role="img" aria-label="Example vault page with Logins, Cards, Personal info and Activity">
+          <div class="row"><h5>Logins</h5><div class="items">
+            <div class="item"><span>smartbuy.hdfc.bank.in</span><span>98•••••210</span></div>
+            <div class="item"><span>consumer.experian.in</span><span>a•••••@gmail.com</span></div>
+          </div></div>
+          <div class="row"><h5>Cards</h5><div class="items">
+            <div class="item"><span>HDFC Mastercard ending 4421</span><span>saved at SmartBuy</span></div>
+          </div></div>
+          <div class="row"><h5>Personal info</h5><div class="items">
+            <div class="item"><span>PAN</span><span>ABC••••4F</span></div>
+            <div class="item"><span>BESCOM account</span><span>••7890</span></div>
+            <div class="item"><span>UPI ID</span><span>••••@okhdfc</span></div>
+          </div></div>
+          <div class="row"><h5>Activity</h5><div class="items">
+            <div class="item"><span>SmartBuy login used · buy Swiggy ₹250</span><span>today 17:52</span></div>
+            <div class="item"><span>PAN refused on woohoo.in (out of scope)</span><span>today 17:40</span></div>
+          </div></div>
+        </div>
+        <p class="small">Example data. Values are always masked; the vault never reveals them in full.</p>
+
+        <div class="tw"><table>
+          <thead><tr><th>Section</th><th>Holds</th><th>Typed only</th></tr></thead>
+          <tbody>
+            <tr><td>Logins</td><td class="wrap">Username and password for stores, billers, bureaus and issuer portals. Never net banking or wallets.</td><td class="wrap">On that login's own host</td></tr>
+            <tr><td>Cards</td><td class="wrap">Label, network, issuer, last 4, and where the store saved it. Number and expiry only once the gate is passed.</td><td class="wrap">Inside a payment the user said yes to</td></tr>
+            <tr><td>Personal info</td><td class="wrap">Name, phone, email, addresses, PAN, date of birth, UPI ID, biller account numbers</td><td class="wrap">Matching fields. PAN and date of birth only on bureau, bank and issuer hosts</td></tr>
+            <tr><td>Activity</td><td class="wrap">Every use and every refusal: item, task, host, time</td><td class="wrap">n/a</td></tr>
+          </tbody>
+        </table></div>
+
+        <figure>
+          <div class="fig w960">
+            <svg class="dg" viewBox="0 0 960 330" role="img" aria-label="Vault encryption: a KMS key wraps each user's data key; items are AES-256-GCM encrypted; the API can only encrypt; the worker decrypts with the user's id as context, types the value and logs the use; the card vault is separate and needs a consent id.">
+              <defs>
+                <marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk"/></marker>
+                <marker id="a6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk-acc"/></marker>
+              </defs>
+              <rect class="box" x="16" y="30" width="200" height="60" rx="8"/>
+              <text class="t" x="116" y="55" text-anchor="middle">KMS key · vault</text>
+              <text class="s" x="116" y="74" text-anchor="middle">never leaves KMS</text>
+              <rect class="box" x="290" y="30" width="220" height="60" rx="8"/>
+              <text class="t" x="400" y="55" text-anchor="middle">The user's data key</text>
+              <text class="s" x="400" y="74" text-anchor="middle">stored wrapped in Postgres</text>
+              <rect class="box" x="16" y="150" width="200" height="60" rx="8"/>
+              <text class="t" x="116" y="175" text-anchor="middle">api role</text>
+              <text class="s" x="116" y="194" text-anchor="middle">encrypt only (saves)</text>
+              <rect class="box" x="290" y="150" width="220" height="60" rx="8"/>
+              <text class="t" x="400" y="175" text-anchor="middle">vault_items</text>
+              <text class="s" x="400" y="194" text-anchor="middle">AES-256-GCM · AAD user + item</text>
+              <rect class="box-accent" x="590" y="150" width="200" height="60" rx="8"/>
+              <text class="t" x="690" y="175" text-anchor="middle">worker role</text>
+              <text class="s" x="690" y="194" text-anchor="middle">decrypt · context user_id</text>
+              <rect class="box" x="820" y="150" width="124" height="60" rx="8"/>
+              <text class="t" x="882" y="175" text-anchor="middle">Page field</text>
+              <text class="s" x="882" y="194" text-anchor="middle">typed, then wiped</text>
+              <rect class="box" x="590" y="260" width="200" height="56" rx="8"/>
+              <text class="t" x="690" y="283" text-anchor="middle">vault_activity</text>
+              <text class="s" x="690" y="302" text-anchor="middle">item · task · host · time</text>
+              <rect class="box-gated" x="290" y="260" width="220" height="56" rx="8"/>
+              <text class="t" x="400" y="283" text-anchor="middle">Card vault (gated)</text>
+              <text class="s" x="400" y="302" text-anchor="middle">own key · card(consent)</text>
+
+              <line class="edge" x1="216" y1="60" x2="288" y2="60" marker-end="url(#a6)"/>
+              <text class="lbl" x="252" y="52" text-anchor="middle">wraps</text>
+              <line class="edge dash" x1="116" y1="150" x2="116" y2="92" marker-end="url(#a6)"/>
+              <text class="lbl" x="124" y="125">GenerateDataKey</text>
+              <line class="edge" x1="216" y1="180" x2="288" y2="180" marker-end="url(#a6)"/>
+              <text class="lbl" x="252" y="172" text-anchor="middle">save</text>
+              <path class="edge-acc" d="M510,60 H690 V148" marker-end="url(#a6a)"/>
+              <text class="lbl-acc" x="600" y="52" text-anchor="middle">KMS Decrypt · context user_id</text>
+              <line class="edge" x1="510" y1="180" x2="588" y2="180" marker-end="url(#a6)"/>
+              <text class="lbl" x="549" y="172" text-anchor="middle">ciphertext</text>
+              <line class="edge-acc" x1="790" y1="180" x2="818" y2="180" marker-end="url(#a6a)"/>
+              <line class="edge" x1="690" y1="210" x2="690" y2="258" marker-end="url(#a6)"/>
+              <text class="lbl" x="698" y="240">every use logged</text>
+              <path class="edge dash" d="M590,198 H560 V288 H512" marker-end="url(#a6)"/>
+              <text class="lbl" x="552" y="252" text-anchor="end">consent id</text>
+              <text class="lbl" x="698" y="128">the model sees [vault:login.smartbuy]</text>
+            </svg>
+          </div>
+          <figcaption><b>Envelope encryption per user.</b> Values are encrypted with the user's own data key, bound to that user and item. Only the browser worker can decrypt, only for the user whose task it runs, and only at the moment it types. Deleting the vault deletes the key, which makes every item unreadable.</figcaption>
+        </figure>
+        <div class="callout"><b>Card vault launch gate.</b> RBI's card-on-file rules (since Oct 2022) let only card issuers and networks store card data, and PCI DSS 3.3.1 forbids keeping a CVV after a payment. The card vault is built as an isolated service with its own key and role, and answers only <code>card(user, card_id, consent_id)</code> for a live consent. It stays switched off in production (<code>CARD_VAULT=off</code>) until there is a legal opinion and PCI DSS controls are in place. Until then, each store saves the card as an RBI token, and only the CVV and OTP are asked.</div>
+      </section>
+
+      <!-- 10 -->
+      <section id="runtime">
+        <h2><span class="num">10</span>Background tasks</h2>
+        <p>A task is a row in Postgres that survives restarts. It holds the plan, facts, chosen option, route position and consents, never a secret. One money task runs per user at a time; overall, 20 run at once.</p>
+        <figure>
+          <div class="fig w960">
+            <svg class="dg" viewBox="0 0 920 420" role="img" aria-label="Task states: queued, running, waiting on you, paused, and the endings done, failed, unclear and cancelled.">
+              <defs>
+                <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk"/></marker>
+                <marker id="a4k" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk-ask"/></marker>
+              </defs>
+              <rect class="box" x="20" y="170" width="120" height="44" rx="22"/>
+              <text class="t" x="80" y="197" text-anchor="middle">queued</text>
+              <rect class="box" x="220" y="170" width="140" height="44" rx="22"/>
+              <text class="t" x="290" y="197" text-anchor="middle">running</text>
+              <rect class="box-ask" x="440" y="60" width="170" height="44" rx="22"/>
+              <text class="t" x="525" y="87" text-anchor="middle">waiting on you</text>
+              <rect class="box" x="690" y="60" width="150" height="44" rx="22"/>
+              <text class="t" x="765" y="87" text-anchor="middle">paused</text>
+              <rect class="box-accent" x="690" y="150" width="150" height="44" rx="22"/>
+              <text class="t" x="765" y="177" text-anchor="middle">done</text>
+              <rect class="box" x="690" y="220" width="150" height="44" rx="22"/>
+              <text class="t" x="765" y="247" text-anchor="middle">failed</text>
+              <rect class="box-never" x="690" y="290" width="150" height="44" rx="22"/>
+              <text class="t" x="765" y="317" text-anchor="middle">unclear</text>
+              <rect class="box" x="690" y="360" width="150" height="44" rx="22"/>
+              <text class="t" x="765" y="387" text-anchor="middle">cancelled</text>
+
+              <line class="edge" x1="140" y1="192" x2="218" y2="192" marker-end="url(#a4)"/>
+              <text class="lbl" x="179" y="184" text-anchor="middle">claimed</text>
+              <path class="edge-ask" d="M300,170 V92 H438" marker-end="url(#a4k)"/>
+              <text class="lbl-ask" x="294" y="132" text-anchor="end">asks you</text>
+              <path class="edge" d="M440,72 H320 V168" marker-end="url(#a4)"/>
+              <text class="lbl" x="328" y="132">answered</text>
+              <line class="edge" x1="610" y1="82" x2="688" y2="82" marker-end="url(#a4)"/>
+              <text class="lbl" x="649" y="74" text-anchor="middle">expired</text>
+              <text class="lbl" x="649" y="122" text-anchor="middle">OTP: one resend first</text>
+              <path class="edge" d="M765,60 V26 H80 V168" marker-end="url(#a4)"/>
+              <text class="lbl" x="420" y="20" text-anchor="middle">you say continue · restarts fast, consent asked again</text>
+              <path class="edge" d="M360,192 H620 V382" />
+              <line class="edge" x1="620" y1="172" x2="688" y2="172" marker-end="url(#a4)"/>
+              <line class="edge" x1="620" y1="242" x2="688" y2="242" marker-end="url(#a4)"/>
+              <line class="edge" x1="620" y1="312" x2="688" y2="312" marker-end="url(#a4)"/>
+              <line class="edge" x1="620" y1="382" x2="688" y2="382" marker-end="url(#a4)"/>
+              <path class="edge" d="M620,192 V172"/>
+              <text class="lbl" x="612" y="166" text-anchor="end">proof + judge</text>
+              <text class="lbl" x="612" y="236" text-anchor="end">declined · nothing worked</text>
+              <text class="lbl" x="612" y="306" text-anchor="end">after the yes, outcome unknown</text>
+              <text class="lbl" x="612" y="376" text-anchor="end">you stop it</text>
+              <path class="edge dash" d="M290,214 V404 H80 V216" marker-end="url(#a4)"/>
+              <text class="lbl" x="185" y="398" text-anchor="middle">worker lost before the yes · starts again</text>
+            </svg>
+          </div>
+          <figcaption><b>Task states.</b> An expired ask pauses the task with nothing paid. "Continue" restarts it quickly from the checkpoint, and consent is always asked again. A task that loses its worker after the yes is never repeated: it becomes "unclear", and the user is offered "check my order".</figcaption>
+        </figure>
+        <div class="split">
+          <div class="panel">
+            <h4>Schedules</h4>
+            <ul>
+              <li>"Pay my electricity bill on the 5th", "buy ₹2,000 of Amazon vouchers monthly"</li>
+              <li>Each run is an ordinary task with a fresh consent. It waits in the chat if the user isn't there.</li>
+              <li>A run missed while the server was down runs once if less than 12 h late.</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <h4>Bill-due watches</h4>
+            <ul>
+              <li>Saved billers are read, read-only, weekly, and daily in the 5 days before the due date.</li>
+              <li>A new bill or a nearing due date posts one message with "Pay now".</li>
+              <li>Duplicate alerts are suppressed. A task silent for 3 minutes posts one progress line.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- 11 -->
+      <section id="recovery">
+        <h2><span class="num">11</span>Recovery</h2>
+        <p>The user's yes is the line. Before it, Jev fixes things by itself and never bothers the user. After it, nothing is ever pressed twice.</p>
+        <figure>
+          <div class="fig w960">
+            <svg class="dg" viewBox="0 0 960 270" role="img" aria-label="Before the yes Jev retries, takes a new browser and IP, switches to the next-best option, and escalates; after the yes nothing is retried.">
+              <defs>
+                <marker id="a8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk"/></marker>
+              </defs>
+              <line class="edge-acc" x1="480" y1="30" x2="480" y2="258" stroke-width="2.5" stroke-dasharray="8 5"/>
+              <text class="lbl-acc" x="480" y="20" text-anchor="middle">YOUR YES</text>
+              <text class="t" x="240" y="48" text-anchor="middle">Before the yes: Jev handles it</text>
+              <text class="t" x="720" y="48" text-anchor="middle">After the yes: never retried</text>
+              <rect class="box" x="60" y="64" width="360" height="34" rx="6"/>
+              <text class="s" x="240" y="85" text-anchor="middle">Retry the step twice, then reload the page</text>
+              <rect class="box" x="60" y="112" width="360" height="34" rx="6"/>
+              <text class="s" x="240" y="133" text-anchor="middle">New browser context and a new Indian IP, from the route</text>
+              <rect class="box" x="60" y="160" width="360" height="34" rx="6"/>
+              <text class="s" x="240" y="181" text-anchor="middle">Switch to the next-best option, named in the consent</text>
+              <rect class="box" x="60" y="208" width="360" height="34" rx="6"/>
+              <text class="s" x="240" y="229" text-anchor="middle">Stuck: astra, one fresh restart, then say what was tried</text>
+              <line class="edge" x1="240" y1="98" x2="240" y2="110" marker-end="url(#a8)"/>
+              <line class="edge" x1="240" y1="146" x2="240" y2="158" marker-end="url(#a8)"/>
+              <line class="edge" x1="240" y1="194" x2="240" y2="206" marker-end="url(#a8)"/>
+              <rect class="box" x="540" y="64" width="360" height="34" rx="6"/>
+              <text class="s" x="720" y="85" text-anchor="middle">Declined: "Not paid", next option offered with a fresh yes</text>
+              <rect class="box-never" x="540" y="112" width="360" height="34" rx="6"/>
+              <text class="s" x="720" y="133" text-anchor="middle">Unknown: check SMS and email · "check my order"</text>
+              <rect class="box" x="540" y="160" width="360" height="34" rx="6"/>
+              <text class="s" x="720" y="181" text-anchor="middle">Worker lost: marked unclear, the user is told</text>
+              <rect class="box" x="540" y="208" width="360" height="34" rx="6"/>
+              <text class="s" x="720" y="229" text-anchor="middle">The bank's OTP and gateway steps ride on the one yes</text>
+            </svg>
+          </div>
+          <figcaption><b>The yes is the boundary.</b> A switch before the yes never changes what was asked for (brand, amount, biller), only where and how it is paid.</figcaption>
+        </figure>
+        <div class="tw"><table>
+          <thead><tr><th>Failure</th><th>What Jev does by itself</th></tr></thead>
+          <tbody>
+            <tr><td>Transient</td><td class="wrap">Timeout, 5xx, network error, crash or empty page: retry twice, reload, then a new context and IP, restarting from the route (≤ 2 restarts).</td></tr>
+            <tr><td>Blocked</td><td class="wrap">403, bot page or 3 captchas in a row: a new context and IP once, then the next-best option. For bills, a retry in an hour with one chat line.</td></tr>
+            <tr><td>Unavailable</td><td class="wrap">Out of stock, limit reached, brand not sold or maintenance: the next-best option.</td></tr>
+            <tr><td>Bad user detail</td><td class="wrap">Invalid account number or login refused: one <span class="pill pill-ask">detail</span> ask, and the vault value is corrected.</td></tr>
+            <tr><td>Agent stuck</td><td class="wrap">Loop detector or 5 failures: astra for 3 steps, one fresh restart, the next-best option, then the user is told what was tried.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <!-- 12 -->
+      <section id="flows">
+        <h2><span class="num">12</span>A purchase end to end</h2>
+        <p>"Get me ₹250 of Swiggy vouchers." The user is asked five times: three secrets, one consent and one bank OTP. Each of those needs a person, and nothing else does.</p>
+        <figure>
+          <div class="fig w960">
+            <svg class="dg" viewBox="0 0 960 690" role="img" aria-label="Sequence of a ₹250 Swiggy voucher purchase on SmartBuy between you, Jev, the worker, SmartBuy and the bank, with the five asks highlighted.">
+              <defs>
+                <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk"/></marker>
+                <marker id="a5k" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk-ask"/></marker>
+                <marker id="a5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk-acc"/></marker>
+              </defs>
+              <rect class="box" x="20" y="16" width="120" height="40" rx="8"/><text class="t" x="80" y="41" text-anchor="middle">You</text>
+              <rect class="box" x="210" y="16" width="160" height="40" rx="8"/><text class="t" x="290" y="41" text-anchor="middle">Jev</text>
+              <rect class="box" x="420" y="16" width="160" height="40" rx="8"/><text class="t" x="500" y="41" text-anchor="middle">Worker</text>
+              <rect class="box" x="630" y="16" width="160" height="40" rx="8"/><text class="t" x="710" y="41" text-anchor="middle">SmartBuy</text>
+              <rect class="box" x="820" y="16" width="120" height="40" rx="8"/><text class="t" x="880" y="41" text-anchor="middle">Bank 3-DS</text>
+              <line class="life" x1="80" y1="56" x2="80" y2="676"/>
+              <line class="life" x1="290" y1="56" x2="290" y2="676"/>
+              <line class="life" x1="500" y1="56" x2="500" y2="676"/>
+              <line class="life" x1="710" y1="56" x2="710" y2="676"/>
+              <line class="life" x1="880" y1="56" x2="880" y2="676"/>
+
+              <line class="edge" x1="80" y1="86" x2="288" y2="86" marker-end="url(#a5)"/>
+              <text class="lbl" x="185" y="80" text-anchor="middle">₹250 of Swiggy vouchers</text>
+              <path class="edge" d="M290,104 H330 V120 H292" marker-end="url(#a5)"/>
+              <text class="lbl" x="282" y="116" text-anchor="end">compare in parallel, pick best</text>
+              <line class="edge" x1="290" y1="142" x2="498" y2="142" marker-end="url(#a5)"/>
+              <text class="lbl" x="395" y="136" text-anchor="middle">task · consent rules</text>
+              <line class="edge-acc" x1="500" y1="170" x2="708" y2="170" marker-end="url(#a5a)"/>
+              <text class="lbl-acc" x="605" y="164" text-anchor="middle">route: brand page, phone</text>
+              <line class="edge dash" x1="710" y1="198" x2="502" y2="198" marker-end="url(#a5)"/>
+              <text class="lbl" x="605" y="192" text-anchor="middle">OTP sent</text>
+              <line class="edge-ask" x1="500" y1="226" x2="82" y2="226" marker-end="url(#a5k)"/>
+              <text class="lbl-ask" x="290" y="220" text-anchor="middle">ask · secret: sign-in OTP</text>
+              <line class="edge-ask dash" x1="80" y1="254" x2="498" y2="254" marker-end="url(#a5k)"/>
+              <text class="lbl-ask" x="290" y="248" text-anchor="middle">OTP (hidden field)</text>
+              <line class="edge" x1="500" y1="282" x2="708" y2="282" marker-end="url(#a5)"/>
+              <text class="lbl" x="605" y="276" text-anchor="middle">₹250 · cart · checkout</text>
+              <line class="edge-ask" x1="500" y1="310" x2="82" y2="310" marker-end="url(#a5k)"/>
+              <text class="lbl-ask" x="290" y="304" text-anchor="middle">ask · secret: card number, expiry, CVV</text>
+              <line class="edge-ask dash" x1="80" y1="338" x2="498" y2="338" marker-end="url(#a5k)"/>
+              <text class="lbl-ask" x="290" y="332" text-anchor="middle">card (hidden field; CVV only if saved)</text>
+              <line class="edge-ask" x1="500" y1="366" x2="82" y2="366" marker-end="url(#a5k)"/>
+              <text class="lbl-ask" x="290" y="360" text-anchor="middle">ask · consent: Buy ₹250 · Regalia Gold · best saving</text>
+              <line class="edge-ask dash" x1="80" y1="394" x2="498" y2="394" marker-end="url(#a5k)"/>
+              <text class="lbl-ask" x="290" y="388" text-anchor="middle">Yes</text>
+              <line class="edge" x1="500" y1="422" x2="708" y2="422" marker-end="url(#a5)"/>
+              <text class="lbl" x="605" y="416" text-anchor="middle">PROCEED (bound to the yes)</text>
+              <line class="edge" x1="710" y1="450" x2="878" y2="450" marker-end="url(#a5)"/>
+              <text class="lbl" x="795" y="444" text-anchor="middle">3-D Secure</text>
+              <line class="edge-ask" x1="500" y1="478" x2="82" y2="478" marker-end="url(#a5k)"/>
+              <text class="lbl-ask" x="290" y="472" text-anchor="middle">ask · secret: bank OTP</text>
+              <line class="edge-ask dash" x1="80" y1="506" x2="498" y2="506" marker-end="url(#a5k)"/>
+              <text class="lbl-ask" x="290" y="500" text-anchor="middle">OTP (hidden field)</text>
+              <line class="edge" x1="500" y1="534" x2="878" y2="534" marker-end="url(#a5)"/>
+              <text class="lbl" x="690" y="528" text-anchor="middle">SUBMIT (rides on the yes)</text>
+              <line class="edge dash" x1="880" y1="562" x2="712" y2="562" marker-end="url(#a5)"/>
+              <text class="lbl" x="795" y="556" text-anchor="middle">approved</text>
+              <line class="edge dash" x1="710" y1="590" x2="502" y2="590" marker-end="url(#a5)"/>
+              <text class="lbl" x="605" y="584" text-anchor="middle">order page · HSB327…</text>
+              <line class="edge-acc" x1="500" y1="618" x2="292" y2="618" marker-end="url(#a5a)"/>
+              <text class="lbl-acc" x="395" y="612" text-anchor="middle">proof + judge · route saved</text>
+              <line class="edge" x1="290" y1="646" x2="82" y2="646" marker-end="url(#a5)"/>
+              <text class="lbl" x="185" y="640" text-anchor="middle">Bought ₹250 · order HSB327…</text>
+            </svg>
+          </div>
+          <figcaption><b>The five asks are amber:</b> the sign-in OTP (throwaway sessions), the card, the consent, and the bank OTP. With the card saved at SmartBuy, the card ask is just the CVV. Teal steps run from the learned route or end in the proof check.</figcaption>
+        </figure>
+        <div class="split">
+          <div class="panel">
+            <h4>When SmartBuy is down</h4>
+            <p class="small" style="margin:0">Retry twice, then a new context and IP. Still down, so Jev switches to Woohoo with UPI. The consent says "SmartBuy wasn't loading, so this is Woohoo with UPI, 3% off with code WOOHOO". After the yes, the QR goes to the chat.</p>
+          </div>
+          <div class="panel">
+            <h4>A scheduled bill</h4>
+            <p class="small" style="margin:0">On the 5th, a task reads the BESCOM bill, and its captcha waits in the chat. The user types it, then consents to "Pay ₹1,240 to BESCOM · UPI". The QR is checked against ₹1,240 and the payee. The user taps I paid, and Jev shows the receipt and reference.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 13 -->
+      <section id="routes">
+        <h2><span class="num">13</span>Routes: learning the path that worked</h2>
+        <p>A successful run saves its steps up to the yes as a route for that store or biller. Values are saved only as placeholders and variables: <code>{brand}</code>, <code>{amount}</code>, <code>{account}</code>, <code>[vault:…]</code>, <code>[ask]</code>. Some steps are never replayed:</p>
+        <ul>
+          <li>amounts;</li>
+          <li>steps on pages that show the cart, payable, fee or bill;</li>
+          <li>the yes and everything after it.</li>
+        </ul>
+        <p>Before each model call, the next route step is found by trying these in order:</p>
+        <ol class="cascade">
+          <li>Element hash: parent tag path, static attributes, accessible name</li>
+          <li>Stable hash: the same, without changing style class names</li>
+          <li>XPath</li>
+          <li>Role and accessible name</li>
+          <li>A unique name, id or aria-label</li>
+          <li class="miss">No single match: the model takes the step, and the route resumes after the step it took</li>
+        </ol>
+        <p class="small">A newer success replaces the route. A failure before the yes in a run that used the route drops it. On the replica store, the second purchase already signs in and opens the cart with no model calls.</p>
+      </section>
+
+      <!-- 14 -->
+      <section id="deploy">
+        <h2><span class="num">14</span>Deployment on AWS ECS</h2>
+        <p>This is planned now and deployed later. Everything runs in Mumbai, so data stays in India. Postgres is the only queue and state store, with no Redis and no SQS.</p>
+        <figure>
+          <div class="fig w1000">
+            <svg class="dg" viewBox="0 0 1000 620" role="img" aria-label="AWS ap-south-1 deployment: ALB and WAF in front of the api service; scheduler, workers and the gated card vault on ECS Fargate in private subnets; RDS Postgres; VPC endpoints; S3, KMS, Secrets Manager, CloudWatch and ECR; model calls through NAT; browser traffic through an Indian residential proxy.">
+              <defs>
+                <marker id="a7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk"/></marker>
+              </defs>
+              <rect class="box" x="40" y="12" width="230" height="44" rx="8"/>
+              <text class="t" x="155" y="39" text-anchor="middle">rivo-companion · in-app chat</text>
+              <rect class="box" x="520" y="12" width="180" height="44" rx="8"/>
+              <text class="t" x="610" y="39" text-anchor="middle">Model API</text>
+              <rect class="box" x="730" y="12" width="230" height="44" rx="8"/>
+              <text class="t" x="845" y="39" text-anchor="middle">Indian proxy → websites</text>
+
+              <rect class="zone" x="10" y="78" width="980" height="530" rx="12"/>
+              <text class="zone-t" x="300" y="98">AWS ap-south-1 · Mumbai</text>
+              <rect class="zone" x="26" y="108" width="948" height="380" rx="10"/>
+              <text class="zone-t" x="300" y="128">VPC · 2 availability zones</text>
+              <rect class="zone-fill" x="42" y="138" width="916" height="70" rx="8"/>
+              <text class="zone-t" x="300" y="154">public subnets</text>
+              <rect class="box" x="60" y="162" width="220" height="38" rx="6"/>
+              <text class="t" x="170" y="186" text-anchor="middle">ALB + WAF · TLS</text>
+              <rect class="box" x="520" y="162" width="180" height="38" rx="6"/>
+              <text class="t" x="610" y="186" text-anchor="middle">NAT gateway</text>
+
+              <rect class="zone-fill" x="42" y="222" width="916" height="254" rx="8"/>
+              <text class="zone-t" x="300" y="238">private subnets</text>
+              <rect class="zone" x="58" y="248" width="560" height="216" rx="8"/>
+              <text class="zone-t" x="270" y="266">ECS cluster · Fargate</text>
+              <rect class="box" x="74" y="276" width="170" height="56" rx="8"/>
+              <text class="t" x="159" y="299" text-anchor="middle">api ×2+</text>
+              <text class="s" x="159" y="318" text-anchor="middle">chat · brain · asks · vault</text>
+              <rect class="box" x="258" y="276" width="170" height="56" rx="8"/>
+              <text class="t" x="343" y="299" text-anchor="middle">scheduler ×1 (+1)</text>
+              <text class="s" x="343" y="318" text-anchor="middle">schedules · watches</text>
+              <rect class="box-gated" x="442" y="276" width="160" height="56" rx="8"/>
+              <text class="t" x="522" y="299" text-anchor="middle">cardvault ×2</text>
+              <text class="s" x="522" y="318" text-anchor="middle">flag off · isolated</text>
+              <rect class="box-accent" x="74" y="348" width="528" height="98" rx="8"/>
+              <text class="t" x="338" y="380" text-anchor="middle">worker ×4 → N, scaled on queued tasks</text>
+              <text class="s" x="338" y="401" text-anchor="middle">agent + headful Chrome in a virtual display · ≤ 5 task contexts each</text>
+              <text class="s" x="338" y="420" text-anchor="middle">lease + heartbeat every 10 s · 4 vCPU, 16 GB</text>
+
+              <rect class="box" x="640" y="276" width="300" height="56" rx="8"/>
+              <text class="t" x="790" y="299" text-anchor="middle">RDS PostgreSQL · Multi-AZ</text>
+              <text class="s" x="790" y="318" text-anchor="middle">tasks · answers · vault · routes · audit</text>
+              <rect class="box" x="640" y="348" width="300" height="98" rx="8"/>
+              <text class="t" x="790" y="380" text-anchor="middle">VPC endpoints</text>
+              <text class="s" x="790" y="401" text-anchor="middle">ECR · S3 · KMS · Secrets Manager</text>
+              <text class="s" x="790" y="420" text-anchor="middle">CloudWatch Logs · no public route needed</text>
+
+              <rect class="box" x="26" y="508" width="170" height="80" rx="8"/>
+              <text class="t" x="111" y="540" text-anchor="middle">S3</text>
+              <text class="s" x="111" y="560" text-anchor="middle">masked traces · files</text>
+              <text class="s" x="111" y="575" text-anchor="middle">30-day lifecycle</text>
+              <rect class="box-accent" x="210" y="508" width="170" height="80" rx="8"/>
+              <text class="t" x="295" y="540" text-anchor="middle">KMS</text>
+              <text class="s" x="295" y="560" text-anchor="middle">vault · card vault</text>
+              <text class="s" x="295" y="575" text-anchor="middle">data at rest</text>
+              <rect class="box" x="394" y="508" width="170" height="80" rx="8"/>
+              <text class="t" x="479" y="540" text-anchor="middle">Secrets Manager</text>
+              <text class="s" x="479" y="560" text-anchor="middle">model key · proxy</text>
+              <text class="s" x="479" y="575" text-anchor="middle">DB credentials</text>
+              <rect class="box" x="578" y="508" width="170" height="80" rx="8"/>
+              <text class="t" x="663" y="540" text-anchor="middle">CloudWatch</text>
+              <text class="s" x="663" y="560" text-anchor="middle">masked logs · metrics</text>
+              <text class="s" x="663" y="575" text-anchor="middle">alarms</text>
+              <rect class="box" x="762" y="508" width="212" height="80" rx="8"/>
+              <text class="t" x="868" y="540" text-anchor="middle">ECR</text>
+              <text class="s" x="868" y="560" text-anchor="middle">images from GitHub Actions</text>
+              <text class="s" x="868" y="575" text-anchor="middle">scanned on push</text>
+
+              <line class="edge" x1="155" y1="56" x2="155" y2="160" marker-end="url(#a7)"/>
+              <text class="lbl" x="163" y="112">HTTPS · service token</text>
+              <line class="edge" x1="159" y1="200" x2="159" y2="274" marker-end="url(#a7)"/>
+              <line class="edge" x1="610" y1="162" x2="610" y2="58" marker-end="url(#a7)"/>
+              <text class="lbl" x="618" y="112">model calls</text>
+              <path class="edge" d="M602,430 H628 V216 H945 V58" marker-end="url(#a7)"/>
+              <text class="lbl" x="800" y="246">browser traffic via the proxy</text>
+            </svg>
+          </div>
+          <figcaption><b>Production plan.</b> Only <code>api</code> faces the internet, behind ALB and WAF, and its internal routes accept only rivo-companion's service token. Workers reach websites only through the Indian residential proxy, and AWS services only through VPC endpoints.</figcaption>
+        </figure>
+        <div class="tw"><table>
+          <thead><tr><th>Service</th><th>Runs</th><th>Size</th><th>Scaling</th></tr></thead>
+          <tbody>
+            <tr><td>api</td><td class="wrap">Internal API, in-app chat and vault pages, the brain, ask and consent endpoints</td><td class="wrap num-col">1 vCPU · 2 GB</td><td class="wrap">2 or more, on CPU</td></tr>
+            <tr><td>scheduler</td><td class="wrap">Schedules, bill-due watches, recovery timers, missed runs</td><td class="wrap num-col">0.5 vCPU · 1 GB</td><td class="wrap">1 active (Postgres advisory lock), 1 standby</td></tr>
+            <tr><td>worker</td><td class="wrap">Agent and one headful Chrome with ≤ 5 task contexts; claims tasks</td><td class="wrap num-col">4 vCPU · 16 GB</td><td class="wrap">4 at launch (20 tasks); scales on queued tasks per worker</td></tr>
+            <tr><td>cardvault</td><td class="wrap">The card vault, flag off in production</td><td class="wrap num-col">0.5 vCPU · 1 GB</td><td class="wrap">2, isolated security group</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>How a secret answer reaches the right worker</h3>
+        <figure>
+          <div class="fig w960">
+            <svg class="dg" viewBox="0 0 960 170" role="img" aria-label="Secret answer path: the phone posts to the api with a one-time token, the api encrypts it into Postgres with a short expiry, NOTIFY wakes the worker that holds the task's lease, which reads and deletes it and types it into the page.">
+              <defs>
+                <marker id="a9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" class="mk-ask"/></marker>
+              </defs>
+              <rect class="box-ask" x="16" y="50" width="140" height="64" rx="8"/>
+              <text class="t" x="86" y="76" text-anchor="middle">Your phone</text>
+              <text class="s" x="86" y="96" text-anchor="middle">hidden field</text>
+              <rect class="box" x="206" y="50" width="140" height="64" rx="8"/>
+              <text class="t" x="276" y="76" text-anchor="middle">api</text>
+              <text class="s" x="276" y="96" text-anchor="middle">/v1/secure/asks/{id}</text>
+              <rect class="box" x="396" y="50" width="140" height="64" rx="8"/>
+              <text class="t" x="466" y="76" text-anchor="middle">Postgres answers</text>
+              <text class="s" x="466" y="96" text-anchor="middle">encrypted · 10-min TTL</text>
+              <rect class="box-accent" x="586" y="50" width="140" height="64" rx="8"/>
+              <text class="t" x="656" y="76" text-anchor="middle">Worker (lease)</text>
+              <text class="s" x="656" y="96" text-anchor="middle">read, then delete</text>
+              <rect class="box" x="776" y="50" width="140" height="64" rx="8"/>
+              <text class="t" x="846" y="76" text-anchor="middle">Page field</text>
+              <text class="s" x="846" y="96" text-anchor="middle">typed, then wiped</text>
+              <line class="edge-ask" x1="156" y1="82" x2="204" y2="82" marker-end="url(#a9)"/>
+              <text class="lbl-ask" x="180" y="140" text-anchor="middle">one-time token</text>
+              <line class="edge-ask" x1="346" y1="82" x2="394" y2="82" marker-end="url(#a9)"/>
+              <text class="lbl-ask" x="370" y="140" text-anchor="middle">user's key</text>
+              <line class="edge-ask" x1="536" y1="82" x2="584" y2="82" marker-end="url(#a9)"/>
+              <text class="lbl-ask" x="560" y="140" text-anchor="middle">NOTIFY</text>
+              <line class="edge-ask" x1="726" y1="82" x2="774" y2="82" marker-end="url(#a9)"/>
+              <text class="lbl-ask" x="750" y="140" text-anchor="middle">type</text>
+            </svg>
+          </div>
+          <figcaption><b>A secret answer's path.</b> It goes from the client straight to Jev, never through rivo-companion's backend. It is encrypted at rest for seconds, read once by the worker that holds the task, and never logged or shown to a model.</figcaption>
+        </figure>
+
+        <div class="tw"><table>
+          <thead><tr><th>Concern</th><th>Plan</th></tr></thead>
+          <tbody>
+            <tr><td>Queue</td><td class="wrap">Tasks are claimed with <code>SELECT … FOR UPDATE SKIP LOCKED</code>. Services are woken by <code>LISTEN/NOTIFY</code>, with polling as a backstop. One money task per user is enforced in the claim.</td></tr>
+            <tr><td>Leases</td><td class="wrap">A heartbeat every 10 s. Three missed heartbeats end the lease: before the yes the task is re-queued; after it, the task is unclear and the user is told.</td></tr>
+            <tr><td>Deploys</td><td class="wrap">Rolling at 100 % / 200 %. On SIGTERM a worker stops claiming and re-queues tasks before the yes. Tasks after the yes get the remaining 120 s Fargate stop timeout. Migrations run as a one-off task first.</td></tr>
+            <tr><td>Images</td><td class="wrap">Worker: Debian, Chrome stable, Xvfb and Indic fonts. All images run as non-root with a read-only root filesystem, <code>--disable-dev-shm-usage</code> for Chrome, and are scanned in ECR.</td></tr>
+            <tr><td>Security</td><td class="wrap">Least-privilege IAM per service: only the worker decrypts vault keys, with the user's id as context, and the api only encrypts. CloudTrail on every KMS use, GuardDuty and Security Hub. No SSH, and ECS Exec is off in production.</td></tr>
+            <tr><td>Observability</td><td class="wrap">Masked JSON logs. Metrics for tasks by outcome and failure class, asks by kind, agent time, model spend, queue wait and vault use. Alarms when completion drops below 95 % or queue wait exceeds 2 min.</td></tr>
+            <tr><td>Delivery</td><td class="wrap">Terraform modules for staging and production accounts. GitHub Actions:
+              <ol>
+                <li>tests on every PR;</li>
+                <li>on main, images built and pushed to ECR;</li>
+                <li>deploy to staging, then replicas and a read-bench smoke test;</li>
+                <li>manual approval;</li>
+                <li>production deploy.</li>
+              </ol></td></tr>
+            <tr><td>Recovery</td><td class="wrap">RDS point-in-time restore (RPO 5 min), a Terraform rebuild (RTO 1 h), S3 versioning.</td></tr>
+            <tr><td>Cost drivers</td><td class="wrap">Worker Fargate hours, residential proxy traffic, model tokens, NAT data, RDS.</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <!-- 15 -->
+      <section id="api">
+        <h2><span class="num">15</span>rivo-companion API</h2>
+        <p>Jev has no sign-in of its own. rivo-companion will own users and the main app, and call Jev with a service token and the user's id. Until then, Jev's own web chat runs with one development user and is never exposed publicly.</p>
+        <div class="tw"><table>
+          <thead><tr><th>Endpoint</th><th>Does</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST /v1/tasks</code></td><td class="wrap"><code>{user_id, request}</code> → a task id</td></tr>
+            <tr><td><code>GET /v1/tasks/{id}</code></td><td class="wrap">State, result, progress</td></tr>
+            <tr><td><code>GET /v1/users/{id}/events</code></td><td class="wrap">Server-sent events: progress lines, asks, results</td></tr>
+            <tr><td><code>POST /v1/asks/{id}/answer</code></td><td class="wrap">Consent, clarify and detail answers</td></tr>
+            <tr><td><code>POST /v1/secure/asks/{id}</code></td><td class="wrap">Secret answers, posted by the client straight to Jev with the ask's one-time token</td></tr>
+            <tr><td><code>/v1/users/{id}/vault/items</code></td><td class="wrap">GET, POST, DELETE. Masked on read.</td></tr>
+            <tr><td><code>/v1/users/{id}/schedules</code>, <code>…/watches</code></td><td class="wrap">GET, POST, DELETE</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <!-- 16 -->
+      <section id="stages">
+        <h2><span class="num">16</span>Stages</h2>
+        <p>Eight stages, each with its own spec, plan and build, and each gated on all unit and headless-Chrome replica tests.</p>
+        <figure>
+          <div class="fig w960">
+            <svg class="dg" viewBox="0 0 960 140" role="img" aria-label="Eight stages in order: browser core, loop and tools, money jobs, runtime and vault, replay, ECS and many users, other use cases, and the gated card vault.">
+              <line class="edge" x1="76" y1="44" x2="884" y2="44"/>
+              <circle class="dot" cx="60" cy="44" r="16"/><text class="dot-n" x="60" y="48" text-anchor="middle">1</text>
+              <circle class="dot" cx="180" cy="44" r="16"/><text class="dot-n" x="180" y="48" text-anchor="middle">2</text>
+              <circle class="dot" cx="300" cy="44" r="16"/><text class="dot-n" x="300" y="48" text-anchor="middle">3</text>
+              <circle class="dot" cx="420" cy="44" r="16"/><text class="dot-n" x="420" y="48" text-anchor="middle">4</text>
+              <circle class="dot" cx="540" cy="44" r="16"/><text class="dot-n" x="540" y="48" text-anchor="middle">5</text>
+              <circle class="dot" cx="660" cy="44" r="16"/><text class="dot-n" x="660" y="48" text-anchor="middle">6</text>
+              <circle class="dot" cx="780" cy="44" r="16"/><text class="dot-n" x="780" y="48" text-anchor="middle">7</text>
+              <circle class="dot-gated" cx="900" cy="44" r="16"/><text class="dot-n" x="900" y="48" text-anchor="middle">8</text>
+              <text class="t" x="60" y="88" text-anchor="middle">Browser</text><text class="s" x="60" y="105" text-anchor="middle">core</text>
+              <text class="t" x="180" y="88" text-anchor="middle">Loop &amp;</text><text class="s" x="180" y="105" text-anchor="middle">tools</text>
+              <text class="t" x="300" y="88" text-anchor="middle">Money</text><text class="s" x="300" y="105" text-anchor="middle">jobs switch</text>
+              <text class="t" x="420" y="88" text-anchor="middle">Runtime</text><text class="s" x="420" y="105" text-anchor="middle">&amp; vault</text>
+              <text class="t" x="540" y="88" text-anchor="middle">Replay</text><text class="s" x="540" y="105" text-anchor="middle">routes</text>
+              <text class="t" x="660" y="88" text-anchor="middle">ECS &amp;</text><text class="s" x="660" y="105" text-anchor="middle">many users</text>
+              <text class="t" x="780" y="88" text-anchor="middle">Other</text><text class="s" x="780" y="105" text-anchor="middle">use cases</text>
+              <text class="t" x="900" y="88" text-anchor="middle">Card vault</text><text class="s" x="900" y="105" text-anchor="middle">gated</text>
+            </svg>
+          </div>
+          <figcaption><b>Eight stages in order.</b> The card vault is built but switched on only after the legal opinion and the PCI DSS assessment.</figcaption>
+        </figure>
+        <div class="tw"><table>
+          <thead><tr><th>#</th><th>Delivers</th><th>Gate</th></tr></thead>
+          <tbody>
+            <tr><td class="num-col">1</td><td class="wrap">cdp/, browser/ (contexts, settle, watchdogs incl. banners and dialogs), dom/ reader with masking and hashes, a CLI to print a page's state</td><td class="wrap">Every replica fixture and 10 live pages read correctly; no secret in any output; no more wait and look turns on the replicas</td></tr>
+            <tr><td class="num-col">2</td><td class="wrap">agent/ loop, effects, memory, loop detector, judge, done schema; tools/ with the mechanics; <code>execute()</code>; ask_user</td><td class="wrap">Replica purchase and bill flows plus the safety set (fee, leftover cart, injected page, declined card, covered pay button, confirm dialog); exact ask sequences</td></tr>
+            <tr><td class="num-col">3</td><td class="wrap">Vouchers (auto-pick, parallel compare, every way to pay, card-on-file opt-in) and bills (incl. net banking) on the new agent; the actor loop deleted</td><td class="wrap">Replica targets; one real ₹50–₹250 purchase per store changed and one real bill; live read bench ≥ 90 %</td></tr>
+            <tr><td class="num-col">4</td><td class="wrap">Durable tasks, ask expiry and resend, pause and continue, restart rules, recovery, schedules and watches; the vault with a local key</td><td class="wrap">State and recovery tests; vault scope tests; no vault value in any payload; a live scheduled bill read</td></tr>
+            <tr><td class="num-col">5</td><td class="wrap">Five-lookup routes with variables, think steps and resume</td><td class="wrap">Second replica purchase ≤ 50 % of the first's model turns; SmartBuy with a route ≤ 60 s agent time</td></tr>
+            <tr><td class="num-col">6</td><td class="wrap">The ECS plan built and deployed; the Chrome pool; per-user data partition; the internal API</td><td class="wrap">20 concurrent replica purchases with no cross-user leakage; read bench from staging ≥ 90 %; deploy and restore drills</td></tr>
+            <tr><td class="num-col">7</td><td class="wrap">Bureau disputes, mandates and card applications with submit, cancel and accept consents; old loops, snapshot.js and browser_harness deleted</td><td class="wrap">Each use case's bench; one real run each with the user</td></tr>
+            <tr><td class="num-col">8</td><td class="wrap">The isolated card vault behind <code>CARD_VAULT</code></td><td class="wrap">Built and tested; switched on only after legal and PCI DSS</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <!-- 17 -->
+      <section id="testing">
+        <h2><span class="num">17</span>Testing</h2>
+        <ul>
+          <li><b>Units:</b> the CDP client against a fake socket, settle against scripted network and DOM activity, the serialiser against recorded snapshots, lookups against fixtures, <code>execute()</code> guards, consent binding, and redaction everywhere a string goes.</li>
+          <li><b>Replica tests</b> in headless Chrome, with the model scripted. New fixtures:
+            <ul>
+              <li>a cross-origin card frame;</li>
+              <li>shadow DOM;</li>
+              <li>a covered pay button;</li>
+              <li>a confirm dialog;</li>
+              <li>a consent banner;</li>
+              <li>a slow XHR page;</li>
+              <li>500 and 403 pages;</li>
+              <li>an out-of-stock page;</li>
+              <li>a net-banking login.</li>
+            </ul></li>
+          <li><b>Ask-count assertions:</b> every replica flow asserts its exact ask sequence and nothing more.</li>
+          <li><b>Data scans:</b> no secret or vault value in the database (outside ciphertext), traces, logs or model payloads after any test.</li>
+          <li><b>Vault tests:</b>
+            <ul>
+              <li>a login only on its host;</li>
+              <li>a card only with a live consent;</li>
+              <li>PAN only on bureau, bank and issuer hosts;</li>
+              <li>ciphertext moved to another user fails;</li>
+              <li>every use appears in Activity.</li>
+            </ul></li>
+          <li><b>Deploy drills:</b> a rolling deploy mid-task, a worker killed while waiting, an RDS failover, a point-in-time restore.</li>
+          <li><b>Live:</b> a read-only bench across every store × 5 brands and 5 billers. From stage 3, one real purchase per store changed, by the user.</li>
+        </ul>
+      </section>
+
+      <!-- 18 -->
+      <section id="reference">
+        <h2><span class="num">18</span>browser-use reference</h2>
+        <p>Two code studies of commit c75e847 (7 Oct 2026) and a verified web review. Only ideas are taken. Where browser-use is weak, Jev is built to do better.</p>
+        <div class="tw"><table>
+          <thead><tr><th>browser-use</th><th>Jev</th></tr></thead>
+          <tbody>
+            <tr><td class="wrap">Sleeps 0.3 s while requests are in flight; its network-idle settings are never read</td><td class="wrap">Waits for network and DOM quiet</td></tr>
+            <tr><td class="wrap">Navigation timeouts never shown to the model</td><td class="wrap">Shown</td></tr>
+            <tr><td class="wrap">Structured done hides <code>success</code>, so every run reports success</td><td class="wrap">Explicit status</td></tr>
+            <tr><td class="wrap">The judge only advises</td><td class="wrap">Proof and judge decide</td></tr>
+            <tr><td class="wrap">Confirm dialogs auto-accepted</td><td class="wrap">Never auto-accepted; commits go to consent</td></tr>
+            <tr><td class="wrap">Unmasked screenshots every step</td><td class="wrap">Masked, only when needed, never on secret pages</td></tr>
+            <tr><td class="wrap">Secrets leak through extract, tool results and TOTP codes</td><td class="wrap">Redacted everywhere</td></tr>
+            <tr><td class="wrap">Unrestricted evaluate</td><td class="wrap">Fenced and read-only</td></tr>
+            <tr><td class="wrap">Covered buttons always script-clicked</td><td class="wrap">Never for pay or submit</td></tr>
+            <tr><td class="wrap">Can't select ARIA options outside the combobox</td><td class="wrap">Can</td></tr>
+            <tr><td class="wrap">Text search in the top document only</td><td class="wrap">Searches frames too</td></tr>
+            <tr><td class="wrap">Crash watchdog disabled</td><td class="wrap">Enabled</td></tr>
+            <tr><td class="wrap">One Chrome process per session</td><td class="wrap">One context per task</td></tr>
+            <tr><td class="wrap">Allow-list bypass from loose URL parsing (CVE-2025-47241)</td><td class="wrap">Strict parsing</td></tr>
+            <tr><td class="wrap">PostHog analytics on by default</td><td class="wrap">None</td></tr>
+            <tr><td class="wrap">workflow-use's fallback to the agent disabled</td><td class="wrap">Routes resume with the model</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note"><b>What we take:</b> watchdogs on an event bus, CDP only, the snapshot reader with paint-order occlusion and stable element numbers, the step output and list endings, the click and typing chains, the dropdown tools, retries, the loop detector, compaction, the action registry, domain-scoped placeholders, chunked extract, free text search, and the five-way replay lookup.</div>
+        <p class="small">Human-graded, early-2025 browser-use with GPT-4o finished about 30 % of live tasks on Online-Mind2Web. Jev's reliability has to come from settle, effects, recovery, consent and routes, proven on our own bench.</p>
+        <footer class="end">
+          <span>Spec v3 · commit e41cd5d</span>
+          <span>Prepared for review before the stage 1 implementation plan</span>
+        </footer>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script>
+(function () {
+  try {
+    if (window.matchMedia && window.matchMedia("(max-width: 1039px)").matches) {
+      var d = document.getElementById("toc-details");
+      if (d) d.removeAttribute("open");
+    }
+  } catch (e) { /* contents stay open */ }
+})();
+</script>
