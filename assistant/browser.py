@@ -339,6 +339,11 @@ KEPT = {}  # (owner, site) -> the tab a finished task left signed in, for that u
 TOKENS = {}  # (owner, site) -> the latest keep's token: an earlier keep's timer then does nothing
 ENDED = {}  # owner (None: everyone) -> when they logged out: a task begun before then keeps no tab
 KEEPING = threading.Lock()
+# Each task runs in its own browser context (cookies, storage, cache, sign-ins), deleted when the task ends: many users
+# share one Chrome and never each other's sessions. JEV_ISOLATE=off shares the agent Chrome's saved profile instead
+# (local testing that stays signed in between runs).
+ISOLATE = os.environ.get("JEV_ISOLATE", "on").lower() != "off"
+CONTEXTS = {}  # tab target -> its task's browser context
 LOG_OUT = r"""(() => {
   const out = [...document.querySelectorAll('button,a,[role="button"]')]
     .find(e => /^\s*(log ?out|sign ?out)\s*$/i.test(e.innerText || e.textContent || ''));
@@ -367,6 +372,16 @@ def end_session(target, why):
         cdp("Target.closeTarget", targetId=target)
     except (RuntimeError, TimeoutError):
         pass
+    dispose(CONTEXTS.pop(target, None))
+
+
+def dispose(context):
+    """Delete a task's browser context, and with it everything the sites kept in it."""
+    if context:
+        try:
+            cdp("Target.disposeBrowserContext", browserContextId=context)
+        except (RuntimeError, TimeoutError):
+            pass  # gone already
 
 
 def end_sessions(owner=None):
@@ -393,6 +408,8 @@ def end_leftovers(sites):
             if t["type"] == "page" and site_of(t["url"]) in sites]
     for target in left:
         end_session(target, "left signed in by an earlier run")
+    for context in cdp("Target.getBrowserContexts").get("browserContextIds", []):
+        dispose(context)  # an earlier run's tasks, stopped before they ended: nothing of theirs survives
     return len(left)
 
 
@@ -493,14 +510,23 @@ class Browser:
         self.downloads_dir = Path(downloads) if downloads else HOME / "downloads"
         self.geolocation = geolocation
         INCOMING.mkdir(parents=True, exist_ok=True)
+        self.context = None
+        kept = self._kept(url)
+        self.context = CONTEXTS.get(kept) if kept else \
+            cdp("Target.createBrowserContext")["browserContextId"] if ISOLATE else None
+        own = {"browserContextId": self.context} if self.context else {}
         for permission, setting in (("notifications", "denied"), ("camera", "denied"), ("microphone", "denied"),
                                     ("geolocation", "granted")):  # sites detect the device's own location
             try:
-                cdp("Browser.setPermission", permission={"name": permission}, setting=setting)
+                cdp("Browser.setPermission", permission={"name": permission}, setting=setting, **own)
             except RuntimeError:
                 pass  # ponytail: an unsupported permission keeps Chrome's prompt, which cannot block CDP
-        kept = self._kept(url)
-        self.active = kept or self._adopt(cdp("Target.createTarget", url="about:blank", background=True)["targetId"])
+        try:
+            self.active = kept or self._adopt(cdp("Target.createTarget", url="about:blank", background=True,
+                                                  **own)["targetId"])
+        except Exception:
+            dispose(None if kept else self.context)
+            raise
         if kept and stay:
             return
         try:
@@ -566,6 +592,8 @@ class Browser:
         session = cdp("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
         self.tabs[target] = session
         OWNERS[target] = self
+        if self.context:
+            CONTEXTS[target] = self.context
         if opener:
             self.opener[target] = opener
         self.call("Page.enable", session)
@@ -585,7 +613,7 @@ class Browser:
         # Downloads land in one folder. Chrome reports them to the session that set this, and resets it when that
         # session detaches, so every tab sets it on adoption and the survivors set it again when a tab closes.
         self.call("Browser.setDownloadBehavior", session, behavior="allowAndName", downloadPath=str(INCOMING),
-                  eventsEnabled=True)
+                  eventsEnabled=True, **({"browserContextId": self.context} if self.context else {}))
 
     def _forget(self, target):
         session = self.tabs.pop(target, None)
@@ -1298,9 +1326,10 @@ class Browser:
                     cdp("Target.closeTarget", targetId=target)
                 except (RuntimeError, TimeoutError):
                     pass
+                CONTEXTS.pop(target, None)
             self._forget(target)
         if not kept:
-            return
+            return dispose(self.context)  # the task's cookies, storage and sign-ins go with it
         try:
             cdp("Target.detachFromTarget", sessionId=session)
         except (RuntimeError, TimeoutError):

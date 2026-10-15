@@ -357,6 +357,32 @@ SIGN_IN = ("sessionStorage.setItem('accessToken', 'signed-in'); document.body.in
 LOGGED_OUT = "const out = document.cookie.includes('out=1'); document.cookie = 'out=; path=/; max-age=0'; out"
 
 
+SET_USER = "document.cookie = 'sid=' + arguments_user + '; path=/'; localStorage.setItem('who', arguments_user)"
+READ_USER = "[document.cookie, localStorage.getItem('who')]"
+
+
+def test_two_users_on_one_site_share_nothing_and_a_closed_task_leaves_nothing(browser_at):
+    # the user's rule: one Chrome for many users, each task in its own context, wiped when it ends
+    alice = browser_at("/next.html", owner="alice")
+    alice.evaluate(SET_USER.replace("arguments_user", "'alice'"))
+    bob = browser_at("/next.html", owner="bob")
+    assert bob.evaluate(READ_USER) == ["", None]  # alice's sign-in never reaches bob's task
+    bob.evaluate(SET_USER.replace("arguments_user", "'bob'"))
+    assert alice.evaluate(READ_USER) == ["sid=alice", "alice"]
+    alice.close()
+    assert browser_at("/next.html", owner="alice").evaluate(READ_USER) == ["", None]  # wiped with the task
+
+
+def test_with_isolation_off_tasks_share_the_agent_chromes_profile(browser_at, monkeypatch):
+    monkeypatch.setattr(browser, "ISOLATE", False)  # local testing: stay signed in between runs
+    first = browser_at("/next.html", owner="dev")
+    first.evaluate("document.cookie = 'sid=dev; path=/'")
+    first.close()
+    second = browser_at("/next.html", owner="dev")
+    assert "sid=dev" in second.evaluate("document.cookie")
+    second.evaluate("document.cookie = 'sid=; path=/; max-age=0'")
+
+
 def test_a_kept_tab_carries_its_sign_in_to_the_next_task_on_the_site(browser_at):
     # MyUPI keeps its sign-in in the tab's sessionStorage: closing the tab signed the user out after every request
     first = browser_at("/next.html", owner="u1")
@@ -381,6 +407,7 @@ def test_a_kept_page_is_where_the_next_task_on_the_site_starts(browser_at):
 
 
 def test_a_kept_sign_in_ends_when_idle_by_the_sites_own_logout(browser_at, monkeypatch):
+    monkeypatch.setattr(browser, "ISOLATE", False)  # the Logout's cookie is read from a fresh tab: a shared profile
     monkeypatch.setattr(browser, "SESSION_IDLE", 0.5)
     first = browser_at("/next.html", owner="u3")
     first.evaluate(SIGN_IN)
@@ -403,7 +430,8 @@ def test_a_sign_in_kept_again_lasts_from_its_last_task_not_its_first(browser_at,
     assert browser_at("/next.html", owner="u7").evaluate(TOKEN) == "signed-in"
 
 
-def test_logging_out_ends_kept_sign_ins_and_those_of_tasks_still_running(browser_at):
+def test_logging_out_ends_kept_sign_ins_and_those_of_tasks_still_running(browser_at, monkeypatch):
+    monkeypatch.setattr(browser, "ISOLATE", False)  # the Logout's cookie is read from a fresh tab: a shared profile
     first = browser_at("/next.html", owner="u4")
     first.evaluate(SIGN_IN)
     first.close(keep=True)
@@ -415,7 +443,8 @@ def test_logging_out_ends_kept_sign_ins_and_those_of_tasks_still_running(browser
     assert fresh.evaluate(TOKEN) is None and fresh.evaluate(LOGGED_OUT)
 
 
-def test_a_sign_in_left_by_an_earlier_run_is_ended_at_start(browser_at):
+def test_a_sign_in_left_by_an_earlier_run_is_ended_at_start(browser_at, monkeypatch):
+    monkeypatch.setattr(browser, "ISOLATE", False)  # the Logout's cookie is read from a fresh tab: a shared profile
     first = browser_at("/next.html", owner="u5")
     first.evaluate(SIGN_IN)
     first.close(keep=True)
@@ -695,8 +724,10 @@ def test_a_transparent_code_input_over_drawn_boxes_is_offered(browser_at):
     fills = [a for a in b.observe()["actions"] if a["kind"] == "fill"]
     assert any(b.evaluate(f"window.__jevFast.nodes.get({a['node']}).id") == "otp" for a in fills)
 
-def test_forgetting_a_site_signs_the_agent_out(browser_at, site):
+def test_forgetting_a_site_signs_the_agent_out(browser_at, site, monkeypatch):
     from assistant.browser import forget_sites
+
+    monkeypatch.setattr(browser, "ISOLATE", False)  # the shared profile: an isolated task's sign-in goes with its task
 
     b = browser_at("/next.html")
     b.evaluate("document.cookie = 'session=abc; path=/'; localStorage.setItem('token', 'xyz'); true")
