@@ -40,7 +40,7 @@ def bill_intent(goal):
 
 SPLIT = r"\d+ × ₹[\d,]+(?: \+ \d+ × ₹[\d,]+)*"
 VOUCHER_GOAL = re.compile(rf"^Buy ₹([\d,]+) of (.+?) vouchers on (.+?): ({SPLIT}|any vouchers that make ₹[\d,]+), "
-                          r"paying with (.+?)\.(?: Compared: (.+)\.)?$")
+                          r"paying with (.+?)\.(?: Apply code ([A-Z0-9]{4,20}) at checkout\.)?(?: Compared: (.+)\.)?$")
 READ_GOAL = re.compile(r"^Read the (.+?) vouchers on (.+?) for ₹([\d,]+): every amount, the reward, any discount or "
                        r"fee, and the monthly limit\. Buy nothing\.$")
 MULTIPLIER = re.compile(r"(\d+(?:\.\d+)?)\s*[x×](?![a-z])", re.IGNORECASE)  # "5X Reward Points"
@@ -67,19 +67,32 @@ def job_intent(goal):
         made = None if found[4].startswith("any ") else {int(size.replace(",", "")): int(n) for n, size in
                                                           re.findall(r"(\d+) × ₹([\d,]+)", found[4])}
         return {"kind": "voucher", "portal": found[3], "brand": found[2], "amount": int(found[1].replace(",", "")),
-                "split": made, "card": found[5], "compared": found[6]}
+                "split": made, "card": found[5], "code": found[6], "compared": found[7]}
     found = READ_GOAL.match(goal or "")
     if found:
         return {"kind": "voucher_read", "portal": found[2], "brand": found[1], "amount": int(found[3].replace(",", ""))}
     return None
 
 
-def voucher_goal(portal, brand, amount, made, card, compared=None):
+def voucher_goal(portal, brand, amount, made, card, compared=None, code=None):
     """The worker's goal for one purchase: the total, the brand, the store, the vouchers (or any that make the total,
-    for a store whose amounts couldn't be read), the card, and the reward the comparison showed."""
+    for a store whose amounts couldn't be read), the card, the store's code for the card's discount, and the reward
+    the comparison showed."""
     vouchers = counted(made) if made else f"any vouchers that make ₹{amount:,}"
     return (f"Buy ₹{amount:,} of {brand} vouchers on {portal}: {vouchers}, paying with {card}."
+            + (f" Apply code {code} at checkout." if code else "")
             + (f" Compared: {' '.join(re.sub(r'[.](?!\d)', ' ', compared).split())}." if compared else ""))
+
+
+PROMO = re.compile(r"\bcode\s*[:#-]?\s*([A-Z0-9]{4,20})\b")  # "1% off with code WOOHOOCCNB"
+PROMO_LAST = re.compile(r"\b([A-Z][A-Z0-9]{4,19})\s*$")  # Woohoo's, as shown: "… Get 1% Discount WOOHOOCCNB"
+
+
+def promo_code(text):
+    """The store's code its card discount needs, as the read wrote it ("… with code WOOHOOCCNB", or the offer's
+    lines as shown, its code last), else None."""
+    found = PROMO.search(str(text or "")) or PROMO_LAST.search(str(text or ""))
+    return found[1] if found else None
 
 
 def read_goal(portal, brand, amount):

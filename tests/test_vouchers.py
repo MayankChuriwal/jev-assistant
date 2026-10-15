@@ -331,6 +331,19 @@ def test_a_purchase_going_in_circles_stops_and_says_nothing_was_bought(tmp_path)
     assert w.asked == [] and w.state["stuck_why"] == "visits 6: x"
 
 
+def test_a_read_ending_on_a_refused_fact_gets_one_turn_to_copy_it(tmp_path, monkeypatch):
+    # live, Woohoo: the credit-card offer was written in the model's own words, refused, and the read ended without it
+    shown = "Swiggy\n₹50\n₹100\nDiscount with Credit Card or Net Banking\nGet 1% Discount\nWOOHOOCCNB"
+    w = worker_with(tmp_path, page=page(shown), goal=READ)
+    script(monkeypatch, answer(end="done", amounts="₹50, ₹100", discount="1% off for credit cards, code WOOHOOCCNB"),
+           answer(end="done", amounts="₹50, ₹100",
+                  discount="Discount with Credit Card or Net Banking: Get 1% Discount WOOHOOCCNB"))
+    w.command("tick")
+    assert w.state["outcome"] is None and any("isn't on the page" in f for f in w.state["feedback"])
+    w.command("tick")
+    assert w.state["outcome"] == "read" and "WOOHOOCCNB" in w.state["job_facts"]["discount"]
+
+
 def test_a_read_never_adds_to_a_cart(tmp_path, monkeypatch):
     # review: a read could press "Add to cart" (a step, not a commit) and leave a cart for the next purchase
     add = {"id": "add", "kind": "click", "label": "Add to cart", "role": "button", "node": 4}

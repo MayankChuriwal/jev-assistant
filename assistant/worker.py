@@ -2416,6 +2416,9 @@ class Worker:
 
     def read_done(self):
         s = self.state
+        if any(f.startswith("The fact ") for f in s["feedback"]) and not s.get("fact_retry"):  # live, Woohoo: its
+            s["fact_retry"] = True  # card offer, in the model's own words, was refused and the read ended without it
+            return None
         if not s["job_facts"].get("amounts"):
             s["feedback"].append("DONE refused: put every amount the brand's page offers in facts.amounts first, or "
                                  "stop saying why there are none.")

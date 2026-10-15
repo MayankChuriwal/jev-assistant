@@ -474,7 +474,8 @@ class Brain:
                 offers.append({"portal": name, "card": card, "vouchers": money.counted(made), "nearest": [],
                                "limit": facts.get("limit"), "reward": facts.get("reward"), **worth})
                 self.offers[(name, card)] = {"brand": brand, "amount": amount, "split": made,
-                                             "reward": facts.get("reward") or None}
+                                             "reward": facts.get("reward") or None,
+                                             "code": money.promo_code(facts.get("discount"))}
         made = [o for o in offers if o["vouchers"]]
         if offers and not made:  # the eval: with the totals only inside each offer, the stores were offered instead
             totals = sorted({int(t[1:].replace(",", "")) for o in offers for t in o["nearest"]},
@@ -541,7 +542,8 @@ class Brain:
             return {"status": "rejected", "reason": "The user declined just now.",
                     "next": "Don't buy. Say nothing was bought; call no other tool."}
         note = skills.portals(self.core.library["sites"]).get(portal) or {}
-        goal = money.voucher_goal(portal, offer["brand"], amount, offer["split"], card, compared=offer["reward"])
+        goal = money.voucher_goal(portal, offer["brand"], amount, offer["split"], card, compared=offer["reward"],
+                                  code=offer.get("code"))  # live, Woohoo: its card discount needs its code
         result = self.core.execute(goal, url=voucher_page(note, offer["brand"], "vouchers"), skill="vouchers",
                                    progress=f"Getting your ₹{amount:,} of {offer['brand']} vouchers on {portal}…")
         said = {"bought": "Tell them it's bought, in the report's words: the vouchers, the total, the order. The codes "

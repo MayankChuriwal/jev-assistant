@@ -118,7 +118,7 @@ def test_the_purchase_and_read_goals_round_trip():
     assert goal == ("Buy ₹5,000 of Swiggy vouchers on SmartBuy: 2 × ₹2,000 + 1 × ₹1,000, paying with Infinia. "
                     "Compared: 5X reward points.")
     assert money.job_intent(goal) == {"kind": "voucher", "portal": "SmartBuy", "brand": "Swiggy", "amount": 5000,
-                                      "split": {2000: 2, 1000: 1}, "card": "Infinia",
+                                      "split": {2000: 2, 1000: 1}, "card": "Infinia", "code": None,
                                       "compared": "5X reward points"}
     any_goal = money.voucher_goal("ShopWise", "Swiggy", 5000, None, "Platinum Travel")
     assert "any vouchers that make ₹5,000" in any_goal and money.job_intent(any_goal)["split"] is None
@@ -296,3 +296,23 @@ def test_amounts_limits_and_ranges_read_in_any_rupee_form():
 def test_ranges_are_read_in_the_forms_stores_write_them(text, span):
     # live sweep: "Min: ₹100.00, Max: ₹10,000.00" (Grab Deals) and a range beside a shown amount (Woohoo) were lists
     assert money.amount_range(text) == span
+
+
+def test_a_stores_card_offer_with_a_code_is_carried_into_the_purchase():
+    # live, Woohoo: "Discount with Credit Card or Net Banking: Get 1% Discount", code WOOHOOCCNB, was never counted
+    assert money.promo_code("1% off with code WOOHOOCCNB") == "WOOHOOCCNB"
+    assert money.promo_code("Flat 2% OFF") is None and money.promo_code(None) is None
+    goal = money.voucher_goal("Woohoo", "Swiggy", 250, {250: 1}, "Regalia Gold", compared="1% off",
+                              code="WOOHOOCCNB")
+    assert "Apply code WOOHOOCCNB at checkout." in goal
+    intent = money.job_intent(goal)
+    assert intent["code"] == "WOOHOOCCNB" and intent["card"] == "Regalia Gold" and intent["compared"] == "1% off"
+    assert money.job_intent(money.voucher_goal("SmartBuy", "Swiggy", 250, {250: 1}, "Infinia"))["code"] is None
+
+
+@pytest.mark.parametrize("text, code", [
+    ("Discount with Credit Card or Net Banking: Get 1% Discount WOOHOOCCNB", "WOOHOOCCNB"),  # live, Woohoo, as shown
+    ("1% off with code WOOHOOCCNB", "WOOHOOCCNB"), ("Flat 2.5% Off", None), ("FLAT 1% OFF", None),
+    ("2.5 % Instant Discount + 1X Reward Points*", None), ("Flat 2% OFF on HDFC", None)])
+def test_a_discounts_code_is_read_as_the_page_shows_it(text, code):
+    assert money.promo_code(text) == code

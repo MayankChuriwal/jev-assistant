@@ -671,6 +671,26 @@ def test_a_store_taking_any_amount_in_a_range_buys_the_total_as_one_voucher(tmp_
     assert offer["vouchers"] == "1 × ₹2,750" and offer["effective"] == "₹2,695"
 
 
+def test_the_live_swiggy_250_comparison_ranks_by_worth_and_buys_woohoos_card_offer_with_its_code(tmp_path):
+    # live: "Regalia Gold (HDFC)" matched no card note, so SmartBuy's 5X points were worth nothing and SBI's 1% ranked
+    # first; Woohoo's amount box and its credit-card offer (1%, code WOOHOOCCNB) were not read
+    brain, core = voucher_brain(tmp_path, said=["Swiggy 250"], reads={
+        "SmartBuy": {"amounts": "₹250, ₹500, ₹1,000, ₹2,000", "reward": "Upto 5X Reward Points / 5% Cashback"},
+        "SBI Card": {"amounts": "₹1,000, ₹500, ₹250", "reward": "GV Coins (Instant Earn) ₹0",
+                     "discount": "1% Discount"},
+        "Woohoo": {"amounts": "₹50, ₹100, ₹1,000; Enter a value between ₹50 and ₹10,000",
+                   "discount": "1% off with code WOOHOOCCNB"}})
+    core.memory.remember("preference", "Regalia Gold (HDFC); Cashback (SBI)", label="cards", supersede=True)
+    offers = brain.voucher_compare("Swiggy", 250)["offers"]
+    assert (offers[0]["portal"], offers[0]["card"], offers[0]["effective"]) == ("SmartBuy", "Regalia Gold (HDFC)",
+                                                                              "₹234.50")
+    woohoo = next(o for o in offers if o["portal"] == "Woohoo")
+    assert woohoo["vouchers"] == "1 × ₹250" and woohoo["payable"] == "₹247.50"
+    brain.items.append({"role": "user", "content": "Woohoo + Regalia"})
+    brain.buy_voucher("Woohoo", "Swiggy", 250, "Regalia Gold (HDFC)")
+    assert "Apply code WOOHOOCCNB at checkout." in core.executed[-1]["goal"]
+
+
 def test_a_card_with_no_note_is_compared_on_its_banks_store(tmp_path):
     # review I5 / spec §3.1: a card with no note is saved with its bank, and its bank's store is read, unranked
     brain, core = voucher_brain(tmp_path, said=["Swiggy 2000"], cards=["HDFC Swiggy"], reads={
