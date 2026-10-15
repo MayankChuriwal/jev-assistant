@@ -70,7 +70,8 @@ BANKS = (("HDFC", r"hdfc"), ("ICICI", r"icici"), ("Axis", r"axis"), ("SBI", r"sb
 
 
 def card_words(text):
-    return " ".join(w for w in re.findall(r"[a-z0-9]+", str(text or "").lower()) if w not in CARD_FILLER)
+    """The words naming a card, in any order (live: "Regalia Gold (HDFC)" is HDFC's Regalia Gold)."""
+    return " ".join(sorted(w for w in re.findall(r"[a-z0-9]+", str(text or "").lower()) if w not in CARD_FILLER))
 
 
 def card_for(said, cards):

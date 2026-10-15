@@ -158,6 +158,16 @@ def test_the_smartbuy_note_holds_no_field_only_deleted_code_read():
     assert not {"pay-form", "never"} & set(sites["pay.gyftr.com"])
 
 
+def test_a_card_named_with_its_bank_after_it_is_still_its_card():
+    # live: the user's card was saved as "Regalia Gold (HDFC)"; it matched no note, so SmartBuy's 5X points were worth
+    # nothing and a 1% discount elsewhere ranked first
+    cards = skills.load_cards()
+    assert skills.card_for("Regalia Gold (HDFC)", cards)["name"] == "Regalia Gold"
+    assert skills.card_for("Infinia HDFC credit card", cards)["name"] == "Infinia"
+    assert skills.card_for("Gold Regalia", cards)["name"] == "Regalia Gold"  # word order is not the name
+    assert skills.card_for("Regalia", cards) is None  # Regalia Gold's words, not all of them
+
+
 def test_cards_are_matched_without_filler_and_an_unknown_card_keeps_its_bank():
     # review I5: "HDFC Infinia Credit Card" matched no note, and a card with no note lost its bank
     cards = skills.load_cards()
