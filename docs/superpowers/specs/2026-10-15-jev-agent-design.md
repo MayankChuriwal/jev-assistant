@@ -1,6 +1,7 @@
 # Jev Agent: an end-to-end personal finance assistant on browser-use's architecture
 
-Date: 16 Oct 2026 (v2; v1 was 15 Oct). Status: design, for review.
+Date: 16 Oct 2026 (v3: adds the per-user vault, the card vault behind a launch gate, the ECS deployment plan and the
+rivo-companion API; v2 and v1 were 15–16 Oct). Status: design, for review.
 
 ## 1. Goal
 
@@ -14,11 +15,14 @@ The browser agent underneath is built in-house, from scratch, on the architectur
 
 Jev asks the user for these, and only these:
 
-1. **Secrets Jev never keeps:** OTPs, passwords, net-banking or wallet logins, card number, expiry and CVV.
+1. **Secrets not in the user's vault:**
+   - Always asked: OTPs, CVVs, net-banking and wallet logins.
+   - Asked only until saved in the vault: site passwords; card number and expiry, once the card vault is switched on
+     (§7).
    - A UPI PIN is never typed by Jev at all: the user approves in their own UPI app.
 2. **Captchas.**
 3. **Consent:** every payment, and every irreversible submission made for the user (§6.1).
-4. **A personal detail Jev doesn't have yet.** It is asked once and kept if its class may be kept (§7).
+4. **A personal detail Jev doesn't have yet.** It is asked once, then saved in the user's vault (§7).
 5. **A clarification,** only when the request matches more than one of the user's saved targets, or none (two
    electricity accounts, an unknown biller).
 
@@ -32,14 +36,20 @@ Everything else Jev decides and does by itself:
 
 - **Consent.** No payment and no irreversible submission without the user's yes. The yes is asked in code and bound to
   exactly what is paid or submitted.
-- **Secrets are never kept.** OTPs, passwords, net-banking and wallet logins, card numbers, expiry dates, CVVs, UPI
-  PINs and Aadhaar numbers are never stored anywhere: database, traces, logs or model payloads.
-- **Models never see secrets.** Models see only placeholders.
+- **Kept only in the user's vault.** The vault is encrypted per user (§7). It may hold:
+  - personal info;
+  - site logins (never banks);
+  - card label and last 4;
+  - card number and expiry, once the card vault's launch gate is passed.
+- **Never kept anywhere:** OTPs, CVVs, UPI PINs, net-banking and wallet logins, Aadhaar numbers. Not in the database,
+  traces, logs or model payloads.
+- **Models never see a secret or a vault value.** Models see only placeholders. Values are decrypted only inside the
+  browser worker, at the moment they are typed.
 
 ### 1.3 Clean room
 
 - No browser-use code is copied, forked, vendored or installed.
-  - Its architecture and ideas are the only input, taken from our own study notes (§13).
+  - Its architecture and ideas are the only input, taken from our own study notes (§15).
   - Its prompts are not copied either; ours are written in our own words.
   - Nothing comes from workflow-use (AGPL-3.0).
 - Jev's own code is ours, and is reused or rewritten freely.
@@ -64,7 +74,12 @@ Everything else Jev decides and does by itself:
 | Choosing | Jev picks the best option (most savings) by itself. The payment consent names the choice and the saving, with "use another option" offered. |
 | Consent scope | Every payment, every submission that can't be undone or speaks for the user (bureau dispute, card application, mandate cancel), and every consent given on the user's behalf (a bureau pull, account terms). |
 | Sessions | Throwaway: every task starts signed out, in its own browser context, deleted at the end. Sign-in OTPs are asked every time. |
-| Kept data | Encrypted per user: name, phone, email, address, biller account numbers, PAN, date of birth, UPI ID. Never kept: §7. |
+| Vault | Per user, encrypted, Instinct-style (§7). It holds Logins (sites, never banks), Cards (label and last 4; number and expiry behind the launch gate) and Personal info (name, phone, email, addresses, PAN, date of birth, UPI ID, biller account numbers), with an Activity log of every use. Values are masked when shown and never revealed. |
+| Card vault | Built now as a separate, isolated service. Switched off in production until a legal opinion on RBI's card-on-file rules and PCI DSS controls are in place. Until then cards are label and last 4, and each store saves the card itself as an RBI token. CVVs are never stored. |
+| Vault use | Scoped and logged. A login is used only on its own site; a card only inside a payment the user said yes to; PAN and date of birth only on bureau, bank and card-issuer hosts. Every use goes to the vault's Activity, and any item can be deleted. |
+| Sign-ups | Jev never creates accounts. A sign-up form ends with stop, and the user is told to create the account. |
+| Identity | No sign-in in Jev for now. Jev will merge into rivo-companion, which will own users and sign-in. Jev exposes an internal API keyed by user id (§14). |
+| Deployment | Planned now, deployed later: AWS ECS on Fargate in ap-south-1 (Mumbai), Postgres (RDS) as the only queue and state, KMS for the vault, Terraform and GitHub Actions (§13). |
 | Card on file | Opt-in per store. The payment consent offers "Yes, and save this card with \<store\>". The token lives with the store or bank, never with Jev. Afterwards only the CVV and OTP are asked. |
 | Failure before the yes | Retry with backoff and a fresh browser context and IP, then switch to the next-best option and carry on. The switch is named in the consent. |
 | Failure after the yes | Never retried. Jev tells the user and offers the next option, which needs a fresh consent. |
@@ -81,14 +96,16 @@ Everything else Jev decides and does by itself:
 | Tools | browser-use's set plus ask_user. evaluate is read-only and fenced (§6.4). |
 | Dialogs | Never auto-accepted. A dialog that commits goes to consent. |
 | Captchas | Basic stealth only. Every captcha goes to the user. No solver services, no fingerprint spoofing. |
-| Net banking and wallets | Supported. Login ID, password and OTP are asked through the hidden field, typed only on the bank's or wallet's own host, and never kept. |
-| UPI | A QR with app links, whose amount and payee are checked against the consent first. Or a collect request to the kept UPI ID, approved by the user in their app. |
+| Net banking and wallets | Supported. Login ID, password and OTP are asked through the hidden field every time, typed only on the bank's or wallet's own host, and never kept, not even in the vault. |
+| UPI | A QR with app links, whose amount and payee are checked against the consent first. Or a collect request to the vault's UPI ID, approved by the user in their app. |
 | Analytics | None. Only Jev's own masked traces, kept 30 days. |
 
 ## 3. Architecture
 
 ```
-in-app chat ── brain (conversation; compare, buy, pay bill, dispute …; picks the best option)
+in-app chat / rivo-companion (later) ── api/ (internal API, chat, asks, vault pages)
+                 │
+brain (conversation; compare, buy, pay bill, dispute …; picks the best option)
                  │ task
                  ▼
 runtime/   tasks (durable) · per-user queue · asks · consent · schedules · watches · pause/resume · recovery
@@ -97,7 +114,8 @@ runtime/   tasks (durable) · per-user queue · asks · consent · schedules · 
 agent/     loop · step · message manager · loop detector · compaction · routes · judge
                  │ actions                     ▲ page state + effects
                  ▼                             │
-tools/     registry · actions · ask_user · done(job schema) ── execute(): security → consent → secrets → handler → mask
+tools/     registry · actions · ask_user · done(job schema) ── execute(): security → consent → secrets/vault → handler → mask
+vault/     per-user encrypted items (KMS envelope) · scopes · activity · card vault service (gated, isolated)
                  │ CDP                         ▲ events
                  ▼                             │
 browser/   session = one browser context · event bus · watchdogs (dom, settle, banners, dialogs, downloads,
@@ -343,7 +361,15 @@ No secrets are stored.
 - A health check restarts a crashed Chrome, and its tasks go to recovery.
 - Locally: one Chrome, same interface.
 
-### 4.9 Learning from failures
+### 4.9 vault/: the user's vault
+
+§7 covers the items, encryption, scopes, saving and the card vault. The component:
+- `vault_items` and `vault_activity` tables;
+- the KMS envelope;
+- `use(item, task, host)`, which checks the scope, decrypts, returns the value to the typing code only, and logs;
+- the vault pages: Logins, Cards, Personal info, Activity.
+
+### 4.10 Learning from failures
 
 A task that fails or ends unclear:
 - drops the route it used;
@@ -358,15 +384,16 @@ learn from successes by themselves.
 
 | Kind | When | What the user sees | Expires |
 |---|---|---|---|
-| `secret` | OTP, password, net-banking or wallet login, card number, expiry, CVV | Hidden field in the in-app chat ("Your bank sent an OTP for ₹250 Swiggy on SmartBuy") | OTP: the site's limit (about 3 min), Resend pressed once, then pause. Others: 10 min, then pause |
+| `secret` | OTP, CVV, net-banking or wallet login, a site password not in the vault, a card number or expiry not in the vault | Hidden field in the in-app chat ("Your bank sent an OTP for ₹250 Swiggy on SmartBuy"). A site password, and a card when the card vault is on, have "Save to vault", ticked by default | OTP: the site's limit (about 3 min), Resend pressed once, then pause. Others: 10 min, then pause |
 | `captcha` | A captcha on the page | The captcha's picture, sized to read on a phone | Image refreshed once, then pause |
 | `consent` | §6.1 | The code-written summary, with Yes, "Yes, and save card with \<store\>", "Use another option" and No | 10 min, then pause (nothing paid) |
 | `qr` | UPI QR after the yes | The QR with app links, plus I paid / I didn't pay | The QR's own expiry |
-| `detail` | A personal detail not in the user's profile | A plain question. The answer is kept if its class may be kept | 30 min, then pause |
+| `detail` | A personal detail not in the user's vault | A plain question. The answer is saved to the vault's Personal info, shown there, and deletable | 30 min, then pause |
 | `clarify` | The request matches several saved targets, or none | A choice | 30 min, then pause |
 
-**Secrets:**
-- Held in a per-task vault in memory only, scoped to the host they were asked for.
+**Secrets** (answers to `secret` asks, not yet in the vault):
+- Held in a per-task store in memory only, scoped to the host they were asked for.
+- An answer saved to the vault goes in encrypted (§7). Every other answer is wiped after typing.
 - A gateway's bank page counts as that host only when the payment redirected there, with the host parsed strictly.
 - Typed once, then wiped, and wiped in any case when the task ends.
 - The model sees only `<secret>otp1</secret>`-style placeholders.
@@ -428,20 +455,77 @@ The job's checks run first:
 - A script that clicks, submits, navigates or sets values is refused. This is checked before it runs and by comparing
   the page before and after; a change stops a money job.
 
-## 7. Data
+## 7. The vault and data
 
-| Kept, encrypted per user, typed only into matching fields | Never kept anywhere |
-|---|---|
-| Name, phone, email, address | OTPs |
-| Biller account and consumer numbers | Passwords; net-banking and wallet logins |
-| PAN and date of birth (typed only on bureau, bank and card-issuer hosts) | Card number, expiry, CVV |
-| UPI ID | UPI PIN (never typed by Jev at all) |
-| Card names (no numbers); store and card preferences | Aadhaar number |
-| Routes (hold no user data) | Browser sessions and cookies (each context is deleted at the end of its task) |
+### 7.1 What the vault holds
+
+| Section | Items | Typed where | Shown as |
+|---|---|---|---|
+| Logins | Username and password for a site: voucher stores, billers, bureaus, card issuers' portals. Never net banking or wallets | Only on that login's own host (strict host match) | "smartbuy.hdfc.bank.in · 98•••••953" |
+| Cards | Label, network, issuer, last 4, and the stores where the card is saved by the store. Number and expiry only behind the card vault's launch gate (§7.4) | Card boxes inside a payment the user said yes to | "HDFC Mastercard ending 0185" |
+| Personal info | Name, phone, email, addresses, PAN, date of birth, UPI ID, biller account numbers (per biller) | Matching fields. PAN and date of birth only on bureau, bank and card-issuer hosts. A biller's number only on that biller's host | Masked: "PAN ABC••••4F", "BESCOM ••7890" |
+| Activity | Every use: item, task, host, time, outcome | n/a | A list the user can read |
+
+**Never in the vault, nor anywhere else:** OTPs, CVVs, UPI PINs, net-banking and wallet logins, Aadhaar numbers.
+
+**No agent items:** Jev never creates accounts (§2).
+
+### 7.2 Encryption
+
+- **Envelope encryption** with AWS KMS. Each user has one data key, generated by KMS under the vault's customer-managed
+  key and stored only in its wrapped form.
+- **Item values** are encrypted with AES-256-GCM under that data key. The item id and user id are the associated data,
+  so a value can't be moved to another user or item.
+- **Who can decrypt:**
+  - Only the browser worker's role may decrypt a data key, and only for the user whose task it is running. KMS
+    encryption context: `user_id`.
+  - The API's role can only encrypt (to save items).
+- **Plaintext lives only in the worker's memory** for the moment it is typed, then is wiped. It is never sent to a
+  model, logged or traced. The model sees `[vault:login.smartbuy]`-style placeholders.
+- **Deleting an item** destroys its ciphertext. Deleting a user's vault schedules their data key for deletion
+  (crypto-shredding).
+- **Locally**, KMS is replaced by a key from the environment (today's JEV_MEMORY_KEY), with the same interface.
+- Today's `ids` table (one Fernet key for the whole app) moves into the vault.
+
+### 7.3 How items get in and are used
+
+**Getting in:**
+- **Personal info** comes from `detail` asks, saved automatically and shown in the vault.
+- **Logins** come from `secret` asks for a site password, with "Save to vault" ticked by default. Also from the vault
+  page's "+".
+- **Cards:**
+  - With the gate off, a card is added by label and last 4 on the vault page, or after a purchase.
+  - With the gate on, the card's number and expiry are also saved through "Save to vault" on the card ask.
+
+**Use** (`vault.use(item, task, host)`):
+- The item's scope (§7.1) is checked against the task and the page's strictly parsed host.
+- A card needs the task's consent id for the payment.
+- The value is decrypted, typed, and logged to Activity.
+- Use outside its scope is refused and logged.
+
+**On the vault page** the user can add, replace or delete items. Values are never revealed, only masked.
+
+### 7.4 The card vault (built now, switched on later)
+
+- **A separate service and database schema:** its own KMS key, its own task role, and network isolation (only the
+  browser workers can reach it).
+- **The only call:** `card(user, card_id, consent_id)`. It returns the number and expiry only for a live payment
+  consent of that user, once per consent.
+- **Feature flag `CARD_VAULT`:** off in production until both are in place:
+  1. A legal opinion that Jev may store card data under RBI's card-on-file rules (since Oct 2022, only issuers and
+     networks may store card data).
+  2. PCI DSS controls for the service: scope assessment, key management, logging, audits.
+- **CVVs are never stored,** under PCI DSS 3.3.1.
+- **With the flag off,** stores save cards as RBI tokens (the opt-in in the consent). After that, only CVV and OTP are
+  asked.
+
+### 7.5 Other data
 
 - Traces are masked and kept 30 days.
-- Card-on-file tokens live with the store or bank only.
-- Change from today: memory now accepts PAN (encrypted and host-scoped). Aadhaar stays refused.
+- Browser contexts and their cookies are deleted at the end of each task.
+- Card-on-file tokens live with the store or bank.
+- Routes hold no user data.
+- Audit rows (consents, vault uses) hold ids, hashes and times, never values.
 
 ## 8. Data flows
 
@@ -449,7 +533,7 @@ The job's checks run first:
 1. The brain compares stores in parallel (≤ 60 s) and picks SmartBuy + Regalia Gold (₹234.50 effective).
 2. A task starts: route for the brand page and sign-in, `[profile:phone]`, sign-in OTP asked (`secret`).
 3. The model picks ₹250 and reads the cart; the cart check passes.
-4. The card form: card number, expiry and CVV asked in one turn (`secret` ×3), typed key by key.
+4. The card form. If SmartBuy has the card saved, only the CVV is asked. Otherwise card number, expiry and CVV are asked in one turn (`secret` ×3; number and expiry come from the card vault once it is switched on), typed key by key.
 5. PROCEED is a commit, so a `consent` is asked: "Buy ₹250 Swiggy on SmartBuy with Regalia Gold · ₹15.50 back in points
    (best; next Woohoo UPI ₹242.50) · Yes / Yes and save card / Use another option / No".
 6. On yes: click, then the bank OTP (`secret`), then SUBMIT riding on the yes.
@@ -496,10 +580,11 @@ Each stage gets its own spec, plan and build. Every gate includes all unit tests
 | 1 | Browser core | cdp/, browser/ (contexts, settle, watchdogs incl. banners and dialogs), dom/ reader with masking and hashes. A CLI that prints a page's state. | Every replica fixture and 10 live store and biller pages read correctly. No secret in any output. Settle ends the wait and look turns on the replica flows. |
 | 2 | Agent loop and tools | agent/ loop, effects, message manager, loop detector, judge, done schema; tools/ with the mechanics in §4.5; `execute()` with consent and secrets; ask_user. | Replica purchase and bill flows, plus the safety set: fee, leftover cart, injected page, declined card, covered pay button, confirm dialog. Ask-count tests pass. |
 | 3 | Money jobs switch | Vouchers (auto-pick, parallel compare, every way to pay, card-on-file opt-in), bills (incl. net banking through hidden asks) on the new agent. The actor loop is deleted. | Replica targets met. One real ₹50–₹250 purchase per store changed, and one real bill. Live read bench ≥ 90 %. |
-| 4 | Runtime | Durable tasks, in-app asks with expiry and resend, pause and continue, restart rules, recovery (§9), schedules and bill-due watches, progress lines, PAN and UPI ID kept. | Pause and continue, restart before and after the yes, recovery switches, and schedules all tested on replicas. A live scheduled bill read. |
+| 4 | Runtime and vault | Durable tasks, in-app asks with expiry and resend, pause and continue, restart rules, recovery (§9), schedules and bill-due watches, progress lines. The vault: Logins, Cards (label and last 4), Personal info, Activity; envelope encryption with a local key; scoped use; vault pages; today's `ids` moved in. | Pause and continue, restart before and after the yes, recovery switches, and schedules all tested on replicas. Vault scope tests pass. No vault value in any payload, log or trace. A live scheduled bill read. |
 | 5 | Replay | Five-lookup routes with variables, think steps and resume. | A second replica purchase uses ≤ 50 % of the first's model turns. Live: SmartBuy with a route ≤ 60 s agent time. |
-| 6 | Pool and many users | Mumbai server, Chrome pool, proxies, per-user queue and data partition. | 20 concurrent replica purchases with no cross-user leakage. Live read bench from the server ≥ 90 %. |
+| 6 | ECS and many users | The §13 plan built and deployed: Terraform, images, Fargate services, RDS, KMS envelope, Postgres queue with leases, CI/CD, observability. The Chrome pool (one Chrome per worker, contexts, proxies), a per-user data partition, and the internal API for rivo-companion (§14). | Staging: 20 concurrent replica purchases with no cross-user leakage; live read bench from staging ≥ 90 %; a rolling deploy in the middle of tasks loses none; a restore drill. |
 | 7 | Other use cases | Bureau disputes, mandates, card applications on the new agent, with submit, cancel and accept consents. The planner and picker loop, snapshot.js and browser_harness are deleted. | Each use case's bench passes. One real run each, with the user. |
+| 8 | Card vault (gated) | The isolated card-vault service, behind the `CARD_VAULT` flag (§7.4). | Built and tested. Switched on in production only after the legal opinion and the PCI DSS assessment. |
 
 ## 12. Testing
 
@@ -525,12 +610,129 @@ Each stage gets its own spec, plan and build. Every gate includes all unit tests
   - net-banking login.
 - **Ask-count assertions:** every replica flow asserts its exact ask sequence (for example: sign-in OTP, card ×3,
   consent, bank OTP) and nothing more.
-- **Data scans:** no secret value in the database, traces, logs or model payloads after any test, using the same
-  matcher the model calls use.
+- **Data scans:** no secret or vault value in the database (outside vault ciphertext), traces, logs or model payloads
+  after any test, using the same matcher the model calls use.
+- **Vault tests:**
+  - A login is used only on its own host.
+  - A card is used only with a live consent.
+  - PAN is used only on bureau, bank and issuer hosts.
+  - Ciphertext moved to another user or item fails to decrypt.
+  - A deleted item is gone.
+  - Every use is in Activity.
+- **Deploy drills** (stage 6):
+  - a rolling deploy in the middle of tasks;
+  - a worker killed while a task waits on the user;
+  - an RDS failover;
+  - a restore from point-in-time.
 - **Live bench:** read-only, every store × 5 brands, and 5 billers' bill reads.
 - **Live purchases:** one per store changed, by the user, from stage 3.
 
-## 13. Reference: browser-use (architecture only, no code)
+## 13. Deployment on AWS ECS (planned now, deployed later)
+
+### 13.1 Shape
+
+- **Region and data:** AWS ap-south-1 (Mumbai), two availability zones. Data stays in India.
+- **No Redis and no SQS:** Postgres is the only queue and state.
+
+| Service (ECS Fargate) | Runs | Size per task | Scaling |
+|---|---|---|---|
+| `api` | Internal API, the in-app chat and vault pages, the brain (conversation and its tools), ask and consent endpoints | 1 vCPU, 2 GB | 2 or more, on CPU |
+| `scheduler` | Schedules, bill-due watches, recovery timers, missed runs | 0.5 vCPU, 1 GB | 1 active (Postgres advisory lock), 1 standby |
+| `worker` | The agent and one headful Chrome (in a virtual display) with up to 5 task contexts. Claims tasks | 4 vCPU, 16 GB | 4 at launch (20 tasks); scales on queued tasks per worker |
+| `cardvault` | The card vault (§7.4), flag off in production | 0.5 vCPU, 1 GB | 2, isolated security group |
+
+- **Data:**
+  - RDS PostgreSQL, Multi-AZ, encrypted, backups with point-in-time restore.
+  - S3 for masked traces and downloaded files: SSE-KMS, 30-day lifecycle, no public access.
+- **Keys:**
+  - KMS customer-managed keys for the vault, the card vault, and data at rest (RDS, S3, logs).
+  - Secrets Manager for the model API key, proxy credentials and database credentials, with rotation.
+- **Network:**
+  - VPC with public subnets (ALB, NAT) and private subnets (services, RDS).
+  - VPC endpoints for ECR, S3, KMS, Secrets Manager and CloudWatch Logs.
+  - Model calls go out through NAT. Browser traffic goes through the residential proxy provider.
+  - Workers may only make outbound 443 connections.
+  - Only `api` sits behind the ALB, with ACM TLS and WAF (managed rules, rate limits). Its internal routes are open
+    only to rivo-companion's service token.
+
+### 13.2 Coordination through Postgres
+
+- **Claiming:** `tasks` are claimed by workers with `SELECT … FOR UPDATE SKIP LOCKED`.
+- **Lease:** the worker's id and a heartbeat every 10 s. Three missed heartbeats end the lease, and the restart rules
+  apply (§4.7): before the yes, re-queued; after the yes, unclear and the user told.
+- **Waking:** `LISTEN/NOTIFY` wakes services (`task_ready`, `answer:<worker>`), with polling as a backstop.
+- **Answers to secret asks:**
+  - Written to `answers` encrypted under the user's data key, with a 10-minute TTL.
+  - The worker holding the task's lease is notified, reads the row, deletes it, and holds the value only in memory.
+- **Per-user order:** one money task per user at a time (§4.7), enforced in the claim query.
+
+### 13.3 Deploys
+
+- **Rolling:** minimum 100 % healthy, maximum 200 %. New workers start before old ones stop.
+- **On SIGTERM a worker:**
+  - stops claiming;
+  - checkpoints and re-queues tasks before the yes, which restart quickly elsewhere with their routes;
+  - gives tasks after the yes the remaining stop timeout (Fargate allows up to 120 s) to finish, after which they are
+    marked unclear and the user is told.
+- **Migrations** run as a one-off ECS task before the services roll, and stay backward-compatible for one release.
+
+### 13.4 Images
+
+- **`api`, `scheduler`, `cardvault`:** Python slim.
+- **`worker`:** Debian, Google Chrome stable, Xvfb, Indic fonts and the app.
+- **All of them:** run as non-root, with a read-only root filesystem except /tmp, `--disable-dev-shm-usage` for
+  Chrome, and ECR image scanning.
+
+### 13.5 Observability and security
+
+- **Logs:** structured JSON in CloudWatch Logs, masked: no secret, vault value or OTP is ever logged.
+- **Metrics:**
+  - tasks started, finished and failed, by job and failure class;
+  - asks by kind;
+  - agent time; model spend;
+  - queue depth and wait; worker load;
+  - vault uses and refusals.
+- **Alarms:** completion below 95 % over an hour, queue wait over 2 min, worker crashes, KMS decrypt errors, error
+  rates.
+- **Traces:** kept in S3 and linked from the task record.
+- **Security:**
+  - Least-privilege IAM per service: only `worker` may decrypt vault keys, and only with the task's `user_id` as the
+    encryption context; `api` may only encrypt.
+  - CloudTrail, including every KMS use, plus GuardDuty and Security Hub.
+  - No SSH. ECS Exec is off in production.
+
+### 13.6 Environments and delivery
+
+- **Environments:** staging and production in separate AWS accounts, built from the same Terraform modules: network,
+  ecs, services, rds, kms, s3, alb-waf, iam, observability, ecr.
+- **GitHub Actions:**
+  - On a PR: unit and browser tests.
+  - On main:
+    1. build images and push them to ECR, tagged with the commit;
+    2. deploy to staging, then run the replica suite and a live read-bench smoke test;
+    3. manual approval;
+    4. production rolling deploy.
+- **Recovery:** RDS point-in-time restore (RPO 5 min), Terraform rebuild (RTO 1 h), S3 versioning.
+- **Cost drivers to watch:** worker Fargate hours, residential proxy traffic, model tokens, NAT data, RDS.
+
+## 14. rivo-companion integration (later)
+
+Jev will run as a service. rivo-companion owns users, sign-in and the main app UI, and calls Jev's internal API with a
+service token and the user's id.
+
+| Endpoint | Does |
+|---|---|
+| `POST /v1/tasks` | `{user_id, request}` → a task id |
+| `GET /v1/tasks/{id}` | State, result and progress |
+| `GET /v1/users/{id}/events` | Server-sent events: progress lines, asks, results |
+| `POST /v1/asks/{id}/answer` | Answers to non-secret asks (consent, clarify, detail) |
+| `POST /v1/secure/asks/{id}` | Secret answers, posted by the client straight to Jev with the ask's one-time token. They never pass through rivo-companion's backend |
+| `GET/POST/DELETE /v1/users/{id}/vault/items` | Vault items, masked on read |
+| `GET/POST/DELETE /v1/users/{id}/schedules`, `…/watches` | Schedules and bill-due watches |
+
+Until then, Jev's own web chat runs with one development user, no sign-in, and is never exposed publicly.
+
+## 15. Reference: browser-use (architecture only, no code)
 
 From two code studies of commit c75e847 (7 Oct 2026) and the web research.
 
