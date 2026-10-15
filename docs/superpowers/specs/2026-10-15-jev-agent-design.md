@@ -1,37 +1,59 @@
-# Jev Agent: an in-house browser agent on browser-use's architecture
+# Jev Agent: an end-to-end personal finance assistant on browser-use's architecture
 
-Date: 15 Oct 2026. Status: design, for review.
+Date: 16 Oct 2026 (v2; v1 was 15 Oct). Status: design, for review.
 
 ## 1. Goal
 
-Build Jev's own browser agent, written from scratch in this repo, with the architecture of browser-use
-(github.com/browser-use/browser-use). It should be faster, cheaper and more reliable than Jev's current loops, work on
-sites it has never seen, and serve many users at once.
+Jev is the user's end-to-end personal finance assistant. The user asks for a task. Jev does it in the background on the
+real websites, from start to finish, and comes back to the user only for what a person must give.
 
-Jev adds two things on top of that architecture:
+The browser agent underneath is built in-house, from scratch, on the architecture of browser-use
+(github.com/browser-use/browser-use), with Jev's guardrails on top.
 
-1. **The user gives what Jev doesn't have.** A captcha, an OTP, a card number, a CVV, an expiry, a password, or any
-   detail Jev lacks is asked for in Jev's chat. Secrets go through the hidden field and are never shown to a model.
-2. **The user confirms the payment.** Nothing that pays, buys or commits money happens without the user's yes, asked
-   in code on the payment screen.
+### 1.1 What only the user gives (the ask list)
 
-Everything else follows browser-use's architecture.
+Jev asks the user for these, and only these:
 
-### 1.1 Clean room
+1. **Secrets Jev never keeps:** OTPs, passwords, net-banking or wallet logins, card number, expiry and CVV.
+   - A UPI PIN is never typed by Jev at all: the user approves in their own UPI app.
+2. **Captchas.**
+3. **Consent:** every payment, and every irreversible submission made for the user (§6.1).
+4. **A personal detail Jev doesn't have yet.** It is asked once and kept if its class may be kept (§7).
+5. **A clarification,** only when the request matches more than one of the user's saved targets, or none (two
+   electricity accounts, an unknown biller).
 
-- No browser-use code is copied, forked, vendored or installed. The project's ideas and architecture (MIT-licensed
-  code; ideas aren't copyrightable) are the only input, taken from our own study notes (§11). Nothing comes from
-  workflow-use (AGPL-3.0).
-- Jev's own code (browser.py, snapshot.js masking, gate.py, money.py, skills, memory) is ours, and is reused or
-  rewritten freely.
-- No third-party agent SDKs. Model calls go through Jev's own model client.
+Everything else Jev decides and does by itself:
+- which store, card or way to pay gives the most savings;
+- every page, form, banner and pop-up;
+- every retry and recovery;
+- switching to the next-best option when one fails before the payment.
 
-### 1.2 Targets
+### 1.2 Guardrails
+
+- **Consent.** No payment and no irreversible submission without the user's yes. The yes is asked in code and bound to
+  exactly what is paid or submitted.
+- **Secrets are never kept.** OTPs, passwords, net-banking and wallet logins, card numbers, expiry dates, CVVs, UPI
+  PINs and Aadhaar numbers are never stored anywhere: database, traces, logs or model payloads.
+- **Models never see secrets.** Models see only placeholders.
+
+### 1.3 Clean room
+
+- No browser-use code is copied, forked, vendored or installed.
+  - Its architecture and ideas are the only input, taken from our own study notes (§13).
+  - Its prompts are not copied either; ours are written in our own words.
+  - Nothing comes from workflow-use (AGPL-3.0).
+- Jev's own code is ours, and is reused or rewritten freely.
+- No third-party agent SDKs and no browser extensions.
+
+### 1.4 Targets
 
 | What | Target |
 |---|---|
+| Tasks finished | ≥ 95 % of started tasks end done. Not counted against this: the user's no, a declined card, or a task the user abandons. |
+| Asks | Only from the ask list. Every ask is counted by kind in the trace, and tests fail on any other ask. |
 | Purchase on a store with a learned route | ≤ 60 s agent time (excluding time waiting on the user), ≤ $0.02 model spend |
 | First run on an unseen store | ≤ 3 min agent time |
+| Comparing all stores for a brand | ≤ 60 s (stores read in parallel) |
 | Unseen-site bench, read-only | ≥ 90 % success |
 | Concurrency at launch | 20 tasks at once, queued beyond that |
 
@@ -39,348 +61,521 @@ Everything else follows browser-use's architecture.
 
 | Area | Decision |
 |---|---|
-| Scope | One loop for every task. Vouchers and bills move first; the planner and picker loop and the page-model (actor) loop are retired last. |
-| Browsers | Our own Chrome pool on an Indian server. Each task runs in its own browser context, with an Indian residential proxy per context. Nothing is kept after the task ends. |
-| CDP | Our own thin async CDP client. browser_harness is dropped. |
-| Models | gpt-6-luna for every step; one step goes to gpt-6-astra on a stall, then back. Routes skip the model where they can. |
-| Page reading | Chrome's DOMSnapshot (paint order, bounds), the DOM tree and the accessibility tree, across all frames, including cross-origin iframes and shadow roots. Elements hidden behind others are dropped. Elements are numbered by backendNodeId, and new ones are marked `*`. |
-| Step | One model call per step returning memory, an evaluation of the last goal, the next goal, a plan checklist, the facts and up to 5 actions. The list stops early when the page moves, a question comes up, or the gate steps in. |
-| Screenshots | Sent only when the model asks, with fields masked. Never sent on a page with a card, OTP or password box, and never after the yes. |
-| Tools | The browser-use set: navigate, search, go_back, click, input, select, upload, scroll, send_keys, tabs, wait, extract, find_text / search_page, file area with todo.md, evaluate, done. Jev adds ask_user. |
-| evaluate | Read-only and fenced (§6.4). |
-| Dialogs | Never auto-accepted. A dialog that commits money goes through the payment confirmation. |
-| Captchas | Basic stealth only: real Chrome, AutomationControlled off, human-like typing, Indian proxy. Every captcha goes to the user as a picture. No solver services, no fingerprint spoofing. |
-| Memory | The recent steps plus a summary of the rest, written by the model, with secrets filtered out. Site notes and the route go in as guidance. |
-| Replay | Routes find elements again through five lookups in turn: element hash, stable hash, xpath, role and accessible name, then a unique name, id or aria-label. Amounts, brand and phone are variables. A missed step goes to the model, and the route resumes after it. |
-| Hand-off on a server | Hidden field, captcha picture and UPI QR only. Net banking and wallets aren't offered on a server. |
-| Analytics | None. Only Jev's own traces, kept on our servers. |
-| Staging | Six stages, each with its own spec, plan and build (§9). |
-| Acceptance | Replica-store tests in headless Chrome, a live read-only bench (≥ 90 %), and from stage 3 one real ₹50–₹250 purchase by the user on each store that changed. |
+| Choosing | Jev picks the best option (most savings) by itself. The payment consent names the choice and the saving, with "use another option" offered. |
+| Consent scope | Every payment, every submission that can't be undone or speaks for the user (bureau dispute, card application, mandate cancel), and every consent given on the user's behalf (a bureau pull, account terms). |
+| Sessions | Throwaway: every task starts signed out, in its own browser context, deleted at the end. Sign-in OTPs are asked every time. |
+| Kept data | Encrypted per user: name, phone, email, address, biller account numbers, PAN, date of birth, UPI ID. Never kept: §7. |
+| Card on file | Opt-in per store. The payment consent offers "Yes, and save this card with \<store\>". The token lives with the store or bank, never with Jev. Afterwards only the CVV and OTP are asked. |
+| Failure before the yes | Retry with backoff and a fresh browser context and IP, then switch to the next-best option and carry on. The switch is named in the consent. |
+| Failure after the yes | Never retried. Jev tells the user and offers the next option, which needs a fresh consent. |
+| Reach | In-app chat only. A task waiting on the user shows in the chat. |
+| Expiring asks | A bank OTP not answered in time: the site's Resend OTP is pressed once and the user asked again. If still unanswered, the task pauses with nothing paid, and resumes when the user says continue. |
+| Proactive | Bill-due watches with reminders, and scheduled tasks. Each run asks a fresh consent. No deal alerts. |
+| Site changes | No nightly checks. A failed user task drops its route and drafts a site-note fix for our review. |
+| Banners | Our own handler rejects optional cookies on common consent banners before the model reads the page. No extensions. |
+| Browsers | Our own Chrome pool on an Indian server. One context per task. An Indian residential proxy per context. |
+| CDP | Our own thin async client. browser_harness is dropped. |
+| Models | gpt-6-luna for every step, at high reasoning as chosen on 14 Oct. It is lowered only if the bench shows no loss. A stuck step goes to gpt-6-astra for up to 3 steps. Routes skip the model where they can. |
+| Page reading | browser-use's design: DOMSnapshot, DOM and AX trees, all frames, paint-order occlusion, backendNodeId element numbers, `*` on new elements. Jev's masking stays. |
+| Screenshots | On request, or after an action whose effect the page text can't confirm. Masked. Never on a card, OTP or password page, and never after the yes. |
+| Tools | browser-use's set plus ask_user. evaluate is read-only and fenced (§6.4). |
+| Dialogs | Never auto-accepted. A dialog that commits goes to consent. |
+| Captchas | Basic stealth only. Every captcha goes to the user. No solver services, no fingerprint spoofing. |
+| Net banking and wallets | Supported. Login ID, password and OTP are asked through the hidden field, typed only on the bank's or wallet's own host, and never kept. |
+| UPI | A QR with app links, whose amount and payee are checked against the consent first. Or a collect request to the kept UPI ID, approved by the user in their app. |
+| Analytics | None. Only Jev's own masked traces, kept 30 days. |
 
 ## 3. Architecture
 
 ```
-brain (chat; compare, buy, pay bill)        ← unchanged: Jev's chat brain and its tools
-   │ task: goal, start URL, job (money rules), guide
-   ▼
-agent/      loop · step · message manager · loop detector · compaction · routes (record/replay)
-   │ actions                      ▲ page state
-   ▼                              │
-tools/      registry · actions · ask_user · done(job schema) ── guard: gate (payment confirmation, money rules)
-   │ CDP commands                 ▲ events
-   ▼                              │
-browser/    session (one task = one browser context) · event bus · watchdogs
-dom/        capture (snapshot + DOM + AX, all frames) · visibility · paint order · serializer · hashes · masking
-cdp/        async websocket client · sessions · event routing
-pool/       Chrome processes · contexts · proxies · queue (stage 5)
+in-app chat ── brain (conversation; compare, buy, pay bill, dispute …; picks the best option)
+                 │ task
+                 ▼
+runtime/   tasks (durable) · per-user queue · asks · consent · schedules · watches · pause/resume · recovery
+                 │ run
+                 ▼
+agent/     loop · step · message manager · loop detector · compaction · routes · judge
+                 │ actions                     ▲ page state + effects
+                 ▼                             │
+tools/     registry · actions · ask_user · done(job schema) ── execute(): security → consent → secrets → handler → mask
+                 │ CDP                         ▲ events
+                 ▼                             │
+browser/   session = one browser context · event bus · watchdogs (dom, settle, banners, dialogs, downloads,
+           security, crash, popups, permissions, screenshot)
+dom/       capture (snapshot + DOM + AX, all frames) · visibility · paint order · serializer · hashes · masking
+cdp/       async websocket client
+pool/      Chrome processes · contexts · proxies · health
 ```
 
-The money layer (money.py, gate.py, payment records, the 24-hour check, voucher-code masking) wraps the tools.
-It is the only code that decides whether a payment may happen.
+The money layer (money.py, gate.py, payment records, the 24-hour check, voucher-code masking) sits inside `execute()`
+and the job's checks. It is the only code that decides whether money moves.
 
 ## 4. Components
 
 ### 4.1 cdp/: client
 
-- One websocket per Chrome. Each command carries an id, and each reply resolves its future.
-- Events are routed by sessionId, and flattened target sessions are attached. Commands time out.
-- No daemon, no IPC hop and no control tab.
-- API: `send(method, params, session=None)`, `on(event, handler, session=None)`, `attach(target) -> session`.
+- One websocket per Chrome. Each command has an id and a future; events are routed by sessionId.
+- Flattened target sessions, including cross-origin iframes. Each command type has its own timeout.
+- Reconnects 3 times (1, 2 and 4 s) before the session is declared lost.
+- No daemon, no IPC hop, no control tab.
 
-### 4.2 browser/: session and watchdogs
+### 4.2 browser/: session, settle and watchdogs
 
 **`BrowserSession`** is one task:
-- It creates a browser context on start (`Target.createBrowserContext`, with a proxy when it runs on the pool) and
-  disposes of it on close.
-- It owns its tabs (targets) and the focused tab, sets download and permission settings for its context, and owns an
-  event bus.
+- It creates a browser context (with the task's proxy) and disposes of it at the end.
+- It owns the context's tabs and the focused tab, its download folder and permissions, and an event bus.
 
-**Watchdogs**, each a small class listening on the bus, as in browser-use:
+**Settle.** This is done better than browser-use, which only sleeps 0.3 s while requests are in flight and has no
+DOM-quiet wait. It runs after every action and before every page read:
+- **After a navigation:** wait for that navigation's load event, up to 8 s. A timeout is told to the model as "still
+  loading after 8 s". (browser-use computes this and never shows it.)
+- **Network quiet:** no request in flight for 500 ms, counted from Network events for the context. Ads, analytics,
+  media, websockets, long-polls and anything older than 10 s don't count.
+- **DOM quiet:** no mutations for 300 ms (MutationObserver). Capped at 3 s.
+- **Suggestions:** an autocomplete box waits until its options show (Jev's current rule).
+- **Empty page after load:** wait 3 s, read again, reload once, then tell the model the page is empty.
+
+**Watchdogs:**
 
 | Watchdog | What it does |
 |---|---|
-| dom | Builds the page state on request. |
-| downloads | Tracks a download to completion, gives the file to the task, and keeps PDFs. |
-| dialogs | Reads every JS dialog. An alert is dismissed and noted for the model. A confirm or prompt is held for the model to answer through an action. A confirm whose text pays or commits goes to the payment confirmation. Nothing is auto-accepted. |
-| security | Checks the allowed and blocked domains before navigation, on redirects and on new tabs. URLs are parsed strictly: userinfo is removed and the hostname normalised (the CVE-2025-47241 lesson). A page opened by typing its address never takes a payment, as now. |
-| crash | Notices a crashed target and reports it to the loop. The loop reopens the tab or stops the task, saying why. |
-| popups | Adopts a tab the page opens, which then becomes the focused tab. |
-| permissions | Denies notifications, camera and microphone. Grants geolocation to the context. |
-| screenshot | Takes masked captures (§6.3). |
+| dom | Builds the page state on request, always from a fresh read. |
+| banners | Recognises common consent managers (OneTrust, Cookiebot, Didomi, Quantcast, TrustArc) and in-house banners by their buttons. It presses reject or "necessary only", or accept only when that is the only choice, before the model reads the page. |
+| dialogs | Reads every JS dialog. An alert is dismissed and noted for the model. A confirm or prompt waits for the model's answer. A confirm that pays or submits goes to consent. |
+| downloads | Event-driven, with no fixed sleep: CDP download events. The file is attached to the task, and PDFs are kept. |
+| security | Checks allowed and blocked hosts before navigation, on redirects and on new tabs. URLs are parsed strictly: userinfo is removed and hostnames normalised. A page opened by typing its address never takes a payment. |
+| crash | Notices a crashed target. The tab is reopened once, then recovery takes over (§9). |
+| popups | Adopts tabs the page opens. The agent switches to them and says so. |
+| permissions | Denies notifications, camera and microphone. Grants geolocation. |
+| screenshot | Masked captures (§6.3). |
 
 ### 4.3 dom/: page reader
 
-**Capture.** `DOMSnapshot.captureSnapshot` (with layout, paint order and computed styles), `DOM.getDocument`
-(pierce) and `Accessibility.getFullAXTree`. This is done for every frame, including cross-origin iframes through
-their own targets (depth ≤ 5, ≤ 100 frames), and shadow roots both open and closed.
-
-**Visibility.** An element is kept if its bounds, intersected through every parent frame, lie inside the viewport plus
-1000 px, it has a non-zero size, and CSS doesn't hide it.
-
-**Occlusion.** Elements are walked from the highest paint order down, keeping a union of the opaque rectangles above.
-An element fully under them is dropped; transparent layers don't count as covering. At click time the target is
-hit-tested again.
-
-**Interactive.** By tag, role, listeners, tabindex, contenteditable and cursor, with the accessible name from the AX tree.
-
-**Serialised for the model.** One line per element:
-```
-*[backendNodeId]<role-or-tag name=… value=… placeholder=… aria-*… />
-```
-Text children go on the lines that follow, and shadow, iframe and scroll containers are marked. A `*` marks an element
-that is new since the last step. The text is capped at 40,000 characters, along with the counts of pages above and
-below.
-
-**Masking (Jev's rules carried over).**
-- A field holding a secret shows `[secret]`, and a password value is never shown.
-- The user's saved details show as `[profile:…]` placeholders.
-- After the yes, code-like tokens are masked, except rupee amounts and the order id (money.mask_codes).
-
-**Hashes for replay.** For each element:
-- an element hash: the parent tag path, the static attributes and the accessible name;
-- a stable hash: the same, without dynamic class names;
-- its xpath.
+- **Capture:** DOMSnapshot (layout, paint order, styles), the DOM (pierce) and the AX tree, for every frame. That
+  includes cross-origin iframes through their own sessions (visible, at least 10 px, depth ≤ 5, ≤ 100 frames) and
+  shadow roots, open and closed.
+- **Visibility:** an element is kept if its bounds, intersected through every parent frame, fall within the viewport
+  plus 1000 px, and it isn't hidden.
+- **Occlusion:** a paint-order sweep drops elements fully covered by opaque ones above.
+- **Interactive:** decided by tag, role, listeners, tabindex, contenteditable and cursor, with the AX name.
+- **For the model:**
+  - one line per element, `*[backendNodeId]<role name=… value=… placeholder=… aria-* />`, with text children below;
+  - shadow, iframe and scroll containers marked; `*` for new elements;
+  - "N pages above, M below"; capped at 40,000 characters.
+- **Masking (Jev):**
+  - Secret fields show `[secret]`, and password values are never shown.
+  - The user's kept details show as `[profile:…]`.
+  - After the yes, codes are masked, except rupee amounts and the order id.
+- **Hashes for replay:** element hash, stable hash and xpath.
 
 ### 4.4 agent/: loop
 
-**`run(task)`** loops `step()` until done, a stop, or the limits below.
+**Per step:**
+1. Prepare the context: page state, the previous actions' effects, nudges (budget at 75 %, replan after 3 failures,
+   loop warnings).
+2. Run a learned route step if one matches (§4.6).
+3. Otherwise make one model call returning
+   `{evaluation_previous_goal, memory, next_goal, plan_update, current_plan_item, facts, actions[≤5]}`.
+4. Run the actions (`multi_act`). The list ends at:
+   - a navigation, search, back or tab switch;
+   - any change of URL or focused tab, or new controls appearing;
+   - an error, an ask or a consent.
+5. Post-process:
+   - facts are grounded on the page;
+   - history and effects recorded;
+   - the loop detector runs;
+   - the judge runs on `done`.
 
-**`step()`**, in order:
-1. Prepare the context: the page state from the dom watchdog, any queued screenshot request (§6.3), and nudges for
-   budget, replan, loop and forced done.
-2. The route: if a learned step's element is on the page, run it with no model call (§4.6).
-3. Otherwise one structured-output call: `{memory, evaluation_previous_goal, next_goal, plan_update, facts, actions[≤5]}`.
-   The plan is a checklist, and facts follow the job's schema (money.FACTS).
-4. Run the actions through the tools (`multi_act`). Each one is validated against the current page, and the list
-   stops at a page change, a navigation, a tab switch, an error, a question to the user, or the gate.
-5. Post-process: store the facts (each grounded on the page, as `take_facts` does now), record the history, run the
-   loop detector, and save the route on success.
+**Effects as ground truth.** Every action returns what it changed: controls new or gone, URL, values, dialogs, tabs
+and downloads. This is Jev's existing diff. It replaces browser-use's "the screenshot is ground truth" at a fraction of
+the tokens. A screenshot is added only when the effects can't confirm the action.
+
+**Our prompt** gives this guidance, in our words:
+- clear banners and pop-ups first;
+- for autocomplete, type, then pick the suggestion on the next step;
+- redo actions cut short by a page change;
+- filters before browsing;
+- a 403 or bot page goes to recovery, never a blind retry;
+- note what was tried, to avoid loops;
+- plan by how complex the task is;
+- before `done`, check every requirement against the page, with values grounded and never invented.
 
 **Limits.**
-- Steps: 40 per task, plus 10 after the payment's yes, counted from the yes.
-- Failures: 5 in a row trigger a forced `done`.
-- Time: 180 s per step.
-- Escalation: a stall, a refused action or a failure gives the next step to gpt-6-astra.
+- Steps: 40 per task, plus 10 after the yes.
+- Time: 180 s per step. Per-action caps: click 15 s, type 60 s, navigate 30 s, select 8 s.
+- Model calls: retried up to 5 times with backoff and jitter. On a rate limit or 5xx, astra takes the step.
+- An empty answer is retried once, then counts as a failure.
+- 5 failures in a row hand over to recovery (§9), not to a forced `done`.
 
-**Loop detector.** Normalised actions are hashed over a window of 20, and each page is fingerprinted by URL, element
-count and DOM text hash. Nudges come at 5, 8 and 12 repeats. A money job stops at the third nudge, saying nothing was
-paid.
+**Loop detector.** Normalised actions are hashed over a window of 20, and pages fingerprinted. Nudges come at 5, 8
+and 12 repeats, and after 5 steps on an unchanged page. A third nudge hands over to recovery.
 
 **Message manager.**
-- The prompt is one system prompt plus one rebuilt state message: the user request, the history, the agent state
-  (plan, todo, secret placeholder names) and the browser state.
-- Above about 40,000 characters, the history is summarised by the model into 6,000 characters or fewer, keeping the
-  last 6 steps.
-- Literal secret values are replaced with their placeholders before anything is stored or sent.
+- One system prompt plus one rebuilt state message: request, history, plan, todo, secret placeholders, browser state.
+- History above 40,000 characters is summarised into 6,000 characters or fewer, keeping the last 6 steps, with secrets
+  filtered out.
+
+**done** returns the job's schema with an explicit `status` (done, failed, blocked or needs_user) and is never
+defaulted. (browser-use hides `success` in structured mode, so it always reads true.)
+
+**Judge.**
+- After `done`, the deterministic proof comes first: an order id or reference on a page after the yes, or an
+  acknowledgement number for a submission.
+- Then a strict judge call, on text history only, that must agree. It doubts self-reported success, and a captcha,
+  invented values or an early done make it fail.
+- If it disagrees, the loop gets one more round with the judge's reason. If it still disagrees, the result is
+  "unclear", and the user is told what is known.
+- (browser-use's judge is advice only.)
 
 ### 4.5 tools/: registry and actions
 
-**Registry.** `@action(description, params=Model, domains=…, ends_list=bool)`. The model's action union is generated
-from the registry for the current page's domain. Parameters are validated, and named dependencies (session, page,
-secrets, job) are injected.
+**Registry.** `@action(description, params=Model, domains=…, ends_list=bool, commits=bool)`. The model's action union
+is generated per page domain. Parameters are validated, and dependencies injected by name.
 
-**Actions.**
+**Mechanics** (browser-use's, with our fixes):
 
-| Action | Notes |
-|---|---|
-| navigate, search, go_back | End the action list. |
-| click | By element number; coordinates as a fallback. |
-| input | Human-like key-by-key typing for secrets and card details. |
-| select, upload, scroll, send_keys | |
-| switch_tab, close_tab, wait | |
-| extract | A cheap model reads the page into facts; its output is masked. |
-| find_text, search_page | |
-| file area: write, read, replace, todo.md | |
-| evaluate | Read-only (§6.4). |
-| ask_user | §5. |
-| done | The job's result schema. |
+- **click**
+  - `<select>` is refused and its options returned instead. A file input is refused; use upload.
+  - Scroll into view, then geometry: quads, then box model, then rect.
+  - Hit-test at the point: it passes on the target, an ancestor or descendant, or its label.
+  - CDP mouse move, press and release, with short human delays.
+  - A checkbox or radio is checked to have toggled, with a script click as the fallback.
+  - A covered control gets a script click, **except a commit control**: a covered pay or submit button is never
+    script-clicked. The model is told what covers it.
+  - A new tab is switched to and announced. A download is tracked.
+- **input**
+  - Focus (DOM.focus, else a click), then clear: select, the native value setter, then input and change events, with
+    fallbacks.
+  - Key events per character with real key codes.
+  - Date, time, range and jQuery or Bootstrap datepickers are set through the native setter with their events.
+  - In a contenteditable, a dropped first character is retyped.
+  - Non-secret values are read back, and a reformatted value is reported. Secrets are checked as non-empty only.
+  - An autocomplete box gets a hint to wait for its suggestions.
+- **dropdown_options / select_dropdown**
+  - Native select, ARIA listbox (including options elsewhere, through aria-controls or aria-owns, which browser-use
+    can't do), menus.
+  - Exact, case-insensitive match. On a miss, the available options are listed.
+- **navigate, search, go_back** (all end the list); **scroll, send_keys, upload, wait**.
+- **switch_tab, close_tab:** tabs shown as "Tab ab12: url — title".
+- **extract:**
+  - The fresh DOM is converted to markdown in our own code, chunked at 100,000 characters with overlap and table
+    headers carried over.
+  - Facts come out in the job's schema, through a cheap model, with the output masked.
+- **search_page, find_elements:** free and instant. They also search inside iframes, which browser-use doesn't.
+- **file area:** write, read, replace, with todo.md for long tasks.
+- **evaluate:** read-only and fenced (§6.4).
+- **ask_user:** §5.
+- **done.**
 
 **Every action runs through `execute(action)`:**
-1. the security re-check of the domain;
-2. the payment confirmation (§6.1);
-3. secret substitution (§6.2);
+1. the security re-check;
+2. consent, if the action commits;
+3. secret substitution;
 4. the handler;
 5. masking of the result.
 
+**Error texts** go back to the model as information. Examples:
+- "Element N is no longer on the page; read it again." (A stale element doesn't count as a failure.)
+- "Couldn't click N: covered by \<label\>."
+- "Site unavailable: \<url\>."
+- "The value shows as '…', not '…'."
+
 ### 4.6 Routes: record and replay
 
-**Record.** On success, the history up to the yes is saved under the store or biller's key (memory `routes`). Each step
-keeps its action, the five lookups for its element, and the text it typed as a placeholder or variable (`{brand}`,
-`{amount}`, `[profile:phone]`, `[ask]`).
+**Record.** On success, the steps up to the yes are saved per store or biller (memory `routes`). Each step keeps its
+action, its element's lookups (element hash, stable hash, xpath, role and accessible name, unique name/id/aria-label)
+and its text as a placeholder or variable (`{brand}`, `{amount}`, `{account}`, `[profile:phone]`, `[ask]`).
 
-These steps are marked `think` and are never replayed:
+These steps are marked `think` and never replayed:
 - an amount;
-- a step taken on a page that showed the cart, payable, fee or bill;
+- a step on a page showing the cart, payable, fee or bill;
 - the yes, and everything after it.
 
-**Replay.** Before each model call, the next route step (or one of the 2 after it) is looked up through the five
-lookups in turn. If exactly one element matches, it runs through `execute` with no model call. Otherwise the model
-takes the step, and the route resumes after the step the model actually took.
+**Replay.**
+- Before each model call, the route's next step (or one of the 2 after it) is looked up through the five lookups in
+  turn.
+- A single match runs through `execute` with no model call. Otherwise the model takes the step, and the route resumes
+  after the step the model actually took.
 
 **Learning.**
 - A newer success replaces the route.
-- A run that used the route and failed before the yes drops it.
+- A failure before the yes in a run that used the route drops it.
 
-### 4.7 pool/: Chrome pool (stage 5)
+### 4.7 runtime/: tasks, asks and schedules
 
-- N Chrome processes on an Indian server, each with up to 10 live contexts.
-- A task queue with a cap of 20 concurrent tasks.
-- A residential Indian proxy per context.
-- A health check restarts a crashed Chrome, and its tasks stop, saying so.
-- Locally, there is one Chrome and the same interface.
+**Task record** (Postgres, per user):
+- goal and job;
+- state: queued, running, waiting_user, paused, done, failed, unclear or cancelled;
+- checkpoint: plan, facts, memory summary, route position, the chosen option and its alternatives, consents, and the
+  payment row;
+- timestamps.
+
+No secrets are stored.
+
+**Concurrency:** one money task per user at a time, with that user's other tasks queued; 20 tasks at once overall.
+
+**Waiting on the user:**
+- An ask puts the task in waiting_user. The browser context stays alive until the ask expires (§5).
+- An expired ask pauses the task: the context is disposed of and nothing is paid.
+- "Continue" restarts it from the start, reusing the checkpoint (the choice, facts and route), so it goes quickly.
+- A consent is always asked again.
+
+**Restart or crash:**
+- A task running before the yes is re-queued and starts again.
+- A task after the yes is marked unclear, and the user is told. It is never repeated. Jev offers "check my order",
+  which is a read-only task on the store's order history.
+
+**Progress.** A task silent for 3 minutes posts one line in the chat about what it is doing.
+
+**Schedules.**
+- The user creates them ("pay my electricity bill on the 5th every month", "buy ₹2,000 of Amazon vouchers monthly").
+- Each run is an ordinary task with a fresh consent, waiting in the chat if the user isn't there.
+- A run missed while the server was down runs once if less than 12 hours late.
+
+**Bill-due watches.**
+- Each saved biller's bill is read, read-only, weekly and daily in the 5 days before it is due.
+- A new bill or a nearing due date posts one chat message with "Pay now". Alerts are de-duplicated.
+
+### 4.8 pool/: Chrome pool
+
+- N Chrome processes on an Indian server, up to 10 live contexts each.
+- Indian residential proxy per context. A blocked context gets a new IP on retry.
+- A health check restarts a crashed Chrome, and its tasks go to recovery.
+- Locally: one Chrome, same interface.
+
+### 4.9 Learning from failures
+
+A task that fails or ends unclear:
+- drops the route it used;
+- runs one reflection call on the masked trace, drafting site-note lines (learn.py's checks).
+
+Drafts go to a review queue for us, never straight into the notes, because a page could plant instructions. Routes
+learn from successes by themselves.
 
 ## 5. Asking the user
 
-`ask_user(kind, field?, question)` is called by the model, or by code when a step needs it:
+`ask_user(kind, why, field?, host?)`. Only these kinds exist. The agent and the code can't ask anything else.
 
-| kind | When | How it reaches the user | What the model sees |
+| Kind | When | What the user sees | Expires |
 |---|---|---|---|
-| `secret` | OTP, CVV, card number, expiry, password, PIN, or any value Jev lacks that it shouldn't see | Hidden field in Jev's chat | Only `<secret>answerN</secret>` |
-| `captcha` | A captcha on the page | A picture of the captcha, sized to read on a phone; the user's answer | Only `[captcha]` |
-| `qr` | A UPI QR after the yes | The QR with app links, plus "I paid" and "I didn't pay" buttons | Whether the user says they paid |
-| `choice` / `text` | A detail the user must decide or supply that isn't a secret (which bank, which address) | A normal chat question | The answer |
+| `secret` | OTP, password, net-banking or wallet login, card number, expiry, CVV | Hidden field in the in-app chat ("Your bank sent an OTP for ₹250 Swiggy on SmartBuy") | OTP: the site's limit (about 3 min), Resend pressed once, then pause. Others: 10 min, then pause |
+| `captcha` | A captcha on the page | The captcha's picture, sized to read on a phone | Image refreshed once, then pause |
+| `consent` | §6.1 | The code-written summary, with Yes, "Yes, and save card with \<store\>", "Use another option" and No | 10 min, then pause (nothing paid) |
+| `qr` | UPI QR after the yes | The QR with app links, plus I paid / I didn't pay | The QR's own expiry |
+| `detail` | A personal detail not in the user's profile | A plain question. The answer is kept if its class may be kept | 30 min, then pause |
+| `clarify` | The request matches several saved targets, or none | A choice | 30 min, then pause |
 
-**Code-level backstops** (as now):
-- Typing a literal into a field that holds a secret is refused.
-- A secret box with no answer yet triggers a `secret` ask by itself.
-- A card's details are never typed into a code box.
-- Codes have their own try limits, and a bank OTP gets fresh tries.
+**Secrets:**
+- Held in a per-task vault in memory only, scoped to the host they were asked for.
+- A gateway's bank page counts as that host only when the payment redirected there, with the host parsed strictly.
+- Typed once, then wiped, and wiped in any case when the task ends.
+- The model sees only `<secret>otp1</secret>`-style placeholders.
 
-The expiry is asked "as MM/YY" and typed in the form its box takes.
+**Code-level backstops:**
+- Typing a literal into a secret field is refused.
+- A secret field still empty triggers its ask by itself.
+- Card details never go into a code box.
+- Codes have their own try limits, with fresh tries for a bank OTP.
+- The expiry is asked as MM/YY and typed in the form its box takes.
 
-## 6. Money safety
+## 6. Money and consent safety
 
-### 6.1 Payment confirmation
+### 6.1 Consent
 
-Before any click, key press or dialog accept, `execute` asks the gate whether the action commits: pays, buys, places,
-books or submits money (gate.commit_label, as now).
+**Classes:**
+- **pay:** payments, including the card-on-file option.
+- **submit:** a bureau dispute, a card application.
+- **cancel:** a mandate cancellation.
+- **accept:** a consent or terms on the user's behalf beyond the store's own checkout terms, such as a bureau pull or
+  account terms.
 
-If it does:
-- The approval is written in code from the job and the page: what is bought or paid, from whom, how it is paid, and
-  the payable amount, including any fee.
-- It is asked once, as a yes or no.
-- Only a yes runs the action.
-- The bank's OTP page and the gateway steps that follow belong to that payment, and ride on that yes.
+**Before a commit.** `execute()` asks the gate whether an action commits (gate.commit_label, extended to the four
+classes). If it does, code writes the summary from the job and the page:
+- what is bought, paid or submitted, and to whom;
+- the amount, including any fee, and how it is paid;
+- the saving against the next option;
+- the terms ticked to complete it;
+- any switch made ("SmartBuy was down, so this is Woohoo").
 
-Money jobs never use standing or pre-approval. The job's checks run before the question:
+The job's checks run first:
 - the cart is exactly the order;
 - the payable is no more than the amount plus any fee shown;
-- no unsettled purchase or bill exists in the last 24 hours;
-- the page wasn't opened by typing its address.
+- no unsettled purchase or bill in the last 24 hours;
+- the page wasn't reached by typing its address.
+
+**Binding.**
+- A consent is bound to a hash of class, payee, amount, items and method. Any change asks again.
+- The bank OTP page and the gateway steps after the yes ride on it.
+- Money jobs never use standing or pre-approval.
+- Each consent is audited: user, time, summary hash, answer. No secrets.
 
 ### 6.2 Secrets
 
-- The model only ever sees placeholder names.
-- Values are put in at execution time, only on hosts where they were asked for.
-- A literal value is redacted everywhere: prompts, history, the summary, traces, `extract` output and tool results.
-- Card numbers and CVVs are never stored. OTPs are used once.
+- Placeholders only, put in at execution time on their own host.
+- Literal values are redacted from prompts, history, summaries, the judge, traces, `extract` output and tool results.
 
 ### 6.3 Screenshots
 
-- A screenshot is sent only when the model asks, with every filled field and the user's details masked (browser.py's
-  MASK, as now).
-- It is refused on a page with any card, OTP or password box, and after the yes.
+- Taken on request, or when an action's effects can't confirm it.
+- Every filled field and every kept detail is masked.
+- Refused on a page with any card, OTP or password box, and after the yes.
 
 ### 6.4 evaluate
 
-- It runs in an isolated world, and its result passes the masking.
-- It is refused:
-  - on a page with any secret box;
-  - on a payment or bank host;
-  - in a money job from the cart onwards;
-  - after the yes.
-- A script that clicks, submits, navigates or sets values is refused. This is checked statically before it runs, and
-  by comparing the page before and after; a change is reported and the money job stops.
+- Runs in an isolated world, and its result is masked.
+- Refused on a page with a secret box, on payment and bank hosts, in a money job from the cart onwards, and after the
+  yes.
+- A script that clicks, submits, navigates or sets values is refused. This is checked before it runs and by comparing
+  the page before and after; a change stops a money job.
 
-## 7. Data flow: buying a voucher
+## 7. Data
 
-1. The brain compares stores and the user picks "SmartBuy + Regalia Gold".
-2. The task starts with its goal, the brand page URL and the job (vouchers).
-3. A session opens a new context.
-4. The route runs the known steps: brand page and sign-in with `[profile:phone]`. The OTP goes through `ask_user(secret)`.
-5. The model adds the amounts and reads the cart into facts. The gate's cart check passes.
-6. Checkout opens the card form. The model plans every box in one turn, and each `[ask]` goes through
-   `ask_user(secret)`.
-7. The model presses PROCEED. `execute` asks the gate, which asks the user to confirm with the written approval. On
-   yes, the click runs and the payment record is written as "started".
-8. The bank's OTP page appears; the OTP goes through `ask_user(secret)`. SUBMIT rides on the yes.
-9. The order page shows. The model sets `order_id`, the proof check passes, and Jev reports "Bought …". The record is
-   marked paid and the route is saved.
-10. The context is disposed of.
-
-## 8. Errors
-
-| Case | What happens |
+| Kept, encrypted per user, typed only into matching fields | Never kept anywhere |
 |---|---|
-| Model gives no valid action | One retry, then a forced `done(failure)`. |
-| Action on a missing element | "Element N not on the page" goes back to the model. |
-| Page changes mid-list | The list stops and the page is read again. |
-| Crash | The tab is reopened once, then the task stops. |
-| Context or proxy failure | One new context, then the task stops. |
-| After the yes, anything unclear | Never repeated. The user is told to check SMS and email, and the record is marked unclear. |
-| Declined | The record is marked failed and Jev reports "Not bought". |
-| A loop in a money job | The job stops, saying nothing was paid. |
+| Name, phone, email, address | OTPs |
+| Biller account and consumer numbers | Passwords; net-banking and wallet logins |
+| PAN and date of birth (typed only on bureau, bank and card-issuer hosts) | Card number, expiry, CVV |
+| UPI ID | UPI PIN (never typed by Jev at all) |
+| Card names (no numbers); store and card preferences | Aadhaar number |
+| Routes (hold no user data) | Browser sessions and cookies (each context is deleted at the end of its task) |
 
-## 9. Stages
+- Traces are masked and kept 30 days.
+- Card-on-file tokens live with the store or bank only.
+- Change from today: memory now accepts PAN (encrypted and host-scoped). Aadhaar stays refused.
 
-Each stage gets its own spec, plan and build. Each gate includes all unit tests and headless-Chrome replica tests.
+## 8. Data flows
+
+**"Get me ₹250 of Swiggy vouchers":**
+1. The brain compares stores in parallel (≤ 60 s) and picks SmartBuy + Regalia Gold (₹234.50 effective).
+2. A task starts: route for the brand page and sign-in, `[profile:phone]`, sign-in OTP asked (`secret`).
+3. The model picks ₹250 and reads the cart; the cart check passes.
+4. The card form: card number, expiry and CVV asked in one turn (`secret` ×3), typed key by key.
+5. PROCEED is a commit, so a `consent` is asked: "Buy ₹250 Swiggy on SmartBuy with Regalia Gold · ₹15.50 back in points
+   (best; next Woohoo UPI ₹242.50) · Yes / Yes and save card / Use another option / No".
+6. On yes: click, then the bank OTP (`secret`), then SUBMIT riding on the yes.
+7. Order page: proof plus judge, then "Bought … Order HSB…". The record is marked paid and the route saved.
+
+**SmartBuy down at step 2:** retry twice, then a new context and IP. Still down, so switch to Woohoo + UPI. The consent
+says "SmartBuy wasn't loading, so this is Woohoo with UPI (3% off, code WOOHOO)".
+
+**Scheduled bill:**
+1. On the 5th, a task reads the BESCOM bill. Its captcha is asked, and the task waits in the chat.
+2. The user opens the app and types it. Consent "Pay ₹1,240 to BESCOM · UPI"; on yes, the QR is shown; I paid, then the
+   receipt and reference.
+
+## 9. Recovery
+
+| Failure | What Jev does by itself |
+|---|---|
+| Transient: timeout, 5xx, network error, crash, empty page | Retry the step twice, reload, then a new context and IP, restarting from the route (≤ 2 restarts). |
+| Blocked: 403, bot page, 3 captchas in a row | A new context and IP once. Then the next-best option (vouchers), or a retry in 1 hour with a chat line (bills). |
+| Unavailable: out of stock, limit reached, brand not sold, store down for maintenance | The next-best option, named in the consent. |
+| Bad user detail: invalid account number, login refused | `detail` ask once. The kept value is corrected. |
+| Agent stuck: loop detector or 5 failures | gpt-6-astra for 3 steps. Then one fresh restart with the failure noted. Then the next-best option. Then tell the user what was tried. |
+| After the yes: declined | Recorded as failed. "Not paid", with the next option offered as one tap and a fresh consent. |
+| After the yes: unclear | Recorded as unclear. Told to check SMS and email, with "check my order" offered. Never repeated. |
+
+A switch happens only before the yes, and never changes what the user asked for (brand, amount, biller).
+
+## 10. Errors the user sees
+
+Only:
+- the asks (§5);
+- the result;
+- "paused, say continue";
+- recovery outcomes that need them (§9).
+
+No internal errors, stack traces or "I'm stuck" questions.
+
+## 11. Stages
+
+Each stage gets its own spec, plan and build. Every gate includes all unit tests and headless-Chrome replica tests.
 
 | # | Stage | Delivers | Gate |
 |---|---|---|---|
-| 1 | Browser core | cdp/ client; browser/ session, contexts, watchdogs; dom/ reader with masking and hashes. A CLI that prints the serialised page. | The page reader reads every replica fixture and 10 live store and biller pages read-only. No secret value appears in any output. |
-| 2 | Agent loop and tools | agent/ loop, message manager, loop detector, compaction; tools/ registry and actions; ask_user; the gate in `execute`. | Replica purchase and bill flows pass, including the safety set: fee, leftover cart, injected page, declined card. Unseen-site read bench ≥ 90 %. |
-| 3 | Money jobs switch | Vouchers, voucher reads and bills run on the new agent. The actor loop is deleted. | Targets met on the replicas. One real ₹50–₹250 purchase per store changed. All live reads pass. |
-| 4 | Replay | Five-lookup routes with variables, think steps and resume. | A second replica purchase uses ≤ 50 % of the first's model turns. Live: a SmartBuy purchase with a learned route takes ≤ 60 s agent time. |
-| 5 | Pool | Mumbai server, Chrome pool, queue, proxies. | 20 concurrent replica purchases with no cross-session leakage. Live read bench from the server ≥ 90 %. |
-| 6 | Everything else | General tasks (Experian, MyUPI, shopping) move over. The planner and picker loop, snapshot.js and browser_harness are deleted. | Each task's bench passes on the new agent. |
+| 1 | Browser core | cdp/, browser/ (contexts, settle, watchdogs incl. banners and dialogs), dom/ reader with masking and hashes. A CLI that prints a page's state. | Every replica fixture and 10 live store and biller pages read correctly. No secret in any output. Settle ends the wait and look turns on the replica flows. |
+| 2 | Agent loop and tools | agent/ loop, effects, message manager, loop detector, judge, done schema; tools/ with the mechanics in §4.5; `execute()` with consent and secrets; ask_user. | Replica purchase and bill flows, plus the safety set: fee, leftover cart, injected page, declined card, covered pay button, confirm dialog. Ask-count tests pass. |
+| 3 | Money jobs switch | Vouchers (auto-pick, parallel compare, every way to pay, card-on-file opt-in), bills (incl. net banking through hidden asks) on the new agent. The actor loop is deleted. | Replica targets met. One real ₹50–₹250 purchase per store changed, and one real bill. Live read bench ≥ 90 %. |
+| 4 | Runtime | Durable tasks, in-app asks with expiry and resend, pause and continue, restart rules, recovery (§9), schedules and bill-due watches, progress lines, PAN and UPI ID kept. | Pause and continue, restart before and after the yes, recovery switches, and schedules all tested on replicas. A live scheduled bill read. |
+| 5 | Replay | Five-lookup routes with variables, think steps and resume. | A second replica purchase uses ≤ 50 % of the first's model turns. Live: SmartBuy with a route ≤ 60 s agent time. |
+| 6 | Pool and many users | Mumbai server, Chrome pool, proxies, per-user queue and data partition. | 20 concurrent replica purchases with no cross-user leakage. Live read bench from the server ≥ 90 %. |
+| 7 | Other use cases | Bureau disputes, mandates, card applications on the new agent, with submit, cancel and accept consents. The planner and picker loop, snapshot.js and browser_harness are deleted. | Each use case's bench passes. One real run each, with the user. |
 
-## 10. Testing
+## 12. Testing
 
-- **Units:** each module on its own.
-  - The CDP client against a fake socket.
-  - The serialiser against recorded snapshots.
-  - Hashes and lookups against fixture pages.
-  - The registry and `execute` guards.
-  - Secret redaction everywhere a string goes.
-- **Replica tests:** headless Chrome on the voucher, bill, OTP and gateway fixtures, with the model scripted. These are
-  extended with cross-origin iframe, shadow DOM, covered-button and confirm-dialog fixtures.
-- **Live bench:** read-only. Every store × 5 brands, and 5 billers' bill reads.
-- **Live purchase:** one per store changed, by the user, from stage 3.
-- **Speed:** agent time and spend come from traces and are checked against §1.2 at stages 3 and 4.
+- **Units:**
+  - the CDP client against a fake socket;
+  - settle against scripted network and DOM activity;
+  - the serialiser against recorded snapshots;
+  - lookups against fixture pages;
+  - `execute()` guards;
+  - consent binding;
+  - redaction everywhere a string goes;
+  - the ask whitelist.
+- **Replica tests:** headless Chrome on the voucher, bill, OTP and gateway fixtures, with the model scripted. New
+  fixtures:
+  - cross-origin card iframe;
+  - shadow DOM;
+  - covered pay button;
+  - confirm dialog;
+  - consent banner;
+  - slow XHR page;
+  - 500 and 403 pages;
+  - out-of-stock page;
+  - net-banking login.
+- **Ask-count assertions:** every replica flow asserts its exact ask sequence (for example: sign-in OTP, card ×3,
+  consent, bank OTP) and nothing more.
+- **Data scans:** no secret value in the database, traces, logs or model payloads after any test, using the same
+  matcher the model calls use.
+- **Live bench:** read-only, every store × 5 brands, and 5 billers' bill reads.
+- **Live purchases:** one per store changed, by the user, from stage 3.
 
-## 11. Reference: browser-use study (architecture only, no code)
+## 13. Reference: browser-use (architecture only, no code)
 
-From the code study of commit c75e847 (7 Oct 2026) and the web research.
+From two code studies of commit c75e847 (7 Oct 2026) and the web research.
 
 **Taken:**
-- the event bus with watchdogs;
-- CDP only;
-- the DOMSnapshot, DOM and AX capture with paint-order occlusion;
-- backendNodeId element numbers with `*` on new elements;
-- the step output (memory, goals, plan, actions ≤ 5) and the `multi_act` page-change guards;
-- the loop detector;
-- history compaction;
-- the action registry;
+- event bus and watchdogs; CDP only;
+- DOMSnapshot, DOM and AX capture with paint-order occlusion; backendNodeId element numbers with `*`;
+- the step output (memory, goals, plan, ≤ 5 actions); `multi_act`'s list endings;
+- the click chain with hit-test and script fallback; per-character typing with clearing, read-back and the datepicker
+  setter;
+- the dropdown tools; new-tab auto-switch; the error texts;
+- model-call retries and fallback;
+- loop detector; compaction; the action registry;
 - domain-scoped secret placeholders;
-- the replay with five lookups.
+- extract with chunking; search_page and find_elements;
+- the five lookups for replay; the planning and pre-done guidance (in our words).
 
-**Changed for Jev:**
+**Done better than browser-use:**
 
 | browser-use | Jev |
 |---|---|
+| Sleeps 0.3 s while requests are in flight; its network-idle settings are unused | Settle waits for network and DOM quiet |
+| Navigation timeouts never shown to the model | Shown |
+| Structured `done` hides `success`, so it always reads true | Explicit status |
+| Judge is advice only | Judge decides (with proof) |
 | Dialogs auto-accepted | Never auto-accepted |
-| Screenshots unmasked every step | Masked, on request only |
-| No ask-user action and no hook that can block an action | ask_user, and the gate in `execute` |
-| TOTP and tool outputs unredacted | Redacted |
-| PostHog analytics on by default | None |
+| Screenshots unmasked every step | Masked, and only when needed |
+| Secrets leak through extract, tool results and TOTP | Redacted |
+| evaluate unrestricted | Fenced |
+| Can't select ARIA options outside the combobox | Can |
+| search_page and find_elements top document only | Also inside iframes |
+| extract can read a stale DOM | Always a fresh read |
+| Crash watchdog disabled | Enabled |
 | One Chrome process per session | One context per task |
-| CrashWatchdog disabled | Enabled |
-| Allow-list bug from loose URL parsing | Strict URL parsing |
+| Covered buttons always script-clicked | Never for a commit control |
+| Allow-list bypass from loose URL parsing (CVE-2025-47241) | Strict parsing |
+| PostHog analytics on by default | None |
+| workflow-use's fallback to the agent disabled | Routes resume with the model |
+| Fixed 0.5 s wait for a download after every click | Event-driven |
 
 **Not taken:**
-- the LLM adapters (we use Jev's model client);
-- MCP, cloud skills, sandbox, the beta Rust agent, the judge, GIF and HAR recording;
-- workflow-use (AGPL).
+- LLM adapters, MCP, cloud skills, sandbox, the beta Rust agent, GIF and HAR recording;
+- the about:blank keep-alive tab (the pool keeps Chrome alive);
+- third-party extensions;
+- coordinate clicks keyed to model names.
 
 **Measured caution:** human-graded, early-2025 browser-use with GPT-4o succeeded on about 30 % of live tasks
-(Online-Mind2Web), so Jev's reliability comes from its guards, routes and bench, not from the architecture alone.
+(Online-Mind2Web). Jev's reliability has to come from settle, effects, recovery, consent and routes, and is proven on
+our own bench, not on browser-use's numbers.
