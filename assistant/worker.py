@@ -2156,8 +2156,9 @@ class Worker:
             if not value or value == s["job_facts"].get(name):
                 continue
             listed = [a for a in money.amounts(value) if a >= 10]  # a list of amounts, or a cart's: each on the page
+            parts = re.split(r"\s*\|\s*", value) if name == "offers" else [value]  # each offer on its own
             if (name in {"amounts", "cart"} and listed and set(listed) <= shown) or \
-                    any(money.grounded(value, text) for text in texts):
+                    all(any(money.grounded(part, text) for text in texts) for part in parts):
                 s["job_facts"][name] = value
                 if name == "cart" and self.job["kind"] == "voucher":
                     self.cart_check(value)
@@ -2365,13 +2366,15 @@ class Worker:
         """Whether the payment the user said yes to now shows a UPI QR on screen to hand them (read by the gate's
         watch too)."""
         s = self.state
-        return bool(self.job) and self.job["kind"] == "bill" and self.paid() and not s["qr_sent"] and \
+        return bool(self.job) and self.job["kind"] in {"bill", "voucher"} and self.paid() and not s["qr_sent"] and \
             self.payment_qr()[1] is not None
 
     def qr_hand_off(self, page):
         """The QR goes to the user only when it pays the approved amount to a named UPI address: its picture and
         buttons that open their UPI app. They pay with their PIN; the page is then read for the confirmation."""
-        s, biller = self.state, self.job["biller"]
+        s, job = self.state, self.job
+        what, payee = (f"your {job['biller']} bill", job["biller"]) if job["kind"] == "bill" else \
+            (f"your {job['brand']} vouchers", job["portal"])
         link, image = self.payment_qr()
         approved = Decimal(s["approved_pay"] or "0")
         problem = money.qr_problem(link, approved) if link else "I couldn't read the UPI QR's amount and payee"
@@ -2381,8 +2384,7 @@ class Worker:
         params = money.upi_params(link)
         s["qr_sent"] = True
         question = (f"Scan this QR with your UPI app, or tap your app below, and pay {money.shown(approved)} to "
-                    f"{params.get('pn') or params['pa']} for your {biller} bill with your UPI PIN. Nothing is paid "
-                    "until you do.")
+                    f"{params.get('pn') or params['pa']} for {what} with your UPI PIN. Nothing is paid until you do.")
         reply = self.ask({"kind": "choice", "image": image, "text": question,
                           "links": [{"label": label, "url": url} for label, url in money.app_links(link)],
                           "options": [{"id": "o1", "label": "I paid"}, {"id": "o2", "label": "I didn't pay"}]})
@@ -2393,8 +2395,9 @@ class Worker:
                                                              "I didn't pay"}]
         if not said:
             self.end_payment("failed")
-            s["status"], s["outcome"] = "done", "not_paid"
-            self.say(f"Not paid: nothing went to {biller}, and your bill is still due.", kind="result")
+            s["status"], s["outcome"] = "done", "not_paid" if job["kind"] == "bill" else "not_bought"
+            self.say(f"Not paid: nothing went to {payee}, and your bill is still due." if job["kind"] == "bill" else
+                     f"Not bought: nothing went to {payee}, and no {job['brand']} vouchers were bought.", kind="result")
             return None
         s["notes"].append("The user says they paid the QR in their UPI app: read the page for the payment's "
                           "confirmation and its reference.")
@@ -2425,7 +2428,7 @@ class Worker:
             return None
         s["status"], s["outcome"] = "done", "read"
         read = "; ".join(f"{name}: {value}" for name, value in s["job_facts"].items()
-                         if name in {"amounts", "reward", "discount", "fee", "limit"})
+                         if name in {"amounts", "reward", "discount", "offers", "fee", "limit"})
         self.say(f"Read the {self.job['brand']} vouchers on {self.job['portal']}: {read}.", kind="result")
         return None
 

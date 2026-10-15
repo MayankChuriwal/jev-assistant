@@ -344,6 +344,43 @@ def test_a_read_ending_on_a_refused_fact_gets_one_turn_to_copy_it(tmp_path, monk
     assert w.state["outcome"] == "read" and "WOOHOOCCNB" in w.state["job_facts"]["discount"]
 
 
+def test_a_read_keeps_every_offer_by_way_of_paying_each_as_shown(tmp_path, monkeypatch):
+    # the user's rule: the best saving whatever the way to pay, so UPI's and debit's offers are read too
+    shown = ("Swiggy\n₹50\n₹100\nOffers for you\nDiscount on UPI Payments\nGet 3% Discount\nWOOHOO\nCopy\n"
+             "Discount on Debit Card Payments\nGet 2% Discount\nWOOHOODC\nCopy")
+    w = worker_with(tmp_path, page=page(shown), goal=READ)
+    script(monkeypatch, answer(end="done", amounts="₹50, ₹100", offers=(
+        "Discount on UPI Payments: Get 3% Discount WOOHOO | Discount on Debit Card Payments: Get 2% Discount "
+        "WOOHOODC")))
+    w.command("tick")
+    assert w.state["outcome"] == "read" and "WOOHOODC" in w.state["job_facts"]["offers"]
+    w = worker_with(tmp_path, page=page(shown), goal=READ)
+    script(monkeypatch, answer(end="done", amounts="₹50, ₹100",
+                               offers="Discount on UPI Payments: Get 5% Discount WOOHOO"))
+    w.command("tick")
+    assert "offers" not in w.state["job_facts"]  # a part the page doesn't show is refused
+
+
+UPI_GOAL = money.voucher_goal("Woohoo", "Swiggy", 5000, {2000: 2, 1000: 1}, "UPI", code="WOOHOO")
+UPI_LINK = "upi://pay?pa=pinelabs.woohoo@icici&pn=Woohoo&am=5000.00&tr=TXN9&cu=INR"
+
+
+@pytest.mark.parametrize("reply, outcome", [({"option": "o1"}, None), ({"option": "o2"}, "not_bought")])
+def test_a_purchase_paid_by_upi_hands_its_qr_to_the_user(tmp_path, monkeypatch, reply, outcome):
+    # the user's rule: UPI's 3% may be the most savings, so a purchase is paid by UPI as a bill is
+    from unittest.mock import Mock
+    w = worker_with(tmp_path, page=page("Scan the QR with any UPI app\nPay ₹5,000", url="https://pay.woohoo.in/upi"),
+                    goal=UPI_GOAL, replies=[reply])
+    paid(w)
+    w.browser.evaluate, w.browser.qr_screenshot = Mock(return_value=UPI_LINK), Mock(return_value="cXI=")
+    script(monkeypatch, answer())
+    w.command("tick")
+    assert w.asked[0]["image"] == "cXI=" and "pay ₹5,000 to Woohoo for your Swiggy vouchers" in w.asked[0]["text"]
+    assert w.state["outcome"] == outcome
+    if outcome:
+        assert w.told[-1]["text"].startswith("Not bought: nothing went to Woohoo")
+
+
 def test_a_read_never_adds_to_a_cart(tmp_path, monkeypatch):
     # review: a read could press "Add to cart" (a step, not a commit) and leave a cart for the next purchase
     add = {"id": "add", "kind": "click", "label": "Add to cart", "role": "button", "node": 4}

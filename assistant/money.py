@@ -14,7 +14,7 @@ VOUCHER_WINDOW = timedelta(hours=24)  # the same vouchers bought within this lon
 BILL_GOAL = re.compile(r"^Pay the (.+?) bill for account \[profile:([a-z][a-z0-9_]{1,39})\]: "
                        r"(?:the amount due|exactly ₹([\d,]+))(?:, by (UPI|card))?\.$")
 BILL_FACTS = ("name", "amount_due", "due_date", "payable", "payee", "reference")
-VOUCHER_FACTS = ("amounts", "reward", "discount", "fee", "limit", "cart", "payable", "order_id")
+VOUCHER_FACTS = ("amounts", "reward", "discount", "offers", "fee", "limit", "cart", "payable", "order_id")
 FACTS = {"bill": BILL_FACTS, "voucher": VOUCHER_FACTS, "voucher_read": VOUCHER_FACTS}  # what each job reads
 AMOUNT = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{2,3})+|\d+)(?:\.(\d{1,2}))?(?![\d,])")
 UPI_LINK = re.compile(r"upi://pay\?[^\s\"'<>\\]+", re.IGNORECASE)
@@ -93,6 +93,27 @@ def promo_code(text):
     lines as shown, its code last), else None."""
     found = PROMO.search(str(text or "")) or PROMO_LAST.search(str(text or ""))
     return found[1] if found else None
+
+
+MODES = (("upi", r"\bupi\b"), ("debit", r"\bdebit\b"), ("credit", r"\bcredit\b"), ("netbanking", r"\bnet ?banking\b"),
+         ("wallet", r"\bwallets?\b"))
+PAYERS = {"upi": "UPI", "debit": "Debit card", "netbanking": "Net banking", "wallet": "Wallet"}  # besides credit cards
+
+
+def mode_offers(text):
+    """A store's offers by way of paying, as the read copied them ("… UPI …: Get 3% Discount WOOHOO | …"): each part's
+    modes, its words and its code. A part naming no way to pay is the store's own discount, not one of these."""
+    found = []
+    for part in re.split(r"\s*\|\s*", str(text or "")):
+        modes = {mode for mode, words in MODES if re.search(words, part, re.IGNORECASE)}
+        if modes and part.strip():
+            found.append({"modes": modes, "text": part.strip(), "code": promo_code(part)})
+    return found
+
+
+def payer_mode(payer):
+    """How a payer pays: one of PAYERS' modes by its name, else a credit card's name."""
+    return next((mode for mode, name in PAYERS.items() if name.lower() == str(payer).strip().lower()), "credit")
 
 
 def read_goal(portal, brand, amount):
@@ -224,13 +245,14 @@ def card_rate(card):
     return (Decimal(found[1]), Decimal(found[2])) if found else None
 
 
-def value(facts, card, amount, cap=None):
+def value(facts, card, amount, cap=None, extra=None):
     """An offer in rupees for one card: points (the card's base earn × the offer's multiplier, held to the store's
     cap in points), rupees back (points × the card's rupees a point, or the offer's percent back, held to a cap in
     rupees), the discount and fee, what is payable, and the effective price. Unranked when its worth isn't known."""
     amount = Decimal(amount)
     offer, rate = reward(facts.get("reward")), card_rate(card)
     discount, fee = money_off(facts.get("discount"), amount), money_off(facts.get("fee"), amount)
+    discount += money_off(extra, amount)  # the offer for how it's paid (Woohoo's UPI 3%), on top of the store's own
     if offer["kind"] == "off":  # a discount read as the reward: the same money off, counted once
         discount = max(discount, (amount * offer["value"] / 100).quantize(Decimal("0.01")))
     payable = (amount - discount + fee).quantize(Decimal("0.01"))

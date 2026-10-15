@@ -316,3 +316,27 @@ def test_a_stores_card_offer_with_a_code_is_carried_into_the_purchase():
     ("2.5 % Instant Discount + 1X Reward Points*", None), ("Flat 2% OFF on HDFC", None)])
 def test_a_discounts_code_is_read_as_the_page_shows_it(text, code):
     assert money.promo_code(text) == code
+
+
+WOOHOO_OFFERS = ("Discount on UPI Payments: Get 3% Discount WOOHOO | Discount on Debit Card Payments: Get 2% Discount "
+                 "WOOHOODC | Discount with Credit Card or Net Banking: Get 1% Discount WOOHOOCCNB")
+
+
+def test_a_stores_offers_by_way_of_paying_are_each_their_modes_and_code():
+    # live, Woohoo's "Offers for You": the best saving may be UPI's, whatever the user's cards (the user's rule)
+    offers = money.mode_offers(WOOHOO_OFFERS)
+    assert [(sorted(o["modes"]), o["code"]) for o in offers] == [
+        (["upi"], "WOOHOO"), (["debit"], "WOOHOODC"), (["credit", "netbanking"], "WOOHOOCCNB")]
+    assert money.mode_offers(None) == [] and money.mode_offers("Flat 2% OFF") == []
+    assert money.mode_offers("Get 5% off with Paytm Wallet PAYTM5")[0]["modes"] == {"wallet"}
+
+
+def test_a_payer_is_a_mode_or_a_credit_card():
+    assert [money.payer_mode(p) for p in ("UPI", "Debit card", "Net banking", "Wallet", "Regalia Gold")] == [
+        "upi", "debit", "netbanking", "wallet", "credit"]
+    assert money.PAYERS["upi"] == "UPI"
+
+
+def test_a_modes_offer_adds_to_the_stores_own_discount():
+    worth = money.value({"discount": "1% off"}, None, 250, extra="Discount on UPI Payments: Get 3% Discount WOOHOO")
+    assert worth["discount"] == Decimal("10.00") and worth["payable"] == Decimal("240.00") and worth["ranked"]

@@ -109,15 +109,18 @@ TOOLS = [
     tool("voucher_compare", "Compare a brand's gift vouchers for a total across the voucher stores the user's cards "
                             "fit (HDFC SmartBuy, SBI Card, Axis Gift EDGE, Axis Grab Deals, IndusInd, Yes Bank, ICICI "
                             "iShop, Amex ShopWise, Woohoo): it reads each store's page in a real browser (no sign-in, "
-                            "buys nothing) and ranks the offers by effective price in code.",
+                            "buys nothing) and ranks the offers by effective price in code, over every way to pay: "
+                            "the user's cards, and UPI, debit card, net banking or a wallet where a store offers a "
+                            "discount for it.",
          brand=text("The brand the user named (“Swiggy”)"),
          amount={"type": "integer", "description": "The total the user wants, in rupees (“5k” is 5000)"}),
-    tool("buy_voucher", "Buy one offer from the user's last comparison: the store and card they picked. It signs in, "
-                        "asks for the card's details and the bank's code in a hidden field, and asks yes or no once "
-                        "before paying.",
+    tool("buy_voucher", "Buy one offer from the user's last comparison: the store and way to pay they picked. It "
+                        "signs in, applies the store's code for that way to pay, asks for a card's details and the "
+                        "bank's code in a hidden field (UPI: a QR to scan, or a request to approve in their app), "
+                        "and asks yes or no once before paying.",
          portal=text("The store, exactly as voucher_compare named it"), brand=text("The brand"),
          amount={"type": "integer", "description": "The total, in rupees, as compared"},
-         card=text("The card, exactly as voucher_compare named it")),
+         card=text("The card or way to pay (“UPI”), exactly as voucher_compare named it")),
     tool("pay_bill", "Pay one of the user's bills on the biller's own website, in a real browser. It reads the bill, "
                      "checks the name on it and that something is due, asks yes or no once with the amount, and the "
                      "user pays by UPI (a QR, or a tap that opens their UPI app) or by card (its details and the "
@@ -463,19 +466,29 @@ class Brain:
             span = money.amount_range(facts.get("amounts"))
             if span:  # live, Woohoo's Zomato card: any amount in a range, so the total is one voucher
                 made = {amount: 1} if span[0] <= amount <= span[1] else None
-            for card in fitting:
+            # each card the store takes, with its offer for credit cards; then each other way to pay it offers a
+            # discount for (the user's rule: the most savings whatever the way to pay)
+            by_mode = {}
+            for found in money.mode_offers(facts.get("offers")):
+                for mode, _ in money.MODES:  # in a fixed order: ties rank the same every time
+                    if mode in found["modes"]:
+                        by_mode.setdefault(mode, found)
+            payers = [(card, self.card_note(card), by_mode.get("credit")) for card in fitting] + \
+                [(money.PAYERS[mode], None, found) for mode, found in by_mode.items() if mode != "credit"]
+            for card, payer, found in payers:
                 if not made or (limit is not None and amount > limit):
                     options = [min(max(amount, span[0]), span[1], limit or span[1])] if span else \
                         money.nearest(amount, amounts, limit)
                     offers.append({"portal": name, "card": card, "vouchers": None, "ranked": False, "effective": None,
                                    "nearest": [f"₹{total:,}" for total in options], "limit": facts.get("limit")})
                     continue
-                worth = money.value(facts, self.card_note(card), amount, cap=note.get("cap"))
+                worth = money.value(facts, payer, amount, cap=note.get("cap"), extra=found and found["text"])
                 offers.append({"portal": name, "card": card, "vouchers": money.counted(made), "nearest": [],
                                "limit": facts.get("limit"), "reward": facts.get("reward"), **worth})
                 self.offers[(name, card)] = {"brand": brand, "amount": amount, "split": made,
                                              "reward": facts.get("reward") or None,
-                                             "code": money.promo_code(facts.get("discount"))}
+                                             "code": found["code"] if found else money.promo_code(
+                                                 facts.get("discount"))}
         made = [o for o in offers if o["vouchers"]]
         if offers and not made:  # the eval: with the totals only inside each offer, the stores were offered instead
             totals = sorted({int(t[1:].replace(",", "")) for o in offers for t in o["nearest"]},

@@ -691,6 +691,28 @@ def test_the_live_swiggy_250_comparison_ranks_by_worth_and_buys_woohoos_card_off
     assert "Apply code WOOHOOCCNB at checkout." in core.executed[-1]["goal"]
 
 
+def test_every_way_to_pay_a_store_offers_is_compared_with_the_cards(tmp_path):
+    # the user's rule: the most savings whatever the way to pay; Woohoo's UPI 3% beats its credit card 1%
+    brain, core = voucher_brain(tmp_path, said=["Swiggy 250"], reads={
+        "SmartBuy": {"amounts": "₹250, ₹500", "reward": "Upto 5X Reward Points / 5% Cashback"},
+        "Woohoo": {"amounts": "₹50, ₹100, ₹1,000", "offers": (
+            "Discount on UPI Payments: Get 3% Discount WOOHOO | Discount on Debit Card Payments: Get 2% Discount "
+            "WOOHOODC | Discount with Credit Card or Net Banking: Get 1% Discount WOOHOOCCNB")}})
+    core.memory.remember("preference", "Regalia Gold (HDFC)", label="cards", supersede=True)
+    offers = brain.voucher_compare("Swiggy", 250)["offers"]
+    assert [(o["portal"], o["card"], o["effective"]) for o in offers] == [
+        ("SmartBuy", "Regalia Gold (HDFC)", "₹234.50"), ("Woohoo", "UPI", "₹242.50"),
+        ("Woohoo", "Debit card", "₹245"), ("Woohoo", "Regalia Gold (HDFC)", "₹247.50"),
+        ("Woohoo", "Net banking", "₹247.50")]
+    brain.items.append({"role": "user", "content": "Woohoo + UPI"})
+    brain.buy_voucher("Woohoo", "Swiggy", 250, "UPI")
+    assert core.executed[-1]["goal"] == ("Buy ₹250 of Swiggy vouchers on Woohoo: 2 × ₹100 + 1 × ₹50, paying with UPI. "
+                                         "Apply code WOOHOO at checkout.")
+    brain.items.append({"role": "user", "content": "Woohoo + Regalia"})
+    brain.buy_voucher("Woohoo", "Swiggy", 250, "Regalia Gold (HDFC)")
+    assert "Apply code WOOHOOCCNB at checkout." in core.executed[-1]["goal"]
+
+
 def test_a_card_with_no_note_is_compared_on_its_banks_store(tmp_path):
     # review I5 / spec §3.1: a card with no note is saved with its bank, and its bank's store is read, unranked
     brain, core = voucher_brain(tmp_path, said=["Swiggy 2000"], cards=["HDFC Swiggy"], reads={
