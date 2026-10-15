@@ -3974,6 +3974,35 @@ def test_the_banks_code_is_sent_under_the_payments_yes(tmp_path, monkeypatch, no
     assert w.told[-1]["text"].startswith("Payment ")  # dry run: "Submit: the site is still working on it"
 
 
+def test_a_purchase_the_watch_cant_read_is_ended_by_the_order_page(tmp_path, monkeypatch, no_wait):
+    # live, SmartBuy ₹250: the bank took the OTP and the vouchers were bought, but Jev's watch read the page after
+    # SUBMIT as unclear twice and stopped the task, so no "Bought" and the purchase stayed unconfirmed
+    from assistant import actor
+    w = worker_with(tmp_path, page=bank_page("[secret]"), goal=FIVE)
+    w.state["history"] += [dict(PAID), {"operation": "TYPE_TEXT", "action": "Enter OTP", "text": "[secret:answer2]"}]
+    w.state.update(approved_pay="5000", offer="5000", checked=True)
+    w.state["payment_id"] = w.memory.payment_started("SmartBuy", money.voucher_key("Swiggy"), "5000", "Regalia Gold")
+    order = fake_page(url="https://www.gyftr.com/instantvouchers/payment/HSB327028719-1792067040",
+                      text="Thank you\nYour order no HSB327028719-1792067040 has been placed successfully.",
+                      actions=[{"id": "h", "kind": "click", "label": "Home", "role": "link", "node": 1}])
+
+    def submit(*_, **__):  # the bank's page hands over to the store's order page
+        w.browser.observe.return_value, w.browser.fresh.return_value = order, False
+        return {}
+
+    w.browser.act.side_effect = submit
+    no_planner(monkeypatch)
+    jev_checks(monkeypatch, after_commit="unclear")
+    w.command("tick")  # the bank's Submit, under the payment's yes
+    assert w.state["status"] not in STOPPED
+    monkeypatch.setattr(actor, "turn", lambda *a, **k: (
+        {"actions": [], "facts": {"order_id": "HSB327028719-1792067040"}, "end": "done", "say": "Bought",
+         "options": []}, {"model": "fake", "latency_ms": 1}))
+    w.command("tick")
+    assert w.state["outcome"] == "bought" and w.told[-1]["text"].startswith("Bought ₹5,000 of Swiggy vouchers")
+    assert w.memory.payments("SmartBuy", "voucher_swiggy")[0]["status"] == "paid"
+
+
 def test_the_banks_code_is_sent_with_its_own_submit_link_under_the_payments_yes(tmp_path, monkeypatch, no_wait):
     # live, HDFC: Enter in "Enter OTP Here" sent nothing; its SUBMIT is a link, and was asked about again
     page = fake_page(url=BANK, text="Merchant Name:\nGYFTR VIA SMARTBUY\nTotal Charge:\n₹1250.00", actions=[

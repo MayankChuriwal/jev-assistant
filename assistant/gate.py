@@ -920,6 +920,7 @@ def watch(w, label, goal):
     s = w.state
     commit = s["commit"]
     since, told, unclear = commit["since"], False, 0
+    money_job = bool(getattr(w, "job", None))  # a payment or purchase: its own ending reads the proof
     while True:
         # a payment's bank asking for its one-time password: its next step, never a model's "processing" to wait on
         bank, qr = getattr(w, "bank_box", None), getattr(w, "pay_qr", None)
@@ -929,9 +930,9 @@ def watch(w, label, goal):
         if verdict == "processing":
             if w.elapsed() - since >= w.processing_ms:
                 s["commit"] = None
-                raise Halt("blocked", f"{label} went through, but after {w.processing_ms // 60000} minutes the site "
-                                      "still shows it in progress. I stopped watching; check the site or its app "
-                                      "for updates.")
+                why = (f"{label} went through, but after {w.processing_ms // 60000} minutes the site still shows it "
+                       "in progress. I stopped watching; check the site or its app for updates.")
+                raise w.job_halt(why) if money_job else Halt("blocked", why)  # a purchase's record is settled
             if not told:
                 told = True
                 w.say(f"{label}: the site is still working on it. I'll tell you as soon as it's confirmed.")
@@ -953,6 +954,8 @@ def watch(w, label, goal):
         s["notes"].append(f"Done: {label}, confirmed by the site. Report every detail the page shows.")
     elif verdict == "failed":
         s["notes"].append(f"{label} failed; trying again needs a new approval.")
+    elif money_job:  # live, SmartBuy: bought, but Jev read the page after the bank's SUBMIT as unclear and stopped
+        s["notes"].append(f"Whether {label} went through isn't clear yet: read the page for the order or receipt.")
     else:
         raise Halt("blocked", f"I can't tell whether {label} went through, so I stopped rather than risk doing it "
                               "twice. Please check the site or its app before trying again.")
