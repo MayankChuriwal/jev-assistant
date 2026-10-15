@@ -47,8 +47,10 @@ MULTIPLIER = re.compile(r"(\d+(?:\.\d+)?)\s*[x×](?![a-z])", re.IGNORECASE)  # "
 PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")  # "5% cashback", "10% GV coins", "2.5%"
 EARN = re.compile(r"^\s*(\d+(?:\.\d+)?)\s+per\s+(\d+)\s*$")  # a card note's base earn: "5 per 150"
 CART = (re.compile(r"(\d+)\s*[x×]\s*₹\s?([\d,]+)"), re.compile(r"₹\s?([\d,]+)\s*[x×]\s*(\d+)"))
-ORDER_LABEL = re.compile(r"\border\s*(?:id|no\.?|number)\b\s*[:#-]?\s*$", re.IGNORECASE)  # a bare label: id below it
-ORDER_ID = re.compile(r"\border\s*(?:id|no\.?|number)\b\s*[:#-]?\s*([A-Za-z0-9][A-Za-z0-9-]{4,})", re.IGNORECASE)
+ORDER_LABEL = re.compile(r"\border\s*(?:(?:id|no|number)\b\.?|#)\s*[:#-]?\s*$",
+                         re.IGNORECASE)  # a bare label: id below it
+ORDER_ID = re.compile(r"\border\s*(?:(?:id|no|number)\b\.?|#)\s*[:#-]?\s*([A-Za-z0-9][A-Za-z0-9-]{4,})",
+                      re.IGNORECASE)  # "Order No. : …", "Order #: …"
 RUPEE_BEFORE = re.compile(r"(?:₹|\brs\.?|\binr)\s*$", re.IGNORECASE)
 DECIMAL_AFTER = re.compile(r"\.\d")
 TOKEN = re.compile(r"(?<![\w-])(?=[A-Za-z0-9-]*\d)[A-Za-z0-9][A-Za-z0-9-]{3,}(?![\w-])")  # letters and digits

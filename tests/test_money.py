@@ -190,6 +190,13 @@ def test_codes_and_pins_are_masked_and_the_order_id_is_kept():
     assert "GV7Q2M44K1" in masked and "HSB922376724-2892849964" in masked and "₹2,000 × 2" in masked
 
 
+@pytest.mark.parametrize("line", ["Order No. : HSB327028719-1792067040", "Order No.\nHSB327028719-1792067040",
+                                  "Your order no HSB327028719-1792067040 has been placed",
+                                  "Order #: HSB327028719-1792067040"])
+def test_the_order_number_stays_readable_whatever_its_labels_punctuation(line):
+    assert "HSB327028719-1792067040" in money.mask_codes(line)
+
+
 def test_a_voucher_bought_today_is_asked_about_again():
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)
