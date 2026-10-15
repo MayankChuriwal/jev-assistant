@@ -322,6 +322,15 @@ def test_a_payment_the_page_says_was_declined_is_not_bought(tmp_path, monkeypatc
     assert w.memory.payments("SmartBuy", "voucher_swiggy")[0]["status"] == "failed"
 
 
+def test_a_purchase_going_in_circles_stops_and_says_nothing_was_bought(tmp_path):
+    # live, SBI Card: the circle guard's question was dropped each time a pop-up changed the page, so the loop ran on
+    from assistant.errors import Halt
+    w = worker_with(tmp_path, page=page("Swiggy\n₹100 ADD"), goal=GOAL)
+    with pytest.raises(Halt, match="going in circles on www.gyftr.com.*Nothing was bought"):
+        w.loop_stuck("visits|x", "visits 6: x")
+    assert w.asked == [] and w.state["stuck_why"] == "visits 6: x"
+
+
 def test_a_read_never_adds_to_a_cart(tmp_path, monkeypatch):
     # review: a read could press "Add to cart" (a step, not a commit) and leave a cart for the next purchase
     add = {"id": "add", "kind": "click", "label": "Add to cart", "role": "button", "node": 4}

@@ -2933,6 +2933,9 @@ class Worker:
         trace."""
         s = self.state
         why = why or key
+        if self.job:  # a money job stops: live, SBI Card's pop-up changed the page before each question, which was
+            s["stuck_why"] = why  # dropped, and the loop ran on to the turn cap
+            raise self.job_halt(f"I'm going in circles on {rules.host(s['page']['url'])}, so I stopped.")
         asked = s["loops"].get(key, 0)
         if asked >= LOOP_ASKS:
             raise self.circling(after_asking=True, why=f"asked {asked}x already: {why}")

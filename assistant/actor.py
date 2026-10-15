@@ -74,7 +74,9 @@ Pop-ups: close banners and pop-ups that cover the page. For cookies, pick the ch
 Paying:
 - Press a pay button like any other: the system shows the user what it pays and asks their yes itself. Never press a \
 pay button twice; never press one the user said no to.
-- Never save a card, take an offer the goal didn't ask for, sign up, or change the user's account or contact details.
+- Never save a card, take an offer the goal didn't ask for, sign up, or change the user's account or contact details. \
+When signing in leads to a sign-up form (a new account: name, e-mail, terms), end with stop saying the user has no \
+account on this site yet; never close it and try again.
 
 Ending your turn (end):
 - continue: run your actions.
