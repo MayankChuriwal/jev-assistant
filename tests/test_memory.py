@@ -24,7 +24,7 @@ def test_open_makes_the_schema_once_and_opening_again_is_harmless(memory, databa
     tables = memory.run(lambda cur: [r["table_name"] for r in cur.execute(
         "SELECT table_name FROM information_schema.tables WHERE table_schema = %s ORDER BY table_name",
         (memory.schema,)).fetchall()])
-    assert tables == ["approvals", "events", "facts", "habits", "ids", "notes", "payments", "schema_version"]
+    assert tables == ["approvals", "events", "facts", "habits", "ids", "notes", "payments", "routes", "schema_version"]
     again = Memory.open(database_url, schema=memory.schema, key=TEST_KEY)
     try:
         assert again.run(lambda cur: cur.execute("SELECT version FROM schema_version").fetchall()) == [{"version": 1}]
@@ -458,3 +458,13 @@ def test_a_payment_is_recorded_started_then_settled_with_its_reference(memory):
 def test_a_payment_never_keeps_an_account_number_only_its_key(memory):
     with pytest.raises(ValueError):
         memory.payment_started("BESCOM", "1234567890", "1240", "UPI")
+
+
+def test_a_route_is_kept_per_key_replaced_by_the_next_and_dropped(memory):
+    # the user's rule: a store's path that worked runs again without the model thinking through each step
+    assert memory.route("voucher:SmartBuy") is None
+    memory.save_route("voucher:SmartBuy", [{"op": "CLICK", "name": "Add to cart"}])
+    memory.save_route("voucher:SmartBuy", [{"op": "CLICK", "name": "Checkout"}])
+    assert memory.route("voucher:SmartBuy") == [{"op": "CLICK", "name": "Checkout"}]
+    memory.drop_route("voucher:SmartBuy")
+    assert memory.route("voucher:SmartBuy") is None

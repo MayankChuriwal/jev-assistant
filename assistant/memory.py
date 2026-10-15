@@ -116,6 +116,11 @@ CREATE TABLE IF NOT EXISTS habits (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS habits_live
   ON habits (host, skill, (lower(btrim(regexp_replace(goal, '\s+', ' ', 'g'))))) WHERE retired_at IS NULL;
+CREATE TABLE IF NOT EXISTS routes (
+  key text PRIMARY KEY,
+  steps jsonb NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS events (
   id bigserial PRIMARY KEY,
   at timestamptz NOT NULL DEFAULT now(),
@@ -609,6 +614,19 @@ class Memory:
             f"SELECT * FROM habits WHERE retired_at IS NULL AND (%s::text IS NULL OR skill = %s) "
             f"AND (%s::text[] IS NULL OR {UNDER}) ORDER BY updated_at DESC, id DESC LIMIT %s",
             (skill, skill, hosts, hosts, limit)).fetchall())
+
+    def route(self, key):
+        """The steps of the last run that worked for this job on this store or biller (worker.route_from), or None."""
+        row = self.run(lambda cur: cur.execute("SELECT steps FROM routes WHERE key = %s", (key,)).fetchone())
+        return row["steps"] if row else None
+
+    def save_route(self, key, steps):
+        self.run(lambda cur: cur.execute(
+            "INSERT INTO routes (key, steps) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET steps = EXCLUDED.steps, "
+            "updated_at = now()", (key, Jsonb(steps))))
+
+    def drop_route(self, key):
+        self.run(lambda cur: cur.execute("DELETE FROM routes WHERE key = %s", (key,)))
 
     def habit(self, habit_id):
         return self.run(lambda cur: cur.execute("SELECT * FROM habits WHERE id = %s", (habit_id,)).fetchone())

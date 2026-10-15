@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-from . import actor, executor, gate, jev, learn, money, planner, replay, rules, skills, views
+from . import actor, executor, gate, jev, learn, money, planner, privacy, replay, rules, skills, views
 from .browser import Browser, ExecutionUncertain, StalePage, TabsClosed, unique
 from .errors import Halt, Retry
 from .memory import HOME, KEY, LABELS, Memory, StoreError, Unstorable
@@ -32,6 +32,9 @@ BILL_SPEND = 1.00  # a bill's or a purchase's page model reads every page at hig
 READ_SPEND = 0.30  # a voucher store's read: a few pages, nothing bought
 ACTOR_TURNS, ACTOR_IDLE, ACTOR_BAD = 40, 3, 3  # a job's page-model turns: in all, in a row with no progress, refused
 # (live, SmartBuy: signing in took 10 turns and a three-voucher cart ran out of 25)
+ROUTE_OPS = {"CLICK", "TYPE_TEXT", "PRESS_KEY", "SELECT"}  # a route's steps: never a wait, scroll or look
+ROUTE_READS = {"voucher": ("cart", "payable", "fee"), "bill": money.BILL_FACTS}
+ROUTE_AHEAD = 3  # a route's step may be up to this many ahead of where it stood (a pop-up the last run never had)
 PAID_TURNS = 10  # turns after the user's yes, counted from it: its outcome is always read
 DECLINED = re.compile(r"\b(?:declined|payment (?:has )?failed|transaction (?:has )?failed|payment (?:was )?"
                       r"unsuccessful|transaction (?:was )?unsuccessful)\b", re.IGNORECASE)  # a card the bank refused
@@ -275,6 +278,11 @@ def repeats(message, earlier):
     """Whether `message` says again what `earlier` said: most of the shorter one's words are in both."""
     said, before = (set(re.findall(r"[a-z0-9]+", t.lower())) for t in (message, earlier))
     return bool(said and before) and len(said & before) / min(len(said), len(before)) >= 0.6
+
+
+def controls(page):
+    """What a page offers to act on, values aside: the rest of a list chosen on it still stands once a box is typed."""
+    return {(a.get("kind"), a.get("label"), a.get("frame")) for a in page["actions"]}
 
 
 class Worker:
@@ -2001,6 +2009,16 @@ class Worker:
         if self.job["kind"] == "voucher" and not s["checked"]:
             s["checked"] = True
             self.voucher_checks()
+        planned = self.route_step(page)
+        if planned:  # the store's route knows this step: it runs through the same gate, with no model call
+            s["route_used"] = True
+            s["actor_log"] = (s["actor_log"] + [{"turn": s["actor_turns"], "url": page["url"], "end": "route",
+                                                 "actions": [planned[1].get("label")], "ms": 0}])[-40:]
+            self.run_plan([planned], page)
+            last = s["history"][-1] if s["history"] else {}
+            if last.get("page_changed") is False or last.get("effect") == "failed":
+                s["route_off"] = True  # it did nothing here: the model takes over for the rest of the run
+            return None
         look = s.pop("actor_look", False)
         if look and self.masking():  # a picture can't be masked: a voucher's code would reach the model
             look = False
@@ -2022,6 +2040,9 @@ class Worker:
                                              "actions": answer.get("actions"), "facts": answer.get("facts"),
                                              "say": answer.get("say"), "ms": meta["latency_ms"]}])[-40:]
         self.take_facts(answer.get("facts") or {}, page)
+        s["read_now"] = any(s["job_facts"].get(name) and money.grounded(str(s["job_facts"][name]), page["text"])
+                            for name in ROUTE_READS.get(self.job["kind"], ()))  # a page showing what the money
+        # rules check (the cart, what's payable, the bill): its steps are always the model's, which reads it
         if self.job["kind"] == "bill":
             self.bill_checks()
         seen = (page.get("fingerprint"), json.dumps(s["job_facts"], sort_keys=True), self.replies())  # its own waits
@@ -2048,6 +2069,84 @@ class Worker:
             return None
         s["actor_bad"] = 0
         return self.run_plan(plan, page)
+
+    # ---- a store's or biller's route: the steps of the last run that worked, run again without the page model
+
+    def route_key(self):
+        job = self.job or {}
+        return {"voucher": f"voucher:{job.get('portal')}", "bill": f"bill:{job.get('biller')}"}.get(job.get("kind"))
+
+    def route_from(self):
+        """The run's steps up to the user's yes, as a route: each control's name (the brand as {brand}), what was
+        typed only as a placeholder, and `think` where the model must decide again: an amount (each purchase its
+        own), a step chosen on a page whose facts it read (the cart, the bill), or anything typed in its own words."""
+        brand = str((self.job or {}).get("brand") or "")
+        swap = (lambda text: re.sub(re.escape(brand), "{brand}", text, flags=re.IGNORECASE)) if brand else str
+        steps = []
+        for h in self.state["history"]:
+            if h.get("committed") and h.get("approved") == "user":
+                break  # what follows the yes (the bank's code, the order) is the model's and the code's
+            op = h.get("operation")
+            if op not in ROUTE_OPS or h.get("effect") == "failed" or h.get("page_changed") is False \
+                    or h.get("unconfirmed"):
+                continue
+            label, text = str(h.get("action") or ""), h.get("text") if op == "TYPE_TEXT" else None
+            if text and text.startswith("[secret:"):
+                text = "[ask]"
+            elif text and rules.CAPTCHA_BOX.search(label):
+                text = "[captcha]"
+            elif text and not PLACEHOLDER.fullmatch(text):
+                text = swap(text)
+            think = bool(h.get("reads") or op not in {"CLICK", "TYPE_TEXT"} or rules.PRICE.search(label)
+                         or not learn.control_name(label)
+                         or (text and "{" not in text and not text.startswith("[")))  # typed in its own words
+            step = {"op": op, "name": swap(learn.control_name(label)), "text": text, "key": h.get("key"),
+                    "think": think}
+            steps.append(step)  # a step done twice in a row is two steps (two vouchers added); one that changed
+        return steps  # nothing was left out above
+
+    def route_step(self, page):
+        """(operation, action, extras) for the route's next step when its control is on this page, one of a kind;
+        None for the model: no route, the route used up or switched off, a step that needs thought, after the yes."""
+        s = self.state
+        if self.job["kind"] not in {"voucher", "bill"} or s.get("route_off") or self.paid():
+            return None
+        if "route" not in s:
+            try:
+                s["route"] = self.memory.route(self.route_key()) or []
+            except Exception:  # memory down: the model does every step
+                s["route"] = []
+        route, at, brand = s["route"], s.get("route_at", 0), str(self.job.get("brand") or "")
+        last = s["history"][-1] if s["history"] else None
+        if last:  # the model may have taken the route's next step itself: carry on after it (the next one of that
+            # name: three "Add to cart" in a row are three steps)
+            done = next((j for j in range(at, len(route)) if route[j]["op"] == last.get("operation")
+                         and route[j]["name"].replace("{brand}", brand.lower()) == learn.control_name(
+                             last.get("action"))), None)
+            at = s["route_at"] = done + 1 if done is not None else at
+        for j in range(at, min(at + ROUTE_AHEAD, len(route))):
+            step = route[j]
+            if step["think"]:
+                return None
+            name = step["name"].replace("{brand}", brand.lower())
+            kind = "fill" if step["op"] == "TYPE_TEXT" else "click"
+            found = [a for a in page["actions"] if a.get("kind") == kind and a.get("node") is not None
+                     and learn.control_name(a.get("label")) == name]
+            if len(found) == 1:
+                s["route_at"] = j + 1
+                text = (step["text"] or "").replace("{brand}", brand)
+                return step["op"], found[0], {"text": text, "key": step.get("key")}
+        return None
+
+    def keep_route(self):
+        """The run's route saved for the next run on this store or biller: the user's saved details hidden in it, and
+        never one holding a card number (as a habit is kept)."""
+        try:
+            hidden = self.memory.hide(json.dumps(self.route_from(), ensure_ascii=False))
+            if not privacy.secret_number(hidden):
+                self.memory.save_route(self.route_key(), json.loads(hidden))
+        except Exception as error:
+            self.state["errors"].append({"step": len(self.state["history"]), "error": f"route: {error}"})
 
     def job_guide(self, page):
         """What the page model reads besides the page: the task's skill and the site's note."""
@@ -2118,9 +2217,11 @@ class Worker:
                 self.act(operation, action, page, None, key=extra.get("key"),
                          text=text if operation == "TYPE_TEXT" else None)
             last = s["history"][-1] if len(s["history"]) > before else {}
+            if last and s.pop("read_now", False):
+                last["reads"] = True  # a route never runs this step: its page needs the model to read it
             results.append(f"{operation.lower()} “{label}”: {last.get('changed') or 'done'}")
-            moved = last.get("after_spot") != last.get("spot") or last.get("url") != page["url"]  # new controls or
-            # address: a typed value alone changes the page's fingerprint, not what the rest of the list was chosen on
+            moved = controls(s["page"]) != controls(page) or last.get("url") != page["url"]  # new controls or
+            # address: a typed value alone (live, pay.gyftr.com's card form: a turn a box) changes neither
             page = s["page"]
             if s["status"] != "ready" or s["commit"] or self.replies() > replies or moved \
                     or last.get("committed") or not last:
@@ -2446,6 +2547,7 @@ class Worker:
             order = None  # the page the yes was acted on (GyFTR's shows an Order Id before paying): no proof
         if self.paid() and order:
             self.end_payment("paid", order)
+            self.keep_route()
             s["status"], s["outcome"] = "done", "bought"
             made = money.counted(intent["split"]) if intent["split"] else f"vouchers making ₹{intent['amount']:,}"
             self.say(f"Bought ₹{intent['amount']:,} of {intent['brand']} vouchers on {intent['portal']} ({made}). "
@@ -2468,6 +2570,7 @@ class Worker:
             amount = money.shown(Decimal(s["approved_pay"])) if s["approved_pay"] else "your bill"
             account = self.account_value()
             self.end_payment("paid", reference or "")
+            self.keep_route()
             s["status"], s["outcome"] = "done", "paid"
             self.say(f"Paid {amount} to {intent['biller']}" + (f" for account ••{account[-4:]}" if account else "")
                      + "." + (f" Reference {reference}." if reference else " The page showed no reference.")
@@ -2485,6 +2588,11 @@ class Worker:
         if job["kind"] == "voucher_read":
             s["outcome"] = "unread"
             return Halt("blocked", why)
+        if s.get("route_used") and not self.paid():  # the route led here: the next run that works learns it anew
+            try:
+                self.memory.drop_route(self.route_key())
+            except Exception:
+                pass
         if self.paid() and job["kind"] == "voucher" and DECLINED.search(s["page"]["text"]):  # the page says so
             self.end_payment("failed")
             s["outcome"] = "not_bought"

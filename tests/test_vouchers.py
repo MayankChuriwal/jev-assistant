@@ -449,3 +449,75 @@ def test_a_brands_own_product_is_no_pay_control_but_a_pay_button_is():
         class W:
             job = {"kind": "voucher", "brand": brand}
         assert bool(gate.brand_product(W, {"label": label}, {"url": store})) is not commits, label
+
+
+# ---- a store's route: the path that worked last time runs again without the page model (the user's rule)
+
+def test_a_bought_purchase_keeps_its_path_up_to_the_yes_as_its_stores_route(tmp_path):
+    w = worker_with(tmp_path, page=page(ORDER), goal=GOAL)
+    w.state["history"] += [
+        {"operation": "TYPE_TEXT", "action": "Search brands", "text": "Swiggy", "page_changed": True},
+        {"operation": "CLICK", "action": "Swiggy Money Voucher", "page_changed": True},
+        {"operation": "CLICK", "action": "₹ 2,000", "page_changed": True},
+        {"operation": "TYPE_TEXT", "action": "Mobile number", "text": "[profile:phone]", "page_changed": True},
+        {"operation": "TYPE_TEXT", "action": "Enter OTP", "text": "[secret:answer1]", "page_changed": True},
+        {"operation": "CLICK", "action": "Verify", "page_changed": False, "effect": "failed"},
+        {"operation": "SCROLL", "action": "Page", "page_changed": True},
+        {"operation": "CLICK", "action": "View Cart & Buy", "page_changed": True, "reads": True},
+        {"operation": "CLICK", "action": "Pay ₹5,000", "committed": True, "approved": "user", "page_changed": True},
+        {"operation": "TYPE_TEXT", "action": "Enter OTP Here", "text": "[secret:answer5]", "page_changed": True}]
+    assert w.route_from() == [
+        {"op": "TYPE_TEXT", "name": "search brands", "text": "{brand}", "key": None, "think": False},
+        {"op": "CLICK", "name": "{brand} money voucher", "text": None, "key": None, "think": False},
+        {"op": "CLICK", "name": "", "text": None, "key": None, "think": True},  # an amount: each purchase its own
+        {"op": "TYPE_TEXT", "name": "mobile number", "text": "[profile:phone]", "key": None, "think": False},
+        {"op": "TYPE_TEXT", "name": "enter otp", "text": "[ask]", "key": None, "think": False},
+        {"op": "CLICK", "name": "view cart & buy", "text": None, "key": None, "think": True}]  # the cart was read
+
+
+def route_page(*labels):
+    return page("Swiggy", extra=[{"id": f"r{n}", "kind": "click", "label": label, "role": "button", "node": 20 + n}
+                                 for n, label in enumerate(labels)])
+
+
+ROUTE = [{"op": "CLICK", "name": "{brand} money voucher", "text": None, "key": None, "think": False},
+         {"op": "CLICK", "name": "add to cart", "text": None, "key": None, "think": False},
+         {"op": "CLICK", "name": "view cart & buy", "text": None, "key": None, "think": True}]
+
+
+def test_a_routes_step_on_the_page_runs_without_the_page_model(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=route_page("Swiggy Money Voucher", "Gift Cards"), goal=GOAL)
+    w.memory.save_route("voucher:SmartBuy", ROUTE)
+    w.state["checked"] = True
+    seen = script(monkeypatch, answer([("wait", None, None)]))
+    w.command("tick")
+    assert seen == [] and w.browser.act.call_args.args[1]["label"] == "Swiggy Money Voucher"
+
+
+def test_a_routes_step_not_on_the_page_or_one_that_needs_thought_goes_to_the_page_model(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=route_page("Gift Cards"), goal=GOAL)
+    w.memory.save_route("voucher:SmartBuy", ROUTE)
+    w.state["checked"] = True
+    seen = script(monkeypatch, answer([("wait", None, None)]))
+    w.command("tick")
+    assert len(seen) == 1  # its step isn't here: the model decides
+    w = worker_with(tmp_path, page=route_page("View Cart & Buy"), goal=GOAL)
+    w.memory.save_route("voucher:SmartBuy", ROUTE)
+    w.state.update(checked=True, route_at=2)
+    seen = script(monkeypatch, answer([("wait", None, None)]))
+    w.command("tick")
+    assert len(seen) == 1  # the cart is read on its page: the model's turn
+
+
+def test_a_bought_purchase_saves_its_route_and_a_failed_one_that_used_it_drops_it(tmp_path, monkeypatch):
+    w = worker_with(tmp_path, page=page(ORDER), goal=GOAL)
+    w.state["history"].append({"operation": "CLICK", "action": "Add to cart", "page_changed": True})
+    paid(w)
+    script(monkeypatch, answer(end="done", say="Order placed", order_id="GV7Q2M44K1"))
+    w.command("tick")
+    assert w.state["outcome"] == "bought" and w.memory.route("voucher:SmartBuy")[0]["name"] == "add to cart"
+    w = worker_with(tmp_path, page=page("Swiggy"), goal=GOAL, memory=w.memory)
+    w.state.update(checked=True, route_used=True)
+    script(monkeypatch, answer(end="stop", say="The store is down."))
+    w.command("tick")
+    assert w.memory.route("voucher:SmartBuy") is None

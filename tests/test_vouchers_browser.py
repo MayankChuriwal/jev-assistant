@@ -229,3 +229,18 @@ def test_a_store_taking_any_amount_sells_the_total_as_one_voucher(shop, monkeypa
     w = shop(variant="range", goal=goal)
     assert w.state["outcome"] == "bought", w.state["messages"][-3:]
     assert w.approvals[0].startswith("Buy ₹2,750 of Swiggy vouchers on Woohoo\n• 1 × ₹2,750")
+
+
+def test_a_second_purchase_runs_the_first_ones_route_with_fewer_model_turns(shop, monkeypatch):
+    # the user's rule: SmartBuy took five minutes every time; the path that worked runs again without the model
+    first = model(monkeypatch)
+    assert shop().state["outcome"] == "bought"
+    assert shop.memory.route("voucher:SmartBuy")
+    shop.memory.run(lambda cur: cur.execute("DELETE FROM payments"))  # not "bought today": the same purchase again
+    again = model(monkeypatch)
+    w = shop()
+    assert w.state["outcome"] == "bought", w.state["messages"][-3:]
+    assert any(t["end"] == "route" for t in w.state["actor_log"]) and len(again) < len(first), (len(again), len(first))
+    assert len(w.approvals) == 1  # the route never says yes: the user does, once
+    paying = [t for t in w.state["actor_log"] if "voucher-pay" in t["url"]]
+    assert len(paying) <= 4, len(paying)  # Card, every box at once, the save-card box, Pay (live: a turn a box)
